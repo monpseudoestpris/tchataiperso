@@ -29,4 +29,49 @@ PY
   fi
   compose_files+=(-f compose.cloud.yaml)
 fi
-exec docker compose "${compose_files[@]}" "$@"
+print_site_link() {
+  local site_url='http://localhost:3000'
+  printf '\ncLAIr — ouvrir le site : '
+  if [[ -t 1 ]]; then
+    # OSC 8 rend le lien cliquable dans les terminaux compatibles.
+    printf '\033]8;;%s\033\\%s\033]8;;\033\\\n' "$site_url" "$site_url"
+  else
+    printf '%s\n' "$site_url"
+  fi
+  printf 'Ctrl+clic sur le lien pour ouvrir le navigateur.\n'
+}
+
+link_timing=after
+case "${1:-}" in
+  up)
+    link_timing=before
+    for arg in "$@"; do
+      case "$arg" in
+        -d|--detach|--detach=true|--wait|--wait=true) link_timing=after ;;
+      esac
+    done
+    ;;
+  start|restart)
+    for arg in "$@"; do
+      case "$arg" in
+        -a|--attach|--attach=true) link_timing=before ;;
+      esac
+    done
+    ;;
+  *) exec docker compose "${compose_files[@]}" "$@" ;;
+esac
+
+for arg in "$@"; do
+  case "$arg" in
+    -h|--help) exec docker compose "${compose_files[@]}" "$@" ;;
+  esac
+done
+
+if [[ "$link_timing" == before ]]; then
+  # En mode attaché, conserver les logs et la gestion des signaux de Compose.
+  print_site_link
+  exec docker compose "${compose_files[@]}" "$@"
+fi
+
+docker compose "${compose_files[@]}" "$@"
+print_site_link
