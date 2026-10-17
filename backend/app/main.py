@@ -67,7 +67,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         yield
         engine.dispose()
 
-    app = FastAPI(title="Tchat AI Perso", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="cLAIr", version="0.1.0", lifespan=lifespan)
     app.state.settings, app.state.sessions = settings, sessions
     app.add_middleware(CORSMiddleware, allow_origins=settings.origins, allow_credentials=False,
                        allow_methods=["GET", "POST", "PATCH", "DELETE"], allow_headers=["Content-Type"])
