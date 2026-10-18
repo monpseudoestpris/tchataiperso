@@ -1,4 +1,4 @@
-# cLAIr — tchat IA personnel
+# clAIr — tchat IA personnel
 
 Une application de tchat en français avec **Next.js / React / Tailwind**, **FastAPI** et **PostgreSQL**. Conversation en streaming, historique persistant, choix du modèle, mémoires personnelles, résumé de conversation, documents joints, recherche web et génération d'images Ideogram.
 
