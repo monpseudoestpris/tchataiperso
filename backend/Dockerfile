@@ -8,6 +8,8 @@ RUN --mount=type=secret,id=cloud_ca \
     pip install --no-cache-dir --require-hashes -r requirements.lock.txt && \
     useradd --uid 10001 --create-home app && mkdir -p /data /app/data && chown app:app /data /app/data
 COPY --chown=app:app app ./app
+COPY --chown=app:app migrations ./migrations
+COPY --chown=app:app alembic.ini ./alembic.ini
 USER app
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

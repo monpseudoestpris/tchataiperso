@@ -1,4 +1,37 @@
+import re
+
 from pydantic import BaseModel, Field, field_validator
+
+
+class LoginRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=48)
+    password: str = Field(min_length=12, max_length=128)
+
+    @field_validator("username")
+    @classmethod
+    def normalize_username(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_.-]{2,47}", normalized):
+            raise ValueError("Identifiant invalide")
+        return normalized
+
+
+class AcceptInvitation(BaseModel):
+    token: str = Field(min_length=32, max_length=128)
+    username: str = Field(min_length=3, max_length=48)
+    password: str = Field(min_length=12, max_length=128)
+
+    @field_validator("username")
+    @classmethod
+    def normalize_username(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_.-]{2,47}", normalized):
+            raise ValueError("Identifiant invalide")
+        return normalized
+
+
+class AdminUpdateUser(BaseModel):
+    active: bool
 
 
 class CreateConversation(BaseModel):

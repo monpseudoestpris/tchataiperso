@@ -3,13 +3,15 @@
 import {
   ArrowDown, ArrowUp, BookOpen, Brain, Check, ChevronDown, ChevronRight,
   CircleAlert, Copy, ExternalLink, FileText, Globe2, ImagePlus, LoaderCircle,
-  Menu, MessageCircle, PanelLeftClose, Paperclip, Pencil, Plus, Search,
-  Sparkles, Square, Trash2, WandSparkles, X,
+  LogOut, Menu, MessageCircle, PanelLeftClose, Paperclip, Pencil, Plus, Search,
+  Shield, Sparkles, Square, Trash2, WandSparkles, X,
 } from "lucide-react";
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { api, errorMessage, streamMessage, type Attachment, type Config, type Conversation, type Memory, type Message } from "@/lib/api";
+import { AdminPanel } from "@/components/admin-panel";
+import { AuthPanel } from "@/components/auth-panel";
+import { ApiError, api, errorMessage, streamMessage, type Attachment, type AuthUser, type Config, type Conversation, type Memory, type Message } from "@/lib/api";
 
 const suggestions = [
   { icon: WandSparkles, title: "Faire émerger une idée", description: "Explorer une piste et lui donner forme", prompt: "Aide-moi à explorer une idée. Pose-moi quelques questions pour comprendre ce que je veux créer." },
@@ -17,6 +19,19 @@ const suggestions = [
   { icon: FileText, title: "Travailler un document", description: "Résumer, analyser, prendre du recul", prompt: "Je vais joindre un document. Peux-tu m’en proposer une synthèse et en faire ressortir les points essentiels ?" },
   { icon: ImagePlus, title: "Imaginer une image", description: "Du premier mot à une création visuelle", prompt: "Une petite maison d’architecte au milieu d’une forêt brumeuse, lumière du matin, photographie cinématographique." },
 ];
+
+function subscribeToLocation(callback: () => void) {
+  window.addEventListener("popstate", callback);
+  window.addEventListener("hashchange", callback);
+  return () => {
+    window.removeEventListener("popstate", callback);
+    window.removeEventListener("hashchange", callback);
+  };
+}
+
+function getInvitationToken() {
+  return new URLSearchParams(window.location.hash.slice(1)).get("invite") ?? "";
+}
 
 function shortDate(value: string) {
   return new Intl.DateTimeFormat("fr-FR", { day: "numeric", month: "short" }).format(new Date(value));
@@ -69,6 +84,11 @@ function MessageView({ message, streaming }: { message: Message; streaming?: boo
 }
 
 export function ChatApp() {
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [authError, setAuthError] = useState("");
+  const invitationToken = useSyncExternalStore(subscribeToLocation, getInvitationToken, () => "");
+  const [adminOpen, setAdminOpen] = useState(false);
   const [config, setConfig] = useState<Config | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [conversation, setConversation] = useState<Conversation | null>(null);
@@ -96,24 +116,43 @@ export function ChatApp() {
   const bottomRef = useRef<HTMLDivElement>(null);
   const [atBottom, setAtBottom] = useState(true);
 
-  async function bootstrap() {
+  async function loadWorkspace(signal?: AbortSignal) {
+    const [settings, chats, savedMemories] = await Promise.all([
+      api<Config>("/config", { signal }), api<Conversation[]>("/conversations", { signal }), api<Memory[]>("/memories", { signal }),
+    ]);
+    setConfig(settings); setModel(settings.default_model); setConversations(chats); setMemories(savedMemories);
+  }
+
+  async function bootstrap(signal?: AbortSignal) {
     setBusy("init"); setError("");
     try {
-      const [settings, chats, savedMemories] = await Promise.all([api<Config>("/config"), api<Conversation[]>("/conversations"), api<Memory[]>("/memories")]);
-      setConfig(settings); setModel(settings.default_model); setConversations(chats); setMemories(savedMemories);
-    } catch (err) { setError(`Connexion au serveur impossible. ${errorMessage(err)}`); }
-    finally { setBusy(null); }
+      const current = await api<AuthUser>("/auth/session", { signal });
+      setUser(current);
+      await loadWorkspace(signal);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) setUser(null);
+      else setError(`Connexion au serveur impossible. ${errorMessage(err)}`);
+    } finally { setBusy(null); setAuthReady(true); }
   }
 
   useEffect(() => {
     let active = true;
     const controller = new AbortController();
-    Promise.all([api<Config>("/config", { signal: controller.signal }), api<Conversation[]>("/conversations", { signal: controller.signal }), api<Memory[]>("/memories", { signal: controller.signal })])
-      .then(([settings, chats, savedMemories]) => {
+    api<AuthUser>("/auth/session", { signal: controller.signal })
+      .then(async current => {
+        if (!active) return;
+        setUser(current);
+        const [settings, chats, savedMemories] = await Promise.all([
+          api<Config>("/config", { signal: controller.signal }),
+          api<Conversation[]>("/conversations", { signal: controller.signal }),
+          api<Memory[]>("/memories", { signal: controller.signal }),
+        ]);
         if (!active) return;
         setConfig(settings); setModel(settings.default_model); setConversations(chats); setMemories(savedMemories);
-      }).catch(err => { if (active) setError(`Connexion au serveur impossible. ${errorMessage(err)}`); })
-      .finally(() => { if (active) setBusy(null); });
+      }).catch(err => {
+        if (!active || (err instanceof ApiError && err.status === 401)) return;
+        setAuthError(`Connexion au serveur impossible. ${errorMessage(err)}`);
+      }).finally(() => { if (active) { setAuthReady(true); setBusy(null); } });
     return () => { active = false; controller.abort(); controllerRef.current?.abort(); };
   }, []);
 
@@ -290,6 +329,29 @@ export function ChatApp() {
     finally { setBusy(null); }
   }
 
+  async function authenticated(current: AuthUser) {
+    setUser(current); setError(""); setBusy("init");
+    try { await loadWorkspace(); }
+    catch (err) { setError(`Connexion au serveur impossible. ${errorMessage(err)}`); }
+    finally { setBusy(null); setAuthReady(true); }
+  }
+
+  function invitationAccepted() {
+    setUser(null); setConfig(null); setConversations([]); setConversation(null); setMemories([]);
+    setDraft(""); setAttachments([]); setMemoryDraft(""); setAdminOpen(false);
+    window.history.replaceState({}, "", window.location.pathname + window.location.search);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  }
+
+  async function logout() {
+    setError("");
+    try {
+      await api<void>("/auth/logout", { method: "POST" });
+      setUser(null); setConfig(null); setConversations([]); setConversation(null); setMemories([]);
+      setAuthReady(true); setAdminOpen(false);
+    } catch (err) { setError(errorMessage(err)); }
+  }
+
   async function submitDialog(event: FormEvent) {
     event.preventDefault();
     if (!dialog || working || (dialog.type === "rename" && !renameValue.trim())) return;
@@ -312,6 +374,9 @@ export function ChatApp() {
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); }
   }
 
+  if (!authReady) return <div className="auth-loading" role="status"><LoaderCircle className="spin" size={20} />Vérification de la session…</div>;
+  if (invitationToken || !user) return <AuthPanel invitationToken={invitationToken} serviceError={authError} onAuthenticated={authenticated} onRegistration={invitationAccepted} />;
+
   return <div className="app-shell">
     <a className="skip-link" href="#composer">Aller au message</a>
     {sidebarOpen && <button className="sidebar-overlay" type="button" aria-label="Fermer le menu" onClick={() => setSidebarOpen(false)} />}
@@ -326,7 +391,7 @@ export function ChatApp() {
           <div className="history-tools"><IconButton label={`Renommer « ${item.title} »`} disabled={working} onClick={() => { setDialog({ type: "rename", conversation: item }); setRenameValue(item.title); }}><Pencil size={13} /></IconButton><IconButton label={`Supprimer « ${item.title} »`} disabled={working} onClick={() => setDialog({ type: "delete", conversation: item })}><Trash2 size={13} /></IconButton></div>
         </div>)}</div>) : <div className="history-empty"><MessageCircle size={20} /><p>{query ? "Aucune conversation trouvée." : "Une idée, une question…\nVotre historique commence ici."}</p></div>}
       </nav>
-      <div className="sidebar-bottom"><button type="button" className="memory-shortcut" onClick={() => { setContextTab("memories"); setContextOpen(true); setSidebarOpen(false); }}><span className="memory-icon"><Brain size={18} /></span><span><strong>Votre mémoire</strong><small>{memories.length ? `${memories.length} information${memories.length > 1 ? "s" : ""} enregistrée${memories.length > 1 ? "s" : ""}` : "Les choses qui comptent"}</small></span><ChevronRight size={16} /></button><div className="profile"><span className="avatar">M</span><span><strong>Mon espace personnel</strong><small><span className="connection-dot" /> {config ? "Données conservées sur votre serveur" : "Connexion au serveur…"}</small></span></div></div>
+      <div className="sidebar-bottom"><button type="button" className="memory-shortcut" onClick={() => { setContextTab("memories"); setContextOpen(true); setSidebarOpen(false); }}><span className="memory-icon"><Brain size={18} /></span><span><strong>Votre mémoire</strong><small>{memories.length ? `${memories.length} information${memories.length > 1 ? "s" : ""} enregistrée${memories.length > 1 ? "s" : ""}` : "Les choses qui comptent"}</small></span><ChevronRight size={16} /></button><div className="profile"><span className="avatar">{user.username[0].toLocaleUpperCase("fr")}</span><span className="profile-user"><strong>{user.username}</strong><small><span className="connection-dot" /> Compte sécurisé</small></span>{user.is_admin && <IconButton label="Gérer les utilisateurs" onClick={() => setAdminOpen(true)}><Shield size={16} /></IconButton>}<IconButton label="Se déconnecter" onClick={() => void logout()}><LogOut size={16} /></IconButton></div></div>
     </aside>
 
     <main className="main-panel">
@@ -363,6 +428,7 @@ export function ChatApp() {
       </div>
     </main>
 
+    {adminOpen && user.is_admin && <AdminPanel currentUser={user} onClose={() => setAdminOpen(false)} />}
     {dialog && <div className="modal-backdrop" onClick={event => { if (event.target === event.currentTarget && !working) setDialog(null); }}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="dialog-title" onKeyDown={event => { if (event.key === "Escape" && !working) setDialog(null); if (event.key === "Tab") { const elements = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled)')); if (!elements.length) return; const first = elements[0]; const last = elements[elements.length - 1]; if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); } else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); } } }}><form onSubmit={event => void submitDialog(event)}><div className="modal-header"><span className="modal-icon">{dialog.type === "delete" ? <Trash2 size={20} /> : <Pencil size={20} />}</span><IconButton label="Fermer" disabled={working} onClick={() => setDialog(null)}><X size={18} /></IconButton></div><h2 id="dialog-title">{dialog.type === "delete" ? "Supprimer cette conversation ?" : "Un nouveau titre"}</h2>{dialog.type === "delete" ? <p>« {dialog.conversation.title} » et ses messages seront supprimés. Cette action est définitive.</p> : <><label htmlFor="rename-input">Titre de la conversation</label><input id="rename-input" value={renameValue} onChange={event => setRenameValue(event.target.value)} maxLength={200} autoFocus disabled={working} /></>}<div className="modal-actions"><button type="button" className="secondary-button" disabled={working} onClick={() => setDialog(null)}>Annuler</button><button type="submit" className={dialog.type === "delete" ? "danger-button" : "primary-button"} disabled={working || (dialog.type === "rename" && !renameValue.trim())}>{working ? <LoaderCircle className="spin" size={15} /> : null}{dialog.type === "delete" ? "Supprimer" : "Enregistrer"}</button></div></form></section></div>}
   </div>;
 }

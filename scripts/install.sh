@@ -34,6 +34,24 @@ case "${1:-}" in
     ./scripts/compose.sh version >/dev/null
     docker info >/dev/null
     ./scripts/compose.sh config --quiet
+    ./scripts/compose.sh up --detach --wait --wait-timeout 180 db
+    ./scripts/compose.sh build backend
+    ./scripts/compose.sh run --rm --no-deps backend python -m app.cli migrate-schema
+    initial_admin="${INITIAL_ADMIN_USERNAME:-}"
+    if [[ -z "$initial_admin" ]]; then
+      read -r -p 'Identifiant du premier administrateur : ' initial_admin
+    fi
+    if [[ -z "$initial_admin" ]]; then
+      echo 'Un identifiant administrateur est obligatoire.' >&2
+      exit 2
+    fi
+    ./scripts/compose.sh run --rm --no-deps backend python -m app.cli create-admin --username "$initial_admin"
+    read -r -p 'Compte administrateur propriétaire des anciennes données (laisser vide si aucune) : ' legacy_owner
+    if [[ -n "$legacy_owner" ]]; then
+      ./scripts/compose.sh run --rm --no-deps backend python -m app.cli migrate-legacy --owner "$legacy_owner"
+    else
+      ./scripts/compose.sh run --rm --no-deps backend python -m app.cli migrate-legacy
+    fi
     ./scripts/compose.sh up --build --detach --wait --wait-timeout 180
     python3 scripts/smoke.py
     ;;

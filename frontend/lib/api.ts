@@ -10,6 +10,8 @@ export type Source = { title: string; url: string; snippet?: string };
 export type Message = { id: string; role: string; content: string; created_at: string; attachments: Attachment[]; sources: Source[] };
 export type Conversation = { id: string; title: string; model: string; created_at: string; updated_at: string; summary?: string | null; messages?: Message[] };
 export type Memory = { id: string; content: string; created_at: string };
+export type AuthUser = { id: string; username: string; is_admin: boolean };
+export type AdminUser = AuthUser & { active: boolean; created_at: string };
 export type StreamEvent =
   | { type: "meta"; data: { user_message: Message; assistant_message_id: string } }
   | { type: "status"; data: { message: string } }
@@ -21,7 +23,14 @@ export function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Une erreur inattendue est survenue.";
 }
 
-async function responseError(response: Response): Promise<Error> {
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
+async function responseError(response: Response): Promise<ApiError> {
   let detail = `Le serveur a renvoyé une erreur (${response.status}).`;
   try {
     const body = await response.json();
@@ -29,7 +38,7 @@ async function responseError(response: Response): Promise<Error> {
     else if (Array.isArray(body.detail)) detail = body.detail.map((item: { msg?: string }) => item.msg ?? "Valeur invalide").join(" · ");
     else if (typeof body.message === "string") detail = body.message;
   } catch { /* Keep the HTTP status for non-JSON gateway failures. */ }
-  return new Error(detail);
+  return new ApiError(detail, response.status);
 }
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {

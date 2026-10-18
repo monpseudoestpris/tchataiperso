@@ -12,7 +12,7 @@ Prérequis : Docker Engine avec Compose v2 et Python 3 pour le petit script d'in
 ./scripts/install.sh
 ```
 
-Le script crée `.env` s'il n'existe pas, avec un mot de passe PostgreSQL aléatoire, construit les images, démarre les trois services, attend leur état de santé et exécute un parcours de vérification. Il conserve votre `.env` existant. Les ports sont liés à l'interface locale : frontend **3000**, backend **8000** ; PostgreSQL reste sur le réseau Docker interne.
+Le script crée `.env` s'il n'existe pas, avec un mot de passe PostgreSQL aléatoire, démarre la base et prépare le schéma. Il vous demande l'identifiant du premier administrateur et son mot de passe (saisie masquée); vous choisissez aussi explicitement le propriétaire des anciennes données s'il y en a. Il démarre ensuite les services et exécute un smoke test authentifié. Le mot de passe n'est jamais écrit dans `.env`, qui est conservé s'il existe. Les ports sont liés à l'interface locale : frontend **3000**, backend **8000** ; PostgreSQL reste sur le réseau Docker interne.
 
 ```bash
 ./scripts/compose.sh up --build -d --wait  # démarrer / reconstruire
@@ -22,6 +22,18 @@ python3 scripts/smoke.py            # vérifier le parcours local sans appel pay
 ```
 
 Les volumes `postgres_data` et `uploads_data` conservent les données après un redémarrage. `docker compose down -v` les **efface**. Une sauvegarde doit couvrir la base et les fichiers ; les volumes seuls ne constituent pas une sauvegarde.
+
+### Développement avec Docker
+
+Après l'installation initiale, lancez les trois services avec rechargement automatique :
+
+```bash
+./scripts/compose.sh dev
+```
+
+Le site est accessible sur http://localhost:3000. Les modifications dans `backend/app` relancent FastAPI ; celles du frontend sont prises en compte par Next.js sans reconstruire l'image. `Ctrl+C` arrête les services sans supprimer les données. Après une modification des dépendances ou du `.env`, relancez la commande. Ce mode utilise les mêmes données PostgreSQL et fichiers joints que le lancement Docker normal.
+
+Les routes de données exigent une session. L'inscription est fermée : un administrateur connecté crée une invitation dans le panneau Utilisateurs, puis transmet le lien à usage unique. Les conversations, mémoires et pièces jointes sont cloisonnées par compte dans la base partagée. Derrière HTTPS, configurez `SESSION_COOKIE_SECURE=true` avant de démarrer le backend; ne publiez pas le backend directement.
 
 ## Brancher vos API
 
@@ -81,6 +93,9 @@ Le backend utilise alors SQLite (fichier dans `backend/data`) et le frontend Nex
 ```bash
 cd backend
 .venv/bin/python -m pytest
+.venv/bin/python -m app.cli migrate-schema
+.venv/bin/python -m app.cli create-admin --username mon-identifiant
+.venv/bin/python -m app.cli migrate-legacy --owner mon-identifiant
 cd ../frontend
 npm run typecheck
 npm run build
@@ -88,13 +103,14 @@ cd ..
 python3 scripts/smoke.py
 ```
 
-Les tests fournisseurs utilisent des réponses simulées, sans facturation. `smoke.py` exerce les écritures, le streaming et la relecture d'historique en mode démo, puis nettoie ses conversations et mémoires temporaires. En mode réel, il ne déclenche pas de génération payante.
+Les commandes de migration/création du compte sont requises avant de démarrer une base locale. Pour une base existante, sauvegardez la base et les fichiers, puis attribuez l'historique à un administrateur explicitement choisi avec `migrate-legacy`. Les tests fournisseurs utilisent des réponses simulées, sans facturation. `smoke.py` vérifie le refus anonyme, vous demande les identifiants, puis exerce le tchat en mode démo et nettoie les données temporaires. En mode réel, il vérifie la connexion et la configuration sans déclencher de génération payante. `SMOKE_USERNAME` et `SMOKE_PASSWORD` permettent d'automatiser cette connexion.
 
 ## Organisation
 
 ```text
 frontend/             Next App Router, composants React, Tailwind, client SSE
-backend/app/          API, modèles SQLAlchemy, contexte et adaptateurs fournisseurs
+backend/app/          API, authentification, modèles SQLAlchemy, contexte et fournisseurs
+backend/migrations/   Migrations versionnées et reprise des données existantes
 backend/tests/        Tests API, persistance et fournisseurs simulés
 compose.yaml          Frontend + backend + PostgreSQL avec contrôles de santé
 scripts/install.sh    Installation Docker ou dépendances locales
@@ -107,6 +123,6 @@ docs/services.md      Services, alternatives et maîtrise du budget
 
 ## Périmètre de cette version
 
-Cette version est destinée à un **usage personnel sur une machine de confiance** et lie ses ports à l'interface locale. L'authentification multiutilisateur, l'isolation par compte, les quotas et le déploiement public avec HTTPS restent à ajouter avant une exposition à Internet. La suppression des données, la récupération après panne et les changements futurs de schéma doivent être accompagnés de sauvegardes et de migrations. La configuration fournie n'est pas un déploiement public prêt à l'emploi.
+Cette version prend en charge les comptes sur invitation et l'isolation par compte, mais lie ses ports à l'interface locale. Avant toute exposition, configurez HTTPS, `SESSION_COOKIE_SECURE=true`, des origines autorisées précises et des sauvegardes testées de la base et des fichiers. Les quotas par utilisateur ne sont pas encore appliqués; la configuration fournie n'est pas un déploiement public prêt à l'emploi.
 
 Les véritables appels LLM, Brave, OCR et Ideogram doivent être vérifiés avec vos clés, les domaines autorisés et votre budget. Le mode démo et les tests simulés ne valident pas un abonnement ou un fournisseur distant.

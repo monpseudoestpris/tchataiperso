@@ -4,6 +4,11 @@ repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_dir"
 export BUILDX_CONFIG="${BUILDX_CONFIG:-$repo_dir/../.cache/buildx}"
 compose_files=(-f compose.yaml)
+if [[ "${1:-}" == dev ]]; then
+  compose_files+=(-f compose.dev.yaml)
+  shift
+  set -- up --build --renew-anon-volumes "$@"
+fi
 if [[ -z "${CLOUD_CA_BUNDLE:-}" && -n "${SSL_CERT_FILE:-}" ]]; then
   export CLOUD_CA_BUNDLE="$SSL_CERT_FILE"
 fi

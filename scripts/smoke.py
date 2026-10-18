@@ -2,17 +2,22 @@
 """Vérifie le proxy frontend et les écritures réelles en mode démo uniquement."""
 import json
 import os
+from getpass import getpass
+from http.cookiejar import CookieJar
 from urllib.error import HTTPError
-from urllib.request import Request, urlopen
+from urllib.parse import urlsplit
+from urllib.request import HTTPCookieProcessor, Request, build_opener, urlopen
 
 base = os.environ.get('SMOKE_BASE_URL', 'http://127.0.0.1:3000').rstrip('/')
+opener = build_opener(HTTPCookieProcessor(CookieJar()))
+origin = f'{urlsplit(base).scheme}://{urlsplit(base).netloc}'
 
 
 def request(path, payload=None, method=None):
     data = None if payload is None else json.dumps(payload).encode()
     req = Request(base + path, data=data, method=method,
-                  headers={'Content-Type': 'application/json'} if data else {})
-    with urlopen(req, timeout=90) as response:
+                  headers={'Content-Type': 'application/json', 'Origin': origin})
+    with opener.open(req, timeout=90) as response:
         body = response.read().decode()
         return json.loads(body) if body else None
 
@@ -20,6 +25,14 @@ def request(path, payload=None, method=None):
 def main():
     with urlopen(base, timeout=30) as response:
         assert response.status == 200, 'Page frontend indisponible'
+    try:
+        with opener.open(base + '/api/conversations', timeout=30) as response:
+            raise AssertionError(f'API privée accessible sans session ({response.status})')
+    except HTTPError as exc:
+        assert exc.code == 401, f'API privée refusée avec un statut inattendu ({exc.code})'
+    username = os.environ.get('SMOKE_USERNAME') or input('Identifiant smoke test : ')
+    password = os.environ.get('SMOKE_PASSWORD') or getpass('Mot de passe smoke test : ')
+    request('/api/auth/login', {'username': username, 'password': password})
     health = request('/api/health')
     assert health['status'] == 'ok', health
     config = request('/api/config')
@@ -35,8 +48,8 @@ def main():
                       data=json.dumps({'content': 'Bonjour, ceci est un test de démonstration.',
                                        'model': config['default_model'], 'web_search': False,
                                        'attachment_ids': []}).encode(),
-                      headers={'Content-Type': 'application/json'})
-        with urlopen(req, timeout=90) as response:
+                      headers={'Content-Type': 'application/json', 'Origin': origin})
+        with opener.open(req, timeout=90) as response:
             stream = response.read().decode()
         assert 'event: delta' in stream, stream
         assert 'event: done' in stream and 'event: error' not in stream, stream

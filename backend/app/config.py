@@ -3,7 +3,7 @@ import ipaddress
 import re
 from pathlib import Path
 
-from pydantic import SecretStr, field_validator
+from pydantic import SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -22,10 +22,30 @@ class Settings(BaseSettings):
     ideogram_api_key: SecretStr = SecretStr("")
     ideogram_image_hosts: str = "ideogram.ai"
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+    session_cookie_name: str = "tchat_session"
+    session_cookie_secure: bool = False
+    session_days: int = 14
+    invitation_days: int = 2
     max_upload_mb: int = 20
     max_context_chars: int = 60000
     summary_every_messages: int = 12
     max_summary_chars: int = 6000
+
+    @model_validator(mode="after")
+    def valid_auth_lifetimes(self):
+        if not 1 <= self.session_days <= 90:
+            raise ValueError("SESSION_DAYS doit être compris entre 1 et 90")
+        if not 1 <= self.invitation_days <= 7:
+            raise ValueError("INVITATION_DAYS doit être compris entre 1 et 7")
+        return self
+
+    @field_validator("cors_origins")
+    @classmethod
+    def no_wildcard_cors_origins(cls, value: str) -> str:
+        origins = json.loads(value) if value.strip().startswith("[") else value.split(",")
+        if not isinstance(origins, list) or any(not isinstance(origin, str) or origin.strip() == "*" for origin in origins):
+            raise ValueError("CORS_ORIGINS doit lister des origines explicites; le wildcard est interdit avec les sessions")
+        return value
 
     @field_validator("ideogram_image_hosts")
     @classmethod
