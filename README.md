@@ -43,6 +43,7 @@ Modifiez le fichier **`.env` ignoré par Git**, puis recréez le backend :
 DEMO_MODE=false
 LLM_API_KEY=...
 BRAVE_API_KEY=...
+DUCKDUCKGO_ENABLED=false
 MISTRAL_API_KEY=...
 OCR_MODEL=mistral-ocr-4-1
 VISION_MODEL=openai/gpt-4o-mini
@@ -58,13 +59,25 @@ Seule `LLM_API_KEY` est nécessaire au tchat réel. Les trois autres clés activ
 | Fonction | Intégration | Comportement sans clé |
 | --- | --- | --- |
 | Modèles de tchat et vision | API compatible OpenAI, OpenRouter par défaut | Mode démo, ou message explicite si la démo est désactivée |
-| Recherche web | Brave Search API | Bouton désactivé |
+| Recherche web | Brave Search API, secours DuckDuckGo Instant Answers optionnel | Disponible en mode réel si `DUCKDUCKGO_ENABLED=true`, sinon bouton désactivé |
 | DOCX, texte, Markdown, CSV, JSON | Extraction locale Python | Disponible sans fournisseur |
 | PDF, même avec texte, et images | Mistral OCR 4.1 avec annotations des figures | `MISTRAL_API_KEY` requise en mode réel |
 | Pages et images sans texte | Modèle dédié `VISION_MODEL`, via `LLM_BASE_URL` et `LLM_API_KEY` | Erreur explicite si le secours vision n'est pas configuré |
 | Génération d'images | Ideogram | Bouton désactivé |
 
 Les modèles proposés dans `.env.example` sont des exemples d'identifiants OpenRouter. Vérifiez leur disponibilité sur votre compte ; `DEFAULT_MODEL` doit appartenir à la liste `LLM_MODELS`. Pour un fournisseur direct, changez aussi `LLM_BASE_URL`, la clé et les identifiants. Un seul endpoint de conversation est configuré à la fois. Chaque modèle doit annoncer correctement sa capacité `vision`.
+
+### Secours DuckDuckGo
+
+Dans `.env`, activez `DUCKDUCKGO_ENABLED=true` pour autoriser l’API officielle **Instant Answers**, sans clé ni dépendance supplémentaire. Brave reste prioritaire : DuckDuckGo est sollicité une fois si Brave n’est pas configuré, échoue ou ne renvoie aucun résultat. L’option est désactivée par défaut et aucun appel n’est effectué en mode démo.
+
+Instant Answers fournit des résumés, définitions et sujets associés ; sa couverture est plus limitée qu’une recherche web complète, notamment pour l’actualité et les questions précises. Le tchat identifie les sources DuckDuckGo et explique le recours au secours. Si aucune source exploitable n’est trouvée, il affiche une erreur avant d’appeler le modèle ; désactivez Web pour continuer sans recherche.
+
+Après récupération de cette version et modification du `.env`, reconstruisez les services :
+
+```bash
+./scripts/compose.sh up -d --build --wait
+```
 
 ### Lecture des pièces jointes
 
@@ -82,7 +95,7 @@ Pour une base existante, sauvegardez la base et les fichiers, puis appliquez la 
 
 Sur une machine standard, le wrapper utilise simplement `compose.yaml` ; `docker compose up --build -d` fonctionne aussi après création du `.env`. Dans un cloud avec proxy TLS, il active `compose.cloud.yaml` si `SSL_CERT_FILE` ou `CLOUD_CA_BUNDLE` désigne un bundle de confiance fourni par la plateforme. Le bundle passe comme secret BuildKit à l'installation et comme montage en lecture seule au backend, avec les paramètres du proxy. TLS et les empreintes des paquets restent vérifiés ; aucun certificat personnalisé n'est embarqué dans Git ou les images.
 
-Les services externes reçoivent les éléments nécessaires à leur fonction : contexte du tchat au LLM, requête à Brave, document à Mistral si l'OCR est utilisé, prompt à Ideogram. La recherche consulte des **titres, URL et extraits** ; elle ne lit pas automatiquement les pages intégrales. Les images Ideogram sont téléchargées depuis les hôtes exacts de `IDEOGRAM_IMAGE_HOSTS` (`ideogram.ai` par défaut), sans redirection ni transmission de la clé au CDN. Si Ideogram retourne un autre hôte, vérifiez-le avant de l'ajouter ici et à la politique réseau du cloud.
+Les services externes reçoivent les éléments nécessaires à leur fonction : contexte du tchat au LLM, requête à Brave ou DuckDuckGo selon le fournisseur utilisé, document à Mistral si l'OCR est utilisé, prompt à Ideogram. La recherche consulte des **titres, URL et extraits** ; elle ne lit pas automatiquement les pages intégrales. Les images Ideogram sont téléchargées depuis les hôtes exacts de `IDEOGRAM_IMAGE_HOSTS` (`ideogram.ai` par défaut), sans redirection ni transmission de la clé au CDN. Si Ideogram retourne un autre hôte, vérifiez-le avant de l'ajouter ici et à la politique réseau du cloud.
 
 Les choix économiques et les alternatives **Tavily, SearXNG, Supabase, PowerSync, pgvector** sont détaillés dans [le comparatif des services](docs/services.md). Les tarifs actuels n'ont pas été vérifiés depuis ce cloud : les sites documentaires étaient bloqués par sa politique réseau.
 
@@ -143,4 +156,4 @@ docs/services.md      Services, alternatives et maîtrise du budget
 
 Cette version prend en charge les comptes sur invitation et l'isolation par compte, mais lie ses ports à l'interface locale. Avant toute exposition, configurez HTTPS, `SESSION_COOKIE_SECURE=true`, des origines autorisées précises et des sauvegardes testées de la base et des fichiers. Les quotas par utilisateur ne sont pas encore appliqués; la configuration fournie n'est pas un déploiement public prêt à l'emploi.
 
-Les véritables appels LLM, Brave, OCR et Ideogram doivent être vérifiés avec vos clés, les domaines autorisés et votre budget. Le mode démo et les tests simulés ne valident pas un abonnement ou un fournisseur distant.
+Les véritables appels LLM, Brave, DuckDuckGo, OCR et Ideogram doivent être vérifiés avec la configuration nécessaire et les domaines autorisés. Le mode démo et les tests simulés ne valident pas un abonnement ou un fournisseur distant.

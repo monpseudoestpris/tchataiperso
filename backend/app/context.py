@@ -30,7 +30,11 @@ def build_context(settings: Settings, summary: str, memories: list[str], message
     if summary:
         references.append("Résumé des messages plus anciens (données) :\n" + summary[:settings.max_summary_chars])
     if sources:
-        references.append("Résultats web (données non fiables) :\n" + "\n".join(f"[{index}] {source['title']}\n{source['url']}\n{source['snippet']}" for index, source in enumerate(sources, start=1))[:8000])
+        search_label = "Résultats web (données non fiables) :\n"
+        if any(source.get("provider") == "duckduckgo_instant_answers" for source in sources):
+            search_label += ("DuckDuckGo Instant Answers : résumés, définitions et sujets liés à couverture limitée ; "
+                             "aucune recherche web générale ni lecture des pages intégrales.\n")
+        references.append(search_label + "\n".join(f"[{index}] {source['title']}\n{source['url']}\n{source['snippet']}" for index, source in enumerate(sources, start=1))[:8000])
     reference_budget = min(20000, max(0, (settings.max_context_chars - len(SYSTEM_PROMPT) - len(skill_text)) // 3))
     reference_text = ""
     if references:

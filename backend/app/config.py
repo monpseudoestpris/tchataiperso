@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     llm_models: str = '[{"id":"openai/gpt-4o-mini","name":"GPT-4o mini","vision":true},{"id":"mistralai/mistral-small-3.2-24b-instruct","name":"Mistral Small 3.2","vision":true}]'
     default_model: str = "openai/gpt-4o-mini"
     brave_api_key: SecretStr = SecretStr("")
+    duckduckgo_enabled: bool = False
     mistral_api_key: SecretStr = SecretStr("")
     ocr_model: str = "mistral-ocr-4-1"
     vision_model: str = ""
@@ -159,3 +160,7 @@ class Settings(BaseSettings):
 
     def enabled(self, key: SecretStr) -> bool:
         return not self.demo_mode and bool(key.get_secret_value())
+
+    @property
+    def web_search_enabled(self) -> bool:
+        return not self.demo_mode and (bool(self.brave_api_key.get_secret_value()) or self.duckduckgo_enabled)

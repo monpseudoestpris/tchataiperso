@@ -68,6 +68,23 @@ def test_config_and_disabled_credentials(client):
     assert "api_key" not in json.dumps(config).lower()
 
 
+@pytest.mark.parametrize("demo,brave,duckduckgo,expected", [
+    (True, "brave-secret", True, []),
+    (False, "", False, []),
+    (False, "brave-secret", False, ["brave"]),
+    (False, "", True, ["duckduckgo_instant_answers"]),
+    (False, "brave-secret", True, ["brave", "duckduckgo_instant_answers"]),
+])
+def test_config_announces_only_enabled_search_providers(client, settings, demo, brave, duckduckgo, expected):
+    settings.demo_mode = demo
+    settings.brave_api_key = SecretStr(brave)
+    settings.duckduckgo_enabled = duckduckgo
+    config = client.get("/api/config").json()
+    assert config["search_providers"] == expected
+    assert config["features"]["web_search"] is bool(expected)
+    assert "brave-secret" not in json.dumps(config)
+
+
 def test_app_fails_with_actionable_error_without_admin(tmp_path):
     settings = Settings(_env_file=None, app_data_dir=tmp_path, demo_mode=True)
     with pytest.raises(RuntimeError, match="Aucun administrateur actif"):
@@ -353,6 +370,67 @@ def test_mock_real_chat_injects_memory_docs_and_sources(tmp_path, monkeypatch):
         assert "Information document" in payload
         assert "https://example.org" in payload
         assert client.get(f"/api/conversations/{item}").json()["messages"][-1]["sources"][0]["title"] == "Référence"
+
+
+def test_duckduckgo_only_chat_keeps_sources_and_notice(client, settings, monkeypatch):
+    settings.demo_mode = False
+    settings.llm_api_key = SecretStr("secret")
+    settings.duckduckgo_enabled = True
+    notice = "Brave Search n'est pas configuré. Relais DuckDuckGo : réponses instantanées uniquement."
+    source = {"title": "Résumé : Python", "url": "https://example.org/python", "snippet": "Python est un langage.",
+              "provider": "duckduckgo_instant_answers", "search_notice": notice}
+    captured = {}
+
+    async def search(_settings, query):
+        assert query == "Python"
+        return [source]
+
+    async def stream(_settings, messages, model):
+        captured["messages"] = messages
+        yield "Une réponse avec sa source [1]."
+
+    monkeypatch.setattr(providers, "search_web", search)
+    monkeypatch.setattr(providers, "stream_chat", stream)
+    item = conversation(client)
+    response = client.post(f"/api/conversations/{item}/messages", json={"content": "Python", "web_search": True})
+    assert response.status_code == 200
+    received = events(response)
+    assert ("status", {"message": notice}) in received
+    assert received[-1][0] == "done"
+    assert received[-1][1]["message"]["sources"] == [source]
+    assert source["url"] in json.dumps(captured["messages"])
+    assert source["snippet"] in json.dumps(captured["messages"])
+    assert "couverture limitée" in json.dumps(captured["messages"], ensure_ascii=False)
+    saved = client.get(f"/api/conversations/{item}").json()["messages"][-1]
+    assert saved["sources"] == [source]
+
+
+@pytest.mark.parametrize("brave,duckduckgo", [("brave", False), ("", True)])
+def test_empty_web_search_is_explicit_and_does_not_call_llm(client, settings, monkeypatch, brave, duckduckgo):
+    settings.demo_mode = False
+    settings.llm_api_key = SecretStr("secret")
+    settings.brave_api_key = SecretStr(brave)
+    settings.duckduckgo_enabled = duckduckgo
+    llm_calls = []
+
+    async def search(_settings, query):
+        return []
+
+    async def stream(*args):
+        llm_calls.append(args)
+        yield "Une réponse qui ne doit pas être produite"
+
+    monkeypatch.setattr(providers, "search_web", search)
+    monkeypatch.setattr(providers, "stream_chat", stream)
+    item = conversation(client)
+    response = client.post(f"/api/conversations/{item}/messages", json={"content": "Question précise", "web_search": True})
+    received = events(response)
+    assert received[-1][0] == "error"
+    assert "Aucune source web exploitable" in received[-1][1]["message"]
+    assert not any(name in ("done", "delta") for name, _ in received)
+    assert llm_calls == []
+    assert [message["role"] for message in client.get(f"/api/conversations/{item}").json()["messages"]] == ["user"]
+    assert client.patch(f"/api/conversations/{item}", json={"title": "Déverrouillé"}).status_code == 200
 
 
 def test_stream_failure_is_explicit_unlocks_and_preserves_user(client, settings, monkeypatch):

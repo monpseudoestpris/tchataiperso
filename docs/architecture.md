@@ -10,6 +10,7 @@ flowchart LR
     FastAPI --> Files["Volume persistant · accès filtré par propriétaire"]
     FastAPI --> LLM["OpenRouter / endpoint compatible OpenAI"]
     FastAPI --> Brave["Brave · extraits web"]
+    FastAPI --> DDG["DuckDuckGo Instant Answers · secours optionnel"]
     FastAPI --> OCR["Mistral OCR · facultatif"]
     FastAPI --> Ideogram["Ideogram · génération explicite"]
 ```
@@ -27,12 +28,16 @@ Les sessions utilisent un identifiant opaque stocké sous forme de hash en base,
 ## Envoi d'un message
 
 1. L'interface téléverse les pièces jointes, puis envoie le texte, le modèle, l'option web et les identifiants de fichiers à la conversation choisie.
-2. Le backend enregistre le message utilisateur et prépare le contexte : instructions, mémoires explicites, résumé des anciens échanges, messages récents, documents et éventuels résultats Brave.
-3. Si la recherche est activée, une recherche Brave fournit des titres, liens et extraits. Les résultats accompagnent la réponse et restent consultables avec elle.
-4. Le backend contacte le modèle et transfère ses fragments par **Server-Sent Events**. Le frontend traite aussi les événements de statut et d'erreur.
+2. Le backend enregistre le message utilisateur.
+3. Si la recherche est activée, Brave est prioritaire. Avec `DUCKDUCKGO_ENABLED=true`, DuckDuckGo Instant Answers sert de secours si la clé Brave manque, si Brave échoue ou ne fournit aucun résultat exploitable. Les sources retournées accompagnent la réponse et restent consultables avec elle. Sans source exploitable, le backend émet une erreur explicite et ne contacte pas le modèle pour ce message ; le message utilisateur reste enregistré.
+4. Le backend prépare le contexte : instructions, mémoires explicites, résumé des anciens échanges, messages récents, documents et éventuelles sources web. Il contacte le modèle et transfère ses fragments par **Server-Sent Events**. Le frontend traite aussi les événements de statut et d'erreur.
 5. La réponse finale est persistée, puis le client recharge l'historique. Le résumé est mis à jour périodiquement pour les échanges suivants ; la conversation complète reste en base.
 
 Les documents et contenus web restent des données non fiables. Ils ne doivent pas être traités comme une autorisation d'exécuter des commandes ou de changer les instructions du système. L'application ne donne aucun accès terminal au modèle.
+
+Le secours DuckDuckGo est désactivé par défaut (`DUCKDUCKGO_ENABLED=false`). Il utilise l'API publique officielle sur `api.duckduckgo.com`, sans clé ni dépendance supplémentaire, via `httpx`. Aucun scraping des pages de recherche ni bibliothèque DDGS n'est utilisé. Instant Answers fournit des résumés, définitions et sujets liés : sa couverture est limitée et ce n'est pas une API SERP générale. Les contenus sont attribués à leur source et à DuckDuckGo ; leur présence ne garantit pas une information exhaustive ou à jour. Les quotas, conditions et disponibilité actuels restent à vérifier, sans promesse d'accès illimité.
+
+Références officielles : [Instant Answers API](https://duckduckgo.com/api), [conditions DuckDuckGo](https://duckduckgo.com/terms). Les GET publics de ces pages et d'une requête API représentative ont été refusés par le proxy cloud le 18 octobre 2026 (`403 Forbidden`) ; aucune validation distante n'est revendiquée.
 
 ## Contexte et coûts
 
@@ -70,4 +75,4 @@ Compose attend la santé de PostgreSQL avant de démarrer FastAPI, puis celle du
 
 Les volumes Docker persistent indépendamment des conteneurs. Toute sauvegarde doit inclure **la base et les fichiers**, et être testée par restauration. Alembic ajoute d'abord les clés de propriétaire de façon nullable; l'opérateur crée un administrateur, choisit explicitement le propriétaire historique avec `migrate-legacy --owner`, puis une seconde révision impose `NOT NULL`. Le backend refuse de démarrer sur un schéma legacy non migré ou des lignes sans propriétaire. Un changement de mot de passe `.env` ne modifie pas automatiquement celui d'une base PostgreSQL déjà initialisée.
 
-Les API nécessitent `openrouter.ai`, `api.search.brave.com`, `api.mistral.ai`, `api.ideogram.ai` selon les fonctions activées, et les domaines de téléchargement effectivement retournés par Ideogram. L'allowlist exacte `IDEOGRAM_IMAGE_HOSTS` limite ces téléchargements (`ideogram.ai` par défaut), sans dépendre d'une résolution DNS locale incompatible avec certains proxys d'entreprise. La vérification TLS et la politique egress du cloud s'appliquent ensuite normalement. Les règles cloud, clés et accès réseau sont distincts du `.env` et des conteneurs. Les appels réels restent à vérifier avec ces prérequis.
+Les API nécessitent `openrouter.ai`, `api.search.brave.com`, `api.duckduckgo.com` si le secours est activé, `api.mistral.ai`, `api.ideogram.ai` selon les fonctions activées, et les domaines de téléchargement effectivement retournés par Ideogram. `duckduckgo.com` sert les liens de documentation et d'attribution ; le backend ne télécharge pas les pages citées par la recherche. L'allowlist exacte `IDEOGRAM_IMAGE_HOSTS` limite les téléchargements Ideogram (`ideogram.ai` par défaut), sans dépendre d'une résolution DNS locale incompatible avec certains proxys d'entreprise. La vérification TLS et la politique egress du cloud s'appliquent ensuite normalement. Les règles cloud, clés et accès réseau sont distincts du `.env` et des conteneurs. Les appels réels restent à vérifier avec ces prérequis.

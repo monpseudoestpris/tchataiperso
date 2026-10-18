@@ -13,6 +13,7 @@ import pytest
 from pydantic import SecretStr
 
 from app import providers
+from app.config import Settings
 from app.schemas import DocumentExtraction
 
 
@@ -35,6 +36,8 @@ def settings():
         llm_max_tokens=3072,
         summary_temperature=0.15,
         summary_max_tokens=1200,
+        demo_mode=False,
+        duckduckgo_enabled=False,
         brave_api_key=SecretStr("fake-brave-secret"),
         mistral_api_key=SecretStr("fake-mistral-secret"),
         ocr_model="mistral-ocr-4-1",
@@ -194,6 +197,358 @@ def test_brave_filters_unsafe_links_and_returns_text_sources(settings, transport
         {"title": "Prix & tarifs", "url": "https://example.com/prix", "snippet": "Une source & sa description."},
         {"title": "Autre", "url": "http://example.org/", "snippet": "Texte"},
     ]
+
+
+def enable_duckduckgo(settings):
+    settings.brave_api_key = SecretStr("")
+    settings.duckduckgo_enabled = True
+
+
+@pytest.mark.parametrize("demo_mode, has_brave_key, duckduckgo_enabled, expected", [
+    (False, False, False, False),
+    (False, False, True, True),
+    (False, True, False, True),
+    (False, True, True, True),
+    (True, False, False, False),
+    (True, False, True, False),
+    (True, True, False, False),
+    (True, True, True, False),
+])
+def test_config_web_search_enabled_respects_provider_flags_and_demo_mode(
+    demo_mode, has_brave_key, duckduckgo_enabled, expected
+):
+    config = Settings(
+        _env_file=None, demo_mode=demo_mode, duckduckgo_enabled=duckduckgo_enabled,
+        brave_api_key=SecretStr("fake-brave-secret" if has_brave_key else ""),
+    )
+    assert config.web_search_enabled is expected
+
+
+def test_duckduckgo_uses_official_instant_answers_and_extracts_all_source_types(settings, transport):
+    enable_duckduckgo(settings)
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        assert request.method == "GET"
+        assert request.url.host == "api.duckduckgo.com"
+        assert request.url.path == "/"
+        assert dict(request.url.params) == {
+            "q": "Python & développement", "format": "json", "no_html": "1",
+            "no_redirect": "1", "t": "clair",
+        }
+        assert "x-subscription-token" not in request.headers
+        assert "authorization" not in request.headers
+        assert "fake-brave-secret" not in str(request.url)
+        return httpx.Response(200, json={
+            "Heading": "<b>Python</b> &amp; code",
+            "AbstractText": "Un <strong>langage</strong> &amp; ses outils.",
+            "AbstractURL": "https://example.com/python",
+            "Definition": "Une <em>définition</em> précise.",
+            "DefinitionURL": "https://example.com/definition",
+            "Results": [{"Text": "Résultat &amp; <b>source</b>", "FirstURL": "https://example.com/result"}],
+            "RelatedTopics": [{"Name": "Groupe", "Topics": [
+                {"Text": "Sujet <b>lié</b>", "FirstURL": "https://example.com/related"},
+                {"Topics": [{"Text": "Sujet imbriqué", "FirstURL": "http://example.org/nested"}]},
+            ]}],
+            "Answer": "Réponse directe sans URL", "Redirect": "https://redirect.invalid/ignored",
+        })
+
+    transport(handler)
+    sources = asyncio.run(providers.search_web(settings, "Python & développement"))
+    assert [source["url"] for source in sources] == [
+        "https://example.com/python", "https://example.com/definition", "https://example.com/result",
+        "https://example.com/related", "http://example.org/nested",
+    ]
+    assert [source["snippet"] for source in sources] == [
+        "Un langage & ses outils.", "Une définition précise.", "Résultat & source", "Sujet lié", "Sujet imbriqué",
+    ]
+    assert all(source["provider"] == "duckduckgo_instant_answers" for source in sources)
+    assert all(isinstance(source["title"], str) and "<" not in source["title"] for source in sources)
+    notice = sources[0]["search_notice"].lower()
+    assert "brave" in notice and "configur" in notice
+    assert "instantan" in notice and "sujets liés" in notice and "uniquement" in notice
+    assert all("search_notice" not in source for source in sources[1:])
+    assert len(calls) == 1
+
+
+def test_brave_success_stays_primary_even_when_duckduckgo_is_enabled(settings, transport):
+    settings.duckduckgo_enabled = True
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        assert request.url.host == "api.search.brave.com"
+        return httpx.Response(200, json={"web": {"results": [
+            {"title": "Brave", "url": "https://example.com/brave", "description": "Source Brave"},
+        ]}})
+
+    transport(handler)
+    assert asyncio.run(providers.search_web(settings, "query")) == [
+        {"title": "Brave", "url": "https://example.com/brave", "snippet": "Source Brave"},
+    ]
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("outcome", ["no_key", "empty", "401", "429", "invalid_json", "timeout"])
+def test_duckduckgo_fallback_runs_once_without_forwarding_brave_credentials(settings, transport, outcome):
+    settings.duckduckgo_enabled = True
+    if outcome == "no_key":
+        settings.brave_api_key = SecretStr("")
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        if request.url.host == "api.search.brave.com":
+            assert outcome != "no_key"
+            assert request.headers["x-subscription-token"] == "fake-brave-secret"
+            if outcome == "timeout":
+                raise httpx.ReadTimeout("fake-brave-secret private provider URL", request=request)
+            if outcome == "invalid_json":
+                return httpx.Response(200, text="invalid fake-brave-secret")
+            if outcome == "empty":
+                return httpx.Response(200, json={"web": {"results": []}})
+            return httpx.Response(int(outcome), json={"error": "fake-brave-secret"})
+        assert request.url.host == "api.duckduckgo.com"
+        assert "x-subscription-token" not in request.headers
+        assert "authorization" not in request.headers
+        assert "fake-brave-secret" not in str(request.url)
+        return httpx.Response(200, json={
+            "Heading": "Solution", "AbstractText": "Résultat de secours", "AbstractURL": "https://example.com/fallback",
+        })
+
+    transport(handler)
+    sources = asyncio.run(providers.search_web(settings, "query"))
+    assert len(sources) == 1
+    assert sources[0]["url"] == "https://example.com/fallback"
+    assert sources[0]["provider"] == "duckduckgo_instant_answers"
+    notice = sources[0]["search_notice"]
+    assert "instantan" in notice.lower() and "sujets liés" in notice.lower()
+    assert "fake-brave-secret" not in notice
+    assert "private provider URL" not in notice
+    if outcome == "no_key":
+        assert "configur" in notice.lower()
+    elif outcome == "empty":
+        assert "aucun résultat" in notice.lower()
+    elif outcome in {"401", "429"}:
+        assert outcome in notice and "Brave" in notice
+    elif outcome == "invalid_json":
+        assert "illisible" in notice.lower()
+    else:
+        assert "temps" in notice.lower()
+    assert [request.url.host for request in calls] == (
+        ["api.duckduckgo.com"] if outcome == "no_key" else ["api.search.brave.com", "api.duckduckgo.com"]
+    )
+
+
+def test_search_without_keys_and_with_duckduckgo_disabled_does_not_call_any_api(settings, transport):
+    settings.brave_api_key = SecretStr("")
+    calls = []
+    transport(lambda request: calls.append(request) or pytest.fail("Disabled web search must not make a request"))
+    with pytest.raises(providers.ProviderError):
+        asyncio.run(providers.search_web(settings, "query"))
+    assert calls == []
+
+
+@pytest.mark.parametrize("outcome", ["empty", "401", "429", "invalid_json", "timeout"])
+def test_duckduckgo_disabled_never_falls_back_from_brave(settings, transport, outcome):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        assert request.url.host == "api.search.brave.com"
+        if outcome == "timeout":
+            raise httpx.ReadTimeout("private provider details", request=request)
+        if outcome == "invalid_json":
+            return httpx.Response(200, text="invalid-json")
+        if outcome == "empty":
+            return httpx.Response(200, json={"web": {"results": []}})
+        return httpx.Response(int(outcome), json={"error": "private provider details"})
+
+    transport(handler)
+    if outcome == "empty":
+        assert asyncio.run(providers.search_web(settings, "query")) == []
+    else:
+        with pytest.raises(providers.ProviderError):
+            asyncio.run(providers.search_web(settings, "query"))
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("has_brave_key", [False, True])
+def test_web_search_in_demo_mode_refuses_all_external_calls(settings, transport, has_brave_key):
+    settings.demo_mode = True
+    settings.duckduckgo_enabled = True
+    if not has_brave_key:
+        settings.brave_api_key = SecretStr("")
+    transport(lambda request: pytest.fail("Demo mode must not call an external API"))
+    with pytest.raises(providers.ProviderError):
+        asyncio.run(providers.search_web(settings, "query"))
+
+
+@pytest.mark.parametrize("payload", [
+    {},
+    {"Answer": "Une réponse directe sans source", "AnswerType": "calc", "Redirect": "https://example.com/redirect"},
+    {"AbstractText": "Sans URL", "Definition": "Sans URL", "Results": [], "RelatedTopics": []},
+    {"Heading": {}, "AbstractText": 12, "AbstractURL": [], "Definition": [], "DefinitionURL": {},
+     "Results": "not-a-list", "RelatedTopics": None},
+    {"Results": [None, 42, "texte", {}, {"Text": 12, "FirstURL": "https://example.com/wrong-text"}],
+     "RelatedTopics": [False, {"Topics": "not-a-list"}, {"Text": ["wrong"], "FirstURL": "https://example.com/wrong"}]},
+])
+def test_duckduckgo_empty_or_malformed_optional_fields_return_no_sources(settings, transport, payload):
+    enable_duckduckgo(settings)
+    transport(lambda request: httpx.Response(200, json=payload))
+    assert asyncio.run(providers.search_web(settings, "query")) == []
+
+
+def test_duckduckgo_filters_unsafe_urls_and_deduplicates_sources(settings, transport):
+    enable_duckduckgo(settings)
+    transport(lambda request: httpx.Response(200, json={
+        "Heading": "Titre", "AbstractText": "Première source", "AbstractURL": "https://example.com/duplicate",
+        "Definition": "Copie", "DefinitionURL": "https://example.com/duplicate",
+        "Results": [
+            {"Text": "Copie", "FirstURL": "https://example.com/duplicate"},
+            {"Text": "Script", "FirstURL": "javascript:alert(1)"},
+            {"Text": "Fichier", "FirstURL": "file:///etc/passwd"},
+            {"Text": "Utilisateur", "FirstURL": "https://user:secret@example.com/private"},
+            {"Text": "URL vide", "FirstURL": "https://"},
+        ],
+        "RelatedTopics": [{"Topics": [
+            {"Text": "Copie imbriquée", "FirstURL": "https://example.com/duplicate"},
+            {"Text": "Valide", "FirstURL": "http://example.org/valid"},
+        ]}],
+    }))
+    sources = asyncio.run(providers.search_web(settings, "query"))
+    assert [source["url"] for source in sources] == ["https://example.com/duplicate", "http://example.org/valid"]
+    assert all(source["provider"] == "duckduckgo_instant_answers" for source in sources)
+
+
+def test_duckduckgo_html_result_fallback_is_text_and_uses_only_explicit_source_url(settings, transport):
+    enable_duckduckgo(settings)
+    transport(lambda request: httpx.Response(200, json={"Results": [{
+        "Result": '<a href="https://other.invalid/">&lt;b&gt;Source&lt;/b&gt; &amp; texte</a>',
+        "FirstURL": "https://example.com/explicit-source",
+    }]}))
+    sources = asyncio.run(providers.search_web(settings, "query"))
+    assert len(sources) == 1
+    assert sources[0]["snippet"] == "Source & texte"
+    assert sources[0]["url"] == "https://example.com/explicit-source"
+    assert "<" not in sources[0]["title"]
+
+
+def test_duckduckgo_limits_results_to_five(settings, transport):
+    enable_duckduckgo(settings)
+    transport(lambda request: httpx.Response(200, json={"RelatedTopics": [
+        {"Text": f"Source {index}", "FirstURL": f"https://example.com/{index}"} for index in range(20)
+    ]}))
+    sources = asyncio.run(providers.search_web(settings, "query"))
+    assert len(sources) == 5
+    assert len({source["url"] for source in sources}) == 5
+
+
+def test_duckduckgo_ignores_topics_nested_beyond_depth_limit(settings, transport):
+    enable_duckduckgo(settings)
+    topic = {"Text": "Trop profond", "FirstURL": "https://example.com/deep"}
+    for _ in range(8):
+        topic = {"Topics": [topic]}
+    transport(lambda request: httpx.Response(200, json={"RelatedTopics": [topic]}))
+    assert asyncio.run(providers.search_web(settings, "query")) == []
+
+
+def test_duckduckgo_bounds_number_of_visited_topic_nodes(settings, transport):
+    enable_duckduckgo(settings)
+    topics = [{"Text": "Sans URL"} for _ in range(220)]
+    topics.append({"Text": "Après la limite", "FirstURL": "https://example.com/too-late"})
+    transport(lambda request: httpx.Response(200, json={"RelatedTopics": topics}))
+    assert asyncio.run(providers.search_web(settings, "query")) == []
+
+
+@pytest.mark.parametrize("outcome", ["401", "429", "500", "302", "invalid_json", "json_array", "timeout"])
+def test_duckduckgo_errors_are_safe_and_do_not_retry(settings, transport, outcome):
+    enable_duckduckgo(settings)
+    unsafe = "private-provider-token https://private.invalid/?api_key=private-secret"
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        assert request.url.host == "api.duckduckgo.com"
+        if outcome == "timeout":
+            raise httpx.ReadTimeout(unsafe, request=request)
+        if outcome == "invalid_json":
+            return httpx.Response(200, text=unsafe)
+        if outcome == "json_array":
+            return httpx.Response(200, json=[unsafe])
+        return httpx.Response(int(outcome), json={"error": unsafe}, headers={"location": "https://private.invalid/redirect"})
+
+    transport(handler)
+    with pytest.raises(providers.ProviderError) as error:
+        asyncio.run(providers.search_web(settings, "query"))
+    message = str(error.value)
+    assert "private-provider-token" not in message
+    assert "private-secret" not in message
+    assert "private.invalid" not in message
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("duckduckgo_outcome", ["429", "invalid_json", "timeout"])
+def test_failed_duckduckgo_fallback_preserves_the_brave_error(settings, transport, duckduckgo_outcome):
+    settings.duckduckgo_enabled = True
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        if request.url.host == "api.search.brave.com":
+            return httpx.Response(401, json={"error": "fake-brave-secret"})
+        assert request.url.host == "api.duckduckgo.com"
+        if duckduckgo_outcome == "timeout":
+            raise httpx.ReadTimeout("private-ddg-details", request=request)
+        if duckduckgo_outcome == "invalid_json":
+            return httpx.Response(200, text="private-ddg-details")
+        return httpx.Response(int(duckduckgo_outcome), json={"error": "private-ddg-details"})
+
+    transport(handler)
+    with pytest.raises(providers.ProviderError) as error:
+        asyncio.run(providers.search_web(settings, "query"))
+    assert "Brave" in str(error.value)
+    assert "401" in str(error.value)
+    assert "fake-brave-secret" not in str(error.value)
+    assert "private-ddg-details" not in str(error.value)
+    assert [request.url.host for request in calls] == ["api.search.brave.com", "api.duckduckgo.com"]
+
+
+def test_empty_duckduckgo_fallback_preserves_a_prior_brave_error(settings, transport):
+    settings.duckduckgo_enabled = True
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        if request.url.host == "api.search.brave.com":
+            return httpx.Response(401, json={"error": "fake-brave-secret private-error"})
+        assert request.url.host == "api.duckduckgo.com"
+        return httpx.Response(200, json={"RelatedTopics": [], "Results": []})
+
+    transport(handler)
+    with pytest.raises(providers.ProviderError) as error:
+        asyncio.run(providers.search_web(settings, "query"))
+    assert "Brave" in str(error.value) and "401" in str(error.value)
+    assert "fake-brave-secret" not in str(error.value)
+    assert "private-error" not in str(error.value)
+    assert [request.url.host for request in calls] == ["api.search.brave.com", "api.duckduckgo.com"]
+
+
+def test_empty_brave_and_duckduckgo_responses_stay_a_normal_empty_result(settings, transport):
+    settings.duckduckgo_enabled = True
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        if request.url.host == "api.search.brave.com":
+            return httpx.Response(200, json={"web": {"results": []}})
+        assert request.url.host == "api.duckduckgo.com"
+        return httpx.Response(200, json={"RelatedTopics": [], "Results": []})
+
+    transport(handler)
+    assert asyncio.run(providers.search_web(settings, "query")) == []
+    assert [request.url.host for request in calls] == ["api.search.brave.com", "api.duckduckgo.com"]
 
 
 @pytest.mark.parametrize("mime_type, kind, url_field", [

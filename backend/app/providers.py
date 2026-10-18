@@ -23,6 +23,10 @@ class ProviderError(Exception):
 
 _TIMEOUT = httpx.Timeout(60.0, connect=10.0, pool=10.0)
 _MAX_IMAGE_BYTES = 10 * 1024 * 1024
+_DUCKDUCKGO_TIMEOUT = httpx.Timeout(12.0, connect=5.0, pool=5.0)
+_DUCKDUCKGO_MAX_RESULTS = 5
+_DUCKDUCKGO_MAX_DEPTH = 4
+_DUCKDUCKGO_MAX_NODES = 200
 
 
 def _key(settings: Any, name: str, provider: str) -> str:
@@ -205,7 +209,7 @@ def _safe_web_url(value: Any) -> bool:
         return False
 
 
-async def search_web(settings: Any, query: str) -> list[dict[str, str]]:
+async def _search_brave(settings: Any, query: str) -> list[dict[str, str]]:
     key = _key(settings, "brave_api_key", "Brave Search")
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=False) as client:
@@ -235,6 +239,114 @@ async def search_web(settings: Any, query: str) -> list[dict[str, str]]:
         raise ProviderError("La recherche web met trop de temps à répondre ; réessayez.") from None
     except httpx.HTTPError:
         raise ProviderError("Impossible de joindre Brave Search.") from None
+
+
+def _plain_search_text(value: Any, limit: int) -> str:
+    if not isinstance(value, str):
+        return ""
+    # Decode before stripping tags so encoded markup cannot survive as HTML.
+    decoded = html.unescape(value[:20000])
+    return " ".join(re.sub(r"<[^>]*>", "", decoded).split())[:limit]
+
+
+def _duckduckgo_sources(payload: dict[str, Any]) -> list[dict[str, str]]:
+    """Extract cited Instant Answers, never pretend these are fetched pages."""
+    sources: list[dict[str, str]] = []
+    seen: set[tuple] = set()
+    heading = _plain_search_text(payload.get("Heading"), 200)
+
+    def add(url: Any, text: Any, title: str) -> None:
+        if len(sources) >= _DUCKDUCKGO_MAX_RESULTS or not isinstance(url, str):
+            return
+        url = url.strip()
+        snippet = _plain_search_text(text, 3000)
+        if not snippet or not _safe_web_url(url):
+            return
+        parsed = urlsplit(url)
+        identity = (parsed.scheme.lower(), parsed.netloc.lower(), parsed.path or "/", parsed.query)
+        if identity in seen:
+            return
+        seen.add(identity)
+        sources.append({"title": title[:500], "url": url, "snippet": snippet,
+                        "provider": "duckduckgo_instant_answers"})
+
+    add(payload.get("AbstractURL"), payload.get("AbstractText"),
+        f"Résumé : {heading or 'réponse instantanée DuckDuckGo'}")
+    add(payload.get("DefinitionURL"), payload.get("Definition"),
+        f"Définition : {heading or 'réponse instantanée DuckDuckGo'}")
+
+    visited = 0
+
+    def walk(items: Any, kind: str, depth: int = 0) -> None:
+        nonlocal visited
+        if not isinstance(items, list) or depth > _DUCKDUCKGO_MAX_DEPTH:
+            return
+        for item in items:
+            if visited >= _DUCKDUCKGO_MAX_NODES or len(sources) >= _DUCKDUCKGO_MAX_RESULTS:
+                return
+            visited += 1
+            if not isinstance(item, dict):
+                continue
+            text = _plain_search_text(item.get("Text"), 3000) or _plain_search_text(item.get("Result"), 3000)
+            add(item.get("FirstURL"), text, f"{kind} : {text[:200] or heading or 'DuckDuckGo'}")
+            walk(item.get("Topics"), "Sujet lié", depth + 1)
+
+    walk(payload.get("Results"), "Résultat instantané")
+    walk(payload.get("RelatedTopics"), "Sujet lié")
+    return sources
+
+
+async def _search_duckduckgo(query: str) -> list[dict[str, str]]:
+    # Separate client and headers: the Brave token must never reach DuckDuckGo.
+    try:
+        async with httpx.AsyncClient(timeout=_DUCKDUCKGO_TIMEOUT, follow_redirects=False) as client:
+            response = await client.get(
+                "https://api.duckduckgo.com/",
+                params={"q": query, "format": "json", "no_html": 1, "no_redirect": 1, "t": "clair"},
+                headers={"Accept": "application/json"},
+            )
+        _check_response(response, "DuckDuckGo Instant Answers")
+        return _duckduckgo_sources(_json(response, "DuckDuckGo Instant Answers"))
+    except httpx.TimeoutException:
+        raise ProviderError("DuckDuckGo Instant Answers met trop de temps à répondre ; réessayez.") from None
+    except httpx.HTTPError:
+        raise ProviderError("Impossible de joindre DuckDuckGo Instant Answers.") from None
+
+
+async def search_web(settings: Any, query: str) -> list[dict[str, str]]:
+    """Prefer Brave, optionally relay to the limited official Instant Answers API."""
+    if getattr(settings, "demo_mode", False):
+        raise ProviderError("La recherche web externe est désactivée en mode démonstration.")
+    allow_duckduckgo = getattr(settings, "duckduckgo_enabled", False)
+    brave_key = getattr(settings, "brave_api_key", None)
+    brave_configured = bool(brave_key and brave_key.get_secret_value())
+    brave_error: ProviderError | None = None
+    cause = "Brave Search n'est pas configuré."
+    if brave_configured or not allow_duckduckgo:
+        try:
+            sources = await _search_brave(settings, query)
+            if sources or not allow_duckduckgo:
+                return sources
+            cause = "Brave Search n'a trouvé aucun résultat exploitable."
+        except ProviderError as exc:
+            if not allow_duckduckgo:
+                raise
+            brave_error = exc
+            cause = str(exc)
+    try:
+        sources = await _search_duckduckgo(query)
+    except ProviderError as exc:
+        if brave_error is not None:
+            raise ProviderError(f"{brave_error} Le relais DuckDuckGo a également échoué : {exc}") from None
+        raise
+    if not sources and brave_error is not None:
+        raise brave_error
+    if sources:
+        sources[0]["search_notice"] = (
+            f"{cause} Relais DuckDuckGo Instant Answers : réponses instantanées et sujets liés uniquement ; "
+            "cette API ne fournit pas une recherche web générale ni une lecture des pages citées."
+        )
+    return sources
 
 
 def _annotation(value: Any, schema: type[DocumentAnnotation] | type[FigureAnnotation]):

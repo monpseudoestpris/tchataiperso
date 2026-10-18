@@ -253,9 +253,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/config")
     def config():
+        search_providers = []
+        if not settings.demo_mode:
+            if settings.enabled(settings.brave_api_key):
+                search_providers.append("brave")
+            if settings.duckduckgo_enabled:
+                search_providers.append("duckduckgo_instant_answers")
         return {"models": models, "default_model": settings.default_model, "demo_mode": settings.demo_mode,
+                "search_providers": search_providers,
                 "features": {"chat": settings.demo_mode or settings.enabled(settings.llm_api_key),
-                             "web_search": settings.enabled(settings.brave_api_key),
+                             "web_search": settings.web_search_enabled,
                              "ocr": settings.enabled(settings.mistral_api_key),
                              "image_generation": settings.enabled(settings.ideogram_api_key)}}
 
@@ -498,8 +505,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(503, "Configurez LLM_API_KEY ou activez explicitement DEMO_MODE pour une simulation")
         if not body.content.strip() and not body.attachment_ids:
             raise HTTPException(422, "Écrivez un message ou joignez un document")
-        if body.web_search and not settings.enabled(settings.brave_api_key):
-            raise HTTPException(503, "La recherche web nécessite BRAVE_API_KEY et un mode IA réel")
+        if body.web_search and not settings.web_search_enabled:
+            raise HTTPException(503, "Configurez BRAVE_API_KEY ou activez DUCKDUCKGO_ENABLED en mode IA réel")
         lock = claim(user.id, conversation_id)
         await lock.acquire()
         try:
@@ -548,6 +555,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 if body.web_search:
                     yield sse("status", {"message": "Recherche web en cours…"})
                     sources = await providers.search_web(settings, body.content[:1000])
+                    if not sources:
+                        raise providers.ProviderError(
+                            "Aucune source web exploitable n’a été trouvée. "
+                            "Reformulez ou désactivez Web pour continuer sans recherche.")
+                    if notice := sources[0].get("search_notice"):
+                        yield sse("status", {"message": notice})
                 # Summarize old turns, retaining the complete persisted history.
                 with sessions() as db:
                     conversation = get_conversation(db, conversation_id, user.id)

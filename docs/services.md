@@ -1,6 +1,6 @@
 # Services, bibliothèques et maîtrise du budget
 
-Choix pour cette première version : Next.js/React/Tailwind, FastAPI, PostgreSQL dans Docker, API de conversation compatible OpenAI avec OpenRouter par défaut, recherche Brave à la demande, extraction locale des documents texte et Mistral OCR pour les PDF/images en mode réel. Ideogram utilise votre propre clé, conservée côté serveur.
+Choix pour cette première version : Next.js/React/Tailwind, FastAPI, PostgreSQL dans Docker, API de conversation compatible OpenAI avec OpenRouter par défaut, recherche Brave à la demande avec secours DuckDuckGo Instant Answers optionnel, extraction locale des documents texte et Mistral OCR pour les PDF/images en mode réel. Ideogram utilise votre propre clé, conservée côté serveur.
 
 Vérification documentaire tentée le **17 octobre 2026** : les requêtes HTTPS vers les sources officielles listées ci-dessous ont été refusées par le proxy de cet environnement (`Tunnel connection failed: 403 Forbidden`). Les liens sont fournis pour vérification ; leurs pages et leurs tarifs n'ont donc pas pu être consultés ici. Aucun montant actuel, quota gratuit ou classement du « moins cher » n'est garanti. Aucun appel payant n'a été effectué.
 
@@ -19,19 +19,24 @@ Pour commencer, choisir un petit modèle pour les échanges ordinaires et le ré
 
 Sources officielles à consulter : [OpenRouter, démarrage](https://openrouter.ai/docs/quickstart), [tarifs Gemini](https://ai.google.dev/gemini-api/docs/pricing), [tarifs OpenAI](https://openai.com/api/pricing/), [documentation Mistral](https://docs.mistral.ai/), [tarifs Mistral](https://mistral.ai/pricing).
 
-## Recherche web : Brave au départ
+## Recherche web : Brave et secours DuckDuckGo optionnel
 
 | Solution | À choisir si… | Points de vigilance |
 | --- | --- | --- |
-| **Brave Search API** | Vous voulez une recherche classique avec titres, URL et extraits, puis laisser votre modèle rédiger une réponse sourcée. C'est l'intégration de cette version. | Vérifier prix par requête, crédits éventuels, limites et conditions d'utilisation. La recherche et la rédaction par le LLM sont deux coûts distincts. |
+| **Brave Search API** | Vous voulez une recherche classique avec titres, URL et extraits, puis laisser votre modèle rédiger une réponse sourcée. C'est le fournisseur prioritaire. | Vérifier prix par requête, crédits éventuels, limites et conditions d'utilisation. La recherche et la rédaction par le LLM sont deux coûts distincts. |
+| **DuckDuckGo Instant Answers** | Vous voulez un secours officiel sans clé pour des résumés, définitions et sujets liés. Activer `DUCKDUCKGO_ENABLED=true` ; désactivé par défaut. | Couverture limitée : ce n'est pas une API de résultats web généraux (SERP). Une requête peut ne fournir aucune réponse. Les conditions, quotas et disponibilité doivent être vérifiés ; aucun accès illimité ni SLA n'est promis. |
 | **Tavily** | Vous préférez une API orientée applications IA avec davantage d'options de recherche et d'extraction. | Vérifier le nombre de crédits consommés par chaque opération et chaque profondeur de recherche ; les options avancées peuvent changer le coût. Non intégré dans cette version. |
 | **SearXNG auto-hébergé** | Vous souhaitez administrer votre propre métamoteur et acceptez sa maintenance. | Logiciel libre ne signifie pas recherches illimitées ou sans coût : hébergement, moteurs amont, blocages, conditions et maintenance restent à votre charge. Ce n'est pas une API gérée équivalente. Non intégré ici. |
 
-Brave est un choix de simplicité, pas une affirmation de prix minimal actuel. Pour limiter la facture : recherche activée explicitement par l'utilisateur, une requête par message, quelques résultats, extraits courts et liens conservés avec la réponse. Ajouter des quotas avant toute ouverture multiutilisateur.
+Brave est un choix de simplicité, pas une affirmation de prix minimal actuel. La recherche est activée explicitement par l'utilisateur pour le message. Le backend essaie Brave si sa clé est configurée. Si cette clé manque, si Brave échoue ou ne fournit aucun résultat exploitable, il essaie l'API officielle DuckDuckGo Instant Answers lorsque `DUCKDUCKGO_ENABLED=true`. Sinon, ce secours n'est jamais appelé. Chaque fournisseur est interrogé au plus une fois ; les résultats restent bornés et leurs liens sont conservés avec la réponse. Ajouter des quotas applicatifs pour maîtriser le budget.
+
+L'intégration DuckDuckGo utilise les appels HTTPS `httpx` existants : aucune clé, dépendance supplémentaire, bibliothèque de scraping ou lecture des pages HTML de recherche. Elle ne remplace pas Brave pour les requêtes générales ou l'actualité. Les contenus fournis doivent rester attribués à leur source et à DuckDuckGo, avec leurs liens. Si aucun fournisseur ne retourne de source exploitable, une erreur explicite est affichée et le modèle de conversation n'est pas appelé pour ce message. L'application ne produit pas de réponse prétendument vérifiée sur le web sans source.
+
+Vérification DuckDuckGo tentée le **18 octobre 2026** : les GET publics de la documentation, des conditions et d'une requête représentative sur `api.duckduckgo.com` ont reçu un refus du proxy cloud (`403 Forbidden`). Le fonctionnement distant, les conditions et les quotas actuels restent donc à vérifier dans un environnement autorisé ; les tests simulés ne constituent pas une validation en ligne.
 
 **Les extraits de recherche ne constituent pas une lecture exhaustive des pages.** Une réponse doit rester prudente si la source ne fournit qu'un extrait. Une future fonction de lecture de pages demandera une extraction distincte, les autorisations appropriées et une protection contre les requêtes vers les réseaux privés. Les contenus web doivent être traités comme des données non fiables : ils ne peuvent pas modifier les instructions système ni autoriser des actions.
 
-Sources officielles : [Brave Search API](https://api.search.brave.com/app/documentation/web-search/get-started), [crédits Tavily](https://docs.tavily.com/documentation/api-credits), [tarifs Tavily](https://www.tavily.com/pricing), [documentation SearXNG](https://docs.searxng.org/).
+Sources officielles : [Brave Search API](https://api.search.brave.com/app/documentation/web-search/get-started), [DuckDuckGo Instant Answers API](https://duckduckgo.com/api), [conditions DuckDuckGo](https://duckduckgo.com/terms), [exemple de requête JSON DuckDuckGo](https://api.duckduckgo.com/?q=DuckDuckGo&format=json&no_html=1&no_redirect=1), [crédits Tavily](https://docs.tavily.com/documentation/api-credits), [tarifs Tavily](https://www.tavily.com/pricing), [documentation SearXNG](https://docs.searxng.org/).
 
 ## Pièces jointes, OCR et images
 
@@ -86,6 +91,6 @@ Le cache, les images, les outils et la classification des tokens peuvent modifie
 
 ## Accès réseau à prévoir pour les appels réels
 
-Les domaines nécessaires dépendent des services activés : `openrouter.ai`, `api.search.brave.com`, `api.mistral.ai` et `api.ideogram.ai`. Pour un autre fournisseur direct : `api.openai.com` ou `generativelanguage.googleapis.com`. Les téléchargements d'images peuvent nécessiter un domaine de stockage supplémentaire fourni par Ideogram ; vérifier l'URL réellement retournée et sa politique d'accès avant de l'autoriser.
+Les domaines nécessaires dépendent des services activés : `openrouter.ai`, `api.search.brave.com`, `api.duckduckgo.com` si le secours est activé, `api.mistral.ai` et `api.ideogram.ai`. `duckduckgo.com` sert les liens de documentation et d'attribution, sans être une cible de scraping. Pour un autre fournisseur direct : `api.openai.com` ou `generativelanguage.googleapis.com`. Les téléchargements d'images peuvent nécessiter un domaine de stockage supplémentaire fourni par Ideogram ; vérifier l'URL réellement retournée et sa politique d'accès avant de l'autoriser.
 
 Cette liste explique les besoins ; elle ne modifie aucune règle réseau. Les clés existantes doivent être renseignées dans les paramètres sécurisés de l'environnement ou dans le fichier local ignoré prévu par le projet. Les modes sans fournisseur et les tests locaux ne prouvent pas le fonctionnement d'une API distante. La validation de bout en bout reste à effectuer avec une clé, l'accès réseau et un budget autorisé.

@@ -3,6 +3,7 @@ export type Config = {
   models: Model[];
   default_model: string;
   features: { chat: boolean; web_search: boolean; ocr: boolean; image_generation: boolean };
+  search_providers?: string[];
   demo_mode: boolean;
 };
 export type Attachment = { id: string; filename: string; mime_type: string; url: string; size?: number; has_extraction?: boolean; page_count?: number };
@@ -22,7 +23,7 @@ export type DocumentExtraction = {
   annotations: { title: string; summary: string }[];
   warnings: string[];
 };
-export type Source = { title: string; url: string; snippet?: string };
+export type Source = { title: string; url: string; snippet?: string; provider?: string; search_notice?: string };
 export type Message = { id: string; role: string; content: string; created_at: string; attachments: Attachment[]; sources: Source[] };
 export type Skill = { id: string; name: string; prompt: string; created_at: string; updated_at: string };
 export type Conversation = { id: string; title: string; model: string; created_at: string; updated_at: string; summary?: string | null; messages?: Message[]; skills?: Skill[] };

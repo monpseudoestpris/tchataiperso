@@ -244,6 +244,11 @@ svg { flex-shrink: 0; }
 .sources a span:first-child { color: #98a989; font-size: 8px; }
 .sources a span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 200px; }
 .sources a:hover { background: #edf2e4; border-color: #b9c8a4; }
+.source-provider { flex-shrink: 0; font-size: 8px; color: #6d7562; border-left: 1px solid #dbe3cf; padding-left: 5px; }
+.sources > .source-attribution { display: block; margin: 8px 0 0; font-size: 9px; }
+.sources > .source-notice { align-items: flex-start; margin: 8px 0 0; line-height: 1.6; }
+.sources .source-notice > svg { margin-top: 1px; }
+.sources .source-attribution a { display: inline-flex; gap: 3px; background: transparent; border: 0; border-radius: 0; padding: 0; color: inherit; font-size: inherit; text-decoration: underline; text-underline-offset: 2px; }
 .thinking-dots { display: flex; gap: 5px; padding: 10px 0; }
 .thinking-dots i { width: 5px; height: 5px; background: #a9b697; border-radius: 50%; animation: pulse 1.3s ease-in-out infinite; }
 .thinking-dots i:nth-child(2) { animation-delay: .15s; }.thinking-dots i:nth-child(3) { animation-delay: .3s; }
@@ -285,6 +290,8 @@ svg { flex-shrink: 0; }
 .error-banner .icon-button { width: 20px; height: 24px; color: #bf9e7b; }
 .generation-status { display: flex; align-items: center; gap: 6px; color: #97a184; padding: 0 7px 10px; font-size: 10px; }
 .vision-notice { display: flex; align-items: center; gap: 6px; color: #b28c60; padding: 0 7px 10px; font-size: 10px; line-height: 1.6; }
+.search-notice { display: flex; align-items: flex-start; gap: 6px; color: #6d7562; padding: 0 7px 10px; font-size: 10px; line-height: 1.6; }
+.search-notice svg { margin-top: 1px; }
 
 .context-panel { flex: 0 0 325px; width: 325px; border-left: 1px solid #e9ebdf; background: #f8f9f3; overflow-y: auto; padding: 28px 20px 20px; scrollbar-width: thin; scrollbar-color: #e3e7d8 transparent; }
 .chat-skills-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 42px; padding: 5px 24px; border-bottom: 1px solid #edf0e7; color: #89937b; font-size: 10px; }
