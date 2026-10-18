@@ -34,7 +34,7 @@ def prepare_schema(settings: Settings) -> None:
         engine.dispose()
     if current is None:
         upgrade(settings, SCHEMA_REVISION)
-    elif current not in {SCHEMA_REVISION, "0002_require_data_owner"}:
+    elif current not in {SCHEMA_REVISION, "0002_require_data_owner", "0003_add_skills", "0004_attachment_extraction"}:
         raise SystemExit(f"Révision de base non reconnue : {current}")
 
 

@@ -1,17 +1,18 @@
 "use client";
 
 import {
-  ArrowDown, ArrowUp, BookOpen, Brain, Check, ChevronDown, ChevronRight,
+  ArrowDown, ArrowUp, BookOpen, Brain, Check, ChevronDown, ChevronLeft, ChevronRight,
   CircleAlert, Copy, ExternalLink, FileText, Globe2, ImagePlus, LoaderCircle,
   LogOut, Menu, MessageCircle, PanelLeftClose, Paperclip, Pencil, Plus, Search,
-  Shield, Sparkles, Square, Trash2, WandSparkles, X,
+  RefreshCw, Shield, Sparkles, Square, Trash2, WandSparkles, X,
 } from "lucide-react";
 import { useEffect, useRef, useState, useSyncExternalStore, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { AdminPanel } from "@/components/admin-panel";
 import { AuthPanel } from "@/components/auth-panel";
-import { ApiError, api, errorMessage, streamMessage, type Attachment, type AuthUser, type Config, type Conversation, type Memory, type Message } from "@/lib/api";
+import { SkillsPanel } from "@/components/skills-panel";
+import { ApiError, api, errorMessage, streamMessage, type Attachment, type AuthUser, type Config, type Conversation, type DocumentExtraction, type Memory, type Message } from "@/lib/api";
 
 const suggestions = [
   { icon: WandSparkles, title: "Faire émerger une idée", description: "Explorer une piste et lui donner forme", prompt: "Aide-moi à explorer une idée. Pose-moi quelques questions pour comprendre ce que je veux créer." },
@@ -53,11 +54,68 @@ function IconButton({ label, children, className = "", ...props }: { label: stri
   return <button type="button" className={`icon-button ${className}`} aria-label={label} title={label} {...props}>{children}</button>;
 }
 
-function AttachmentView({ attachment }: { attachment: Attachment }) {
-  if (attachment.mime_type.startsWith("image/")) {
-    return <a className="message-image" href={attachment.url} target="_blank" rel="noreferrer"><img src={attachment.url} alt={attachment.filename} loading="lazy" /><span>{attachment.filename}<ExternalLink size={13} /></span></a>;
+function AttachmentAnalysis({ attachment }: { attachment: Attachment }) {
+  const [extraction, setExtraction] = useState<DocumentExtraction | null>();
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [pageIndex, setPageIndex] = useState(0);
+  const [rawText, setRawText] = useState(true);
+  async function load() {
+    setLoading(true); setError("");
+    try {
+      const result = await api<{ extraction: DocumentExtraction | null }>(`/attachments/${attachment.id}/extraction`);
+      setExtraction(result.extraction);
+    } catch (err) { setError(errorMessage(err)); }
+    finally { setLoading(false); }
   }
-  return <a className="document-link" href={attachment.url} target="_blank" rel="noreferrer"><FileText size={18} /><span>{attachment.filename}</span><ExternalLink size={13} /></a>;
+  const page = extraction?.pages[pageIndex];
+  return <details className="attachment-analysis" onToggle={event => {
+    if (event.currentTarget.open && extraction === undefined && !loading && !error) void load();
+  }}>
+    <summary><BookOpen size={14} />Contenu extrait{attachment.page_count ? <span>{attachment.page_count} p.</span> : null}</summary>
+    {loading && <p className="analysis-status" role="status"><LoaderCircle size={14} className="spin" />Chargement de l’analyse…</p>}
+    {error && <div className="analysis-status" role="alert"><p>{error}</p><IconButton label="Réessayer le chargement" onClick={() => void load()}><RefreshCw size={15} /></IconButton></div>}
+    {extraction === null && <p className="analysis-status">Analyse indisponible pour cette pièce jointe. Joignez à nouveau le fichier pour l’analyser.</p>}
+    {extraction && page && <>
+      <div className="analysis-toolbar">
+        <IconButton label="Page précédente" disabled={pageIndex === 0} onClick={() => setPageIndex(index => index - 1)}><ChevronLeft size={16} /></IconButton>
+        <label>Page <select value={pageIndex} onChange={event => setPageIndex(Number(event.target.value))}>{extraction.pages.map((item, index) => <option key={item.index} value={index}>{item.index + 1}</option>)}</select> / {extraction.pages.length}</label>
+        <IconButton label="Page suivante" disabled={pageIndex === extraction.pages.length - 1} onClick={() => setPageIndex(index => index + 1)}><ChevronRight size={16} /></IconButton>
+        <span>{page.method === "vision" ? "OCR + vision" : page.method === "local" ? "Extraction locale" : "OCR"}</span>
+      </div>
+      <div className="analysis-format" role="group" aria-label="Format de lecture">
+        <button type="button" aria-pressed={rawText} onClick={() => setRawText(true)}><FileText size={13} />Texte brut</button>
+        <button type="button" aria-pressed={!rawText} onClick={() => setRawText(false)}><BookOpen size={13} />Mise en forme</button>
+      </div>
+      <div className="analysis-content" aria-live="polite">
+        {extraction.warnings.map((warning, index) => <p className="analysis-warning" key={index}>{warning}</p>)}
+        <section className="analysis-section"><h4>Transcription OCR · page {page.index + 1}</h4>
+          {page.markdown.trim() ? rawText ? <pre className="analysis-transcript">{page.markdown}</pre> : <div className="markdown"><ReactMarkdown skipHtml remarkPlugins={[remarkGfm]} components={{
+            img: ({ alt }) => <span className="analysis-image-label">[{alt || "Illustration"}]</span>,
+            a: ({ children, href }) => <a href={href} target="_blank" rel="noreferrer">{children}</a>,
+            table: ({ children }) => <div className="table-scroll"><table>{children}</table></div>,
+          }}>{page.markdown}</ReactMarkdown></div> : <p>Aucun texte détecté.</p>}
+        </section>
+        {page.images.map(image => image.annotation && <section className="analysis-section" key={image.id}>
+          <h4>{image.id} · {image.annotation.image_type}</h4><p>{image.annotation.description}</p>
+          {image.annotation.visible_text && <pre className="analysis-transcript analysis-visible-text">{image.annotation.visible_text}</pre>}
+        </section>)}
+        {page.vision_description && <section className="analysis-section"><h4>Description visuelle · page {page.index + 1}</h4><p>{page.vision_description}</p></section>}
+        {pageIndex === 0 && extraction.annotations.length > 0 && <details className="analysis-annotations"><summary>Analyse documentaire complémentaire</summary>
+          {extraction.annotations.map((annotation, index) => <section className="analysis-section" key={index}><h4>{annotation.title || "Relevé documentaire"}</h4><p>{annotation.summary}</p></section>)}
+        </details>}
+      </div>
+    </>}
+  </details>;
+}
+
+function AttachmentView({ attachment }: { attachment: Attachment }) {
+  return <div className="attachment-entry">
+    {attachment.mime_type.startsWith("image/")
+      ? <a className="message-image" href={attachment.url} target="_blank" rel="noreferrer"><img src={attachment.url} alt={attachment.filename} loading="lazy" /><span>{attachment.filename}<ExternalLink size={13} /></span></a>
+      : <a className="document-link" href={attachment.url} target="_blank" rel="noreferrer"><FileText size={18} /><span>{attachment.filename}</span><ExternalLink size={13} /></a>}
+    <AttachmentAnalysis attachment={attachment} />
+  </div>;
 }
 
 function MessageView({ message, streaming }: { message: Message; streaming?: boolean }) {
@@ -105,6 +163,7 @@ export function ChatApp() {
   const [query, setQuery] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
+  const [skillsOpen, setSkillsOpen] = useState(false);
   const [contextTab, setContextTab] = useState<"summary" | "memories">("summary");
   const [memoryDraft, setMemoryDraft] = useState("");
   const [dialog, setDialog] = useState<{ type: "rename" | "delete"; conversation: Conversation } | null>(null);
@@ -176,8 +235,7 @@ export function ChatApp() {
   const messages = conversation?.messages ?? [];
   const working = busy !== null;
   const sending = busy === "send" || busy === "image";
-  const hasImagesWithoutVision = attachments.some(file => file.mime_type.startsWith("image/")) && !config?.demo_mode && !config?.models.find(item => item.id === model)?.vision;
-  const needsVision = hasImagesWithoutVision && !config?.features.ocr;
+  const needsVision = attachments.some(file => file.mime_type.startsWith("image/") && !file.has_extraction) && !config?.demo_mode && !config?.models.find(item => item.id === model)?.vision;
   const canSend = !!config && !working && (imageMode ? config.features.image_generation && !!draft.trim() && draft.length <= 4000 : config.features.chat && !needsVision && (!!draft.trim() || attachments.length > 0));
   const filteredConversations = conversations.filter(item => item.title.toLocaleLowerCase("fr").includes(query.toLocaleLowerCase("fr")));
   const groups = ["Aujourd’hui", "Ces 7 derniers jours", "Plus tôt"].map(label => ({ label, items: filteredConversations.filter(item => dateGroup(item.updated_at) === label) })).filter(group => group.items.length);
@@ -250,7 +308,7 @@ export function ChatApp() {
       for (const file of incoming) {
         if (file.size > 20 * 1024 * 1024) throw new Error(`${file.name} dépasse la limite de 20 Mo par fichier.`);
         if ((file.type.startsWith("image/") || /\.(png|jpe?g|webp)$/i.test(file.name)) && file.size > 8 * 1024 * 1024) throw new Error(`${file.name} dépasse la limite de 8 Mo par image.`);
-        setStatus(`Importation de ${file.name}…`);
+        setStatus(`Importation et analyse de ${file.name}…`);
         const body = new FormData(); body.append("file", file);
         uploaded.push(await api<Attachment>("/attachments", { method: "POST", body }));
       }
@@ -293,7 +351,7 @@ export function ChatApp() {
             setStatus("");
             setConversation(old => old ? { ...old, messages: (old.messages ?? []).map(item => item.id === assistantId ? { ...item, content: item.content + event.data.text } : item) } : old);
           } else if (event.type === "done") {
-            setConversation(old => ({ ...event.data.conversation, messages: event.data.conversation.messages ?? (old?.messages ?? []).map(item => item.id === assistantId ? event.data.message : item) }));
+            setConversation(old => ({ ...event.data.conversation, skills: event.data.conversation.skills ?? old?.skills ?? [], messages: event.data.conversation.messages ?? (old?.messages ?? []).map(item => item.id === assistantId ? event.data.message : item) }));
           }
         });
       }
@@ -402,6 +460,8 @@ export function ChatApp() {
 
       <div className="workspace">
         <section className="chat-panel" aria-label="Conversation">
+          <div className="chat-skills-toolbar"><span>{conversation?.skills?.length ? conversation.skills.map(skill => skill.name).join(" · ") : "Aucune compétence active"}</span><button type="button" onClick={() => { setContextOpen(false); setSkillsOpen(true); }}><Sparkles size={15} />Compétences<small>{conversation?.skills?.length ?? 0}</small></button></div>
+          {skillsOpen && <SkillsPanel conversation={conversation} model={model} config={config} onClose={() => setSkillsOpen(false)} onConversationChange={setConversation} onRefreshConversations={refreshConversations} />}
           <div className="chat-scroll" ref={messagesRef} onScroll={() => { const el = messagesRef.current; if (el) setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 120); }}>
             {!messages.length && busy !== "switch" ? <div className="welcome"><div className="welcome-eyebrow"><span /> UN PEU DE CLARTÉ, BEAUCOUP DE POSSIBILITÉS</div><BrandMark /><h1>Qu’avez-vous en tête<span> aujourd’hui ?</span></h1><p>Un espace pour vos questions, vos idées et vos projets.<br />Commencez quelque part. On avance ensemble.</p><div className="suggestions">{suggestions.map((item, index) => <button type="button" className="suggestion" key={item.title} disabled={working || (index === 3 && !config?.features.image_generation)} title={index === 3 && !config?.features.image_generation ? "Configurez votre clé Ideogram côté serveur pour créer des images." : undefined} onClick={() => { setDraft(item.prompt); setImageMode(index === 3); textareaRef.current?.focus(); }}><span className={`suggestion-icon suggestion-icon-${index}`}><item.icon size={19} strokeWidth={1.6} /></span><strong>{item.title}</strong><span>{item.description}</span><ChevronRight size={15} className="suggestion-arrow" /></button>)}</div><div className="welcome-note"><Brain size={14} /><span>Les souvenirs que vous choisissez gardent le fil d’une conversation à l’autre.</span></div></div> : busy === "switch" ? <div className="loading-conversation"><LoaderCircle size={23} className="spin" />Ouverture de votre conversation…</div> : <div className="messages"><div className="conversation-heading"><span>CONVERSATION</span><h1>{conversation?.title}</h1></div>{messages.map(message => <MessageView key={message.id} message={message} streaming={streamingId === message.id} />)}<div ref={bottomRef} /></div>}
           </div>
@@ -410,11 +470,10 @@ export function ChatApp() {
           <div className="composer-area">
             {error && <div className="error-banner" role="alert"><CircleAlert size={17} /><p>{error}</p>{!config && <button type="button" disabled={working} onClick={() => void bootstrap()}>Réessayer</button>}<IconButton label="Fermer le message d’erreur" onClick={() => setError("")}><X size={15} /></IconButton></div>}
             {needsVision && <div className="vision-notice" role="status"><CircleAlert size={13} />Pour analyser vos images, choisissez un modèle compatible avec la vision.</div>}
-            {hasImagesWithoutVision && config?.features.ocr && <div className="vision-notice" role="status"><FileText size={13} />Mistral OCR lira le texte de ces images ; ce modèle ne réalise pas d’analyse visuelle.</div>}
             {status && <div className="generation-status" role="status"><LoaderCircle size={13} className="spin" />{status}</div>}
             <form className={`composer ${imageMode ? "image-mode" : ""}`} onSubmit={event => void send(event)}>
               {imageMode && <div className="image-mode-label"><ImagePlus size={15} /><span>Studio image <strong>Ideogram</strong></span><button type="button" disabled={working} onClick={() => setImageMode(false)}>Revenir au tchat <X size={13} /></button></div>}
-              {!!attachments.length && <div className="pending-attachments">{attachments.map(item => <div key={item.id}><FileText size={15} /><span>{item.filename}</span><IconButton label={`Retirer ${item.filename}`} disabled={working} onClick={() => void removeAttachment(item.id)}><X size={13} /></IconButton></div>)}</div>}
+              {!!attachments.length && <div className="pending-attachments">{attachments.map(item => <div className="pending-entry" key={item.id}><div className="pending-file"><FileText size={15} /><span>{item.filename}</span><IconButton label={`Retirer ${item.filename}`} disabled={working} onClick={() => void removeAttachment(item.id)}><X size={13} /></IconButton></div><AttachmentAnalysis attachment={item} /></div>)}</div>}
               <label className="sr-only" htmlFor="composer">{imageMode ? "Décrivez l’image à générer" : "Votre message"}</label><textarea id="composer" ref={textareaRef} value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={composerKeyDown} placeholder={imageMode ? "Décrivez l’image que vous imaginez…" : "Une question, une idée, un début de quelque chose…"} rows={2} maxLength={imageMode ? 4000 : 20000} disabled={working || !config} aria-describedby="composer-hint" />
               <div className="composer-toolbar"><div className="composer-tools"><input className="sr-only" type="file" ref={fileRef} multiple accept=".txt,.md,.csv,.json,.pdf,.docx,image/png,image/jpeg,image/webp" onChange={event => void uploadFiles(event.target.files)} tabIndex={-1} /><IconButton label="Joindre jusqu’à 5 fichiers (20 Mo par document, 8 Mo par image)" disabled={working || imageMode || !config} onClick={() => fileRef.current?.click()}><Paperclip size={19} /></IconButton><span className="tool-divider" /><button type="button" className={`tool-button ${webSearch && !imageMode ? "active" : ""}`} disabled={working || imageMode || !config?.features.web_search} aria-pressed={webSearch && !imageMode} title={config?.features.web_search ? "Rechercher sur le web pour enrichir la réponse" : "Recherche web disponible après configuration de Brave côté serveur"} onClick={() => setWebSearch(old => !old)}><Globe2 size={16} /><span>Web</span>{webSearch && !imageMode && <Check size={12} />}</button><button type="button" className={`tool-button ${imageMode ? "active" : ""}`} disabled={working || !config?.features.image_generation || attachments.length > 0} aria-pressed={imageMode} title={config?.features.image_generation ? "Créer une image avec Ideogram" : "Ajoutez votre clé Ideogram côté serveur pour créer des images"} onClick={() => { setImageMode(old => !old); textareaRef.current?.focus(); }}><ImagePlus size={16} /><span>Image</span></button></div><div className="composer-submit"><span className="enter-hint">↵ pour envoyer</span>{sending ? <button className="send-button stop-button" type="button" onClick={() => controllerRef.current?.abort()} aria-label="Interrompre la génération" title="Interrompre la génération"><Square size={14} fill="currentColor" /></button> : <button className="send-button" type="submit" disabled={!canSend} aria-label={imageMode ? "Générer l’image" : "Envoyer le message"}>{busy === "upload" ? <LoaderCircle size={19} className="spin" /> : <ArrowUp size={20} />}</button>}</div></div>
             </form>

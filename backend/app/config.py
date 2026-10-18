@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     default_model: str = "openai/gpt-4o-mini"
     brave_api_key: SecretStr = SecretStr("")
     mistral_api_key: SecretStr = SecretStr("")
+    ocr_model: str = "mistral-ocr-4-1"
+    vision_model: str = ""
     ideogram_api_key: SecretStr = SecretStr("")
     ideogram_image_hosts: str = "ideogram.ai"
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
@@ -104,6 +106,14 @@ class Settings(BaseSettings):
         value = value.strip()
         if not value or len(value) > 200:
             raise ValueError("SUMMARY_MODEL doit contenir entre 1 et 200 caractères")
+        return value
+
+    @field_validator("ocr_model", "vision_model")
+    @classmethod
+    def valid_document_models(cls, value: str, info) -> str:
+        value = value.strip()
+        if len(value) > 200 or (info.field_name == "ocr_model" and not value):
+            raise ValueError("Le modèle OCR doit être renseigné ; les identifiants sont limités à 200 caractères")
         return value
 
     @field_validator("summary_every_messages")

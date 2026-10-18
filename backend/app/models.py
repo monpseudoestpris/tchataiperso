@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import JSON, Boolean, Column, DateTime, ForeignKey, Integer, String, Table, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -15,16 +15,6 @@ def now() -> datetime:
 
 class Base(DeclarativeBase):
     pass
-
-
-conversation_skills = Table(
-    "conversation_skills",
-    Base.metadata,
-    Column("conversation_id", ForeignKey("conversations.id", ondelete="CASCADE"), primary_key=True),
-    Column("skill_id", ForeignKey("skills.id", ondelete="CASCADE"), primary_key=True),
-    Column("position", Integer, nullable=False),
-    UniqueConstraint("conversation_id", "position", name="uq_conversation_skills_position"),
-)
 
 
 class User(Base):
@@ -68,9 +58,13 @@ class Conversation(Base):
     summary: Mapped[str] = mapped_column(Text, default="")
     summary_through: Mapped[int] = mapped_column(Integer, default=0)
     messages: Mapped[list["Message"]] = relationship(back_populates="conversation", cascade="all, delete-orphan", order_by="Message.created_at")
-    skills: Mapped[list["Skill"]] = relationship(
-        secondary=conversation_skills, back_populates="conversations", order_by=conversation_skills.c.position,
+    skill_links: Mapped[list["ConversationSkill"]] = relationship(
+        back_populates="conversation", cascade="all, delete-orphan", order_by="ConversationSkill.position",
     )
+
+    @property
+    def skills(self) -> list["Skill"]:
+        return [link.skill for link in self.skill_links]
 
 
 class Message(Base):
@@ -94,6 +88,7 @@ class Attachment(Base):
     size: Mapped[int] = mapped_column(Integer)
     storage_name: Mapped[str] = mapped_column(String(100), unique=True)
     extracted_text: Mapped[str] = mapped_column(Text, default="")
+    extraction: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     message_id: Mapped[str | None] = mapped_column(ForeignKey("messages.id", ondelete="SET NULL"), nullable=True, index=True)
     message: Mapped[Message | None] = relationship(back_populates="attachments")
@@ -115,4 +110,16 @@ class Skill(Base):
     prompt: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
-    conversations: Mapped[list[Conversation]] = relationship(secondary=conversation_skills, back_populates="skills")
+    conversation_links: Mapped[list["ConversationSkill"]] = relationship(
+        back_populates="skill", cascade="all, delete-orphan",
+    )
+
+
+class ConversationSkill(Base):
+    __tablename__ = "conversation_skills"
+    conversation_id: Mapped[str] = mapped_column(ForeignKey("conversations.id", ondelete="CASCADE"), primary_key=True)
+    skill_id: Mapped[str] = mapped_column(ForeignKey("skills.id", ondelete="CASCADE"), primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    __table_args__ = (UniqueConstraint("conversation_id", "position", name="uq_conversation_skills_position"),)
+    conversation: Mapped[Conversation] = relationship(back_populates="skill_links")
+    skill: Mapped[Skill] = relationship(back_populates="conversation_links")

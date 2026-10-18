@@ -1,6 +1,6 @@
 # Services, bibliothèques et maîtrise du budget
 
-Choix pour cette première version : Next.js/React/Tailwind, FastAPI, PostgreSQL dans Docker, API de conversation compatible OpenAI avec OpenRouter par défaut, recherche Brave à la demande, extraction locale des documents et Mistral OCR en option. Ideogram utilise votre propre clé, conservée côté serveur.
+Choix pour cette première version : Next.js/React/Tailwind, FastAPI, PostgreSQL dans Docker, API de conversation compatible OpenAI avec OpenRouter par défaut, recherche Brave à la demande, extraction locale des documents texte et Mistral OCR pour les PDF/images en mode réel. Ideogram utilise votre propre clé, conservée côté serveur.
 
 Vérification documentaire tentée le **17 octobre 2026** : les requêtes HTTPS vers les sources officielles listées ci-dessous ont été refusées par le proxy de cet environnement (`Tunnel connection failed: 403 Forbidden`). Les liens sont fournis pour vérification ; leurs pages et leurs tarifs n'ont donc pas pu être consultés ici. Aucun montant actuel, quota gratuit ou classement du « moins cher » n'est garanti. Aucun appel payant n'a été effectué.
 
@@ -38,13 +38,17 @@ Sources officielles : [Brave Search API](https://api.search.brave.com/app/docume
 | Type de fichier | Traitement conseillé | Ce qu'il faut savoir |
 | --- | --- | --- |
 | Texte, Markdown | Lecture locale avec limite de taille. | Pas d'appel OCR nécessaire. |
-| PDF contenant du texte | `pypdf` localement. | L'extraction peut perdre l'ordre des colonnes, les tableaux et certaines mises en page. |
+| PDF, avec ou sans texte | Mistral OCR 4.1, toutes les pages, annotations des figures. | `pypdf` valide le PDF ; PDFium rend les pages sans texte pour le secours vision. En démo seulement, extraction de texte locale limitée. |
 | DOCX | `python-docx` localement. | Extraction de texte ; ce n'est pas un moteur complet de rendu bureautique. Les anciens fichiers `.doc` nécessitent un autre outil. |
-| PDF scanné, photo de document | Mistral OCR en option. | Envoi du document à un service externe, consommation facturée et limites à vérifier. |
-| Image à comprendre | Modèle de conversation prenant réellement en charge la vision. | L'OCR lit surtout le texte ; il ne remplace pas l'analyse visuelle d'un schéma ou d'une photographie. Tous les modèles du sélecteur ne prennent pas en charge les images. |
+| Photo de document | Mistral OCR 4.1 avec annotations. | Texte et descriptions enregistrés dès l'ajout ; document envoyé à Mistral, consommation facturée. |
+| Image ou page sans texte | `VISION_MODEL`, modèle vision dédié configurable. | Description détaillée via `LLM_BASE_URL` et `LLM_API_KEY`, même avec un modèle de discussion sans vision. Appel supplémentaire facturable. |
 | Image à générer | Ideogram, avec votre clé existante. | Coût par génération, options et quotas selon votre compte. La génération reste une action explicite. |
 
-`pypdf` **n'effectue pas d'OCR**. Sans service OCR configuré, un PDF scanné ne doit pas produire une prétendue extraction réussie. Mistral OCR est pertinent pour les documents difficiles, mais inutile de lui envoyer systématiquement un fichier dont le texte peut être extrait localement. Si l'OCR externe est activé, informer l'utilisateur du transfert des documents. Le mode local réduit le coût et les transferts de données ; il peut être moins fidèle sur les mises en page complexes.
+`pypdf` **n'effectue pas d'OCR**. En mode réel, l'analyse externe est systématique pour les PDF/images afin de conserver aussi les illustrations des PDF textuels. `OCR_MODEL=mistral-ocr-4-1` est la valeur par défaut ; OCR 4.0 est déprécié selon la documentation consultée le 18 octobre 2026. Les schémas `bbox_annotation_format` demandent des descriptions exhaustives et une transcription verbatim de tous les textes des figures, sans traduction ni correction. `document_annotation_format` demande un relevé détaillé complémentaire, dont la couverture visuelle est limitée aux huit premières figures du lot. Ce relevé ne remplace jamais la transcription OCR, affichée brute par défaut et transmise au chat dans le budget de contexte disponible. Les descriptions par figure restent distinctes. Le secours vision peut produire jusqu'à 8000 tokens ; une sortie coupée est refusée. Ces descriptions plus détaillées peuvent augmenter le coût et la latence. Les détails illisibles doivent être signalés, pas inventés.
+
+L'analyse est conservée par page et consultable depuis **Contenu extrait** sans nouvel appel payant. Limites applicatives : 300 pages, lots OCR de 8 pages, 4 Mo d'extraction structurée, 8 Mo de réponse par lot et 10 minutes au total. Le secours vision analyse une image normalisée à 2048 pixels de côté maximum ; le texte et les détails très fins peuvent rester incertains. Les pages sont traitées séquentiellement, sans réanalyse automatique des anciens fichiers. Si le secours vision requis n'est pas configuré ou échoue, l'ajout échoue explicitement. En démo, aucun fournisseur n'est appelé.
+
+Prévoir les coûts cumulés d'OCR, d'annotations et de description vision, ainsi que le transfert du document à Mistral et des pages/images sans texte au fournisseur vision. Les appels réels et tarifs du compte n'ont pas été testés ; seuls les contrats HTTP simulés et le rendu local sont vérifiés.
 
 Limiter taille, formats acceptés et quantité de texte injectée dans le contexte. Conserver les fichiers hors des répertoires publics du frontend. Une extraction intégrale envoyée à chaque tour peut coûter davantage que l'extraction elle-même ; le futur besoin de recherche dans de gros documents justifiera un système RAG, avec citations et récupération de passages.
 

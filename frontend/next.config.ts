@@ -7,7 +7,7 @@ const config: NextConfig = {
   poweredByHeader: false,
   experimental: {
     proxyClientMaxBodySize: "22mb",
-    proxyTimeout: 300_000,
+    proxyTimeout: 660_000,
   },
   async rewrites() {
     return [{ source: "/api/:path*", destination: `${backendUrl}/api/:path*` }];

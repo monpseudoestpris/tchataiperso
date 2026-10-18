@@ -44,6 +44,8 @@ DEMO_MODE=false
 LLM_API_KEY=...
 BRAVE_API_KEY=...
 MISTRAL_API_KEY=...
+OCR_MODEL=mistral-ocr-4-1
+VISION_MODEL=openai/gpt-4o-mini
 IDEOGRAM_API_KEY=...
 ```
 
@@ -57,12 +59,26 @@ Seule `LLM_API_KEY` est nécessaire au tchat réel. Les trois autres clés activ
 | --- | --- | --- |
 | Modèles de tchat et vision | API compatible OpenAI, OpenRouter par défaut | Mode démo, ou message explicite si la démo est désactivée |
 | Recherche web | Brave Search API | Bouton désactivé |
-| PDF texte, DOCX, texte, Markdown, CSV | Extraction locale Python | Disponible sans fournisseur |
-| PDF scannés / OCR | Mistral OCR | Explication si le PDF n'a pas de texte exploitable |
-| Images en entrée | Modèle de vision autorisé dans `LLM_MODELS` | La démo n'analyse pas réellement les images |
+| DOCX, texte, Markdown, CSV, JSON | Extraction locale Python | Disponible sans fournisseur |
+| PDF, même avec texte, et images | Mistral OCR 4.1 avec annotations des figures | `MISTRAL_API_KEY` requise en mode réel |
+| Pages et images sans texte | Modèle dédié `VISION_MODEL`, via `LLM_BASE_URL` et `LLM_API_KEY` | Erreur explicite si le secours vision n'est pas configuré |
 | Génération d'images | Ideogram | Bouton désactivé |
 
 Les modèles proposés dans `.env.example` sont des exemples d'identifiants OpenRouter. Vérifiez leur disponibilité sur votre compte ; `DEFAULT_MODEL` doit appartenir à la liste `LLM_MODELS`. Pour un fournisseur direct, changez aussi `LLM_BASE_URL`, la clé et les identifiants. Un seul endpoint de conversation est configuré à la fois. Chaque modèle doit annoncer correctement sa capacité `vision`.
+
+### Lecture des pièces jointes
+
+En mode réel, chaque nouveau PDF ou image est analysé dès l'ajout par `OCR_MODEL` (Mistral OCR 4.1 par défaut). Le texte, les tableaux Markdown et les annotations détaillées des figures sont conservés par page. Chaque page sans texte est décrite par `VISION_MODEL` : pour un PDF, le backend rend la page entière avec PDFium. Ce modèle doit réellement prendre en charge les images ; il est indépendant du modèle de discussion et n'a pas besoin d'être ajouté au sélecteur `LLM_MODELS`.
+
+Ouvrez **Contenu extrait** sous une pièce jointe, avant ou après l'envoi, pour consulter les pages et les descriptions. La transcription OCR brute est affichée par défaut, sans résumé ni reformulation ; le rendu Markdown reste disponible via **Mise en forme**. L'analyse documentaire complémentaire est séparée et repliée : elle ne remplace pas le texte extrait. Les consignes d'annotations demandent une transcription verbatim des textes des figures, dans leur langue originale, et des descriptions détaillées sans recherche de concision. Le secours vision dispose de 8000 tokens de sortie et refuse une réponse signalée comme coupée. Les passages illisibles restent incertains : aucune fidélité parfaite ne peut être garantie par un OCR génératif.
+
+Le résultat est chargé à la demande et accessible uniquement au propriétaire. Le chat et ses résumés réutilisent cette analyse, sans nouvel appel OCR à chaque message. Le chat reçoit le texte OCR et les descriptions, pas une synthèse substituée au document ; il utilise le budget de contexte disponible au lieu d'une coupure fixe à 16000 caractères. Si les pièces jointes dépassent ce budget, des extraits sont répartis entre les pages, avec un avertissement de sélection ; leur extraction complète reste consultable, sans garantie que chaque réponse prenne en compte tous les détails. Joignez à nouveau un ancien document pour bénéficier des nouvelles consignes d'analyse ; aucune réanalyse payante n'est déclenchée automatiquement.
+
+Limites : 300 pages par PDF, lots OCR de 8 pages, 8 Mo par image et `MAX_UPLOAD_MB` par fichier ; résultat structuré limité à 4 Mo, réponse OCR à 8 Mo par lot, délai global de 10 minutes. Les dépassements ou erreurs fournisseur refusent l'ajout au lieu d'enregistrer une analyse prétendument complète. L'OCR, ses annotations et les appels vision peuvent chacun être facturés. Le document est envoyé à Mistral ; les pages/images sans texte sont aussi envoyées au fournisseur LLM configuré. L'annotation documentaire est un relevé complémentaire, pas la transcription ni la description exhaustive des figures : Mistral n'y fournit que les huit premières images du lot.
+
+Avec `DEMO_MODE=true`, aucun OCR ni appel vision n'est effectué : seuls les textes locaux restent disponibles et les PDF sans texte sont refusés. Les anciennes pièces jointes ne sont pas réanalysées automatiquement ; joignez-les à nouveau pour obtenir l'analyse complète.
+
+Pour une base existante, sauvegardez la base et les fichiers, puis appliquez la migration avant de redémarrer : `cd backend && .venv/bin/python -m app.cli migrate-legacy` en local, ou `./scripts/compose.sh run --rm backend python -m app.cli migrate-legacy` avec Docker. Les extractions historiques restent inchangées.
 
 Sur une machine standard, le wrapper utilise simplement `compose.yaml` ; `docker compose up --build -d` fonctionne aussi après création du `.env`. Dans un cloud avec proxy TLS, il active `compose.cloud.yaml` si `SSL_CERT_FILE` ou `CLOUD_CA_BUNDLE` désigne un bundle de confiance fourni par la plateforme. Le bundle passe comme secret BuildKit à l'installation et comme montage en lecture seule au backend, avec les paramètres du proxy. TLS et les empreintes des paquets restent vérifiés ; aucun certificat personnalisé n'est embarqué dans Git ou les images.
 
@@ -75,6 +91,7 @@ Les choix économiques et les alternatives **Tavily, SearXNG, Supabase, PowerSyn
 - L'historique complet des messages reste dans la base.
 - Un résumé progressif condense les échanges anciens et accompagne les messages récents dans le contexte du modèle. Réglez `SUMMARY_MODEL` (`openai/gpt-4o-mini`), `SUMMARY_EVERY_MESSAGES` (12), `MAX_SUMMARY_CHARS` (6000), `SUMMARY_TEMPERATURE` (0.2) et `SUMMARY_MAX_TOKENS` (900) dans `.env`.
 - Les mémoires personnelles sont des informations que vous ajoutez explicitement, consultables et supprimables dans le panneau Mémoire. Elles sont injectées dans les conversations.
+- Les compétences sont des prompts personnels réutilisables, enregistrés en base et sélectionnables par conversation. Le modèle IA configuré peut en proposer une amélioration ; elle reste un brouillon jusqu'à son enregistrement explicite.
 - Le budget de contexte se règle avec `MAX_CONTEXT_CHARS` (60000). Pour les réponses du modèle, `LLM_TEMPERATURE` (0.7) et `LLM_MAX_TOKENS` (2048) sont également configurables dans `.env`.
 - Les fichiers sont conservés sur un volume privé ; leurs métadonnées et le texte extrait sont enregistrés en base.
 

@@ -17,10 +17,15 @@ from . import providers
 from .auth import hash_password, new_token, token_digest, verify_password
 from .config import Settings
 from .context import build_context
-from .documents import extract_document
-from .models import Attachment, AuthSession, Base, Conversation, Invitation, Memory, Message, User, now
+from .documents import extract_document, extraction_text
+from .models import Attachment, AuthSession, Base, Conversation, ConversationSkill, Invitation, Memory, Message, Skill, User, now
 from .schemas import (AcceptInvitation, AdminUpdateUser, CreateConversation, CreateImage, CreateMemory,
-                      LoginRequest, SendMessage, UpdateConversation)
+                      CreateSkill, ImproveSkillPrompt, LoginRequest, SendMessage, SetConversationSkills,
+                      UpdateConversation, UpdateSkill)
+
+
+MAX_SKILL_COUNT = 100
+MAX_SKILL_CONTEXT_CHARS = 12000
 
 
 def stamp(value) -> str:
@@ -30,7 +35,8 @@ def stamp(value) -> str:
 def attachment_json(item: Attachment) -> dict:
     return {"id": item.id, "filename": item.filename, "mime_type": item.mime_type, "size": item.size,
             "url": f"/api/attachments/{item.id}/file", "created_at": stamp(item.created_at),
-            "extracted_chars": len(item.extracted_text)}
+            "extracted_chars": len(item.extracted_text), "has_extraction": bool(item.extraction),
+            "page_count": len(item.extraction["pages"]) if item.extraction else 0}
 
 
 def message_json(item: Message) -> dict:
@@ -38,11 +44,17 @@ def message_json(item: Message) -> dict:
             "attachments": [attachment_json(value) for value in item.attachments], "sources": item.sources}
 
 
+def skill_json(item: Skill) -> dict:
+    return {"id": item.id, "name": item.name, "prompt": item.prompt,
+            "created_at": stamp(item.created_at), "updated_at": stamp(item.updated_at)}
+
+
 def conversation_json(item: Conversation, detail: bool = False) -> dict:
     result = {"id": item.id, "title": item.title, "model": item.model, "created_at": stamp(item.created_at),
               "updated_at": stamp(item.updated_at), "summary": item.summary}
     if detail:
         result["messages"] = [message_json(message) for message in item.messages]
+        result["skills"] = [skill_json(link.skill) for link in item.skill_links]
     return result
 
 
@@ -70,6 +82,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(_app):
         Base.metadata.create_all(engine)
         inspector = inspect(engine)
+        if "extraction" not in {column["name"] for column in inspector.get_columns("attachments")}:
+            raise RuntimeError("Base non migrée ; exécutez `python -m app.cli migrate-legacy` pour appliquer la migration des pièces jointes.")
         for table in ("conversations", "attachments", "memories"):
             if "user_id" not in {column["name"] for column in inspector.get_columns(table)}:
                 raise RuntimeError("Base non migrée; exécutez les étapes `migrate-schema`, `create-admin` et `migrate-legacy` du README.")
@@ -328,6 +342,92 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             db.commit()
         return Response(status_code=204)
 
+    @app.get("/api/skills")
+    def list_skills(user: User = Depends(current_user)):
+        with sessions() as db:
+            return [skill_json(item) for item in db.scalars(
+                select(Skill).where(Skill.user_id == user.id).order_by(Skill.created_at, Skill.id))]
+
+    @app.post("/api/skills", status_code=201)
+    def create_skill(body: CreateSkill, user: User = Depends(current_user)):
+        with sessions() as db:
+            count = db.scalar(select(func.count()).select_from(Skill).where(Skill.user_id == user.id))
+            if count >= MAX_SKILL_COUNT:
+                raise HTTPException(422, f"Limite de {MAX_SKILL_COUNT} compétences atteinte")
+            item = Skill(user_id=user.id, name=body.name, prompt=body.prompt)
+            db.add(item)
+            db.commit()
+            return skill_json(item)
+
+    @app.post("/api/skills/improve")
+    async def improve_skill(body: ImproveSkillPrompt, user: User = Depends(current_user)):
+        if settings.demo_mode or not settings.enabled(settings.llm_api_key):
+            raise HTTPException(503, "L'amélioration des compétences nécessite une clé LLM_API_KEY et le mode IA réel")
+        try:
+            prompt = await providers.improve_skill_prompt(settings, settings.default_model, body.prompt)
+        except providers.ProviderError as exc:
+            raise HTTPException(502, str(exc)) from exc
+        return {"prompt": prompt}
+
+    @app.patch("/api/skills/{skill_id}")
+    def update_skill(skill_id: str, body: UpdateSkill, user: User = Depends(current_user)):
+        with sessions() as db:
+            item = db.scalar(select(Skill).where(Skill.id == skill_id, Skill.user_id == user.id))
+            if not item:
+                raise HTTPException(404, "Compétence introuvable")
+            new_prompt = body.prompt if body.prompt is not None else item.prompt
+            for link in item.conversation_links:
+                other_prompt_chars = sum(len(active_link.skill.prompt) for active_link in link.conversation.skill_links
+                                         if active_link.skill_id != item.id)
+                skill_limit = min(MAX_SKILL_CONTEXT_CHARS, settings.max_context_chars - 5000)
+                if other_prompt_chars + len(new_prompt) > skill_limit:
+                    raise HTTPException(422, "Les prompts actifs de cette conversation dépasseraient la limite de contexte")
+            if body.name is not None:
+                item.name = body.name
+            if body.prompt is not None:
+                item.prompt = body.prompt
+            item.updated_at = now()
+            db.commit()
+            return skill_json(item)
+
+    @app.delete("/api/skills/{skill_id}", status_code=204)
+    def delete_skill(skill_id: str, user: User = Depends(current_user)):
+        with sessions() as db:
+            item = db.scalar(select(Skill).where(Skill.id == skill_id, Skill.user_id == user.id))
+            if not item:
+                raise HTTPException(404, "Compétence introuvable")
+            db.delete(item)
+            db.commit()
+        return Response(status_code=204)
+
+    @app.get("/api/conversations/{conversation_id}/skills")
+    def list_conversation_skills(conversation_id: str, user: User = Depends(current_user)):
+        with sessions() as db:
+            conversation = get_conversation(db, conversation_id, user.id)
+            return [skill_json(link.skill) for link in conversation.skill_links]
+
+    @app.patch("/api/conversations/{conversation_id}/skills")
+    def set_conversation_skills(conversation_id: str, body: SetConversationSkills, user: User = Depends(current_user)):
+        lock_key = f"{user.id}:{conversation_id}"
+        if locks.get(lock_key) and locks[lock_key].locked():
+            raise HTTPException(409, "Attendez la fin de la réponse")
+        with sessions() as db:
+            conversation = get_conversation(db, conversation_id, user.id)
+            found = list(db.scalars(select(Skill).where(Skill.id.in_(body.skill_ids), Skill.user_id == user.id))) if body.skill_ids else []
+            if len(found) != len(body.skill_ids):
+                raise HTTPException(404, "Une ou plusieurs compétences sont introuvables")
+            by_id = {item.id: item for item in found}
+            selected = [by_id[item_id] for item_id in body.skill_ids]
+            skill_limit = min(MAX_SKILL_CONTEXT_CHARS, settings.max_context_chars - 5000)
+            if sum(len(item.prompt) for item in selected) > skill_limit:
+                raise HTTPException(422, "Les prompts actifs dépassent la limite de contexte")
+            conversation.skill_links.clear()
+            db.flush()
+            conversation.skill_links = [ConversationSkill(skill=item, position=index) for index, item in enumerate(selected)]
+            conversation.updated_at = now()
+            db.commit()
+            return [skill_json(item) for item in selected]
+
     @app.post("/api/attachments", status_code=201)
     async def upload(file: UploadFile = File(...), user: User = Depends(current_user)):
         try:
@@ -340,7 +440,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(422, "Fichier vide")
         filename = Path((file.filename or "document").replace("\\", "/")).name[:255]
         try:
-            mime, extracted = await extract_document(settings, content, filename)
+            mime, extracted, extraction = await extract_document(settings, content, filename)
         except providers.ProviderError as exc:
             raise HTTPException(502, str(exc)) from exc
         if mime.startswith("image/") and len(content) > 8 * 1024 * 1024:
@@ -351,13 +451,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             with sessions() as db:
                 item = Attachment(user_id=user.id, filename=filename, mime_type=mime, size=len(content),
-                                  storage_name=storage_name, extracted_text=extracted)
+                                  storage_name=storage_name, extracted_text=extracted, extraction=extraction)
                 db.add(item)
                 db.commit()
                 return attachment_json(item)
         except Exception:
             path.unlink(missing_ok=True)
             raise
+
+    @app.get("/api/attachments/{attachment_id}/extraction")
+    def attachment_extraction(attachment_id: str, user: User = Depends(current_user)):
+        with sessions() as db:
+            item = db.scalar(select(Attachment).where(Attachment.id == attachment_id, Attachment.user_id == user.id))
+            if not item:
+                raise HTTPException(404, "Pièce jointe introuvable")
+            return JSONResponse({"extraction": item.extraction}, headers={"Cache-Control": "no-store"})
 
     @app.get("/api/attachments/{attachment_id}/file")
     def attachment_file(attachment_id: str, user: User = Depends(current_user)):
@@ -409,10 +517,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 if sum(item.mime_type.startswith("image/") for item in attachments) > 4:
                     raise HTTPException(422, "Joignez au maximum 4 images par message pour qu'elles soient toutes analysées")
                 for item in attachments:
-                    if item.mime_type.startswith("image/") and not model_info["vision"] and not settings.demo_mode:
-                        if not settings.enabled(settings.mistral_api_key):
-                            raise HTTPException(422, "Choisissez un modèle vision ou configurez MISTRAL_API_KEY pour lire cette image")
-                        item.extracted_text = (await providers.extract_ocr(settings, (upload_dir / item.storage_name).read_bytes(), item.mime_type))[:40000]
+                    if item.mime_type.startswith("image/") and not item.extracted_text and not model_info["vision"] and not settings.demo_mode:
+                        raise HTTPException(422, "Joignez à nouveau cette image pour l'analyser, ou choisissez un modèle vision.")
                 message = Message(conversation_id=conversation_id, role="user", content=body.content.strip())
                 db.add(message)
                 db.flush()
@@ -455,7 +561,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     for item in history[conversation.summary_through:cutoff]:
                         item_text = f"{item.role}: {item.content[:4000]}"
                         for attachment in item.attachments:
-                            item_text += f"\n[Pièce jointe : {attachment.filename}]\n{attachment.extracted_text[:4000]}"
+                            attachment_text = extraction_text(attachment.extraction, 4000) if attachment.extraction else attachment.extracted_text[:4000]
+                            item_text += f"\n[Pièce jointe : {attachment.filename}]\n{attachment_text}"
                         # Do not mark unsummarized turns as covered if the input
                         # budget forces this summary to consume only part of them.
                         item_text = item_text[:12000]
@@ -483,9 +590,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     conversation = get_conversation(db, conversation_id, user.id)
                     memories = [item.content for item in db.scalars(select(Memory).where(
                         Memory.user_id == user.id).order_by(Memory.created_at))]
+                    skills = [{"name": link.skill.name, "prompt": link.skill.prompt}
+                              for link in conversation.skill_links]
                     history = [{"role": item.role, "content": item.content, "attachments": [
                         {"filename": attachment.filename, "mime_type": attachment.mime_type,
-                         "extracted_text": attachment.extracted_text, "path": str(upload_dir / attachment.storage_name)}
+                         "extracted_text": attachment.extracted_text, "extraction": attachment.extraction,
+                         "path": str(upload_dir / attachment.storage_name)}
                         for attachment in item.attachments]} for item in conversation.messages[conversation.summary_through:]]
                     summary = conversation.summary
                 if settings.demo_mode:
@@ -499,7 +609,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         yield sse("delta", {"text": chunk})
                         await asyncio.sleep(0.005)
                 else:
-                    context = build_context(settings, summary, memories, history, sources, model_info["vision"])
+                    context = build_context(settings, summary, memories, history, sources, model_info["vision"], skills)
                     yield sse("status", {"message": "Rédaction de la réponse…"})
                     async for chunk in providers.stream_chat(settings, context, model):
                         accumulated += chunk

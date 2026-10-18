@@ -63,6 +63,8 @@ def test_legacy_rows_are_assigned_to_explicit_admin(tmp_path, monkeypatch):
             assert actual_owner == owner_id
         assert connection.execute(text("SELECT content FROM messages WHERE id = 'legacy-message'")).scalar_one() == "Old message"
         assert {"skills", "conversation_skills"}.issubset(inspect(connection).get_table_names())
+        assert "extraction" in {column["name"] for column in inspect(connection).get_columns("attachments")}
+        assert connection.execute(text("SELECT extraction FROM attachments WHERE id = 'legacy-attachment'")).scalar_one() is None
 
     for table in ("conversations", "attachments", "memories"):
         owner_column = next(column for column in inspect(engine).get_columns(table) if column["name"] == "user_id")

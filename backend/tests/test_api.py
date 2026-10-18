@@ -14,7 +14,8 @@ from app import providers
 from app.auth import hash_password
 from app.config import Settings
 from app.main import create_app
-from app.models import Conversation, Message, User
+from app.models import Conversation, ConversationSkill, Message, Skill, User
+from app.schemas import DocumentExtraction, ExtractedPage
 
 
 @pytest.fixture
@@ -150,6 +151,7 @@ def test_invited_users_cannot_access_another_users_data(client):
         assert other.get("/api/memories").json() == []
         assert other.delete(f"/api/memories/{owned_memory['id']}").status_code == 404
         assert other.get(owned_attachment["url"]).status_code == 404
+        assert other.get(f"/api/attachments/{owned_attachment['id']}/extraction").status_code == 404
         assert other.delete(f"/api/attachments/{owned_attachment['id']}").status_code == 404
 
         other_conversation = conversation(other)
@@ -239,6 +241,82 @@ def test_explicit_memory_is_persisted_and_deleted(client):
     assert client.post("/api/memories", json={"content": "  "}).status_code == 422
 
 
+def test_skill_crud_multiple_conversation_links_and_live_context(tmp_path, monkeypatch):
+    settings = Settings(_env_file=None, app_data_dir=tmp_path, demo_mode=False, llm_api_key="secret")
+    captured = []
+
+    async def stream(_settings, messages, model):
+        captured.append(messages)
+        yield "Réponse"
+
+    monkeypatch.setattr(providers, "stream_chat", stream)
+    with authenticated_client(settings) as client:
+        first = client.post("/api/skills", json={"name": "Rédaction", "prompt": "PROMPT_ONE"}).json()
+        second = client.post("/api/skills", json={"name": "Expert", "prompt": "PROMPT_TWO"}).json()
+        item = conversation(client)
+
+        selected = client.patch(f"/api/conversations/{item}/skills", json={"skill_ids": [second["id"], first["id"]]})
+        assert selected.status_code == 200
+        assert [skill["id"] for skill in client.get(f"/api/conversations/{item}/skills").json()] == [second["id"], first["id"]]
+
+        response = client.post(f"/api/conversations/{item}/messages", json={"content": "Premier tour"})
+        assert events(response)[-1][0] == "done"
+        assert "PROMPT_ONE" in json.dumps(captured[-1])
+        assert "PROMPT_TWO" in json.dumps(captured[-1])
+
+        updated = client.patch(f"/api/skills/{first['id']}", json={"prompt": "PROMPT_UPDATED"})
+        assert updated.status_code == 200
+        assert client.patch(f"/api/conversations/{item}/skills", json={"skill_ids": [first["id"]]}).status_code == 200
+        response = client.post(f"/api/conversations/{item}/messages", json={"content": "Deuxième tour"})
+        assert events(response)[-1][0] == "done"
+        assert "PROMPT_UPDATED" in json.dumps(captured[-1])
+        assert "PROMPT_TWO" not in json.dumps(captured[-1])
+
+        assert client.delete(f"/api/skills/{first['id']}").status_code == 204
+        assert client.get(f"/api/conversations/{item}/skills").json() == []
+        assert client.get("/api/skills").json() == [second]
+
+
+def test_skill_improvement_is_unsaved_and_requires_real_provider(client, settings, monkeypatch):
+    assert client.post("/api/skills/improve", json={"prompt": "Rends-le clair"}).status_code == 503
+
+    settings.demo_mode = False
+    settings.llm_api_key = SecretStr("secret")
+
+    async def improve(_settings, model, prompt):
+        assert model == settings.default_model
+        assert prompt == "Rends-le clair"
+        return "Proposition améliorée"
+
+    monkeypatch.setattr(providers, "improve_skill_prompt", improve)
+    response = client.post("/api/skills/improve", json={"prompt": "Rends-le clair"})
+    assert response.status_code == 200
+    assert response.json() == {"prompt": "Proposition améliorée"}
+    assert client.get("/api/skills").json() == []
+
+
+def test_skills_are_private_and_foreign_skills_cannot_be_attached(client):
+    item = conversation(client)
+    skill = client.post("/api/skills", json={"name": "Privée", "prompt": "Mon prompt"}).json()
+    invitation = client.post("/api/admin/invitations").json()
+    origin = client.app.state.settings.origins[0]
+    with TestClient(client.app, base_url=origin, headers={"Origin": origin}) as other:
+        assert other.post("/api/auth/register", json={
+            "token": invitation["token"], "username": "skill-user", "password": "another secure password",
+        }).status_code == 201
+        assert other.post("/api/auth/login", json={
+            "username": "skill-user", "password": "another secure password",
+        }).status_code == 200
+        foreign_conversation = conversation(other)
+        assert other.get("/api/skills").json() == []
+        assert other.patch(f"/api/skills/{skill['id']}", json={"name": "Volée"}).status_code == 404
+        assert other.delete(f"/api/skills/{skill['id']}").status_code == 404
+        assert other.patch(f"/api/conversations/{foreign_conversation}/skills", json={
+            "skill_ids": [skill["id"]],
+        }).status_code == 404
+    assert client.get(f"/api/conversations/{item}/skills").json() == []
+
+
 def test_no_key_never_silently_uses_demo(tmp_path):
     settings = Settings(_env_file=None, app_data_dir=tmp_path, demo_mode=False)
     with authenticated_client(settings) as client:
@@ -313,9 +391,10 @@ def test_image_model_and_ocr_fallback(tmp_path, monkeypatch):
     Image.new("RGB", (8, 8), "red").save(content, format="PNG")
     captured = {}
 
-    async def ocr(_settings, data, mime):
+    async def ocr(_settings, data, mime, page_count):
         assert mime == "image/png"
-        return "TEXTE OCR"
+        captured["calls"] = captured.get("calls", 0) + 1
+        return DocumentExtraction(model="mistral-ocr-4-1", pages=[ExtractedPage(index=0, markdown="TEXTE OCR")])
 
     async def stream(_settings, messages, model):
         captured["messages"] = messages
@@ -329,6 +408,91 @@ def test_image_model_and_ocr_fallback(tmp_path, monkeypatch):
         response = client.post(f"/api/conversations/{item}/messages", json={"content": "lis", "attachment_ids": [upload["id"]]})
         assert events(response)[-1][0] == "done"
         assert "TEXTE OCR" in json.dumps(captured)
+        assert captured["calls"] == 1
+        extraction = client.get(f"/api/attachments/{upload['id']}/extraction")
+        assert extraction.headers["cache-control"] == "no-store"
+        assert extraction.json()["extraction"]["pages"][0]["markdown"] == "TEXTE OCR"
+
+
+def test_mixed_pdf_keeps_every_page_and_describes_textless_pages(tmp_path, monkeypatch):
+    settings = Settings(_env_file=None, app_data_dir=tmp_path, mistral_api_key="fake", llm_api_key="fake",
+                        vision_model="dedicated/vision")
+    writer = PdfWriter()
+    for index in range(3):
+        writer.add_blank_page(width=300 + index, height=400)
+    content = io.BytesIO()
+    writer.write(content)
+    seen = []
+
+    async def ocr(_settings, data, mime, page_count):
+        assert page_count == 3 and mime == "application/pdf"
+        return DocumentExtraction(model="mistral-ocr-4-1", pages=[
+            ExtractedPage(index=0, markdown="Texte de la premiere page"),
+            ExtractedPage(index=1, markdown="![img-0.jpeg](img-0.jpeg)"),
+            ExtractedPage(index=2, markdown=""),
+        ])
+
+    async def describe(_settings, data, mime):
+        assert _settings.vision_model == "dedicated/vision" and mime == "image/png"
+        with Image.open(io.BytesIO(data)) as image:
+            assert max(image.size) <= 2048
+            seen.append(image.size)
+        return "Une page blanche."
+
+    monkeypatch.setattr(providers, "extract_ocr", ocr)
+    monkeypatch.setattr(providers, "describe_image", describe)
+    with authenticated_client(settings) as client:
+        response = client.post("/api/attachments", files={"file": ("mixed.pdf", content.getvalue(), "application/pdf")})
+        assert response.status_code == 201
+        attachment = response.json()
+        assert attachment["page_count"] == 3
+        result = client.get(f"/api/attachments/{attachment['id']}/extraction").json()["extraction"]
+        assert len(seen) == 2
+        assert [page["method"] for page in result["pages"]] == ["ocr", "vision", "vision"]
+        assert result["pages"][2]["vision_description"] == "Une page blanche."
+        assert client.get(attachment["url"]).content == content.getvalue()
+
+
+@pytest.mark.parametrize("vision_model, expected_status", [("dedicated/vision", 201), ("", 502)])
+def test_textless_image_requires_dedicated_vision_and_failed_upload_is_clean(tmp_path, monkeypatch, vision_model, expected_status):
+    settings = Settings(_env_file=None, app_data_dir=tmp_path, mistral_api_key="fake", llm_api_key="fake",
+                        vision_model=vision_model)
+    content = io.BytesIO()
+    Image.new("RGB", (20, 30), "red").save(content, format="PNG")
+
+    async def ocr(_settings, data, mime, page_count):
+        return DocumentExtraction(model="mistral-ocr-4-1", pages=[ExtractedPage(index=0, markdown="")])
+
+    async def describe(_settings, data, mime):
+        assert mime == "image/jpeg"
+        return "Un rectangle rouge."
+
+    monkeypatch.setattr(providers, "extract_ocr", ocr)
+    if vision_model:
+        monkeypatch.setattr(providers, "describe_image", describe)
+    with authenticated_client(settings) as client:
+        response = client.post("/api/attachments", files={"file": ("photo.png", content.getvalue(), "image/png")})
+        assert response.status_code == expected_status
+        if expected_status == 201:
+            result = client.get(f"/api/attachments/{response.json()['id']}/extraction").json()["extraction"]
+            assert result["pages"][0]["vision_description"] == "Un rectangle rouge."
+        else:
+            assert "VISION_MODEL" in response.json()["detail"]
+            assert list((tmp_path / "uploads").iterdir()) == []
+
+
+def test_oversize_image_is_rejected_before_ocr(client, settings, monkeypatch):
+    settings.demo_mode = False
+    settings.mistral_api_key = SecretStr("fake")
+    content = io.BytesIO()
+    Image.new("RGB", (4, 4), "red").save(content, format="PNG")
+
+    async def unexpected(*args, **kwargs):
+        pytest.fail("OCR must not run for a rejected upload")
+
+    monkeypatch.setattr(providers, "extract_ocr", unexpected)
+    response = client.post("/api/attachments", files={"file": ("large.png", content.getvalue() + b"x" * (8 * 1024 * 1024), "image/png")})
+    assert response.status_code == 413
 
 
 def test_mock_image_generation_saved_in_history(tmp_path, monkeypatch):

@@ -5,10 +5,27 @@ export type Config = {
   features: { chat: boolean; web_search: boolean; ocr: boolean; image_generation: boolean };
   demo_mode: boolean;
 };
-export type Attachment = { id: string; filename: string; mime_type: string; url: string; size?: number };
+export type Attachment = { id: string; filename: string; mime_type: string; url: string; size?: number; has_extraction?: boolean; page_count?: number };
+export type DocumentExtraction = {
+  version: 1;
+  model: string;
+  pages: {
+    index: number;
+    markdown: string;
+    method: "ocr" | "vision" | "local";
+    vision_description: string;
+    images: {
+      id: string;
+      annotation: { image_type: string; description: string; visible_text: string } | null;
+    }[];
+  }[];
+  annotations: { title: string; summary: string }[];
+  warnings: string[];
+};
 export type Source = { title: string; url: string; snippet?: string };
 export type Message = { id: string; role: string; content: string; created_at: string; attachments: Attachment[]; sources: Source[] };
-export type Conversation = { id: string; title: string; model: string; created_at: string; updated_at: string; summary?: string | null; messages?: Message[] };
+export type Skill = { id: string; name: string; prompt: string; created_at: string; updated_at: string };
+export type Conversation = { id: string; title: string; model: string; created_at: string; updated_at: string; summary?: string | null; messages?: Message[]; skills?: Skill[] };
 export type Memory = { id: string; content: string; created_at: string };
 export type AuthUser = { id: string; username: string; is_admin: boolean };
 export type AdminUser = AuthUser & { active: boolean; created_at: string };
