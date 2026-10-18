@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     max_context_chars: int = 60000
     summary_every_messages: int = 12
     max_summary_chars: int = 6000
+    llm_temperature: float = 0.7
+    llm_max_tokens: int = 2048
+    summary_temperature: float = 0.2
+    summary_max_tokens: int = 900
+    summary_model: str = "openai/gpt-4o-mini"
 
     @model_validator(mode="after")
     def valid_auth_lifetimes(self):
@@ -77,6 +82,28 @@ class Settings(BaseSettings):
     def valid_context_limit(cls, value: int) -> int:
         if not 10000 <= value <= 200000:
             raise ValueError("MAX_CONTEXT_CHARS doit être compris entre 10000 et 200000")
+        return value
+
+    @field_validator("llm_temperature", "summary_temperature")
+    @classmethod
+    def valid_temperature(cls, value: float) -> float:
+        if not 0 <= value <= 2:
+            raise ValueError("Les températures doivent être comprises entre 0 et 2")
+        return value
+
+    @field_validator("llm_max_tokens", "summary_max_tokens")
+    @classmethod
+    def valid_max_tokens(cls, value: int) -> int:
+        if not 1 <= value <= 100000:
+            raise ValueError("Le nombre maximal de tokens doit être compris entre 1 et 100000")
+        return value
+
+    @field_validator("summary_model")
+    @classmethod
+    def valid_summary_model(cls, value: str) -> str:
+        value = value.strip()
+        if not value or len(value) > 200:
+            raise ValueError("SUMMARY_MODEL doit contenir entre 1 et 200 caractères")
         return value
 
     @field_validator("summary_every_messages")

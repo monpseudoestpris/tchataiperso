@@ -471,7 +471,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         if settings.demo_mode:
                             summary = "[Résumé de démonstration, extraits du dialogue]\n" + (previous_summary + "\n" + transcript)[-settings.max_summary_chars:]
                         else:
-                            summary = await providers.summarize(settings, model, previous_summary, transcript)
+                            summary = await providers.summarize(settings, settings.summary_model, previous_summary, transcript)
                         with sessions() as db:
                             conversation = get_conversation(db, conversation_id, user.id)
                             conversation.summary = summary[:settings.max_summary_chars]

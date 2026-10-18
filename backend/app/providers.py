@@ -88,7 +88,7 @@ async def stream_chat(settings: Any, messages: list[dict[str, Any]], model: str)
                 settings.llm_base_url.rstrip("/") + "/chat/completions",
                 headers={"Authorization": f"Bearer {key}", "Accept": "text/event-stream"},
                 json={"model": model, "messages": messages, "stream": True,
-                      "temperature": 0.7, "max_tokens": 2048},
+                        "temperature": settings.llm_temperature, "max_tokens": settings.llm_max_tokens},
             ) as response:
                 _check_response(response, "Fournisseur IA")
                 event: list[str] = []
@@ -140,7 +140,7 @@ async def summarize(settings: Any, model: str, previous_summary: str, transcript
                 settings.llm_base_url.rstrip("/") + "/chat/completions",
                 headers={"Authorization": f"Bearer {key}"},
                 json={"model": model, "messages": messages, "stream": False,
-                      "temperature": 0.2, "max_tokens": 900},
+                        "temperature": settings.summary_temperature, "max_tokens": settings.summary_max_tokens},
             )
         _check_response(response, "Fournisseur IA")
         payload = _json(response, "Fournisseur IA")

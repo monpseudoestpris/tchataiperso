@@ -73,8 +73,9 @@ Les choix économiques et les alternatives **Tavily, SearXNG, Supabase, PowerSyn
 ## Historique et mémoire
 
 - L'historique complet des messages reste dans la base.
-- Un résumé progressif condense les échanges anciens et accompagne les messages récents dans le contexte du modèle. Le seuil se règle avec `SUMMARY_EVERY_MESSAGES`.
+- Un résumé progressif condense les échanges anciens et accompagne les messages récents dans le contexte du modèle. Réglez `SUMMARY_MODEL` (`openai/gpt-4o-mini`), `SUMMARY_EVERY_MESSAGES` (12), `MAX_SUMMARY_CHARS` (6000), `SUMMARY_TEMPERATURE` (0.2) et `SUMMARY_MAX_TOKENS` (900) dans `.env`.
 - Les mémoires personnelles sont des informations que vous ajoutez explicitement, consultables et supprimables dans le panneau Mémoire. Elles sont injectées dans les conversations.
+- Le budget de contexte se règle avec `MAX_CONTEXT_CHARS` (60000). Pour les réponses du modèle, `LLM_TEMPERATURE` (0.7) et `LLM_MAX_TOKENS` (2048) sont également configurables dans `.env`.
 - Les fichiers sont conservés sur un volume privé ; leurs métadonnées et le texte extrait sont enregistrés en base.
 
 Le résumé peut perdre des détails ; ce n'est pas une seconde copie fidèle de l'historique. Les documents et mémoires sont bornés par la limite de contexte, donc tout le contenu stocké n'est pas forcément transmis à chaque tour. Supprimer une mémoire ne réécrit pas les messages et résumés où vous aviez déjà évoqué cette information. Supprimez aussi les conversations concernées si nécessaire. Pas de recherche vectorielle ni de synchronisation hors ligne dans cette première version.

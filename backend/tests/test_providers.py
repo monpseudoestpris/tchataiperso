@@ -20,6 +20,10 @@ def settings():
     return SimpleNamespace(
         llm_base_url="https://llm.example/v1/",
         llm_api_key=SecretStr("fake-llm-secret"),
+        llm_temperature=0.35,
+        llm_max_tokens=3072,
+        summary_temperature=0.15,
+        summary_max_tokens=1200,
         brave_api_key=SecretStr("fake-brave-secret"),
         mistral_api_key=SecretStr("fake-mistral-secret"),
         ideogram_api_key=SecretStr("fake-ideogram-secret"),
@@ -72,7 +76,7 @@ def test_chat_stream_reads_chunked_sse_and_sends_provider_contract(settings, tra
         assert request.headers["accept"] == "text/event-stream"
         assert json.loads(request.content) == {
             "model": "example/model", "messages": [{"role": "user", "content": "Bonjour"}],
-            "stream": True, "temperature": 0.7, "max_tokens": 2048,
+            "stream": True, "temperature": 0.35, "max_tokens": 3072,
         }
         return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=Chunks(
             b': keepalive\r\nevent: message\r\ndata: {"choices":[{"delta":{"content":"Bon',
@@ -133,7 +137,8 @@ def test_summary_sends_old_summary_and_new_transcript(settings, transport):
     def handler(request):
         payload = json.loads(request.content)
         assert payload["stream"] is False
-        assert payload["max_tokens"] == 900
+        assert payload["temperature"] == 0.15
+        assert payload["max_tokens"] == 1200
         assert payload["model"] == "summary/model"
         assert "Résumé ancien" in payload["messages"][1]["content"]
         assert "Échange récent" in payload["messages"][1]["content"]

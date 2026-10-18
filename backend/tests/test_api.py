@@ -350,14 +350,17 @@ def test_mock_image_generation_saved_in_history(tmp_path, monkeypatch):
 
 
 def test_summary_includes_old_document_text_and_preserves_unsummarized_turns(tmp_path, monkeypatch):
-    settings = Settings(_env_file=None, app_data_dir=tmp_path, llm_api_key="key", summary_every_messages=8)
+    settings = Settings(_env_file=None, app_data_dir=tmp_path, llm_api_key="key", summary_every_messages=8,
+                        summary_model="summary-model")
     captured = {}
 
     async def summarize(_settings, model, previous, transcript):
+        captured["summary_model"] = model
         captured["transcript"] = transcript
         return "Résumé fiable"
 
     async def stream(_settings, messages, model):
+        captured["chat_model"] = model
         captured["context"] = json.dumps(messages, ensure_ascii=False)
         yield "Réponse"
 
@@ -376,6 +379,8 @@ def test_summary_includes_old_document_text_and_preserves_unsummarized_turns(tmp
             db.commit()
         response = client.post(f"/api/conversations/{item}/messages", json={"content": "Nouvelle question"})
         assert events(response)[-1][0] == "done"
+        assert captured["summary_model"] == "summary-model"
+        assert captured["summary_model"] != captured["chat_model"]
         assert "OLD_DOCUMENT_FACT" in captured["transcript"]
         with app.state.sessions() as db:
             stored = db.get(Conversation, item)

@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Boolean, Column, DateTime, ForeignKey, Integer, String, Table, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -15,6 +15,16 @@ def now() -> datetime:
 
 class Base(DeclarativeBase):
     pass
+
+
+conversation_skills = Table(
+    "conversation_skills",
+    Base.metadata,
+    Column("conversation_id", ForeignKey("conversations.id", ondelete="CASCADE"), primary_key=True),
+    Column("skill_id", ForeignKey("skills.id", ondelete="CASCADE"), primary_key=True),
+    Column("position", Integer, nullable=False),
+    UniqueConstraint("conversation_id", "position", name="uq_conversation_skills_position"),
+)
 
 
 class User(Base):
@@ -58,6 +68,9 @@ class Conversation(Base):
     summary: Mapped[str] = mapped_column(Text, default="")
     summary_through: Mapped[int] = mapped_column(Integer, default=0)
     messages: Mapped[list["Message"]] = relationship(back_populates="conversation", cascade="all, delete-orphan", order_by="Message.created_at")
+    skills: Mapped[list["Skill"]] = relationship(
+        secondary=conversation_skills, back_populates="conversations", order_by=conversation_skills.c.position,
+    )
 
 
 class Message(Base):
@@ -92,3 +105,14 @@ class Memory(Base):
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     content: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class Skill(Base):
+    __tablename__ = "skills"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(100))
+    prompt: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    conversations: Mapped[list[Conversation]] = relationship(secondary=conversation_skills, back_populates="skills")
