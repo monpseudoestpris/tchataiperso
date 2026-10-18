@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "cLAIr — votre espace IA",
+  title: "clAIr — votre espace IA",
   description: "Un espace personnel pour discuter, explorer et garder le fil avec vos modèles IA.",
 };
 
