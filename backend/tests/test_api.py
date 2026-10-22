@@ -85,6 +85,15 @@ def test_config_announces_only_enabled_search_providers(client, settings, demo, 
     assert "brave-secret" not in json.dumps(config)
 
 
+def test_searxng_enables_search_without_brave_key(tmp_path):
+    settings = Settings(_env_file=None, app_data_dir=tmp_path, demo_mode=False,
+                        searxng_url="http://clair-searxng:8080")
+    with authenticated_client(settings) as client:
+        config = client.get("/api/config").json()
+        assert config["features"]["web_search"] is True
+        assert "searxng" in config["search_providers"]
+
+
 def test_app_fails_with_actionable_error_without_admin(tmp_path):
     settings = Settings(_env_file=None, app_data_dir=tmp_path, demo_mode=True)
     with pytest.raises(RuntimeError, match="Aucun administrateur actif"):
@@ -345,11 +354,18 @@ def test_no_key_never_silently_uses_demo(tmp_path):
 
 
 def test_mock_real_chat_injects_memory_docs_and_sources(tmp_path, monkeypatch):
-    settings = Settings(_env_file=None, app_data_dir=tmp_path, demo_mode=False, llm_api_key="secret", brave_api_key="brave")
+    settings = Settings(_env_file=None, app_data_dir=tmp_path, demo_mode=False, llm_api_key="secret",
+                        searxng_url="http://clair-searxng:8080")
     captured = {}
 
-    async def search(_settings, query):
+    async def rewrite(_settings, query, summary, recent_turns):
         assert query == "Compare les infos"
+        assert summary == ""
+        assert recent_turns[-2] == {"role": "user", "content": "On parle d'Elden Ring, version 3.0.3."}
+        return "Elden Ring version 3.0.3 changements"
+
+    async def search(_settings, query):
+        assert query == "Elden Ring version 3.0.3 changements"
         return [{"title": "Référence", "url": "https://example.org", "snippet": "Texte web"}]
 
     async def stream(_settings, messages, model):
@@ -357,12 +373,15 @@ def test_mock_real_chat_injects_memory_docs_and_sources(tmp_path, monkeypatch):
         yield "Réponse "
         yield "réelle simulée"
 
+    monkeypatch.setattr(providers, "rewrite_search_query", rewrite)
     monkeypatch.setattr(providers, "search_web", search)
     monkeypatch.setattr(providers, "stream_chat", stream)
     with authenticated_client(settings) as client:
         client.post("/api/memories", json={"content": "Répondre en français"})
         attachment = client.post("/api/attachments", files={"file": ("facts.txt", b"Information document", "text/plain")}).json()
         item = conversation(client)
+        earlier = client.post(f"/api/conversations/{item}/messages", json={"content": "On parle d'Elden Ring, version 3.0.3."})
+        assert events(earlier)[-1][0] == "done"
         response = client.post(f"/api/conversations/{item}/messages", json={"content": "Compare les infos", "web_search": True, "attachment_ids": [attachment["id"]]})
         assert events(response)[-1][0] == "done"
         payload = json.dumps(captured["messages"], ensure_ascii=False)
@@ -431,6 +450,33 @@ def test_empty_web_search_is_explicit_and_does_not_call_llm(client, settings, mo
     assert llm_calls == []
     assert [message["role"] for message in client.get(f"/api/conversations/{item}").json()["messages"]] == ["user"]
     assert client.patch(f"/api/conversations/{item}", json={"title": "Déverrouillé"}).status_code == 200
+
+
+def test_search_rewrite_failure_uses_original_question(client, monkeypatch):
+    client.app.state.settings.demo_mode = False
+    client.app.state.settings.llm_api_key = SecretStr("secret")
+    client.app.state.settings.searxng_url = "http://clair-searxng:8080"
+    captured = {}
+
+    async def rewrite(*args):
+        raise providers.ProviderError("Reformulation indisponible")
+
+    async def search(_settings, query):
+        captured["query"] = query
+        return [{"title": "Prix", "url": "https://example.org/prix", "snippet": "Tarif officiel"}]
+
+    async def stream(_settings, messages, model):
+        yield "Réponse"
+
+    monkeypatch.setattr(providers, "rewrite_search_query", rewrite)
+    monkeypatch.setattr(providers, "search_web", search)
+    monkeypatch.setattr(providers, "stream_chat", stream)
+    item = conversation(client)
+    response = client.post(f"/api/conversations/{item}/messages", json={
+        "content": "Et son prix ?", "web_search": True,
+    })
+    assert events(response)[-1][0] == "done"
+    assert captured["query"] == "Et son prix ?"
 
 
 def test_stream_failure_is_explicit_unlocks_and_preserves_user(client, settings, monkeypatch):
@@ -591,6 +637,47 @@ def test_mock_image_generation_saved_in_history(tmp_path, monkeypatch):
         assert len(client.get(f"/api/conversations/{item}").json()["messages"]) == 2
 
 
+def test_dedicated_image_studio_gallery_improve_download_and_delete(tmp_path, monkeypatch):
+    settings = Settings(_env_file=None, app_data_dir=tmp_path, ideogram_api_key="image", llm_api_key="llm", demo_mode=False)
+
+    async def improve(_settings, model, prompt):
+        assert prompt == "Un renard"
+        return "Un renard roux dans une forêt enneigée au lever du soleil, lumière dorée"
+
+    async def generate(_settings, prompt, ratio):
+        assert prompt == "Un renard roux dans une forêt enneigée au lever du soleil, lumière dorée"
+        assert ratio == "16:9"
+        return b"\x89PNG\r\n\x1a\nstudio-image", "image/png"
+
+    monkeypatch.setattr(providers, "improve_image_prompt", improve)
+    monkeypatch.setattr(providers, "generate_image", generate)
+    with authenticated_client(settings) as client:
+        improved = client.post("/api/images/improve", json={"prompt": "  Un renard  "})
+        assert improved.status_code == 200
+        assert improved.json() == {"prompt": "Un renard roux dans une forêt enneigée au lever du soleil, lumière dorée"}
+
+        created = client.post("/api/images", json={"prompt": improved.json()["prompt"], "aspect_ratio": "16:9"})
+        assert created.status_code == 201
+        item = created.json()
+        assert item["aspect_ratio"] == "16:9"
+        assert item["mime_type"] == "image/png"
+        assert client.get("/api/images").json() == [item]
+
+        inline_file = client.get(item["url"])
+        assert inline_file.status_code == 200
+        assert inline_file.content == b"\x89PNG\r\n\x1a\nstudio-image"
+        assert "inline" in inline_file.headers.get("content-disposition", "")
+
+        download_file = client.get(item["download_url"])
+        assert download_file.status_code == 200
+        assert "attachment" in download_file.headers.get("content-disposition", "")
+
+        assert client.delete(f"/api/images/{item['id']}").status_code == 204
+        assert client.get("/api/images").json() == []
+        assert client.get(item["url"]).status_code == 404
+        assert list((tmp_path / "uploads").iterdir()) == []
+
+
 def test_summary_includes_old_document_text_and_preserves_unsummarized_turns(tmp_path, monkeypatch):
     settings = Settings(_env_file=None, app_data_dir=tmp_path, llm_api_key="key", summary_every_messages=8,
                         summary_model="summary-model")
@@ -685,3 +772,157 @@ def test_five_images_rejected_explicitly(client):
     assert response.status_code == 422
     assert "4 images" in response.json()["detail"]
     assert client.get(f"/api/conversations/{item}").json()["messages"] == []
+
+
+def test_deep_search_executes_multi_wave_searxng_and_global_synthesis(tmp_path, monkeypatch):
+    settings = Settings(_env_file=None, app_data_dir=tmp_path, demo_mode=False, llm_api_key="secret",
+                        searxng_url="http://clair-searxng:8080")
+    searched_queries = []
+    captured_context = {}
+
+    async def plan_initial(_settings, query, summary, recent_turns):
+        assert query == "Analyse complète de l'hydrogène vert"
+        return ["hydrogène vert électrolyse coûts", "hydrogène vert industrie décarbonation"]
+
+    async def plan_followup(_settings, query, initial_queries, sources):
+        assert initial_queries == ["hydrogène vert électrolyse coûts", "hydrogène vert industrie décarbonation"]
+        assert len(sources) == 3
+        return ["hydrogène vert projets Europe 2026"]
+
+    async def search(_settings, query, limit=5):
+        assert limit == 10
+        searched_queries.append(query)
+        slug = query.split()[2]
+        return [
+            {"title": f"Étude {slug}", "url": f"https://example.org/{slug}", "snippet": f"Données clés sur {query}"},
+            {"title": "Doublon", "url": "https://example.org/commun/", "snippet": f"Contenu partagé ({query})"},
+        ]
+
+    async def translate(_settings, sources, question):
+        return [{**item, "title": f"{item['title']} (FR)"} for item in sources]
+
+    async def stream(_settings, messages, model):
+        captured_context["messages"] = messages
+        yield "## Synthèse globale\n Selon [1] et [2]..."
+
+    monkeypatch.setattr(providers, "plan_deep_search_queries", plan_initial)
+    monkeypatch.setattr(providers, "plan_deep_search_followup", plan_followup)
+    monkeypatch.setattr(providers, "search_web", search)
+    monkeypatch.setattr(providers, "translate_deep_search_sources", translate)
+    monkeypatch.setattr(providers, "stream_chat", stream)
+
+    with authenticated_client(settings) as client:
+        item = conversation(client)
+        response = client.post(f"/api/conversations/{item}/messages", json={
+            "content": "Analyse complète de l'hydrogène vert",
+            "web_search": True,
+            "deep_search": True,
+        })
+        stream_events = events(response)
+        assert stream_events[-1][0] == "done"
+        statuses = [data["message"] for name, data in stream_events if name == "status"]
+        assert any("Planification" in s for s in statuses)
+        assert any("Exploration" in s for s in statuses)
+        assert any("Approfondissement" in s for s in statuses)
+        assert any("Synthèse globale" in s for s in statuses)
+        assert searched_queries == [
+            "hydrogène vert électrolyse coûts",
+            "hydrogène vert industrie décarbonation",
+            "hydrogène vert projets Europe 2026",
+        ]
+        system_content = captured_context["messages"][0]["content"]
+        assert "Mode DeepSearch" in system_content
+        saved_sources = client.get(f"/api/conversations/{item}").json()["messages"][-1]["sources"]
+        assert len(saved_sources) == 4
+        assert saved_sources[0]["query"] == "hydrogène vert électrolyse coûts"
+
+
+def test_code_mode_streams_multi_file_canvas_in_demo_and_real_modes(tmp_path, monkeypatch):
+    demo_settings = Settings(_env_file=None, app_data_dir=tmp_path / "demo", demo_mode=True)
+    with authenticated_client(demo_settings) as client:
+        item = conversation(client)
+        response = client.post(f"/api/conversations/{item}/messages", json={
+            "content": "Une application de prise de notes",
+            "code_mode": True,
+        })
+        stream_events = events(response)
+        assert stream_events[-1][0] == "done"
+        final_text = stream_events[-1][1]["message"]["content"]
+        assert 'path="index.html"' in final_text
+        assert 'path="styles.css"' in final_text
+        assert 'path="app.js"' in final_text
+
+    real_settings = Settings(_env_file=None, app_data_dir=tmp_path / "real", demo_mode=False, llm_api_key="secret")
+    captured = {}
+
+    async def stream(_settings, messages, model):
+        captured["messages"] = messages
+        yield '```python path="app/main.py"\nprint("ok")\n```'
+
+    monkeypatch.setattr(providers, "stream_chat", stream)
+    with authenticated_client(real_settings) as client:
+        item = conversation(client)
+        response = client.post(f"/api/conversations/{item}/messages", json={
+            "content": "Crée un script Python",
+            "code_mode": True,
+        })
+        stream_events = events(response)
+        assert stream_events[-1][0] == "done"
+        assert "Mode Code Canvas" in captured["messages"][0]["content"]
+        statuses = [data["message"] for name, data in stream_events if name == "status"]
+        assert any("Canvas Code" in s for s in statuses)
+
+
+def test_auto_title_keywords_theme_and_search_by_keywords_and_theme(tmp_path, monkeypatch):
+    real_settings = Settings(_env_file=None, app_data_dir=tmp_path, demo_mode=False, llm_api_key="secret")
+
+    async def stream(_settings, messages, model):
+        yield "Voici un guide complet sur le sommeil et la mélatonine."
+
+    async def classify(_settings, user_text, assistant_text, current_title=""):
+        assert "sommeil" in user_text.lower()
+        return {
+            "title": "Optimiser son sommeil et sa récupération",
+            "theme": "Santé",
+            "keywords": ["sommeil", "mélatonine", "récupération"],
+        }
+
+    monkeypatch.setattr(providers, "stream_chat", stream)
+    monkeypatch.setattr(providers, "classify_conversation", classify)
+
+    with authenticated_client(real_settings) as client:
+        health_id = conversation(client)
+        response = client.post(f"/api/conversations/{health_id}/messages", json={
+            "content": "Comment mieux gérer mon sommeil ?",
+        })
+        stream_events = events(response)
+        assert stream_events[-1][0] == "done"
+        done_conv = stream_events[-1][1]["conversation"]
+        assert done_conv["title"] == "Optimiser son sommeil et sa récupération"
+        assert done_conv["theme"] == "Santé"
+        assert done_conv["keywords"] == ["sommeil", "mélatonine", "récupération"]
+
+        coding_id = client.post("/api/conversations", json={
+            "title": "Architecture API FastAPI",
+            "theme": "Codage",
+            "keywords": ["python", "fastapi", "docker"],
+        }).json()["id"]
+
+        by_kw = client.get("/api/conversations?keyword=mélatonine").json()
+        assert [c["id"] for c in by_kw] == [health_id]
+
+        by_theme = client.get("/api/conversations?theme=Codage").json()
+        assert [c["id"] for c in by_theme] == [coding_id]
+
+        by_query = client.get("/api/conversations?q=fastapi").json()
+        assert [c["id"] for c in by_query] == [coding_id]
+
+        patched = client.patch(f"/api/conversations/{coding_id}", json={
+            "title": "Déploiement FastAPI",
+            "theme": "Codage",
+            "keywords": ["#python", "docker", "production"],
+        }).json()
+        assert patched["title"] == "Déploiement FastAPI"
+        assert patched["keywords"] == ["python", "docker", "production"]
+
+

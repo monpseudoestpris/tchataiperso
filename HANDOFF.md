@@ -1,0 +1,24 @@
+# Relais — 22 octobre 2026
+
+- Réalisé :
+  - **Résolution du rebase `git pull --rebase origin work` (`d463e40` sur `29511a2`)** :
+    - Intégration conjointe des fonctionnalités locales (`d463e40` : blogs d'actualité IA, studio d'images Ideogram, DeepSearch multilingue, Code Canvas, recherche principale SearXNG, reformulation de requêtes, extraction d'URLs web/YouTube, thèmes et mots-clés de conversation, rendu KaTeX) et distantes (`29511a2` : secours DuckDuckGo Instant Answers, variable `DUCKDUCKGO_ENABLED`, `search_providers` dans `/api/config`, erreur explicite en cas de recherche web vide, notices et attributions DuckDuckGo dans l'interface et le prompt système).
+    - Chaîne de priorité de recherche web unifiée dans `backend/app/providers.py` : SearXNG (`SEARXNG_URL`) -> Brave Search (`BRAVE_API_KEY`) -> DuckDuckGo Instant Answers (`DUCKDUCKGO_ENABLED=true`), avec conservation des erreurs amont et propagation de `search_notice` / `provider`.
+    - Mise à jour de `backend/app/cli.py` pour reconnaître les révisions Alembic `0007_add_blogs_and_posts` et `0008_add_blog_theme` lors de `prepare_schema`.
+    - Normalisation des titres entourés de guillemets/espaces dans `classify_conversation` (`backend/app/providers.py`).
+  - **Fonctionnalités précédentes conservées (`d463e40`)** :
+    - 21 thèmes visuels immersifs pour les blogs, actualisation 100% manuelle à la demande (`auto_refresh=False` par défaut), modèle rapide dédié `BLOG_MODEL` (`google/gemini-3.5-flash-lite`) avec repli sur `default_model`, et isolation stricte multi-comptes.
+- Fichiers résolus et modifiés :
+  - Configuration & documentation : `.env.example`, `README.md`, `docs/services.md`, `docs/architecture.md`, `HANDOFF.md`.
+  - Backend : `backend/app/config.py`, `backend/app/context.py`, `backend/app/main.py`, `backend/app/providers.py`, `backend/app/cli.py`.
+  - Tests backend : `backend/tests/test_api.py`, `backend/tests/test_providers.py`.
+  - Frontend : `frontend/app/layout.tsx`, `frontend/app/globals.css`, `frontend/lib/api.ts`, `frontend/components/chat-app.tsx`.
+- Vérifications exécutées :
+  - `python3 -m py_compile backend/app/*.py backend/tests/*.py` : 0 erreur.
+  - Suite complète de tests backend dans le conteneur `clair-api` : **185/185 tests réussis** (`test_api.py` : 45, `test_blogs.py` : 6, `test_context.py` : 23, `test_migrations.py` : 2, `test_providers.py` : 98, `test_web.py` : 5, `test_youtube.py` : 6).
+  - Typecheck TypeScript (`npm --prefix frontend run typecheck`) : 0 erreur.
+  - Build Next.js (`npm --prefix frontend run build`) : compilation réussie.
+- Problèmes connus :
+  - Aucun.
+- Prochaine action :
+  - Travailler directement sur la branche `main` (désormais alignée en fast-forward avec `work` sur l'ensemble de l'historique) et faire un `git pull --rebase` avant de commencer de nouveaux développements si des modifications ont été faites à distance.

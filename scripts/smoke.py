@@ -8,7 +8,7 @@ from urllib.error import HTTPError
 from urllib.parse import urlsplit
 from urllib.request import HTTPCookieProcessor, Request, build_opener, urlopen
 
-base = os.environ.get('SMOKE_BASE_URL', 'http://127.0.0.1:3000').rstrip('/')
+base = os.environ.get('SMOKE_BASE_URL', 'http://127.0.0.1:3001').rstrip('/')
 opener = build_opener(HTTPCookieProcessor(CookieJar()))
 origin = f'{urlsplit(base).scheme}://{urlsplit(base).netloc}'
 

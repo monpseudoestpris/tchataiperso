@@ -1,13 +1,13 @@
 services:
-  backend:
-    command: [uvicorn, app.main:app, --host, 0.0.0.0, --port, "8000", --reload]
+  clair-api:
+    command: [uvicorn, app.main:app, --host, 0.0.0.0, --port, "8001", --reload]
     volumes:
       - ./backend/app:/app/app:ro
 
-  frontend:
+  clair-web:
     build:
       target: dependencies
-    command: [node, node_modules/next/dist/bin/next, dev, --hostname, 0.0.0.0, --port, "3000"]
+    command: [node, node_modules/next/dist/bin/next, dev, --hostname, 0.0.0.0, --port, "3001"]
     environment:
       NODE_ENV: development
       NEXT_TELEMETRY_DISABLED: "1"

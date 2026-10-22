@@ -9,6 +9,7 @@ flowchart LR
     FastAPI --> DB
     FastAPI --> Files["Volume persistant · accès filtré par propriétaire"]
     FastAPI --> LLM["OpenRouter / endpoint compatible OpenAI"]
+    FastAPI --> SearXNG["SearXNG · métamoteur privé"]
     FastAPI --> Brave["Brave · extraits web"]
     FastAPI --> DDG["DuckDuckGo Instant Answers · secours optionnel"]
     FastAPI --> OCR["Mistral OCR · facultatif"]
@@ -17,7 +18,7 @@ flowchart LR
 
 ## Responsabilités
 
-**Next.js** rend l'application, affiche les messages Markdown, les sources et les pièces jointes. Il transfère `/api/*` vers FastAPI. Le navigateur utilise une même origine et ne reçoit aucune clé API. Le proxy est configuré à la compilation par `BACKEND_URL` : `http://backend:8000` dans l'image Docker, backend local en développement. Il faut reconstruire le frontend si cette destination change.
+**Next.js** rend l'application, affiche les messages Markdown, les sources et les pièces jointes. Il transfère `/api/*` vers FastAPI. Le navigateur utilise une même origine et ne reçoit aucune clé API. Le proxy est configuré à la compilation par `BACKEND_URL` : `http://clair-api:8001` dans l'image Docker, `http://127.0.0.1:8001` en développement local. Le service `clair-web` écoute sur le port 3001 ; `clair-db` reste sur le réseau Docker interne. Il faut reconstruire le frontend si cette destination change.
 
 **FastAPI** est la seule entrée pour les données et les services externes. Il valide les modèles autorisés, la taille des fichiers, les formats et les requêtes. Les adaptateurs `httpx` gardent les API fournisseurs remplaçables sans introduire de framework d'agents pour un simple tchat. Les erreurs de configuration et de fournisseur sont rendues explicitement au client.
 
@@ -29,7 +30,7 @@ Les sessions utilisent un identifiant opaque stocké sous forme de hash en base,
 
 1. L'interface téléverse les pièces jointes, puis envoie le texte, le modèle, l'option web et les identifiants de fichiers à la conversation choisie.
 2. Le backend enregistre le message utilisateur.
-3. Si la recherche est activée, Brave est prioritaire. Avec `DUCKDUCKGO_ENABLED=true`, DuckDuckGo Instant Answers sert de secours si la clé Brave manque, si Brave échoue ou ne fournit aucun résultat exploitable. Les sources retournées accompagnent la réponse et restent consultables avec elle. Sans source exploitable, le backend émet une erreur explicite et ne contacte pas le modèle pour ce message ; le message utilisateur reste enregistré.
+3. Si la recherche est activée, SearXNG est interrogé en premier lorsqu'il est configuré, puis Brave en repli. Avec `DUCKDUCKGO_ENABLED=true`, DuckDuckGo Instant Answers sert de secours si SearXNG et Brave manquent, échouent ou ne fournissent aucun résultat exploitable. Les sources retournées accompagnent la réponse et restent consultables avec elle. Sans source exploitable, le backend émet une erreur explicite et ne contacte pas le modèle pour ce message ; le message utilisateur reste enregistré.
 4. Le backend prépare le contexte : instructions, mémoires explicites, résumé des anciens échanges, messages récents, documents et éventuelles sources web. Il contacte le modèle et transfère ses fragments par **Server-Sent Events**. Le frontend traite aussi les événements de statut et d'erreur.
 5. La réponse finale est persistée, puis le client recharge l'historique. Le résumé est mis à jour périodiquement pour les échanges suivants ; la conversation complète reste en base.
 

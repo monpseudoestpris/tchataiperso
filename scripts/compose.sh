@@ -3,6 +3,30 @@ set -euo pipefail
 repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_dir"
 export BUILDX_CONFIG="${BUILDX_CONFIG:-$repo_dir/../.cache/buildx}"
+if [[ -f .env && -z "${SEARXNG_SECRET:-}" ]]; then
+  python3 - <<'PY'
+from pathlib import Path
+import secrets
+
+target = Path('.env')
+contents = target.read_bytes()
+newline = b'\r\n' if b'\r\n' in contents else b'\n'
+lines = contents.splitlines(keepends=True)
+for index, line in enumerate(lines):
+  key, separator, value = line.partition(b'=')
+  if separator and key.strip() == b'SEARXNG_SECRET':
+    if value.strip().strip(b"'\""):
+      break
+    ending = b'\r\n' if line.endswith(b'\r\n') else b'\n'
+    lines[index] = b'SEARXNG_SECRET=' + secrets.token_hex(32).encode() + ending
+    target.write_bytes(b''.join(lines))
+    break
+else:
+  if contents and not contents.endswith((b'\n', b'\r')):
+    contents += newline
+  target.write_bytes(contents + b'SEARXNG_SECRET=' + secrets.token_hex(32).encode() + newline)
+PY
+fi
 compose_files=(-f compose.yaml)
 if [[ "${1:-}" == dev ]]; then
   compose_files+=(-f compose.dev.yaml)
@@ -35,7 +59,7 @@ PY
   compose_files+=(-f compose.cloud.yaml)
 fi
 print_site_link() {
-  local site_url='http://localhost:3000'
+  local site_url='http://localhost:3001'
   printf '\ncLAIr — ouvrir le site : '
   if [[ -t 1 ]]; then
     # OSC 8 rend le lien cliquable dans les terminaux compatibles.
@@ -71,6 +95,10 @@ for arg in "$@"; do
     -h|--help) exec docker compose "${compose_files[@]}" "$@" ;;
   esac
 done
+
+if [[ "${1:-}" == up ]]; then
+  docker compose "${compose_files[@]}" down --remove-orphans
+fi
 
 if [[ "$link_timing" == before ]]; then
   # En mode attaché, conserver les logs et la gestion des signaux de Compose.

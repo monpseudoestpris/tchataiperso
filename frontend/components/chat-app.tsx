@@ -2,21 +2,54 @@
 
 import {
   ArrowDown, ArrowUp, BookOpen, Brain, Check, ChevronDown, ChevronLeft, ChevronRight,
-  CircleAlert, Copy, ExternalLink, FileText, Globe2, ImagePlus, LoaderCircle,
-  LogOut, Menu, MessageCircle, PanelLeftClose, Paperclip, Pencil, Plus, Search,
-  RefreshCw, Shield, Sparkles, Square, Trash2, WandSparkles, X,
+  CircleAlert, Code2, Compass, Copy, ExternalLink, FileCode2, FileText, FolderArchive,
+  Globe2, ImagePlus, Link2, LoaderCircle, LogOut, Menu, MessageCircle, Newspaper, PanelLeftClose, Paperclip,
+  Pencil, Plus, Search, RefreshCw, Shield, Sparkles, Square, SquarePlay, Trash2, WandSparkles, X,
 } from "lucide-react";
-import { useEffect, useRef, useState, useSyncExternalStore, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
+import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
 import { AdminPanel } from "@/components/admin-panel";
 import { AuthPanel } from "@/components/auth-panel";
+import { BlogModal } from "@/components/blog-modal";
+import { CodeCanvas } from "@/components/code-canvas";
+import { ImageStudioModal } from "@/components/image-studio-modal";
 import { SkillsPanel } from "@/components/skills-panel";
-import { ApiError, api, errorMessage, streamMessage, type Attachment, type AuthUser, type Config, type Conversation, type DocumentExtraction, type Memory, type Message } from "@/lib/api";
+import { ApiError, api, attachUrl, errorMessage, streamMessage, type Attachment, type AuthUser, type Config, type Conversation, type DocumentExtraction, type Memory, type Message } from "@/lib/api";
+import { collectConversationCanvasFiles, createZipBlob, extractCanvasFiles, hasExplicitCanvasFiles, triggerBlobDownload } from "@/lib/code-canvas";
+
+const DEFAULT_THEMES = [
+  "Codage",
+  "Santé",
+  "Travail & Projets",
+  "Sciences & Tech",
+  "Apprentissage",
+  "Finance & Droit",
+  "Création & Design",
+  "Vie quotidienne",
+  "Culture & Loisirs",
+  "Général",
+];
+
+function themeTone(theme?: string) {
+  const key = (theme || "Général").toLocaleLowerCase("fr");
+  if (key.includes("codage") || key.includes("code") || key.includes("dev")) return "code";
+  if (key.includes("santé") || key.includes("sante") || key.includes("médecin")) return "health";
+  if (key.includes("travail") || key.includes("projet")) return "work";
+  if (key.includes("science") || key.includes("tech")) return "science";
+  if (key.includes("apprenti") || key.includes("cours")) return "learn";
+  if (key.includes("finance") || key.includes("droit")) return "finance";
+  if (key.includes("création") || key.includes("design") || key.includes("art")) return "creative";
+  if (key.includes("quotidien") || key.includes("cuisine") || key.includes("maison")) return "daily";
+  if (key.includes("culture") || key.includes("loisir")) return "culture";
+  return "general";
+}
 
 const suggestions = [
   { icon: WandSparkles, title: "Faire émerger une idée", description: "Explorer une piste et lui donner forme", prompt: "Aide-moi à explorer une idée. Pose-moi quelques questions pour comprendre ce que je veux créer." },
-  { icon: BookOpen, title: "Comprendre un sujet", description: "Rendre les choses complexes plus claires", prompt: "J’aimerais mieux comprendre un sujet. Aide-moi à l’aborder avec des explications simples et des exemples." },
+  { icon: Newspaper, title: "Créer un blog d’actualités", description: "Veille auto sur les news IA via SearXNG", prompt: "Les dernières actualités et avancées en intelligence artificielle" },
   { icon: FileText, title: "Travailler un document", description: "Résumer, analyser, prendre du recul", prompt: "Je vais joindre un document. Peux-tu m’en proposer une synthèse et en faire ressortir les points essentiels ?" },
   { icon: ImagePlus, title: "Imaginer une image", description: "Du premier mot à une création visuelle", prompt: "Une petite maison d’architecte au milieu d’une forêt brumeuse, lumière du matin, photographie cinématographique." },
 ];
@@ -48,6 +81,43 @@ function dateGroup(value: string) {
 
 function BrandMark({ small = false }: { small?: boolean }) {
   return <span className={`brand-mark ${small ? "small" : ""}`} aria-hidden="true"><Sparkles strokeWidth={1.5} /></span>;
+}
+
+const CODE_SEGMENT_RE = /((?:^|\n)(?:`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:\n(?:`{3,}|~{3,})(?=\n|$)|$)|`+[^`]*?`+)/g;
+const markdownRemarkPlugins = [remarkGfm, remarkMath];
+const markdownRehypePlugins: NonNullable<React.ComponentProps<typeof ReactMarkdown>["rehypePlugins"]> = [
+  [rehypeKatex, { throwOnError: false, strict: "ignore", errorColor: "#64748b" }],
+];
+
+function formatDisplayMathBlock(indent: string, math: string) {
+  const body = math
+    .trim()
+    .split("\n")
+    .map(line => (line.trim() ? `${indent}${line.trim()}` : ""))
+    .join("\n");
+  return `${indent}$$\n${body}\n${indent}$$`;
+}
+
+function normalizeMathSegment(segment: string) {
+  return segment
+    .replace(/(^|\n)([ \t]*)\\\[([\s\S]*?)\\\](?=[ \t]*(?:\n|$))/g, (_, prefix: string, indent: string, math: string) =>
+      `${prefix}${formatDisplayMathBlock(indent, math)}`
+    )
+    .replace(/\\\[([\s\S]*?)\\\]/g, (_, math: string) => `\n$$\n${math.trim()}\n$$\n`)
+    .replace(/(^|\n)([ \t]*)\$\$([^\n$]+?)\$\$(?=[ \t]*(?:\n|$))/g, (_, prefix: string, indent: string, math: string) =>
+      `${prefix}${formatDisplayMathBlock(indent, math)}`
+    )
+    .replace(/(^|\n)([ \t]*)\[[ \t]*\n([\s\S]*?\\[a-zA-Z]+[\s\S]*?)\n[ \t]*\](?=[ \t]*(?:\n|$))/g, (_, prefix: string, indent: string, math: string) =>
+      `${prefix}${formatDisplayMathBlock(indent, math)}`
+    )
+    .replace(/\\\(([\s\S]*?)\\\)/g, (_, math: string) => `$${math.trim().replace(/\s*\n\s*/g, " ")}$`);
+}
+
+function normalizeMathMarkdown(content: string) {
+  return content
+    .split(CODE_SEGMENT_RE)
+    .map((part, index) => (index % 2 === 1 ? part : normalizeMathSegment(part)))
+    .join("");
 }
 
 function IconButton({ label, children, className = "", ...props }: { label: string; children: ReactNode; className?: string } & React.ButtonHTMLAttributes<HTMLButtonElement>) {
@@ -90,11 +160,11 @@ function AttachmentAnalysis({ attachment }: { attachment: Attachment }) {
       <div className="analysis-content" aria-live="polite">
         {extraction.warnings.map((warning, index) => <p className="analysis-warning" key={index}>{warning}</p>)}
         <section className="analysis-section"><h4>Transcription OCR · page {page.index + 1}</h4>
-          {page.markdown.trim() ? rawText ? <pre className="analysis-transcript">{page.markdown}</pre> : <div className="markdown"><ReactMarkdown skipHtml remarkPlugins={[remarkGfm]} components={{
+          {page.markdown.trim() ? rawText ? <pre className="analysis-transcript">{page.markdown}</pre> : <div className="markdown"><ReactMarkdown skipHtml remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins} components={{
             img: ({ alt }) => <span className="analysis-image-label">[{alt || "Illustration"}]</span>,
             a: ({ children, href }) => <a href={href} target="_blank" rel="noreferrer">{children}</a>,
             table: ({ children }) => <div className="table-scroll"><table>{children}</table></div>,
-          }}>{page.markdown}</ReactMarkdown></div> : <p>Aucun texte détecté.</p>}
+          }}>{normalizeMathMarkdown(page.markdown)}</ReactMarkdown></div> : <p>Aucun texte détecté.</p>}
         </section>
         {page.images.map(image => image.annotation && <section className="analysis-section" key={image.id}>
           <h4>{image.id} · {image.annotation.image_type}</h4><p>{image.annotation.description}</p>
@@ -110,18 +180,48 @@ function AttachmentAnalysis({ attachment }: { attachment: Attachment }) {
 }
 
 function AttachmentView({ attachment }: { attachment: Attachment }) {
+  const isYoutube = attachment.filename.startsWith("🎬") || attachment.mime_type.includes("youtube");
+  const isWeb = attachment.mime_type.startsWith("text/html") || !!attachment.source_url || attachment.filename.startsWith("🌐");
   return <div className="attachment-entry">
     {attachment.mime_type.startsWith("image/")
       ? <a className="message-image" href={attachment.url} target="_blank" rel="noreferrer"><img src={attachment.url} alt={attachment.filename} loading="lazy" /><span>{attachment.filename}<ExternalLink size={13} /></span></a>
+      : isYoutube
+      ? <a className="document-link document-youtube-link" href={attachment.source_url || attachment.url} target="_blank" rel="noreferrer" title="Ouvrir la vidéo sur YouTube"><SquarePlay size={18} /><span>{attachment.filename}</span><ExternalLink size={13} /></a>
+      : isWeb
+      ? <a className="document-link document-web-link" href={attachment.source_url || attachment.url} target="_blank" rel="noreferrer" title="Consulter la page d'origine"><Globe2 size={18} /><span>{attachment.filename}</span><ExternalLink size={13} /></a>
       : <a className="document-link" href={attachment.url} target="_blank" rel="noreferrer"><FileText size={18} /><span>{attachment.filename}</span><ExternalLink size={13} /></a>}
     <AttachmentAnalysis attachment={attachment} />
   </div>;
 }
 
-function MessageView({ message, streaming }: { message: Message; streaming?: boolean }) {
+function MessageView({
+  message,
+  streaming,
+  onOpenCanvas,
+}: {
+  message: Message;
+  streaming?: boolean;
+  onOpenCanvas?: (messageId: string, filePath?: string, forceUnnamed?: boolean) => void;
+}) {
   const [copied, setCopied] = useState(false);
+  const [zipDownloaded, setZipDownloaded] = useState(false);
+  const [showAllSources, setShowAllSources] = useState(false);
   const isUser = message.role === "user";
-  const searchNotices = [...new Set((message.sources ?? []).flatMap(source => source.provider === "duckduckgo_instant_answers" && source.search_notice ? [source.search_notice] : []))];
+  const sources = message.sources ?? [];
+  const searchNotices = [...new Set(sources.flatMap(source => source.provider === "duckduckgo_instant_answers" && source.search_notice ? [source.search_notice] : []))];
+  const exploredQueries = Array.from(new Set(sources.map(item => item.query?.trim()).filter((item): item is string => Boolean(item))));
+  const isDeepSearchResult = exploredQueries.length > 0 || sources.length > 5;
+  const visibleSources = showAllSources ? sources : sources.slice(0, 8);
+  const explicitCanvasFiles = useMemo(
+    () => (isUser ? [] : extractCanvasFiles(message.content, { isStreaming: streaming, includeUnnamed: false })),
+    [isUser, message.content, streaming],
+  );
+  const fallbackCanvasFiles = useMemo(
+    () => (isUser || explicitCanvasFiles.length > 0 ? [] : extractCanvasFiles(message.content, { isStreaming: streaming, includeUnnamed: true })),
+    [isUser, explicitCanvasFiles.length, message.content, streaming],
+  );
+  const canvasFiles = explicitCanvasFiles.length > 0 ? explicitCanvasFiles : fallbackCanvasFiles;
+  const isExplicitCanvas = explicitCanvasFiles.length > 0;
   async function copy() {
     try {
       await navigator.clipboard.writeText(message.content);
@@ -129,15 +229,51 @@ function MessageView({ message, streaming }: { message: Message; streaming?: boo
       setTimeout(() => setCopied(false), 2000);
     } catch { setCopied(false); }
   }
+
+  function downloadMessageZip() {
+    if (!canvasFiles.length) return;
+    const blob = createZipBlob(canvasFiles.map(file => ({ path: file.path, content: file.content })));
+    triggerBlobDownload(blob, "projet-canvas.zip");
+    setZipDownloaded(true);
+    setTimeout(() => setZipDownloaded(false), 2000);
+  }
+
   return <article className={`message ${isUser ? "from-user" : "from-assistant"}`} aria-label={isUser ? "Votre message" : "Réponse de l’assistant"}>
-    {!isUser && <div className="message-author"><BrandMark small /><span>cLAIr</span>{streaming && <span className="streaming-label">en train d’écrire</span>}</div>}
-    {message.content ? <div className={`markdown ${streaming ? "is-streaming" : ""}`}><ReactMarkdown remarkPlugins={[remarkGfm]} components={{
+    {!isUser && <div className="message-author"><BrandMark small /><span>cLAIr</span>{isDeepSearchResult && !streaming && <span className="deepsearch-badge"><Compass size={11} />DeepSearch</span>}{isExplicitCanvas && <span className="codecanvas-badge"><Code2 size={11} />Canvas Code</span>}{streaming && <span className="streaming-label">en train d’écrire</span>}</div>}
+    {message.content ? <div className={`markdown ${streaming ? "is-streaming" : ""}`}><ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins} components={{
       a: ({ children, href }) => <a href={href} target="_blank" rel="noreferrer">{children}</a>,
-      pre: ({ children }) => <div className="code-block"><div className="code-label">Code</div><pre>{children}</pre></div>,
+      pre: ({ children }) => <div className="code-block"><div className="code-label"><span>Code</span>{onOpenCanvas && canvasFiles.length > 0 && <button type="button" className="code-open-canvas" onClick={() => onOpenCanvas(message.id, canvasFiles[0]?.path, !isExplicitCanvas)}><Code2 size={11} />Ouvrir dans le Canvas</button>}</div><pre>{children}</pre></div>,
       table: ({ children }) => <div className="table-scroll"><table>{children}</table></div>,
-    }}>{message.content}</ReactMarkdown></div> : streaming && <div className="thinking-dots" aria-label="Réponse en cours"><i /><i /><i /></div>}
+    }}>{normalizeMathMarkdown(message.content)}</ReactMarkdown></div> : streaming && <div className="thinking-dots" aria-label="Réponse en cours"><i /><i /><i /></div>}
+    {!isUser && canvasFiles.length > 0 && <div className="message-canvas-card" role="region" aria-label="Projet Canvas généré">
+      <div className="message-canvas-card-header">
+        <div className="message-canvas-card-title">
+          <span className="message-canvas-icon"><Code2 size={16} /></span>
+          <div>
+            <strong>{isExplicitCanvas ? "Projet Canvas multi-fichiers" : "Code prêt pour le Canvas"}</strong>
+            <small>{canvasFiles.length} fichier{canvasFiles.length > 1 ? "s" : ""}{streaming ? " · Génération en direct…" : " · Éditable & exportable en .zip"}</small>
+          </div>
+        </div>
+        <div className="message-canvas-card-actions">
+          {onOpenCanvas && <button type="button" className="canvas-card-open-btn" onClick={() => onOpenCanvas(message.id, canvasFiles[0]?.path, !isExplicitCanvas)}><Code2 size={13} /><span>Ouvrir le Canvas</span></button>}
+          <button type="button" className="canvas-card-zip-btn" onClick={downloadMessageZip}><FolderArchive size={13} /><span>{zipDownloaded ? "ZIP téléchargé" : "Télécharger .zip"}</span></button>
+        </div>
+      </div>
+      <div className="message-canvas-files">
+        {canvasFiles.map(file => <button key={file.path} type="button" className="message-canvas-file-pill" onClick={() => onOpenCanvas?.(message.id, file.path, !isExplicitCanvas)} title={`Ouvrir ${file.path} dans le Canvas`}><FileCode2 size={12} /><span>{file.path}</span>{file.streaming && <LoaderCircle size={11} className="spin" />}</button>)}
+      </div>
+    </div>}
     {!!message.attachments?.length && <div className="message-attachments">{message.attachments.map(item => <AttachmentView key={item.id} attachment={item} />)}</div>}
-    {!!message.sources?.length && <div className="sources"><p><Globe2 size={13} /> Résultats de recherche</p><div>{message.sources.map((source, index) => <a key={`${source.url}-${index}`} href={source.url} target="_blank" rel="noreferrer" title={source.snippet}><span>{index + 1}</span><span>{source.title || new URL(source.url).hostname}</span>{source.provider === "duckduckgo_instant_answers" && <small className="source-provider">DuckDuckGo</small>}<ExternalLink size={12} /></a>)}</div>{searchNotices.map(notice => <p className="source-notice" key={notice}><CircleAlert size={12} />{notice}</p>)}{message.sources.some(source => source.provider === "duckduckgo_instant_answers") && <p className="source-attribution">Réponses instantanées fournies par <a href="https://duckduckgo.com" target="_blank" rel="noreferrer">DuckDuckGo<ExternalLink size={10} /></a>.</p>}</div>}
+    {!!sources.length && <div className={`sources ${isDeepSearchResult ? "sources-deepsearch" : ""}`}>
+      <div className="sources-header">
+        <p>{isDeepSearchResult ? <><Compass size={13} /> Synthèse DeepSearch · {sources.length} sources croisées</> : <><Globe2 size={13} /> Résultats de recherche ({sources.length})</>}</p>
+        {sources.length > 8 && <button type="button" className="sources-toggle" onClick={() => setShowAllSources(old => !old)}>{showAllSources ? "Réduire" : `Voir les ${sources.length} sources`}</button>}
+      </div>
+      {exploredQueries.length > 0 && <div className="sources-queries" aria-label="Pistes explorées sur SearXNG">{exploredQueries.map(q => <span key={q} className="source-query-pill"><Search size={10} />{q}</span>)}</div>}
+      <div className="sources-links">{visibleSources.map((source, index) => <a key={`${source.url}-${index}`} href={source.url} target="_blank" rel="noreferrer" title={source.query ? `[Piste : ${source.query}]\n${source.snippet ?? ""}` : source.snippet}><span>{index + 1}</span><span>{source.title || new URL(source.url).hostname}</span>{source.provider === "duckduckgo_instant_answers" && <small className="source-provider">DuckDuckGo</small>}<ExternalLink size={12} /></a>)}</div>
+      {searchNotices.map(notice => <p className="source-notice" key={notice}><CircleAlert size={12} />{notice}</p>)}
+      {sources.some(source => source.provider === "duckduckgo_instant_answers") && <p className="source-attribution">Réponses instantanées fournies par <a href="https://duckduckgo.com" target="_blank" rel="noreferrer">DuckDuckGo<ExternalLink size={10} /></a>.</p>}
+    </div>}
     {!isUser && message.content && !streaming && <div className="message-actions"><button type="button" onClick={copy} aria-label={copied ? "Réponse copiée" : "Copier la réponse"}>{copied ? <Check size={14} /> : <Copy size={14} />}{copied ? "Copié" : "Copier"}</button><span>{new Date(message.created_at).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}</span></div>}
   </article>;
 }
@@ -156,12 +292,25 @@ export function ChatApp() {
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [webSearch, setWebSearch] = useState(false);
-  const [imageMode, setImageMode] = useState(false);
+  const [deepSearch, setDeepSearch] = useState(false);
+  const [codeMode, setCodeMode] = useState(false);
+  const [canvasOpen, setCanvasOpen] = useState(false);
+  const [canvasMessageId, setCanvasMessageId] = useState<string | null>(null);
+  const [canvasSelectedPath, setCanvasSelectedPath] = useState<string | null>(null);
+  const [canvasIncludeUnnamed, setCanvasIncludeUnnamed] = useState(false);
+  const [imageStudioOpen, setImageStudioOpen] = useState(false);
+  const [imageStudioPrompt, setImageStudioPrompt] = useState("");
+  const [blogModalOpen, setBlogModalOpen] = useState(false);
+  const [blogModalSeedPrompt, setBlogModalSeedPrompt] = useState("");
   const [busy, setBusy] = useState<string | null>("init");
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
   const [streamingId, setStreamingId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const [groupMode, setGroupMode] = useState<"date" | "theme">("date");
+  const [selectedKeyword, setSelectedKeyword] = useState("");
+  const [selectedTheme, setSelectedTheme] = useState("");
+  const [collapsedThemes, setCollapsedThemes] = useState<Record<string, boolean>>({});
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
   const [skillsOpen, setSkillsOpen] = useState(false);
@@ -169,6 +318,12 @@ export function ChatApp() {
   const [memoryDraft, setMemoryDraft] = useState("");
   const [dialog, setDialog] = useState<{ type: "rename" | "delete"; conversation: Conversation } | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  const [renameTheme, setRenameTheme] = useState("");
+  const [renameKeywords, setRenameKeywords] = useState("");
+  const [showUrlModal, setShowUrlModal] = useState(false);
+  const [urlInputValue, setUrlInputValue] = useState("");
+  const [urlLoading, setUrlLoading] = useState(false);
+  const [urlError, setUrlError] = useState("");
   const controllerRef = useRef<AbortController | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -233,25 +388,133 @@ export function ChatApp() {
     if (atBottom) bottomRef.current?.scrollIntoView({ behavior: streamingId ? "instant" : "smooth", block: "end" });
   }, [conversation?.messages, atBottom, streamingId, status]);
 
-  const messages = conversation?.messages ?? [];
+  const messages = useMemo(() => conversation?.messages ?? [], [conversation?.messages]);
   const working = busy !== null;
-  const sending = busy === "send" || busy === "image";
+  const sending = busy === "send";
   const needsVision = attachments.some(file => file.mime_type.startsWith("image/") && !file.has_extraction) && !config?.demo_mode && !config?.models.find(item => item.id === model)?.vision;
-  const canSend = !!config && !working && (imageMode ? config.features.image_generation && !!draft.trim() && draft.length <= 4000 : config.features.chat && !needsVision && (!!draft.trim() || attachments.length > 0));
-  const searchProviders = config?.search_providers ?? (config?.features.web_search ? ["brave"] : []);
-  const hasBrave = searchProviders.includes("brave");
+  const canSend = !!config && !working && config.features.chat && !needsVision && (!!draft.trim() || attachments.length > 0);
+  const searchProviders = config?.search_providers ?? (config?.features.web_search ? ["searxng", "brave"] : []);
+  const hasPrimarySearch = searchProviders.includes("searxng") || searchProviders.includes("brave");
   const hasDuckDuckGo = searchProviders.includes("duckduckgo_instant_answers");
-  const duckDuckGoOnly = hasDuckDuckGo && !hasBrave;
-  const showDuckDuckGoNotice = duckDuckGoOnly && webSearch && !imageMode && !!config?.features.web_search;
+  const duckDuckGoOnly = hasDuckDuckGo && !hasPrimarySearch;
+  const showDuckDuckGoNotice = duckDuckGoOnly && (webSearch || deepSearch) && !!config?.features.web_search;
   const webSearchTooltip = !config?.features.web_search
-    ? "Configurez une clé Brave ou activez DuckDuckGo côté serveur (DUCKDUCKGO_ENABLED=true) pour utiliser la recherche."
-    : hasBrave && hasDuckDuckGo
-      ? "Recherche web avec Brave ; DuckDuckGo en secours pour des réponses instantanées à couverture limitée."
+    ? "Configurez SearXNG, une clé Brave ou activez DuckDuckGo côté serveur (DUCKDUCKGO_ENABLED=true) pour utiliser la recherche."
+    : hasPrimarySearch && hasDuckDuckGo
+      ? "Recherche web rapide (SearXNG / Brave) ; DuckDuckGo en secours pour des réponses instantanées à couverture limitée."
       : duckDuckGoOnly
         ? "Réponses instantanées DuckDuckGo : sans clé, couverture limitée, sans recherche web complète."
-        : "Rechercher sur le web avec Brave pour enrichir la réponse.";
-  const filteredConversations = conversations.filter(item => item.title.toLocaleLowerCase("fr").includes(query.toLocaleLowerCase("fr")));
-  const groups = ["Aujourd’hui", "Ces 7 derniers jours", "Plus tôt"].map(label => ({ label, items: filteredConversations.filter(item => dateGroup(item.updated_at) === label) })).filter(group => group.items.length);
+        : "Recherche web rapide en une requête pour enrichir la réponse.";
+
+  const availableThemes = useMemo(() => {
+    const base = config?.themes?.length ? config.themes : DEFAULT_THEMES;
+    const extra = conversations
+      .map(item => item.theme?.trim())
+      .filter((t): t is string => typeof t === "string" && t.length > 0 && !base.includes(t));
+    return Array.from(new Set([...base, ...extra]));
+  }, [config?.themes, conversations]);
+
+  const topKeywords = useMemo(() => {
+    const counts = new Map<string, { label: string; count: number }>();
+    for (const item of conversations) {
+      for (const rawKw of item.keywords ?? []) {
+        const clean = rawKw.trim().replace(/^#+/, "");
+        if (!clean) continue;
+        const key = clean.toLocaleLowerCase("fr");
+        const existing = counts.get(key);
+        if (existing) existing.count += 1;
+        else counts.set(key, { label: clean, count: 1 });
+      }
+    }
+    return Array.from(counts.values())
+      .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, "fr"))
+      .slice(0, 14);
+  }, [conversations]);
+
+  const filteredConversations = useMemo(() => {
+    const cleanQuery = query.trim().replace(/^#+/, "").toLocaleLowerCase("fr");
+    const cleanKeyword = selectedKeyword.trim().replace(/^#+/, "").toLocaleLowerCase("fr");
+    const cleanTheme = selectedTheme.trim().toLocaleLowerCase("fr");
+    return conversations.filter(item => {
+      const itemTheme = (item.theme?.trim() || "Général");
+      const itemKeywords = item.keywords ?? [];
+      if (cleanTheme && itemTheme.toLocaleLowerCase("fr") !== cleanTheme) return false;
+      if (cleanKeyword && !itemKeywords.some(kw => kw.toLocaleLowerCase("fr") === cleanKeyword)) return false;
+      if (!cleanQuery) return true;
+      const inTitle = item.title.toLocaleLowerCase("fr").includes(cleanQuery);
+      const inKeywords = itemKeywords.some(kw => kw.toLocaleLowerCase("fr").includes(cleanQuery));
+      const inTheme = itemTheme.toLocaleLowerCase("fr").includes(cleanQuery);
+      const inSummary = (item.summary ?? "").toLocaleLowerCase("fr").includes(cleanQuery);
+      return inTitle || inKeywords || inTheme || inSummary;
+    });
+  }, [conversations, query, selectedKeyword, selectedTheme]);
+
+  const groups = useMemo(() => {
+    if (groupMode === "theme") {
+      const byTheme = new Map<string, Conversation[]>();
+      for (const item of filteredConversations) {
+        const label = item.theme?.trim() || "Général";
+        const list = byTheme.get(label) ?? [];
+        list.push(item);
+        byTheme.set(label, list);
+      }
+      const order = availableThemes;
+      return Array.from(byTheme.entries())
+        .map(([label, items]) => ({ label, items }))
+        .sort((a, b) => {
+          if (a.label === "Général" && b.label !== "Général") return 1;
+          if (b.label === "Général" && a.label !== "Général") return -1;
+          const idxA = order.indexOf(a.label);
+          const idxB = order.indexOf(b.label);
+          if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+          return b.items.length - a.items.length || a.label.localeCompare(b.label, "fr");
+        });
+    }
+    return ["Aujourd’hui", "Ces 7 derniers jours", "Plus tôt"]
+      .map(label => ({ label, items: filteredConversations.filter(item => dateGroup(item.updated_at) === label) }))
+      .filter(group => group.items.length > 0);
+  }, [groupMode, filteredConversations, availableThemes]);
+
+  const hasActiveFilter = Boolean(query.trim() || selectedKeyword || selectedTheme);
+
+  const canvasFiles = useMemo(
+    () => collectConversationCanvasFiles(messages, canvasMessageId, streamingId, codeMode || canvasIncludeUnnamed),
+    [messages, canvasMessageId, streamingId, codeMode, canvasIncludeUnnamed],
+  );
+
+  function openCanvasForMessage(messageId: string, filePath?: string, forceUnnamed = false) {
+    setCanvasMessageId(messageId);
+    setCanvasIncludeUnnamed(forceUnnamed);
+    if (filePath) setCanvasSelectedPath(filePath);
+    setContextOpen(false);
+    setSkillsOpen(false);
+    setCanvasOpen(true);
+  }
+
+  function toggleCodeMode() {
+    setCodeMode(old => {
+      const next = !old;
+      if (next) {
+        setCanvasMessageId(null);
+        setContextOpen(false);
+        setSkillsOpen(false);
+        setCanvasOpen(true);
+      }
+      return next;
+    });
+  }
+
+  function openImageStudio(seedPrompt = "") {
+    setImageStudioPrompt(seedPrompt);
+    setImageStudioOpen(true);
+    setSidebarOpen(false);
+  }
+
+  function openBlogModal(seedPrompt = "") {
+    setBlogModalSeedPrompt(seedPrompt);
+    setBlogModalOpen(true);
+    setSidebarOpen(false);
+  }
 
   async function refreshConversations() { setConversations(await api<Conversation[]>("/conversations")); }
 
@@ -276,7 +539,10 @@ export function ChatApp() {
     try {
       const loaded = await api<Conversation>(`/conversations/${id}`);
       const warning = await discardUploads(attachments);
-      setConversation(loaded); setModel(loaded.model); setDraft(""); setAttachments([]); setAtBottom(true); setImageMode(false);
+      const hasCanvas = (loaded.messages ?? []).some(msg => msg.role === "assistant" && hasExplicitCanvasFiles(msg.content));
+      setConversation(loaded); setModel(loaded.model); setDraft(""); setAttachments([]); setAtBottom(true);
+      setCanvasMessageId(null); setCanvasSelectedPath(null); setCanvasIncludeUnnamed(false);
+      if (hasCanvas) { setContextOpen(false); setCanvasOpen(true); }
       if (warning) setError(warning);
     } catch (err) { setError(errorMessage(err)); }
     finally { setBusy(null); }
@@ -286,7 +552,9 @@ export function ChatApp() {
     if (working) return;
     setBusy("cleanup");
     const warning = await discardUploads(attachments);
-    setConversation(null); setDraft(""); setAttachments([]); setModel(config?.default_model ?? ""); setError(""); setImageMode(false); setSidebarOpen(false); setAtBottom(true);
+    setConversation(null); setDraft(""); setAttachments([]); setModel(config?.default_model ?? ""); setError(""); setSidebarOpen(false); setAtBottom(true);
+    setCanvasMessageId(null); setCanvasSelectedPath(null); setCanvasIncludeUnnamed(false);
+    if (!codeMode) setCanvasOpen(false);
     if (warning) setError(warning);
     setBusy(null);
     textareaRef.current?.focus();
@@ -332,14 +600,39 @@ export function ChatApp() {
     }
   }
 
+  async function handleAttachUrl(event?: FormEvent) {
+    event?.preventDefault();
+    const clean = urlInputValue.trim();
+    if (!clean) return;
+    if (!/^https?:\/\//i.test(clean)) {
+      setUrlError("Veuillez saisir une adresse web valide commençant par http:// ou https://");
+      return;
+    }
+    if (attachments.length >= 5) {
+      setUrlError("Un message peut contenir au maximum 5 pièces jointes. Retirez des fichiers avant d’en ajouter.");
+      return;
+    }
+    setUrlLoading(true);
+    setUrlError("");
+    try {
+      const attached = await attachUrl(clean);
+      setAttachments(old => [...old, attached]);
+      setUrlInputValue("");
+      setShowUrlModal(false);
+    } catch (err) {
+      setUrlError(errorMessage(err));
+    } finally {
+      setUrlLoading(false);
+    }
+  }
+
   async function send(event?: FormEvent) {
     event?.preventDefault();
     if (!canSend || !config) return;
     const text = draft.trim();
     const files = attachments;
-    const generatingImage = imageMode;
     const controller = new AbortController(); controllerRef.current = controller;
-    setBusy(generatingImage ? "image" : "send"); setError(""); setStatus(generatingImage ? "Ideogram prépare votre image…" : "Connexion au modèle…"); setDraft(""); setAttachments([]); setAtBottom(true);
+    setBusy("send"); setError(""); setStatus("Connexion au modèle…"); setDraft(""); setAttachments([]); setAtBottom(true);
     let activeId = conversation?.id;
     let persisted = false;
     let assistantId = "";
@@ -348,26 +641,38 @@ export function ChatApp() {
         const created = await api<Conversation>("/conversations", { method: "POST", body: JSON.stringify({ model }), signal: controller.signal });
         activeId = created.id; setConversation({ ...created, messages: created.messages ?? [] });
       }
-      if (generatingImage) {
-        const message = await api<Message>(`/conversations/${activeId}/images`, { method: "POST", body: JSON.stringify({ prompt: text, aspect_ratio: "1:1" }), signal: controller.signal });
-        persisted = true;
-        setConversation(old => old ? { ...old, messages: [...(old.messages ?? []), message] } : old);
-      } else {
-        await streamMessage(activeId, { content: text, model, web_search: webSearch && config.features.web_search, attachment_ids: files.map(item => item.id) }, controller.signal, event => {
-          if (event.type === "meta") {
-            persisted = true; assistantId = event.data.assistant_message_id; setStreamingId(assistantId);
-            const empty: Message = { id: assistantId, role: "assistant", content: "", created_at: new Date().toISOString(), attachments: [], sources: [] };
-            setConversation(old => old ? { ...old, messages: [...(old.messages ?? []), event.data.user_message, empty] } : old);
-            setStatus("Le modèle réfléchit…");
-          } else if (event.type === "status") setStatus(event.data.message);
-          else if (event.type === "delta") {
-            setStatus("");
-            setConversation(old => old ? { ...old, messages: (old.messages ?? []).map(item => item.id === assistantId ? { ...item, content: item.content + event.data.text } : item) } : old);
-          } else if (event.type === "done") {
-            setConversation(old => ({ ...event.data.conversation, skills: event.data.conversation.skills ?? old?.skills ?? [], messages: event.data.conversation.messages ?? (old?.messages ?? []).map(item => item.id === assistantId ? event.data.message : item) }));
-          }
-        });
+      const useDeepSearch = deepSearch && config.features.web_search;
+      const useWebSearch = (webSearch || deepSearch) && config.features.web_search;
+      const useCodeMode = codeMode;
+      if (useCodeMode) {
+        setCanvasMessageId(null);
+        setContextOpen(false);
+        setSkillsOpen(false);
+        setCanvasOpen(true);
       }
+      let accumulatedText = "";
+      await streamMessage(activeId, { content: text, model, web_search: useWebSearch, deep_search: useDeepSearch, code_mode: useCodeMode, attachment_ids: files.map(item => item.id) }, controller.signal, event => {
+        if (event.type === "meta") {
+          persisted = true; assistantId = event.data.assistant_message_id; setStreamingId(assistantId);
+          if (useCodeMode) setCanvasMessageId(assistantId);
+          const empty: Message = { id: assistantId, role: "assistant", content: "", created_at: new Date().toISOString(), attachments: [], sources: [] };
+          setConversation(old => old ? { ...old, messages: [...(old.messages ?? []), event.data.user_message, empty] } : old);
+          setStatus(useCodeMode ? "Canvas Code · Architecture du projet…" : "Le modèle réfléchit…");
+        } else if (event.type === "status") setStatus(event.data.message);
+        else if (event.type === "delta") {
+          setStatus("");
+          accumulatedText += event.data.text;
+          if (!canvasOpen && (useCodeMode || hasExplicitCanvasFiles(accumulatedText))) {
+            setCanvasMessageId(assistantId);
+            setContextOpen(false);
+            setSkillsOpen(false);
+            setCanvasOpen(true);
+          }
+          setConversation(old => old ? { ...old, messages: (old.messages ?? []).map(item => item.id === assistantId ? { ...item, content: item.content + event.data.text } : item) } : old);
+        } else if (event.type === "done") {
+          setConversation(old => ({ ...event.data.conversation, skills: event.data.conversation.skills ?? old?.skills ?? [], messages: event.data.conversation.messages ?? (old?.messages ?? []).map(item => item.id === assistantId ? event.data.message : item) }));
+        }
+      });
       const loaded = await api<Conversation>(`/conversations/${activeId}`);
       setConversation(loaded); await refreshConversations();
     } catch (err) {
@@ -423,6 +728,59 @@ export function ChatApp() {
     } catch (err) { setError(errorMessage(err)); }
   }
 
+  function openEditDialog(target: Conversation) {
+    setDialog({ type: "rename", conversation: target });
+    setRenameValue(target.title);
+    setRenameTheme(target.theme?.trim() || "Général");
+    setRenameKeywords((target.keywords ?? []).join(", "));
+  }
+
+  function toggleKeywordFilter(kw: string) {
+    const clean = kw.trim().replace(/^#+/, "");
+    setSelectedKeyword(old => (old.toLocaleLowerCase("fr") === clean.toLocaleLowerCase("fr") ? "" : clean));
+  }
+
+  function toggleThemeCollapse(label: string) {
+    setCollapsedThemes(old => ({ ...old, [label]: !old[label] }));
+  }
+
+  async function classifyConversation(id: string, updateTitle = true) {
+    if (working) return;
+    setBusy("classify"); setError("");
+    try {
+      const updated = await api<Conversation>(`/conversations/${id}/classify`, {
+        method: "POST",
+        body: JSON.stringify({ update_title: updateTitle }),
+      });
+      if (conversation?.id === id) {
+        setConversation(old => old ? { ...old, ...updated, messages: updated.messages ?? old.messages } : updated);
+      }
+      if (dialog?.conversation.id === id) {
+        if (updateTitle) setRenameValue(updated.title);
+        setRenameTheme(updated.theme?.trim() || "Général");
+        setRenameKeywords((updated.keywords ?? []).join(", "));
+      }
+      await refreshConversations();
+    } catch (err) { setError(errorMessage(err)); }
+    finally { setBusy(null); }
+  }
+
+  async function classifyAllConversations() {
+    if (working) return;
+    setBusy("classify-all"); setError("");
+    try {
+      const updatedList = await api<Conversation[]>("/conversations/classify-all?force=true", { method: "POST" });
+      setConversations(updatedList);
+      if (conversation) {
+        const match = updatedList.find(item => item.id === conversation.id);
+        if (match) {
+          setConversation(old => old ? { ...old, title: match.title, theme: match.theme, keywords: match.keywords } : old);
+        }
+      }
+    } catch (err) { setError(errorMessage(err)); }
+    finally { setBusy(null); }
+  }
+
   async function submitDialog(event: FormEvent) {
     event.preventDefault();
     if (!dialog || working || (dialog.type === "rename" && !renameValue.trim())) return;
@@ -433,7 +791,19 @@ export function ChatApp() {
         await api(`/conversations/${id}`, { method: "DELETE" });
         if (conversation?.id === id) { setConversation(null); setDraft(""); setAttachments([]); }
       } else {
-        const updated = await api<Conversation>(`/conversations/${id}`, { method: "PATCH", body: JSON.stringify({ title: renameValue.trim() }) });
+        const parsedKeywords = renameKeywords
+          .split(/[,;]+/)
+          .map(k => k.trim().replace(/^#+/, ""))
+          .filter(Boolean)
+          .slice(0, 5);
+        const updated = await api<Conversation>(`/conversations/${id}`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            title: renameValue.trim(),
+            theme: renameTheme.trim() || "Général",
+            keywords: parsedKeywords,
+          }),
+        });
         if (conversation?.id === id) setConversation(old => old ? { ...old, ...updated, messages: updated.messages ?? old.messages } : updated);
       }
       await refreshConversations(); setDialog(null);
@@ -454,19 +824,179 @@ export function ChatApp() {
     <aside className={`sidebar ${sidebarOpen ? "is-open" : ""}`} aria-label="Conversations">
       <div className="brand"><BrandMark small /><span>cLAIr<span className="brand-dot">.</span></span><IconButton label="Fermer le menu" className="mobile-only" onClick={() => setSidebarOpen(false)}><PanelLeftClose size={18} /></IconButton></div>
       <button type="button" className="new-chat" onClick={() => void newConversation()} disabled={working}><Plus size={18} /><span>Nouvelle conversation</span><kbd>+</kbd></button>
-      <label className="search-field"><Search size={16} /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Rechercher une conversation" aria-label="Rechercher dans les titres des conversations" /><kbd>⌕</kbd></label>
-      <div className="history-header"><span>VOTRE ESPACE</span><span>{conversations.length}</span></div>
+      <label className="search-field">
+        <Search size={16} />
+        <input
+          value={query}
+          onChange={event => setQuery(event.target.value)}
+          placeholder="Titre, #mot-clé ou thème…"
+          aria-label="Rechercher par titre, mot-clé ou thème"
+        />
+        {hasActiveFilter ? (
+          <button
+            type="button"
+            className="search-clear"
+            onClick={() => { setQuery(""); setSelectedKeyword(""); setSelectedTheme(""); }}
+            aria-label="Effacer les filtres de recherche"
+            title="Effacer les filtres"
+          >
+            <X size={13} />
+          </button>
+        ) : (
+          <kbd>⌕</kbd>
+        )}
+      </label>
+
+      {topKeywords.length > 0 && (
+        <div className="sidebar-keywords-bar" aria-label="Filtrer par mot-clé">
+          {selectedTheme && (
+            <button
+              type="button"
+              className={`keyword-filter-chip is-theme is-active tone-${themeTone(selectedTheme)}`}
+              onClick={() => setSelectedTheme("")}
+              title="Retirer le filtre de thème"
+            >
+              <span>{selectedTheme}</span>
+              <X size={11} />
+            </button>
+          )}
+          {topKeywords.map(item => {
+            const active = selectedKeyword.toLocaleLowerCase("fr") === item.label.toLocaleLowerCase("fr");
+            return (
+              <button
+                key={item.label}
+                type="button"
+                className={`keyword-filter-chip ${active ? "is-active" : ""}`}
+                onClick={() => toggleKeywordFilter(item.label)}
+                title={`Filtrer par le mot-clé #${item.label} (${item.count})`}
+              >
+                <span>#{item.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      <div className="history-header">
+        <span>VOTRE ESPACE · {filteredConversations.length}</span>
+        <div className="history-header-controls">
+          {conversations.length > 0 && (
+            <button
+              type="button"
+              className="history-autoclassify-btn"
+              disabled={working}
+              onClick={() => void classifyAllConversations()}
+              title="Générer automatiquement les titres, thèmes et mots-clés manquants (Mistral Small)"
+              aria-label="Classer automatiquement les discussions"
+            >
+              {busy === "classify-all" ? <LoaderCircle size={12} className="spin" /> : <WandSparkles size={12} />}
+            </button>
+          )}
+          <div className="history-view-toggle" role="group" aria-label="Mode de regroupement">
+            <button
+              type="button"
+              className={groupMode === "date" ? "is-active" : ""}
+              aria-pressed={groupMode === "date"}
+              onClick={() => setGroupMode("date")}
+            >
+              Date
+            </button>
+            <button
+              type="button"
+              className={groupMode === "theme" ? "is-active" : ""}
+              aria-pressed={groupMode === "theme"}
+              onClick={() => setGroupMode("theme")}
+            >
+              Thèmes
+            </button>
+          </div>
+        </div>
+      </div>
       <nav className="history-list" aria-label="Historique des conversations">
-        {busy === "init" ? <p className="history-empty"><LoaderCircle className="spin" size={16} /> Chargement de l’historique…</p> : groups.length ? groups.map(group => <div key={group.label} className="history-group"><h2>{group.label}</h2>{group.items.map(item => <div key={item.id} className={`history-item ${conversation?.id === item.id ? "is-active" : ""}`}>
-          <button type="button" className="history-select" disabled={working} onClick={() => void openConversation(item.id)}><MessageCircle size={15} /><span>{item.title}</span></button>
-          <div className="history-tools"><IconButton label={`Renommer « ${item.title} »`} disabled={working} onClick={() => { setDialog({ type: "rename", conversation: item }); setRenameValue(item.title); }}><Pencil size={13} /></IconButton><IconButton label={`Supprimer « ${item.title} »`} disabled={working} onClick={() => setDialog({ type: "delete", conversation: item })}><Trash2 size={13} /></IconButton></div>
-        </div>)}</div>) : <div className="history-empty"><MessageCircle size={20} /><p>{query ? "Aucune conversation trouvée." : "Une idée, une question…\nVotre historique commence ici."}</p></div>}
+        {busy === "init" ? <p className="history-empty"><LoaderCircle className="spin" size={16} /> Chargement de l’historique…</p> : groups.length ? groups.map(group => {
+          const isCollapsed = groupMode === "theme" && Boolean(collapsedThemes[group.label]);
+          const tone = groupMode === "theme" ? themeTone(group.label) : "general";
+          return (
+            <div key={group.label} className={`history-group ${groupMode === "theme" ? "is-theme-group" : ""}`}>
+              {groupMode === "theme" ? (
+                <button
+                  type="button"
+                  className={`history-theme-header tone-${tone}`}
+                  onClick={() => toggleThemeCollapse(group.label)}
+                  aria-expanded={!isCollapsed}
+                >
+                  <span className={`theme-dot tone-${tone}`} />
+                  <span className="history-theme-title">{group.label}</span>
+                  <span className="history-theme-count">{group.items.length}</span>
+                  {isCollapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
+                </button>
+              ) : (
+                <h2>{group.label}</h2>
+              )}
+              {!isCollapsed && group.items.map(item => {
+                const itemTheme = item.theme?.trim() || "";
+                const itemKeywords = (item.keywords ?? []).slice(0, 3);
+                return (
+                  <div key={item.id} className={`history-item ${conversation?.id === item.id ? "is-active" : ""}`}>
+                    <div className="history-item-main">
+                      <button type="button" className="history-select" disabled={working} onClick={() => void openConversation(item.id)}>
+                        <MessageCircle size={15} />
+                        <span>{item.title}</span>
+                      </button>
+                      {(itemKeywords.length > 0 || (groupMode === "date" && itemTheme)) && (
+                        <div className="history-item-meta">
+                          {groupMode === "date" && itemTheme && (
+                            <button
+                              type="button"
+                              className={`history-theme-badge tone-${themeTone(itemTheme)}`}
+                              onClick={() => {
+                                setGroupMode("theme");
+                                setSelectedTheme(old => (old === itemTheme ? "" : itemTheme));
+                              }}
+                              title={`Regrouper ou filtrer par le thème « ${itemTheme} »`}
+                            >
+                              {itemTheme}
+                            </button>
+                          )}
+                          {itemKeywords.map(kw => {
+                            const kwActive = selectedKeyword.toLocaleLowerCase("fr") === kw.toLocaleLowerCase("fr");
+                            return (
+                              <button
+                                key={kw}
+                                type="button"
+                                className={`history-keyword-pill ${kwActive ? "is-active" : ""}`}
+                                onClick={() => toggleKeywordFilter(kw)}
+                                title={`Chercher les discussions avec #${kw}`}
+                              >
+                                #{kw}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                    <div className="history-tools">
+                      <IconButton label={`Modifier « ${item.title} »`} disabled={working} onClick={() => openEditDialog(item)}><Pencil size={13} /></IconButton>
+                      <IconButton label={`Supprimer « ${item.title} »`} disabled={working} onClick={() => setDialog({ type: "delete", conversation: item })}><Trash2 size={13} /></IconButton>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        }) : <div className="history-empty"><MessageCircle size={20} /><p>{hasActiveFilter ? "Aucune discussion ne correspond à ce filtre." : "Une idée, une question…\nVotre historique commence ici."}</p></div>}
       </nav>
-      <div className="sidebar-bottom"><button type="button" className="memory-shortcut" onClick={() => { setContextTab("memories"); setContextOpen(true); setSidebarOpen(false); }}><span className="memory-icon"><Brain size={18} /></span><span><strong>Votre mémoire</strong><small>{memories.length ? `${memories.length} information${memories.length > 1 ? "s" : ""} enregistrée${memories.length > 1 ? "s" : ""}` : "Les choses qui comptent"}</small></span><ChevronRight size={16} /></button><div className="profile"><span className="avatar">{user.username[0].toLocaleUpperCase("fr")}</span><span className="profile-user"><strong>{user.username}</strong><small><span className="connection-dot" /> Compte sécurisé</small></span>{user.is_admin && <IconButton label="Gérer les utilisateurs" onClick={() => setAdminOpen(true)}><Shield size={16} /></IconButton>}<IconButton label="Se déconnecter" onClick={() => void logout()}><LogOut size={16} /></IconButton></div></div>
+      <div className="sidebar-bottom">
+        <button type="button" className="blog-shortcut" onClick={() => openBlogModal("")}>
+          <span className="blog-icon"><Newspaper size={18} /></span>
+          <span><strong>Mes Blogs d’actualités</strong><small>Veille SearXNG & résumés auto</small></span>
+          <ChevronRight size={16} />
+        </button>
+        <button type="button" className="memory-shortcut" onClick={() => { setContextTab("memories"); setContextOpen(true); setSidebarOpen(false); }}><span className="memory-icon"><Brain size={18} /></span><span><strong>Votre mémoire</strong><small>{memories.length ? `${memories.length} information${memories.length > 1 ? "s" : ""} enregistrée${memories.length > 1 ? "s" : ""}` : "Les choses qui comptent"}</small></span><ChevronRight size={16} /></button><div className="profile"><span className="avatar">{user.username[0].toLocaleUpperCase("fr")}</span><span className="profile-user"><strong>{user.username}</strong><small><span className="connection-dot" /> Compte sécurisé</small></span>{user.is_admin && <IconButton label="Gérer les utilisateurs" onClick={() => setAdminOpen(true)}><Shield size={16} /></IconButton>}<IconButton label="Se déconnecter" onClick={() => void logout()}><LogOut size={16} /></IconButton></div></div>
     </aside>
 
     <main className="main-panel">
-      <header className="topbar"><div className="topbar-left"><IconButton label="Ouvrir le menu" className="mobile-only" onClick={() => setSidebarOpen(true)}><Menu size={21} /></IconButton><div className="model-select-wrap"><span className="model-indicator" /><select aria-label="Modèle d’intelligence artificielle" value={model} onChange={event => void changeModel(event.target.value)} disabled={!config || working}>{config?.models.map(item => <option key={item.id} value={item.id}>{item.name}</option>) ?? <option>Connexion…</option>}</select><ChevronDown size={14} /></div><span className="topbar-divider" /><span className="personal-label">Votre espace IA</span></div><div className="topbar-right"><button type="button" className={`context-toggle ${contextOpen ? "is-selected" : ""}`} onClick={() => setContextOpen(old => !old)} aria-expanded={contextOpen} aria-controls="context-panel" aria-label="Mémoire & contexte"><Brain size={17} /><span>Mémoire & contexte</span><span className="memory-count">{memories.length}</span></button></div></header>
+      <header className="topbar"><div className="topbar-left"><IconButton label="Ouvrir le menu" className="mobile-only" onClick={() => setSidebarOpen(true)}><Menu size={21} /></IconButton><div className="model-select-wrap"><span className="model-indicator" /><select aria-label="Modèle d’intelligence artificielle" value={model} onChange={event => void changeModel(event.target.value)} disabled={!config || working}>{config?.models.map(item => <option key={item.id} value={item.id}>{item.name}</option>) ?? <option>Connexion…</option>}</select><ChevronDown size={14} /></div><span className="topbar-divider" /><span className="personal-label">Votre espace IA</span></div><div className="topbar-right"><button type="button" className={`blog-topbar-button ${blogModalOpen ? "is-selected" : ""}`} onClick={() => openBlogModal("")} aria-label="Ouvrir mes blogs"><Newspaper size={17} /><span>Blogs</span></button><button type="button" className={`canvas-topbar-button ${canvasOpen ? "is-selected" : ""}`} onClick={() => { setCanvasOpen(old => { const next = !old; if (next) { setContextOpen(false); setSkillsOpen(false); } return next; }); }} aria-expanded={canvasOpen} aria-label="Ouvrir le Canvas Code"><Code2 size={17} /><span>Canvas Code</span>{canvasFiles.length > 0 && <span className="canvas-topbar-count">{canvasFiles.length}</span>}</button><button type="button" className="studio-topbar-button" onClick={() => openImageStudio(draft.trim())} aria-label="Ouvrir le Studio Image"><ImagePlus size={17} /><span>Studio Image</span></button><button type="button" className={`context-toggle ${contextOpen ? "is-selected" : ""}`} onClick={() => { setContextOpen(old => { const next = !old; if (next) setCanvasOpen(false); return next; }); }} aria-expanded={contextOpen} aria-controls="context-panel" aria-label="Mémoire & contexte"><Brain size={17} /><span>Mémoire & contexte</span><span className="memory-count">{memories.length}</span></button></div></header>
 
       {config?.demo_mode && <div className="demo-banner" role="status"><CircleAlert size={17} /><span><strong>Mode démonstration.</strong> Les réponses sont simulées, aucun modèle IA n’est appelé. Configurez une clé côté serveur et désactivez <code>DEMO_MODE</code> pour activer l’IA.</span></div>}
       {config && !config.features.chat && !config.demo_mode && <div className="demo-banner" role="status"><CircleAlert size={17} /><span><strong>Le tchat attend sa configuration.</strong> Ajoutez une clé du fournisseur IA dans le fichier <code>.env</code> du serveur, puis redémarrez le backend.</span></div>}
@@ -476,7 +1006,7 @@ export function ChatApp() {
           <div className="chat-skills-toolbar"><span>{conversation?.skills?.length ? conversation.skills.map(skill => skill.name).join(" · ") : "Aucune compétence active"}</span><button type="button" onClick={() => { setContextOpen(false); setSkillsOpen(true); }}><Sparkles size={15} />Compétences<small>{conversation?.skills?.length ?? 0}</small></button></div>
           {skillsOpen && <SkillsPanel conversation={conversation} model={model} config={config} onClose={() => setSkillsOpen(false)} onConversationChange={setConversation} onRefreshConversations={refreshConversations} />}
           <div className="chat-scroll" ref={messagesRef} onScroll={() => { const el = messagesRef.current; if (el) setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 120); }}>
-            {!messages.length && busy !== "switch" ? <div className="welcome"><div className="welcome-eyebrow"><span /> UN PEU DE CLARTÉ, BEAUCOUP DE POSSIBILITÉS</div><BrandMark /><h1>Qu’avez-vous en tête<span> aujourd’hui ?</span></h1><p>Un espace pour vos questions, vos idées et vos projets.<br />Commencez quelque part. On avance ensemble.</p><div className="suggestions">{suggestions.map((item, index) => <button type="button" className="suggestion" key={item.title} disabled={working || (index === 3 && !config?.features.image_generation)} title={index === 3 && !config?.features.image_generation ? "Configurez votre clé Ideogram côté serveur pour créer des images." : undefined} onClick={() => { setDraft(item.prompt); setImageMode(index === 3); textareaRef.current?.focus(); }}><span className={`suggestion-icon suggestion-icon-${index}`}><item.icon size={19} strokeWidth={1.6} /></span><strong>{item.title}</strong><span>{item.description}</span><ChevronRight size={15} className="suggestion-arrow" /></button>)}</div><div className="welcome-note"><Brain size={14} /><span>Les souvenirs que vous choisissez gardent le fil d’une conversation à l’autre.</span></div></div> : busy === "switch" ? <div className="loading-conversation"><LoaderCircle size={23} className="spin" />Ouverture de votre conversation…</div> : <div className="messages"><div className="conversation-heading"><span>CONVERSATION</span><h1>{conversation?.title}</h1></div>{messages.map(message => <MessageView key={message.id} message={message} streaming={streamingId === message.id} />)}<div ref={bottomRef} /></div>}
+            {!messages.length && busy !== "switch" ? <div className="welcome"><div className="welcome-eyebrow"><span /> UN PEU DE CLARTÉ, BEAUCOUP DE POSSIBILITÉS</div><BrandMark /><h1>Qu’avez-vous en tête<span> aujourd’hui ?</span></h1><p>Un espace pour vos questions, vos idées et vos projets.<br />Commencez quelque part. On avance ensemble.</p><div className="suggestions">{suggestions.map((item, index) => <button type="button" className="suggestion" key={item.title} disabled={working} onClick={() => { if (index === 3) { openImageStudio(item.prompt); } else if (index === 1) { openBlogModal(item.prompt); } else { setDraft(item.prompt); textareaRef.current?.focus(); } }}><span className={`suggestion-icon suggestion-icon-${index}`}><item.icon size={19} strokeWidth={1.6} /></span><strong>{item.title}</strong><span>{item.description}</span><ChevronRight size={15} className="suggestion-arrow" /></button>)}</div><div className="welcome-note"><Brain size={14} /><span>Les souvenirs que vous choisissez gardent le fil d’une conversation à l’autre.</span></div></div> : busy === "switch" ? <div className="loading-conversation"><LoaderCircle size={23} className="spin" />Ouverture de votre conversation…</div> : <div className="messages"><div className="conversation-heading"><div className="conversation-heading-top"><span>CONVERSATION</span>{conversation?.theme && <button type="button" className={`conversation-theme-badge tone-${themeTone(conversation.theme)}`} onClick={() => { setGroupMode("theme"); setSelectedTheme(old => (old === conversation.theme ? "" : (conversation.theme ?? ""))); setSidebarOpen(true); }} title={`Voir toutes les discussions du thème « ${conversation.theme} »`}>{conversation.theme}</button>}<div className="conversation-heading-actions">{conversation && <button type="button" className="conversation-meta-btn" disabled={working} onClick={() => openEditDialog(conversation)} title="Modifier le titre, le thème et les mots-clés"><Pencil size={12} /><span>Éditer</span></button>}{conversation && <button type="button" className="conversation-meta-btn" disabled={working} onClick={() => void classifyConversation(conversation.id, true)} title="Régénérer le titre, le thème et les mots-clés automatiquement (Mistral Small)">{busy === "classify" ? <LoaderCircle size={12} className="spin" /> : <WandSparkles size={12} />}<span>Auto-tags IA</span></button>}</div></div><h1>{conversation?.title}</h1>{!!conversation?.keywords?.length && <div className="conversation-keywords-row" aria-label="Mots-clés de la discussion">{conversation.keywords.map(kw => <button key={kw} type="button" className={`conversation-keyword-chip ${selectedKeyword.toLocaleLowerCase("fr") === kw.toLocaleLowerCase("fr") ? "is-active" : ""}`} onClick={() => { toggleKeywordFilter(kw); setSidebarOpen(true); }} title={`Filtrer les discussions avec #${kw}`}>#{kw}</button>)}</div>}</div>{messages.map(message => <MessageView key={message.id} message={message} streaming={streamingId === message.id} onOpenCanvas={openCanvasForMessage} />)}<div ref={bottomRef} /></div>}
           </div>
           {!atBottom && !!messages.length && <IconButton className="scroll-bottom" label="Aller aux derniers messages" onClick={() => { setAtBottom(true); bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }}><ArrowDown size={18} /></IconButton>}
 
@@ -485,23 +1015,53 @@ export function ChatApp() {
             {showDuckDuckGoNotice && <div className="search-notice" id="web-search-hint" role="status"><Globe2 size={13} />DuckDuckGo fournit des réponses instantanées et des sujets associés ; couverture limitée.</div>}
             {needsVision && <div className="vision-notice" role="status"><CircleAlert size={13} />Pour analyser vos images, choisissez un modèle compatible avec la vision.</div>}
             {status && <div className="generation-status" role="status"><LoaderCircle size={13} className="spin" />{status}</div>}
-            <form className={`composer ${imageMode ? "image-mode" : ""}`} onSubmit={event => void send(event)}>
-              {imageMode && <div className="image-mode-label"><ImagePlus size={15} /><span>Studio image <strong>Ideogram</strong></span><button type="button" disabled={working} onClick={() => setImageMode(false)}>Revenir au tchat <X size={13} /></button></div>}
-              {!!attachments.length && <div className="pending-attachments">{attachments.map(item => <div className="pending-entry" key={item.id}><div className="pending-file"><FileText size={15} /><span>{item.filename}</span><IconButton label={`Retirer ${item.filename}`} disabled={working} onClick={() => void removeAttachment(item.id)}><X size={13} /></IconButton></div><AttachmentAnalysis attachment={item} /></div>)}</div>}
-              <label className="sr-only" htmlFor="composer">{imageMode ? "Décrivez l’image à générer" : "Votre message"}</label><textarea id="composer" ref={textareaRef} value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={composerKeyDown} placeholder={imageMode ? "Décrivez l’image que vous imaginez…" : "Une question, une idée, un début de quelque chose…"} rows={2} maxLength={imageMode ? 4000 : 20000} disabled={working || !config} aria-describedby="composer-hint" />
-              <div className="composer-toolbar"><div className="composer-tools"><input className="sr-only" type="file" ref={fileRef} multiple accept=".txt,.md,.csv,.json,.pdf,.docx,image/png,image/jpeg,image/webp" onChange={event => void uploadFiles(event.target.files)} tabIndex={-1} /><IconButton label="Joindre jusqu’à 5 fichiers (20 Mo par document, 8 Mo par image)" disabled={working || imageMode || !config} onClick={() => fileRef.current?.click()}><Paperclip size={19} /></IconButton><span className="tool-divider" /><button type="button" className={`tool-button ${webSearch && !imageMode ? "active" : ""}`} disabled={working || imageMode || !config?.features.web_search} aria-pressed={webSearch && !imageMode} title={webSearchTooltip} aria-describedby={showDuckDuckGoNotice ? "web-search-hint" : undefined} onClick={() => setWebSearch(old => !old)}><Globe2 size={16} /><span>Web</span>{webSearch && !imageMode && <Check size={12} />}</button><button type="button" className={`tool-button ${imageMode ? "active" : ""}`} disabled={working || !config?.features.image_generation || attachments.length > 0} aria-pressed={imageMode} title={config?.features.image_generation ? "Créer une image avec Ideogram" : "Ajoutez votre clé Ideogram côté serveur pour créer des images"} onClick={() => { setImageMode(old => !old); textareaRef.current?.focus(); }}><ImagePlus size={16} /><span>Image</span></button></div><div className="composer-submit"><span className="enter-hint">↵ pour envoyer</span>{sending ? <button className="send-button stop-button" type="button" onClick={() => controllerRef.current?.abort()} aria-label="Interrompre la génération" title="Interrompre la génération"><Square size={14} fill="currentColor" /></button> : <button className="send-button" type="submit" disabled={!canSend} aria-label={imageMode ? "Générer l’image" : "Envoyer le message"}>{busy === "upload" ? <LoaderCircle size={19} className="spin" /> : <ArrowUp size={20} />}</button>}</div></div>
+            <form className={`composer ${deepSearch ? "deepsearch-mode" : ""} ${codeMode ? "codecanvas-mode" : ""}`} onSubmit={event => void send(event)}>
+              {deepSearch && <div className="deepsearch-mode-label"><Compass size={14} /><span><strong>Mode DeepSearch</strong> · Exploration internationale jusqu’à 40 sites via SearXNG, traduction et synthèse globale</span><button type="button" onClick={() => setDeepSearch(false)}><X size={12} />Désactiver</button></div>}
+              {codeMode && <div className="codecanvas-mode-label"><Code2 size={14} /><span><strong>Mode Code · Canvas</strong> · L’éditeur multi-fichiers s’ouvre en direct avec aperçu web et téléchargement <code>.zip</code></span><button type="button" onClick={() => setCodeMode(false)}><X size={12} />Désactiver</button></div>}
+              {!!attachments.length && <div className="pending-attachments">{attachments.map(item => {
+                const isYoutube = item.filename.startsWith("🎬") || item.mime_type.includes("youtube");
+                const isWeb = item.mime_type.startsWith("text/html") || !!item.source_url || item.filename.startsWith("🌐");
+                return <div className="pending-entry" key={item.id}><div className="pending-file">{isYoutube ? <SquarePlay size={15} color="#dc2626" /> : isWeb ? <Globe2 size={15} /> : <FileText size={15} />}<span>{item.filename}</span><IconButton label={`Retirer ${item.filename}`} disabled={working} onClick={() => void removeAttachment(item.id)}><X size={13} /></IconButton></div><AttachmentAnalysis attachment={item} /></div>;
+              })}</div>}
+              <label className="sr-only" htmlFor="composer">Votre message</label><textarea id="composer" ref={textareaRef} value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={composerKeyDown} placeholder={codeMode ? "Décrivez l’application, le script ou le projet multi-fichiers à coder dans le Canvas…" : deepSearch ? "Quel sujet voulez-vous explorer en profondeur avec SearXNG ?" : "Une question, une idée, un début de quelque chose…"} rows={2} maxLength={20000} disabled={working || !config} aria-describedby="composer-hint" />
+              <div className="composer-toolbar"><div className="composer-tools"><input className="sr-only" type="file" ref={fileRef} multiple accept=".txt,.md,.csv,.json,.pdf,.docx,image/png,image/jpeg,image/webp" onChange={event => void uploadFiles(event.target.files)} tabIndex={-1} /><IconButton label="Joindre jusqu’à 5 fichiers (20 Mo par document, 8 Mo par image)" disabled={working || !config} onClick={() => fileRef.current?.click()}><Paperclip size={19} /></IconButton><IconButton label="Analyser un lien web ou vidéo YouTube (URL)" disabled={working || !config} onClick={() => { setUrlError(""); setUrlInputValue(""); setShowUrlModal(true); }}><Link2 size={19} /></IconButton><span className="tool-divider" /><button type="button" className={`tool-button ${webSearch && !deepSearch ? "active" : ""}`} disabled={working || !config?.features.web_search} aria-pressed={webSearch && !deepSearch} title={webSearchTooltip} aria-describedby={showDuckDuckGoNotice ? "web-search-hint" : undefined} onClick={() => { setWebSearch(old => !old); setDeepSearch(false); }}><Globe2 size={16} /><span>Web</span>{webSearch && !deepSearch && <Check size={12} />}</button><button type="button" className={`tool-button deepsearch-trigger ${deepSearch ? "active" : ""}`} disabled={working || !config?.features.web_search} aria-pressed={deepSearch} title={config?.features.web_search ? "DeepSearch : recherche large multi-requêtes via SearXNG et synthèse globale approfondie" : webSearchTooltip} onClick={() => { setDeepSearch(old => !old); setWebSearch(false); }}><Compass size={16} /><span>DeepSearch</span>{deepSearch && <Check size={12} />}</button><button type="button" className={`tool-button codecanvas-trigger ${codeMode ? "active" : ""}`} disabled={working || !config} aria-pressed={codeMode} title="Mode Code Canvas : générer une application ou un projet multi-fichiers dans l’éditeur interactif avec téléchargement .zip" onClick={toggleCodeMode}><Code2 size={16} /><span>Code · Canvas</span>{codeMode && <Check size={12} />}</button><button type="button" className="tool-button studio-trigger" disabled={working} title="Ouvrir le Studio Image dédié (Ideogram, amélioration de prompt, visualisation et galerie)" onClick={() => openImageStudio(draft.trim())}><ImagePlus size={16} /><span>Studio Image</span></button></div><div className="composer-submit"><span className="enter-hint">↵ pour envoyer</span>{sending ? <button className="send-button stop-button" type="button" onClick={() => controllerRef.current?.abort()} aria-label="Interrompre la génération" title="Interrompre la génération"><Square size={14} fill="currentColor" /></button> : <button className="send-button" type="submit" disabled={!canSend} aria-label="Envoyer le message">{busy === "upload" ? <LoaderCircle size={19} className="spin" /> : <ArrowUp size={20} />}</button>}</div></div>
             </form>
             <div className="composer-footnote" id="composer-hint"><span>cLAIr peut se tromper. Gardez un regard critique sur les réponses.</span><span>Maj + Entrée pour un saut de ligne</span></div>
           </div>
         </section>
 
+        {canvasOpen && (
+          <CodeCanvas
+            title={conversation?.title || "Projet Canvas"}
+            aiFiles={canvasFiles}
+            streaming={Boolean(streamingId)}
+            selectedPath={canvasSelectedPath}
+            onSelectPath={setCanvasSelectedPath}
+            onClose={() => setCanvasOpen(false)}
+            onQuickPrompt={promptText => {
+              setCodeMode(true);
+              setDraft(promptText);
+              textareaRef.current?.focus();
+            }}
+          />
+        )}
+
         {contextOpen && <aside className="context-panel" id="context-panel" aria-label="Mémoire et contexte"><div className="context-heading"><div><span className="eyebrow">GARDER LE FIL</span><h2>Mémoire & contexte</h2></div><IconButton label="Fermer le panneau mémoire" onClick={() => setContextOpen(false)}><X size={18} /></IconButton></div><div className="context-tabs" role="tablist" aria-label="Contexte"><button id="summary-tab" type="button" role="tab" aria-selected={contextTab === "summary"} aria-controls="summary-panel" className={contextTab === "summary" ? "active" : ""} onClick={() => setContextTab("summary")}>Cette conversation</button><button id="memories-tab" type="button" role="tab" aria-selected={contextTab === "memories"} aria-controls="memories-panel" className={contextTab === "memories" ? "active" : ""} onClick={() => setContextTab("memories")}>Mes souvenirs <span>{memories.length}</span></button></div>
-          {contextTab === "summary" ? <div className="context-content" role="tabpanel" id="summary-panel" aria-labelledby="summary-tab"><div className="context-info"><BookOpen size={19} /><h3>L’essentiel, au même endroit.</h3><p>Un résumé progressif aide l’IA à garder le contexte quand la conversation s’allonge.</p></div>{conversation?.summary ? <div className="summary-card markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{conversation.summary}</ReactMarkdown></div> : <div className="context-empty"><span className="empty-orbit"><BookOpen size={24} strokeWidth={1.2} /></span><strong>Chaque échange a son fil.</strong><p>{conversation ? "Le résumé apparaîtra ici lorsque cette conversation sera assez longue." : "Commencez une conversation pour retrouver son résumé ici."}</p></div>}<p className="context-explainer"><CircleAlert size={14} />Ce résumé est lié à cette conversation. Vos souvenirs, eux, peuvent enrichir tous vos échanges.</p></div> : <div className="context-content" role="tabpanel" id="memories-panel" aria-labelledby="memories-tab"><div className="context-info"><Brain size={20} /><h3>Les petites choses à retenir.</h3><p>Ajoutez vos préférences, vos projets ou des informations utiles. Vous gardez le contrôle.</p></div><form className="memory-form" onSubmit={event => void saveMemory(event)}><label className="sr-only" htmlFor="memory-input">Nouvelle information à mémoriser</label><textarea id="memory-input" placeholder="Par exemple : je préfère des réponses courtes et concrètes." value={memoryDraft} onChange={event => setMemoryDraft(event.target.value)} disabled={working} maxLength={2000} rows={3} /><button type="submit" disabled={!memoryDraft.trim() || working}><Plus size={15} />Mémoriser</button></form>{memories.length ? <ul className="memory-list">{memories.map(memory => <li key={memory.id}><div><span className="memory-bullet" /><p>{memory.content}</p><IconButton label={`Oublier : ${memory.content.slice(0, 45)}`} disabled={working} onClick={() => void deleteMemory(memory.id)}><Trash2 size={14} /></IconButton></div><small>Ajouté le {shortDate(memory.created_at)}</small></li>)}</ul> : <div className="memory-empty"><Brain size={23} strokeWidth={1.3} /><p>Votre mémoire est encore une page blanche.</p></div>}<p className="context-explainer"><CircleAlert size={14} />Ces informations sont envoyées au modèle dans vos conversations. Vous pouvez les supprimer à tout moment.</p></div>}
+          {contextTab === "summary" ? <div className="context-content" role="tabpanel" id="summary-panel" aria-labelledby="summary-tab"><div className="context-info"><BookOpen size={19} /><h3>L’essentiel, au même endroit.</h3><p>Un résumé progressif aide l’IA à garder le contexte quand la conversation s’allonge.</p></div>{conversation?.summary ? <div className="summary-card markdown"><ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins}>{normalizeMathMarkdown(conversation.summary)}</ReactMarkdown></div> : <div className="context-empty"><span className="empty-orbit"><BookOpen size={24} strokeWidth={1.2} /></span><strong>Chaque échange a son fil.</strong><p>{conversation ? "Le résumé apparaîtra ici lorsque cette conversation sera assez longue." : "Commencez une conversation pour retrouver son résumé ici."}</p></div>}<p className="context-explainer"><CircleAlert size={14} />Ce résumé est lié à cette conversation. Vos souvenirs, eux, peuvent enrichir tous vos échanges.</p></div> : <div className="context-content" role="tabpanel" id="memories-panel" aria-labelledby="memories-tab"><div className="context-info"><Brain size={20} /><h3>Les petites choses à retenir.</h3><p>Ajoutez vos préférences, vos projets ou des informations utiles. Vous gardez le contrôle.</p></div><form className="memory-form" onSubmit={event => void saveMemory(event)}><label className="sr-only" htmlFor="memory-input">Nouvelle information à mémoriser</label><textarea id="memory-input" placeholder="Par exemple : je préfère des réponses courtes et concrètes." value={memoryDraft} onChange={event => setMemoryDraft(event.target.value)} disabled={working} maxLength={2000} rows={3} /><button type="submit" disabled={!memoryDraft.trim() || working}><Plus size={15} />Mémoriser</button></form>{memories.length ? <ul className="memory-list">{memories.map(memory => <li key={memory.id}><div><span className="memory-bullet" /><p>{memory.content}</p><IconButton label={`Oublier : ${memory.content.slice(0, 45)}`} disabled={working} onClick={() => void deleteMemory(memory.id)}><Trash2 size={14} /></IconButton></div><small>Ajouté le {shortDate(memory.created_at)}</small></li>)}</ul> : <div className="memory-empty"><Brain size={23} strokeWidth={1.3} /><p>Votre mémoire est encore une page blanche.</p></div>}<p className="context-explainer"><CircleAlert size={14} />Ces informations sont envoyées au modèle dans vos conversations. Vous pouvez les supprimer à tout moment.</p></div>}
         </aside>}
       </div>
     </main>
 
+    {blogModalOpen && (
+      <BlogModal
+        initialPrompt={blogModalSeedPrompt}
+        onClose={() => setBlogModalOpen(false)}
+      />
+    )}
+    {imageStudioOpen && <ImageStudioModal config={config} initialPrompt={imageStudioPrompt} onClose={() => setImageStudioOpen(false)} />}
     {adminOpen && user.is_admin && <AdminPanel currentUser={user} onClose={() => setAdminOpen(false)} />}
-    {dialog && <div className="modal-backdrop" onClick={event => { if (event.target === event.currentTarget && !working) setDialog(null); }}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="dialog-title" onKeyDown={event => { if (event.key === "Escape" && !working) setDialog(null); if (event.key === "Tab") { const elements = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled)')); if (!elements.length) return; const first = elements[0]; const last = elements[elements.length - 1]; if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); } else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); } } }}><form onSubmit={event => void submitDialog(event)}><div className="modal-header"><span className="modal-icon">{dialog.type === "delete" ? <Trash2 size={20} /> : <Pencil size={20} />}</span><IconButton label="Fermer" disabled={working} onClick={() => setDialog(null)}><X size={18} /></IconButton></div><h2 id="dialog-title">{dialog.type === "delete" ? "Supprimer cette conversation ?" : "Un nouveau titre"}</h2>{dialog.type === "delete" ? <p>« {dialog.conversation.title} » et ses messages seront supprimés. Cette action est définitive.</p> : <><label htmlFor="rename-input">Titre de la conversation</label><input id="rename-input" value={renameValue} onChange={event => setRenameValue(event.target.value)} maxLength={200} autoFocus disabled={working} /></>}<div className="modal-actions"><button type="button" className="secondary-button" disabled={working} onClick={() => setDialog(null)}>Annuler</button><button type="submit" className={dialog.type === "delete" ? "danger-button" : "primary-button"} disabled={working || (dialog.type === "rename" && !renameValue.trim())}>{working ? <LoaderCircle className="spin" size={15} /> : null}{dialog.type === "delete" ? "Supprimer" : "Enregistrer"}</button></div></form></section></div>}
+    {dialog && <div className="modal-backdrop" onClick={event => { if (event.target === event.currentTarget && !working) setDialog(null); }}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="dialog-title" onKeyDown={event => { if (event.key === "Escape" && !working) setDialog(null); if (event.key === "Tab") { const elements = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled)')); if (!elements.length) return; const first = elements[0]; const last = elements[elements.length - 1]; if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); } else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); } } }}><form onSubmit={event => void submitDialog(event)}><div className="modal-header"><span className="modal-icon">{dialog.type === "delete" ? <Trash2 size={20} /> : <Pencil size={20} />}</span><IconButton label="Fermer" disabled={working} onClick={() => setDialog(null)}><X size={18} /></IconButton></div><h2 id="dialog-title">{dialog.type === "delete" ? "Supprimer cette conversation ?" : "Organiser la discussion"}</h2>{dialog.type === "delete" ? <p>« {dialog.conversation.title} » et ses messages seront supprimés. Cette action est définitive.</p> : <div className="modal-fields"><div className="modal-field-header"><label htmlFor="rename-input">Titre de la conversation</label><button type="button" className="modal-ai-generate-btn" disabled={working} onClick={() => void classifyConversation(dialog.conversation.id, true)} title="Générer titre, thème et mots-clés avec Mistral Small">{busy === "classify" ? <LoaderCircle size={12} className="spin" /> : <WandSparkles size={12} />}<span>Générer en auto (IA)</span></button></div><input id="rename-input" value={renameValue} onChange={event => setRenameValue(event.target.value)} maxLength={200} autoFocus disabled={working} /><label htmlFor="theme-select">Thème</label><select id="theme-select" className="modal-select" value={renameTheme} onChange={event => setRenameTheme(event.target.value)} disabled={working}>{availableThemes.map(t => <option key={t} value={t}>{t}</option>)}</select><label htmlFor="keywords-input">Mots-clés (2 ou 3, séparés par des virgules)</label><input id="keywords-input" value={renameKeywords} onChange={event => setRenameKeywords(event.target.value)} placeholder="ex. santé, sommeil, récupération" maxLength={160} disabled={working} /></div>}<div className="modal-actions"><button type="button" className="secondary-button" disabled={working} onClick={() => setDialog(null)}>Annuler</button><button type="submit" className={dialog.type === "delete" ? "danger-button" : "primary-button"} disabled={working || (dialog.type === "rename" && !renameValue.trim())}>{working ? <LoaderCircle className="spin" size={15} /> : null}{dialog.type === "delete" ? "Supprimer" : "Enregistrer"}</button></div></form></section></div>}
+    {showUrlModal && <div className="modal-backdrop" onClick={event => { if (event.target === event.currentTarget && !urlLoading) setShowUrlModal(false); }}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="url-dialog-title" onKeyDown={event => { if (event.key === "Escape" && !urlLoading) setShowUrlModal(false); }}><form onSubmit={event => void handleAttachUrl(event)}><div className="modal-header"><span className="modal-icon" style={{ background: "#fef2f2", color: "#dc2626" }}><SquarePlay size={20} /></span><IconButton label="Fermer" disabled={urlLoading} onClick={() => setShowUrlModal(false)}><X size={18} /></IconButton></div><h2 id="url-dialog-title">Analyser un lien web ou YouTube</h2><p>Entrez l’adresse d’un article, d’une page web ou d’une vidéo YouTube. Pour YouTube, les propos tenus dans la vidéo seront transcrits et analysés par l’assistant.</p><div className="modal-fields"><label htmlFor="url-input">Adresse URL</label><input id="url-input" type="url" value={urlInputValue} onChange={event => setUrlInputValue(event.target.value)} placeholder="https://exemple.fr/article ou https://youtu.be/..." autoFocus disabled={urlLoading} required /></div>{urlError && <div className="url-error-msg" role="alert"><CircleAlert size={14} /><span>{urlError}</span></div>}<div className="modal-actions"><button type="button" className="secondary-button" disabled={urlLoading} onClick={() => setShowUrlModal(false)}>Annuler</button><button type="submit" className="primary-button" disabled={urlLoading || !urlInputValue.trim()} style={{ background: "linear-gradient(135deg, #dc2626 0%, #b91c1c 100%)" }}>{urlLoading ? <LoaderCircle className="spin" size={15} /> : null}{urlLoading ? "Extraction en cours…" : "Extraire et joindre"}</button></div></form></section></div>}
+
   </div>;
 }

@@ -71,20 +71,75 @@ class AdminUpdateUser(BaseModel):
     active: bool
 
 
+CONVERSATION_THEMES = (
+    "Codage",
+    "Santé",
+    "Travail & Projets",
+    "Sciences & Tech",
+    "Apprentissage",
+    "Finance & Droit",
+    "Création & Design",
+    "Vie quotidienne",
+    "Culture & Loisirs",
+    "Général",
+)
+
+
 class CreateConversation(BaseModel):
     title: str = Field(default="Nouvelle conversation", min_length=1, max_length=200)
     model: str | None = None
+    theme: str | None = Field(default=None, max_length=80)
+    keywords: list[str] | None = Field(default=None, max_length=5)
 
 
 class UpdateConversation(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=200)
     model: str | None = None
+    theme: str | None = Field(default=None, max_length=80)
+    keywords: list[str] | None = Field(default=None, max_length=5)
+
+    @field_validator("theme")
+    @classmethod
+    def sanitize_theme(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return " ".join(value.strip().split())[:80]
+
+    @field_validator("keywords")
+    @classmethod
+    def sanitize_keywords(cls, values: list[str] | None) -> list[str] | None:
+        if values is None:
+            return None
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for item in values:
+            if not isinstance(item, str):
+                continue
+            tag = re.sub(r"^#+", "", item.strip()).strip()
+            tag = " ".join(tag.split())[:40]
+            key = tag.casefold()
+            if tag and key not in seen:
+                seen.add(key)
+                cleaned.append(tag)
+            if len(cleaned) >= 5:
+                break
+        return cleaned
+
+
+class ClassifyConversationRequest(BaseModel):
+    update_title: bool = True
+
+
+class FetchUrlRequest(BaseModel):
+    url: str = Field(min_length=1, max_length=2048)
 
 
 class SendMessage(BaseModel):
     content: str = Field(default="", max_length=20000)
     model: str | None = None
     web_search: bool = False
+    deep_search: bool = False
+    code_mode: bool = False
     attachment_ids: list[str] = Field(default_factory=list, max_length=5)
 
     @field_validator("attachment_ids")
@@ -153,3 +208,64 @@ class ImproveSkillPrompt(BaseModel):
 class CreateImage(BaseModel):
     prompt: str = Field(min_length=1, max_length=4000)
     aspect_ratio: str = "1:1"
+
+    @field_validator("prompt")
+    @classmethod
+    def trim_image_prompt(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Le prompt ne peut pas être vide")
+        return value
+
+
+class ImproveImagePrompt(BaseModel):
+    prompt: str = Field(min_length=1, max_length=4000)
+
+    @field_validator("prompt")
+    @classmethod
+    def trim_prompt(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Le prompt ne peut pas être vide")
+        return value
+
+
+class CreateBlog(BaseModel):
+    prompt: str = Field(min_length=1, max_length=2000)
+    title: str | None = Field(default=None, max_length=200)
+    auto_refresh: bool = False
+    theme: str = Field(default="sunset", max_length=50)
+
+    @field_validator("prompt")
+    @classmethod
+    def trim_blog_prompt(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Le sujet ou prompt ne peut pas être vide")
+        return value
+
+    @field_validator("title")
+    @classmethod
+    def trim_blog_title(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        return value or None
+
+
+class UpdateBlog(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    prompt: str | None = Field(default=None, min_length=1, max_length=2000)
+    auto_refresh: bool | None = None
+    theme: str | None = Field(default=None, max_length=50)
+
+    @field_validator("title", "prompt")
+    @classmethod
+    def trim_optional_blog_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            raise ValueError("Ce champ ne peut pas être vide")
+        return value
+

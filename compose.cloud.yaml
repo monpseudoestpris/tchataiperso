@@ -1,7 +1,20 @@
 # Complément facultatif pour un proxy HTTPS avec autorité de confiance fournie.
 # scripts/compose.sh l'active si CLOUD_CA_BUNDLE ou SSL_CERT_FILE est défini.
 services:
-  backend:
+  clair-searxng:
+    environment:
+      SSL_CERT_FILE: /run/cloud-ca/ca-bundle.pem
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      NO_PROXY: localhost,127.0.0.1,clair-searxng,${NO_PROXY:-}
+    extra_hosts:
+      - "${CLOUD_PROXY_HOST:-proxy}=${CLOUD_PROXY_IP:-host-gateway}"
+    volumes:
+      - type: bind
+        source: ${CLOUD_CA_BUNDLE:?Chemin du bundle CA de confiance requis}
+        target: /run/cloud-ca/ca-bundle.pem
+        read_only: true
+  clair-api:
     build:
       secrets:
         - cloud_ca
@@ -15,7 +28,7 @@ services:
       SSL_CERT_FILE: /run/cloud-ca/ca-bundle.pem
       HTTP_PROXY: ${HTTP_PROXY:-}
       HTTPS_PROXY: ${HTTPS_PROXY:-}
-      NO_PROXY: localhost,127.0.0.1,backend,db,${NO_PROXY:-}
+      NO_PROXY: localhost,127.0.0.1,clair-api,clair-db,clair-searxng,${NO_PROXY:-}
     extra_hosts:
       - "${CLOUD_PROXY_HOST:-proxy}=${CLOUD_PROXY_IP:-host-gateway}"
     volumes:
@@ -23,7 +36,7 @@ services:
         source: ${CLOUD_CA_BUNDLE:?Chemin du bundle CA de confiance requis}
         target: /run/cloud-ca/ca-bundle.pem
         read_only: true
-  frontend:
+  clair-web:
     build:
       secrets:
         - cloud_ca

@@ -1,6 +1,6 @@
 # clAIr — tchat IA personnel
 
-Une application de tchat en français avec **Next.js / React / Tailwind**, **FastAPI** et **PostgreSQL**. Conversation en streaming, historique persistant, choix du modèle, mémoires personnelles, résumé de conversation, documents joints, recherche web et génération d'images Ideogram.
+Une application de tchat en français avec **Next.js / React / Tailwind**, **FastAPI** et **PostgreSQL**. Conversation en streaming, historique persistant, choix du modèle, mémoires personnelles, résumé de conversation, documents joints, recherche web SearXNG avec Brave en repli facultatif et génération d'images Ideogram.
 
 La première exécution utilise un **mode démo explicitement signalé**. Il produit des réponses locales déterministes pour vérifier l'interface et la persistance ; il ne contacte aucune IA. Les fournisseurs réels se configurent uniquement dans le backend.
 
@@ -12,11 +12,11 @@ Prérequis : Docker Engine avec Compose v2 et Python 3 pour le petit script d'in
 ./scripts/install.sh
 ```
 
-Le script crée `.env` s'il n'existe pas, avec un mot de passe PostgreSQL aléatoire, démarre la base et prépare le schéma. Il vous demande l'identifiant du premier administrateur et son mot de passe (saisie masquée); vous choisissez aussi explicitement le propriétaire des anciennes données s'il y en a. Il démarre ensuite les services et exécute un smoke test authentifié. Le mot de passe n'est jamais écrit dans `.env`, qui est conservé s'il existe. Les ports sont liés à l'interface locale : frontend **3000**, backend **8000** ; PostgreSQL reste sur le réseau Docker interne.
+Le script crée `.env` s'il n'existe pas, avec un mot de passe PostgreSQL aléatoire, démarre la base et prépare le schéma. Il vous demande l'identifiant du premier administrateur et son mot de passe (saisie masquée); vous choisissez aussi explicitement le propriétaire des anciennes données s'il y en a. Il démarre ensuite les services et exécute un smoke test authentifié. Le mot de passe n'est jamais écrit dans `.env`, qui est conservé s'il existe. Les ports sont liés à l'interface locale : `clair-web` **3001**, `clair-api` **8001** ; PostgreSQL (`clair-db`) reste sur le réseau Docker interne.
 
 ```bash
 ./scripts/compose.sh up --build -d --wait  # démarrer / reconstruire
-./scripts/compose.sh logs -f backend     # diagnostiquer le backend
+./scripts/compose.sh logs -f clair-api   # diagnostiquer le backend
 ./scripts/compose.sh stop                # arrêter sans supprimer les données
 python3 scripts/smoke.py            # vérifier le parcours local sans appel payant
 ```
@@ -31,7 +31,7 @@ Après l'installation initiale, lancez les trois services avec rechargement auto
 ./scripts/compose.sh dev
 ```
 
-Le site est accessible sur http://localhost:3000. Les modifications dans `backend/app` relancent FastAPI ; celles du frontend sont prises en compte par Next.js sans reconstruire l'image. `Ctrl+C` arrête les services sans supprimer les données. Après une modification des dépendances ou du `.env`, relancez la commande. Ce mode utilise les mêmes données PostgreSQL et fichiers joints que le lancement Docker normal.
+Le site est accessible sur http://localhost:3001. Les modifications dans `backend/app` relancent FastAPI ; celles du frontend sont prises en compte par Next.js sans reconstruire l'image. `Ctrl+C` arrête les services sans supprimer les données. Après une modification des dépendances ou du `.env`, relancez la commande. Ce mode utilise les mêmes données PostgreSQL et fichiers joints que le lancement Docker normal.
 
 Les routes de données exigent une session. L'inscription est fermée : un administrateur connecté crée une invitation dans le panneau Utilisateurs, puis transmet le lien à usage unique. Les conversations, mémoires et pièces jointes sont cloisonnées par compte dans la base partagée. Derrière HTTPS, configurez `SESSION_COOKIE_SECURE=true` avant de démarrer le backend; ne publiez pas le backend directement.
 
@@ -51,15 +51,17 @@ IDEOGRAM_API_KEY=...
 ```
 
 ```bash
-./scripts/compose.sh up -d --force-recreate backend
+./scripts/compose.sh up --build -d clair-searxng clair-api
 ```
 
-Seule `LLM_API_KEY` est nécessaire au tchat réel. Les trois autres clés activent leurs outils indépendamment. Ne mettez jamais ces clés dans une variable `NEXT_PUBLIC_*`, un message de tchat ou un fichier suivi par Git. Dans l'environnement cloud, utilisez les paramètres sécurisés de l'environnement ; les variables injectées dans le shell prennent aussi priorité pour les clés dans Compose.
+Seule `LLM_API_KEY` est nécessaire au tchat réel. La recherche utilise d'abord SearXNG, lancé par Compose sur le réseau privé, puis Brave si SearXNG échoue ou ne renvoie aucun résultat. `BRAVE_API_KEY` reste facultative. `SEARXNG_SECRET` est généré automatiquement pour un nouveau `.env` et complété par `scripts/compose.sh` dans un `.env` existant. Ne mettez jamais les clés API dans une variable `NEXT_PUBLIC_*`, un message de tchat ou un fichier suivi par Git. Dans l'environnement cloud, utilisez les paramètres sécurisés de l'environnement ; les variables injectées dans le shell prennent aussi priorité pour les clés dans Compose.
+
+Avant chaque recherche web, `SEARCH_QUERY_MODEL` reformule la question à partir du résumé et des quatre derniers messages précédents. Mistral Small est utilisé par défaut via `LLM_BASE_URL` et `LLM_API_KEY`; en cas d'échec, la recherche conserve la question originale. Cette requête de reformulation ajoute un appel au modèle uniquement lorsque la recherche web est activée.
 
 | Fonction | Intégration | Comportement sans clé |
 | --- | --- | --- |
 | Modèles de tchat et vision | API compatible OpenAI, OpenRouter par défaut | Mode démo, ou message explicite si la démo est désactivée |
-| Recherche web | Brave Search API, secours DuckDuckGo Instant Answers optionnel | Disponible en mode réel si `DUCKDUCKGO_ENABLED=true`, sinon bouton désactivé |
+| Recherche web | SearXNG local, puis Brave Search API et secours DuckDuckGo Instant Answers optionnel | SearXNG inclus dans Compose ; clé Brave et secours DuckDuckGo (`DUCKDUCKGO_ENABLED=true`) facultatifs |
 | DOCX, texte, Markdown, CSV, JSON | Extraction locale Python | Disponible sans fournisseur |
 | PDF, même avec texte, et images | Mistral OCR 4.1 avec annotations des figures | `MISTRAL_API_KEY` requise en mode réel |
 | Pages et images sans texte | Modèle dédié `VISION_MODEL`, via `LLM_BASE_URL` et `LLM_API_KEY` | Erreur explicite si le secours vision n'est pas configuré |
@@ -91,11 +93,11 @@ Limites : 300 pages par PDF, lots OCR de 8 pages, 8 Mo par image et `MAX_UPLOAD_
 
 Avec `DEMO_MODE=true`, aucun OCR ni appel vision n'est effectué : seuls les textes locaux restent disponibles et les PDF sans texte sont refusés. Les anciennes pièces jointes ne sont pas réanalysées automatiquement ; joignez-les à nouveau pour obtenir l'analyse complète.
 
-Pour une base existante, sauvegardez la base et les fichiers, puis appliquez la migration avant de redémarrer : `cd backend && .venv/bin/python -m app.cli migrate-legacy` en local, ou `./scripts/compose.sh run --rm backend python -m app.cli migrate-legacy` avec Docker. Les extractions historiques restent inchangées.
+Pour une base existante, sauvegardez la base et les fichiers, puis appliquez la migration avant de redémarrer : `cd backend && .venv/bin/python -m app.cli migrate-legacy` en local, ou `./scripts/compose.sh run --rm clair-api python -m app.cli migrate-legacy` avec Docker. Les extractions historiques restent inchangées.
 
-Sur une machine standard, le wrapper utilise simplement `compose.yaml` ; `docker compose up --build -d` fonctionne aussi après création du `.env`. Dans un cloud avec proxy TLS, il active `compose.cloud.yaml` si `SSL_CERT_FILE` ou `CLOUD_CA_BUNDLE` désigne un bundle de confiance fourni par la plateforme. Le bundle passe comme secret BuildKit à l'installation et comme montage en lecture seule au backend, avec les paramètres du proxy. TLS et les empreintes des paquets restent vérifiés ; aucun certificat personnalisé n'est embarqué dans Git ou les images.
+Sur une machine standard, le wrapper utilise simplement `compose.yaml` ; `docker compose up --build -d` fonctionne aussi après création du `.env`. Dans un cloud avec proxy TLS, il active `compose.cloud.yaml` si `SSL_CERT_FILE` ou `CLOUD_CA_BUNDLE` désigne un bundle de confiance fourni par la plateforme. Le bundle passe comme secret BuildKit à l'installation et comme montage en lecture seule au backend et à SearXNG, avec les paramètres du proxy pour leurs appels sortants. TLS et les empreintes des paquets restent vérifiés ; aucun certificat personnalisé n'est embarqué dans Git ou les images.
 
-Les services externes reçoivent les éléments nécessaires à leur fonction : contexte du tchat au LLM, requête à Brave ou DuckDuckGo selon le fournisseur utilisé, document à Mistral si l'OCR est utilisé, prompt à Ideogram. La recherche consulte des **titres, URL et extraits** ; elle ne lit pas automatiquement les pages intégrales. Les images Ideogram sont téléchargées depuis les hôtes exacts de `IDEOGRAM_IMAGE_HOSTS` (`ideogram.ai` par défaut), sans redirection ni transmission de la clé au CDN. Si Ideogram retourne un autre hôte, vérifiez-le avant de l'ajouter ici et à la politique réseau du cloud.
+Les services externes reçoivent les éléments nécessaires à leur fonction : contexte du tchat au LLM, requête à SearXNG puis éventuellement à Brave ou DuckDuckGo selon le fournisseur utilisé, document à Mistral si l'OCR est utilisé, prompt à Ideogram. SearXNG transmet la recherche aux moteurs amont qu'il utilise. Les logs du backend contiennent le texte envoyé au moteur de recherche pour faciliter le diagnostic ; évitez de partager ces logs sans les vérifier. La recherche consulte des **titres, URL et extraits** ; elle ne lit pas automatiquement les pages intégrales. Les images Ideogram sont téléchargées depuis les hôtes exacts de `IDEOGRAM_IMAGE_HOSTS` (`ideogram.ai` par défaut), sans redirection ni transmission de la clé au CDN. Si Ideogram retourne un autre hôte, vérifiez-le avant de l'ajouter ici et à la politique réseau du cloud.
 
 Les choix économiques et les alternatives **Tavily, SearXNG, Supabase, PowerSync, pgvector** sont détaillés dans [le comparatif des services](docs/services.md). Les tarifs actuels n'ont pas été vérifiés depuis ce cloud : les sites documentaires étaient bloqués par sa politique réseau.
 
@@ -119,7 +121,7 @@ Prérequis : Python 3.12+, Node.js 24 et npm.
 ./scripts/dev.sh
 ```
 
-Le backend utilise alors SQLite (fichier dans `backend/data`) et le frontend Next en développement. Il s'agit de données distinctes des volumes PostgreSQL Docker. Arrêtez Compose avant de réutiliser les ports 3000/8000. Le script charge le `.env` racine pour le backend ; le proxy Next pointe vers le backend local.
+Le backend utilise alors SQLite (fichier dans `backend/data`) et le frontend Next en développement. Il s'agit de données distinctes des volumes PostgreSQL Docker. Arrêtez Compose avant de réutiliser les ports 3001/8001. Le script charge le `.env` racine pour le backend ; le proxy Next pointe vers le backend local.
 
 ```bash
 cd backend

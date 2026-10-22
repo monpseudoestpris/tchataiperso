@@ -1,7 +1,15 @@
 name: tchataiperso
 
 services:
-  db:
+  clair-searxng:
+    image: searxng/searxng:latest
+    environment:
+      SEARXNG_SECRET: ${SEARXNG_SECRET:?Exécutez ./scripts/install.sh ou configurez .env}
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    restart: unless-stopped
+
+  clair-db:
     image: postgres:17-alpine
     environment:
       POSTGRES_DB: tchat
@@ -16,26 +24,29 @@ services:
       retries: 20
     restart: unless-stopped
 
-  backend:
+  clair-api:
     build: ./backend
     env_file: .env
     environment:
-      DATABASE_URL: postgresql+psycopg://tchat:${POSTGRES_PASSWORD}@db:5432/tchat
+      DATABASE_URL: postgresql+psycopg://tchat:${POSTGRES_PASSWORD}@clair-db:5432/tchat
       APP_DATA_DIR: /app/data
       # L'environnement du shell est prioritaire sur .env (clés cloud injectées).
       LLM_API_KEY: ${LLM_API_KEY:-}
+      SEARXNG_URL: http://clair-searxng:8080
       BRAVE_API_KEY: ${BRAVE_API_KEY:-}
       MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
       IDEOGRAM_API_KEY: ${IDEOGRAM_API_KEY:-}
+      BLOG_MODEL: ${BLOG_MODEL:-google/gemini-3.5-flash-lite}
     volumes:
       - uploads_data:/app/data
+      - ./.env:/app/.env:ro
     ports:
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:8001:8001"
     depends_on:
-      db:
+      clair-db:
         condition: service_healthy
     healthcheck:
-      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/api/health', timeout=3)"]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -43,21 +54,21 @@ services:
     init: true
     restart: unless-stopped
 
-  frontend:
+  clair-web:
     build:
       context: ./frontend
       args:
-        BACKEND_URL: http://backend:8000
+        BACKEND_URL: http://clair-api:8001
     environment:
-      BACKEND_URL: http://backend:8000
+      BACKEND_URL: http://clair-api:8001
       NODE_ENV: production
     ports:
-      - "127.0.0.1:3000:3000"
+      - "127.0.0.1:3001:3001"
     depends_on:
-      backend:
+      clair-api:
         condition: service_healthy
     healthcheck:
-      test: [CMD, node, -e, "fetch('http://127.0.0.1:3000').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3001').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 10s
       timeout: 5s
       retries: 12

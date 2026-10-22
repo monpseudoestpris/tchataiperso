@@ -53,6 +53,8 @@ class Conversation(Base):
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     title: Mapped[str] = mapped_column(String(200), default="Nouvelle conversation")
     model: Mapped[str] = mapped_column(String(200))
+    theme: Mapped[str] = mapped_column(String(80), default="")
+    keywords: Mapped[list] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     summary: Mapped[str] = mapped_column(Text, default="")
@@ -123,3 +125,46 @@ class ConversationSkill(Base):
     __table_args__ = (UniqueConstraint("conversation_id", "position", name="uq_conversation_skills_position"),)
     conversation: Mapped[Conversation] = relationship(back_populates="skill_links")
     skill: Mapped[Skill] = relationship(back_populates="conversation_links")
+
+
+class GeneratedImage(Base):
+    __tablename__ = "generated_images"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    prompt: Mapped[str] = mapped_column(Text)
+    aspect_ratio: Mapped[str] = mapped_column(String(16), default="1:1")
+    filename: Mapped[str] = mapped_column(String(255))
+    mime_type: Mapped[str] = mapped_column(String(120))
+    size: Mapped[int] = mapped_column(Integer)
+    storage_name: Mapped[str] = mapped_column(String(100), unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class Blog(Base):
+    __tablename__ = "blogs"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    title: Mapped[str] = mapped_column(String(200))
+    prompt: Mapped[str] = mapped_column(Text)
+    auto_refresh: Mapped[bool] = mapped_column(Boolean, default=False)
+    theme: Mapped[str] = mapped_column(String(50), default="sunset")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+    posts: Mapped[list["BlogPost"]] = relationship(
+        back_populates="blog", cascade="all, delete-orphan", order_by="BlogPost.created_at.desc()"
+    )
+
+
+class BlogPost(Base):
+    __tablename__ = "blog_posts"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    blog_id: Mapped[str] = mapped_column(ForeignKey("blogs.id", ondelete="CASCADE"), index=True)
+    title: Mapped[str] = mapped_column(String(255))
+    summary: Mapped[str] = mapped_column(Text, default="")
+    content: Mapped[str] = mapped_column(Text)
+    sources: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+    blog: Mapped[Blog] = relationship(back_populates="posts")
+

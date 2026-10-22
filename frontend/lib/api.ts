@@ -2,11 +2,32 @@ export type Model = { id: string; name: string; vision: boolean };
 export type Config = {
   models: Model[];
   default_model: string;
+  themes?: string[];
   features: { chat: boolean; web_search: boolean; ocr: boolean; image_generation: boolean };
   search_providers?: string[];
   demo_mode: boolean;
 };
-export type Attachment = { id: string; filename: string; mime_type: string; url: string; size?: number; has_extraction?: boolean; page_count?: number };
+export type Attachment = {
+  id: string;
+  filename: string;
+  mime_type: string;
+  url: string;
+  size?: number;
+  has_extraction?: boolean;
+  page_count?: number;
+  source_url?: string | null;
+};
+export type GeneratedImage = {
+  id: string;
+  prompt: string;
+  aspect_ratio: string;
+  filename: string;
+  mime_type: string;
+  size: number;
+  url: string;
+  download_url: string;
+  created_at: string;
+};
 export type DocumentExtraction = {
   version: 1;
   model: string;
@@ -23,10 +44,56 @@ export type DocumentExtraction = {
   annotations: { title: string; summary: string }[];
   warnings: string[];
 };
-export type Source = { title: string; url: string; snippet?: string; provider?: string; search_notice?: string };
+export type Source = { title: string; url: string; snippet?: string; query?: string; provider?: string; search_notice?: string };
 export type Message = { id: string; role: string; content: string; created_at: string; attachments: Attachment[]; sources: Source[] };
 export type Skill = { id: string; name: string; prompt: string; created_at: string; updated_at: string };
-export type Conversation = { id: string; title: string; model: string; created_at: string; updated_at: string; summary?: string | null; messages?: Message[]; skills?: Skill[] };
+export type BlogCard = {
+  title: string;
+  text: string;
+  url: string;
+  source_name: string;
+  tag: string;
+  color: "blue" | "emerald" | "purple" | "amber" | "rose" | "cyan" | string;
+};
+export type BlogPost = {
+  id: string;
+  blog_id: string;
+  title: string;
+  summary: string;
+  content: string;
+  cards?: BlogCard[];
+  sources: Source[];
+  created_at: string;
+};
+export type Blog = {
+  id: string;
+  title: string;
+  prompt: string;
+  auto_refresh: boolean;
+  theme?: string;
+  created_at: string;
+  updated_at: string;
+  posts_count: number;
+  latest_post?: {
+    id: string;
+    title: string;
+    summary: string;
+    created_at: string;
+  } | null;
+  posts?: BlogPost[];
+};
+export type Conversation = {
+  id: string;
+  title: string;
+  model: string;
+  theme?: string;
+  keywords?: string[];
+  created_at: string;
+  updated_at: string;
+  summary?: string | null;
+  messages?: Message[];
+  skills?: Skill[];
+};
 export type Memory = { id: string; content: string; created_at: string };
 export type AuthUser = { id: string; username: string; is_admin: boolean };
 export type AdminUser = AuthUser & { active: boolean; created_at: string };
@@ -71,7 +138,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 /** Parses complete SSE frames while retaining partial UTF-8 and multiline data. */
 export async function streamMessage(
   conversationId: string,
-  body: { content: string; model: string; web_search: boolean; attachment_ids: string[] },
+  body: { content: string; model: string; web_search: boolean; deep_search?: boolean; code_mode?: boolean; attachment_ids: string[] },
   signal: AbortSignal,
   onEvent: (event: StreamEvent) => void,
 ) {
@@ -119,3 +186,57 @@ export async function streamMessage(
     reader.releaseLock();
   }
 }
+
+export async function attachUrl(url: string): Promise<Attachment> {
+  return api<Attachment>("/attachments/url", {
+    method: "POST",
+    body: JSON.stringify({ url }),
+  });
+}
+
+export async function fetchBlogs(): Promise<Blog[]> {
+  return api<Blog[]>("/blogs");
+}
+
+export async function fetchBlog(blogId: string): Promise<Blog> {
+  return api<Blog>(`/blogs/${blogId}`);
+}
+
+export async function createBlog(body: { prompt: string; title?: string; auto_refresh?: boolean; theme?: string }): Promise<Blog> {
+  return api<Blog>("/blogs", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function updateBlog(
+  blogId: string,
+  body: { title?: string; prompt?: string; auto_refresh?: boolean; theme?: string },
+): Promise<Blog> {
+  return api<Blog>(`/blogs/${blogId}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function deleteBlog(blogId: string): Promise<void> {
+  return api<void>(`/blogs/${blogId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function refreshBlog(
+  blogId: string,
+): Promise<{ blog: Blog; new_post: BlogPost }> {
+  return api<{ blog: Blog; new_post: BlogPost }>(`/blogs/${blogId}/refresh`, {
+    method: "POST",
+  });
+}
+
+export async function deleteBlogPost(blogId: string, postId: string): Promise<void> {
+  return api<void>(`/blogs/${blogId}/posts/${postId}`, {
+    method: "DELETE",
+  });
+}
+
+

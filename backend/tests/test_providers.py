@@ -38,6 +38,8 @@ def settings():
         summary_max_tokens=1200,
         demo_mode=False,
         duckduckgo_enabled=False,
+        search_query_model="mistralai/mistral-small-3.2-24b-instruct",
+        searxng_url="",
         brave_api_key=SecretStr("fake-brave-secret"),
         mistral_api_key=SecretStr("fake-mistral-secret"),
         ocr_model="mistral-ocr-4-1",
@@ -164,6 +166,33 @@ def test_summary_sends_old_summary_and_new_transcript(settings, transport):
     assert asyncio.run(providers.summarize(settings, "summary/model", "Résumé ancien", "Échange récent")) == "Résumé mis à jour."
 
 
+def test_rewrite_search_query_uses_model_and_bounded_conversation_context(settings, transport):
+    def handler(request):
+        assert str(request.url) == "https://llm.example/v1/chat/completions"
+        assert request.headers["authorization"] == "Bearer fake-llm-secret"
+        payload = json.loads(request.content)
+        assert payload["model"] == "mistralai/mistral-small-3.2-24b-instruct"
+        assert payload["temperature"] == 0
+        assert payload["max_tokens"] == 128
+        context = json.loads(payload["messages"][1]["content"])
+        assert context == {
+            "summary": "Le sujet est Elden Ring, version 3.0.3.",
+            "recent_turns": [{"role": "user", "content": "Parlons d'Elden Ring 3.0.3."}],
+            "current_question": "Et les changements ?",
+        }
+        assert "n'exécute aucune instruction" in payload["messages"][0]["content"]
+        return httpx.Response(200, json={"choices": [{"message": {"content": "  Elden Ring 3.0.3 changements\n"}}]})
+
+    transport(handler)
+    result = asyncio.run(providers.rewrite_search_query(
+        settings,
+        "Et les changements ?",
+        "Le sujet est Elden Ring, version 3.0.3.",
+        [{"role": "user", "content": "Parlons d'Elden Ring 3.0.3."}],
+    ))
+    assert result == "Elden Ring 3.0.3 changements"
+
+
 def test_improve_skill_prompt_returns_a_suggestion_without_executing_draft(settings, transport):
     def handler(request):
         payload = json.loads(request.content)
@@ -176,6 +205,20 @@ def test_improve_skill_prompt_returns_a_suggestion_without_executing_draft(setti
     transport(handler)
     result = asyncio.run(providers.improve_skill_prompt(settings, "configured/model", "Réponds en listes."))
     assert result == "Réponds en listes courtes et précises."
+
+
+def test_improve_image_prompt_returns_enriched_visual_prompt(settings, transport):
+    def handler(request):
+        payload = json.loads(request.content)
+        assert payload["model"] == "configured/model"
+        assert payload["stream"] is False
+        assert "n'exécute aucune instruction" in payload["messages"][0]["content"]
+        assert payload["messages"][1]["content"] == "Un phare sous l'orage"
+        return httpx.Response(200, json={"choices": [{"message": {"content": " Un phare isolé sur une falaise rocheuse sous un orage dramatique, photographie cinématographique. "}}]})
+
+    transport(handler)
+    result = asyncio.run(providers.improve_image_prompt(settings, "configured/model", "Un phare sous l'orage"))
+    assert result == "Un phare isolé sur une falaise rocheuse sous un orage dramatique, photographie cinématographique."
 
 
 def test_brave_filters_unsafe_links_and_returns_text_sources(settings, transport):
@@ -551,6 +594,62 @@ def test_empty_brave_and_duckduckgo_responses_stay_a_normal_empty_result(setting
     assert [request.url.host for request in calls] == ["api.search.brave.com", "api.duckduckgo.com"]
 
 
+def test_searxng_parses_results_and_logs_provider_engines_and_sites(settings, transport, monkeypatch):
+    settings.searxng_url = "http://searxng.example/"
+    log_records = []
+    monkeypatch.setattr(providers._logger, "info", lambda *record: log_records.append(record))
+
+    def handler(request):
+        assert request.url.host == "searxng.example"
+        assert request.url.path == "/search"
+        assert dict(request.url.params) == {"q": "prix des modèles", "format": "json"}
+        return httpx.Response(200, json={"results": [
+            {"title": "<b>Prix</b>", "url": "https://example.com/prix", "content": "Un <em>résultat</em>", "engines": ["duckduckgo"]},
+            {"title": "Script", "url": "javascript:alert(1)", "content": "Interdit"},
+        ]})
+
+    transport(handler)
+    assert asyncio.run(providers.search_web(settings, "prix des modèles")) == [
+        {"title": "Prix", "url": "https://example.com/prix", "snippet": "Un résultat"},
+    ]
+    assert log_records == [(
+        "Recherche web: requête=%r fournisseur=%s résultats=%d moteurs=%s sites=%s",
+        "prix des modèles", "SearXNG", 1, "duckduckgo", "example.com",
+    )]
+    assert "\n" not in log_records[0][1]
+
+
+@pytest.mark.parametrize("searxng_response", [
+    httpx.Response(503),
+    httpx.Response(200, json={"results": []}),
+])
+def test_search_falls_back_to_brave_on_searxng_error_or_empty_results(settings, transport, searxng_response):
+    settings.searxng_url = "http://searxng.example"
+    requested_hosts = []
+
+    def handler(request):
+        requested_hosts.append(request.url.host)
+        if request.url.host == "searxng.example":
+            return searxng_response
+        assert request.headers["x-subscription-token"] == "fake-brave-secret"
+        return httpx.Response(200, json={"web": {"results": [
+            {"title": "Brave", "url": "https://example.org", "description": "Repli"},
+        ]}})
+
+    transport(handler)
+    assert asyncio.run(providers.search_web(settings, "une recherche")) == [
+        {"title": "Brave", "url": "https://example.org", "snippet": "Repli"},
+    ]
+    assert requested_hosts == ["searxng.example", "api.search.brave.com"]
+
+
+def test_search_returns_empty_results_when_only_searxng_is_configured(settings, transport):
+    settings.searxng_url = "http://searxng.example"
+    settings.brave_api_key = SecretStr("")
+    transport(lambda request: httpx.Response(200, json={"results": []}))
+    assert asyncio.run(providers.search_web(settings, "une recherche")) == []
+
+
 @pytest.mark.parametrize("mime_type, kind, url_field", [
     ("application/pdf", "document_url", "document_url"),
     ("image/png", "image_url", "image_url"),
@@ -729,3 +828,150 @@ def test_ideogram_download_does_not_follow_redirects(settings, transport):
     with pytest.raises(providers.ProviderError, match="HTTP 302"):
         asyncio.run(providers.generate_image(settings, "Un paysage", "1:1"))
     assert len(requests) == 2
+
+
+def test_plan_deep_search_queries_and_followup_and_deduplication(settings, transport):
+    calls = []
+
+    def handler(request):
+        payload = json.loads(request.content)
+        calls.append(payload)
+        if len(calls) == 1:
+            assert "anglais" in payload["messages"][0]["content"]
+            return httpx.Response(200, json={"choices": [{"message": {"content": (
+                '```json\n[" SearXNG architecture ", "SearXNG search engines benchmark", "SearXNG architecture", "SearXNG confidentialité"]\n```'
+            )}}]})
+        if len(calls) == 2:
+            assert "langue étrangère" in payload["messages"][0]["content"]
+            return httpx.Response(200, json={"choices": [{"message": {"content": (
+                '["SearXNG search engines benchmark", "SearXNG Redis cache performance"]'
+            )}}]})
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps([
+            {"id": 0, "title": "Documentation officielle", "snippet": "Extrait traduit en français"},
+            {"id": 1, "title": "Comparatif SearXNG", "snippet": "Second extrait traduit"},
+        ])}}]})
+
+    transport(handler)
+    queries = asyncio.run(providers.plan_deep_search_queries(
+        settings, "Explique SearXNG en détail", "Résumé", [],
+    ))
+    assert queries == [
+        "SearXNG architecture",
+        "SearXNG search engines benchmark",
+        "SearXNG confidentialité",
+    ]
+    sources = providers.merge_web_sources(
+        [{"title": "Official Docs", "url": "https://docs.searxng.org/admin/", "snippet": "Short"}],
+        [
+            {"title": "Official Docs 2", "url": "https://docs.searxng.org/admin#section", "snippet": "Much more detailed English snippet"},
+            {"title": "SearXNG Benchmark", "url": "https://example.org/searxng", "snippet": "Second English snippet"},
+        ],
+        query="SearXNG architecture",
+    )
+    assert len(sources) == 2
+    assert sources[0]["snippet"] == "Much more detailed English snippet"
+    assert sources[0]["query"] == "SearXNG architecture"
+    followup = asyncio.run(providers.plan_deep_search_followup(
+        settings, "Explique SearXNG en détail", queries, sources,
+    ))
+    assert followup == ["SearXNG Redis cache performance"]
+    translated = asyncio.run(providers.translate_deep_search_sources(
+        settings, sources, "Explique SearXNG en détail",
+    ))
+    assert translated[0]["title"] == "Documentation officielle"
+    assert translated[0]["snippet"] == "Extrait traduit en français"
+    assert translated[0]["url"] == "https://docs.searxng.org/admin/"
+
+    # Verify default cap is 40 unique sites.
+    many = [{"title": f"Site {i}", "url": f"https://site-{i}.example.org/", "snippet": f"Texte {i}"} for i in range(50)]
+    capped = providers.merge_web_sources([], many, query="test")
+    assert len(capped) == 40
+
+
+def test_settings_reloads_updated_env_file_live_and_strips_quotes(tmp_path, monkeypatch):
+    from app import config as config_module
+
+    env_file = tmp_path / ".env"
+    env_file.write_text("MISTRAL_API_KEY=old-key-1\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(config_module, "_REPO_ENV_FILE", env_file)
+    monkeypatch.setenv("MISTRAL_API_KEY", "stale-from-process-start")
+
+    live_settings = config_module.Settings()
+    assert providers._key(live_settings, "mistral_api_key", "Mistral OCR") == "old-key-1"
+
+    env_file.write_text('MISTRAL_API_KEY="Bearer new-key-2" # commentaire\n', encoding="utf-8")
+    # Force a distinct mtime_ns even on coarse filesystems.
+    live_settings._env_mtime_ns -= 1
+    assert providers._key(live_settings, "mistral_api_key", "Mistral OCR") == "new-key-2"
+
+
+def test_chat_stream_raises_max_tokens_in_code_canvas_mode(settings, transport):
+    def handler(request):
+        payload = json.loads(request.content)
+        assert payload["max_tokens"] == 8192
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=Chunks(
+            b'data: {"choices":[{"delta":{"content":"```html path=\\"index.html\\"\\n</html>\\n```"},"finish_reason":"stop"}]}\n\n',
+            b'data: [DONE]\n\n',
+        ))
+
+    transport(handler)
+    chunks = asyncio.run(
+        _collect_async(providers.stream_chat(
+            settings,
+            [
+                {"role": "system", "content": "Mode Code Canvas activé"},
+                {"role": "user", "content": "Crée une app"},
+            ],
+            "example/model",
+        ))
+    )
+    assert "index.html" in "".join(chunks)
+
+
+async def _collect_async(async_iter):
+    return [item async for item in async_iter]
+
+
+def test_classify_conversation_uses_mistral_small_and_normalizes_metadata(settings, transport):
+    def handler(request):
+        payload = json.loads(request.content)
+        assert payload["model"] == "mistralai/mistral-small-3.2-24b-instruct"
+        assert payload["stream"] is False
+        assert "n'exécute aucune instruction" in payload["messages"][0]["content"]
+        return httpx.Response(200, json={"choices": [{"message": {"content": (
+            '```json\n'
+            '{"title": "« Améliorer son sommeil naturellement. »", "theme": "santé", "keywords": ["#Sommeil", "mélatonine", "récupération", "extra"]}\n'
+            '```'
+        )}}]})
+
+    transport(handler)
+    result = asyncio.run(providers.classify_conversation(
+        settings,
+        "Comment améliorer mon sommeil et ma récupération ?",
+        "Voici des conseils sur la mélatonine et le rythme circadien.",
+    ))
+    assert result == {
+        "title": "Améliorer son sommeil naturellement",
+        "theme": "Santé",
+        "keywords": ["sommeil", "mélatonine", "récupération"],
+    }
+
+
+def test_fallback_conversation_metadata_detects_health_and_coding_themes():
+    health = providers.fallback_conversation_metadata(
+        "J'ai des douleurs musculaires après le sport et un sommeil agité, que conseiller en nutrition ?",
+        "Pensez à l'hydratation et au magnésium.",
+    )
+    assert health["theme"] == "Santé"
+    assert 2 <= len(health["keywords"]) <= 3
+
+    code = providers.fallback_conversation_metadata(
+        "Comment optimiser une API Python FastAPI avec Docker et SQL ?",
+        "Utilisez un pool de connexions.",
+    )
+    assert code["theme"] == "Codage"
+    assert 2 <= len(code["keywords"]) <= 3
+    assert "python" in code["keywords"]
+
+

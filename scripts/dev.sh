@@ -17,13 +17,13 @@ cleanup() {
 trap cleanup EXIT INT TERM
 (
   cd backend
-  exec .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload --env-file "$repo_dir/.env"
+  exec .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8001 --reload --env-file "$repo_dir/.env"
 ) &
 backend_pid=$!
 (
   cd frontend
-  export BACKEND_URL=http://127.0.0.1:8000
-  exec node node_modules/next/dist/bin/next dev --hostname 127.0.0.1 --port 3000
+  export BACKEND_URL=http://127.0.0.1:8001
+  exec node node_modules/next/dist/bin/next dev --hostname 127.0.0.1 --port 3001
 ) &
 frontend_pid=$!
 wait -n "$backend_pid" "$frontend_pid"

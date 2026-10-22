@@ -13,6 +13,9 @@ target = Path('.env')
 contents = Path('.env.example').read_text().replace(
     'POSTGRES_PASSWORD=replace-with-random-local-password',
     'POSTGRES_PASSWORD=' + secrets.token_hex(24),
+).replace(
+  'SEARXNG_SECRET=replace-with-random-searxng-secret',
+  'SEARXNG_SECRET=' + secrets.token_hex(32),
 )
 fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
 with os.fdopen(fd, 'w') as handle:
@@ -34,9 +37,9 @@ case "${1:-}" in
     ./scripts/compose.sh version >/dev/null
     docker info >/dev/null
     ./scripts/compose.sh config --quiet
-    ./scripts/compose.sh up --detach --wait --wait-timeout 180 db
-    ./scripts/compose.sh build backend
-    ./scripts/compose.sh run --rm --no-deps backend python -m app.cli migrate-schema
+    ./scripts/compose.sh up --detach --wait --wait-timeout 180 clair-db
+    ./scripts/compose.sh build clair-api
+    ./scripts/compose.sh run --rm --no-deps clair-api python -m app.cli migrate-schema
     initial_admin="${INITIAL_ADMIN_USERNAME:-}"
     if [[ -z "$initial_admin" ]]; then
       read -r -p 'Identifiant du premier administrateur : ' initial_admin
@@ -45,12 +48,12 @@ case "${1:-}" in
       echo 'Un identifiant administrateur est obligatoire.' >&2
       exit 2
     fi
-    ./scripts/compose.sh run --rm --no-deps backend python -m app.cli create-admin --username "$initial_admin"
+    ./scripts/compose.sh run --rm --no-deps clair-api python -m app.cli create-admin --username "$initial_admin"
     read -r -p 'Compte administrateur propriétaire des anciennes données (laisser vide si aucune) : ' legacy_owner
     if [[ -n "$legacy_owner" ]]; then
-      ./scripts/compose.sh run --rm --no-deps backend python -m app.cli migrate-legacy --owner "$legacy_owner"
+      ./scripts/compose.sh run --rm --no-deps clair-api python -m app.cli migrate-legacy --owner "$legacy_owner"
     else
-      ./scripts/compose.sh run --rm --no-deps backend python -m app.cli migrate-legacy
+      ./scripts/compose.sh run --rm --no-deps clair-api python -m app.cli migrate-legacy
     fi
     ./scripts/compose.sh up --build --detach --wait --wait-timeout 180
     python3 scripts/smoke.py

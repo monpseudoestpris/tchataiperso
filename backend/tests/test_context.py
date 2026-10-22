@@ -119,3 +119,35 @@ def test_multiple_documents_share_context_without_losing_last_details():
     assert "DOC_0" in context[-1]["content"] and "DOC_1" in context[-1]["content"]
     assert "contenu integral" in context[-1]["content"]
     assert sum(len(message["content"]) for message in context) <= settings.max_context_chars
+
+
+def test_deep_search_context_expands_sources_and_injects_synthesis_instructions():
+    settings = Settings(_env_file=None, max_context_chars=60000)
+    sources = [
+        {"title": f"Source {index}", "url": f"https://example.org/{index}", "query": f"piste {index}", "snippet": f"EXTRAIT_{index} " * 40}
+        for index in range(1, 41)
+    ]
+    context = build_context(
+        settings, "Résumé", ["Souvenir"],
+        [{"role": "user", "content": "Synthèse complète"}],
+        sources, False, deep_search=True,
+    )
+    assert "Mode DeepSearch" in context[0]["content"]
+    assert "Traduis systématiquement" in context[0]["content"]
+    reference_block = context[1]["content"]
+    assert "Requête : piste 1" in reference_block
+    assert "EXTRAIT_40" in reference_block
+    assert sum(len(message["content"]) for message in context) <= settings.max_context_chars
+
+
+def test_code_mode_context_injects_canvas_multi_file_instructions():
+    settings = Settings(_env_file=None, max_context_chars=30000)
+    context = build_context(
+        settings, "", [],
+        [{"role": "user", "content": "Crée une application Pomodoro en HTML/CSS/JS"}],
+        [], False, code_mode=True,
+    )
+    assert "Mode Code Canvas" in context[0]["content"]
+    assert 'path="chemin/relatif/fichier.ext"' in context[0]["content"]
+    assert context[-1]["content"] == "Crée une application Pomodoro en HTML/CSS/JS"
+
