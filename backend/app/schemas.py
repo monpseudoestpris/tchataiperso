@@ -141,12 +141,20 @@ class SendMessage(BaseModel):
     deep_search: bool = False
     code_mode: bool = False
     attachment_ids: list[str] = Field(default_factory=list, max_length=5)
+    skill_ids: list[str] = Field(default_factory=list, max_length=10)
 
     @field_validator("attachment_ids")
     @classmethod
     def no_duplicate_attachments(cls, values: list[str]) -> list[str]:
         if len(values) != len(set(values)):
             raise ValueError("Pièces jointes dupliquées")
+        return values
+
+    @field_validator("skill_ids")
+    @classmethod
+    def no_duplicate_skills(cls, values: list[str]) -> list[str]:
+        if len(values) != len(set(values)):
+            raise ValueError("Compétences dupliquées")
         return values
 
 

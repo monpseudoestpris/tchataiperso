@@ -303,6 +303,51 @@ def test_skill_crud_multiple_conversation_links_and_live_context(tmp_path, monke
         assert client.get("/api/skills").json() == [second]
 
 
+def test_per_message_skills_via_mention_and_skill_ids(tmp_path, monkeypatch):
+    settings = Settings(_env_file=None, app_data_dir=tmp_path, demo_mode=False, llm_api_key=SecretStr("real-key"))
+    captured = []
+
+    async def stream(settings, messages, model):
+        captured.append(messages)
+        yield "Réponse"
+
+    monkeypatch.setattr(providers, "stream_chat", stream)
+    with authenticated_client(settings) as client:
+        prof = client.post("/api/skills", json={"name": "Professeur", "prompt": "PROMPT_PROF"}).json()
+        feynman = client.post("/api/skills", json={"name": "Richard Feynman", "prompt": "PROMPT_FEYNMAN"}).json()
+        item = conversation(client)
+
+        # 1. Message with @prof mention activates Professeur skill for this message only
+        response1 = client.post(f"/api/conversations/{item}/messages", json={"content": "@prof explique la gravité"})
+        evts1 = events(response1)
+        assert evts1[-1][0] == "done"
+        assert any(e[0] == "status" and "Professeur" in e[1].get("message", "") for e in evts1)
+        assert "PROMPT_PROF" in json.dumps(captured[-1])
+        assert "PROMPT_FEYNMAN" not in json.dumps(captured[-1])
+        # Conversation itself has no persistent skills attached
+        assert client.get(f"/api/conversations/{item}/skills").json() == []
+
+        # 2. Next message without mention does NOT include PROMPT_PROF
+        response2 = client.post(f"/api/conversations/{item}/messages", json={"content": "Et ensuite ?"})
+        assert events(response2)[-1][0] == "done"
+        assert "PROMPT_PROF" not in json.dumps(captured[-1])
+        assert "PROMPT_FEYNMAN" not in json.dumps(captured[-1])
+
+        # 3. Message with @feynman activates Feynman skill
+        response3 = client.post(f"/api/conversations/{item}/messages", json={"content": "@feynman donne une analogie"})
+        evts3 = events(response3)
+        assert evts3[-1][0] == "done"
+        assert any(e[0] == "status" and "Richard Feynman" in e[1].get("message", "") for e in evts3)
+        assert "PROMPT_FEYNMAN" in json.dumps(captured[-1])
+        assert "PROMPT_PROF" not in json.dumps(captured[-1])
+
+        # 4. Message with explicit skill_ids
+        response4 = client.post(f"/api/conversations/{item}/messages", json={"content": "Question ciblée", "skill_ids": [prof["id"]]})
+        assert events(response4)[-1][0] == "done"
+        assert "PROMPT_PROF" in json.dumps(captured[-1])
+        assert "PROMPT_FEYNMAN" not in json.dumps(captured[-1])
+
+
 def test_skill_improvement_is_unsaved_and_requires_real_provider(client, settings, monkeypatch):
     assert client.post("/api/skills/improve", json={"prompt": "Rends-le clair"}).status_code == 503
 

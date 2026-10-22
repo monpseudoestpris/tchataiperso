@@ -28,6 +28,57 @@ DEFAULT_USER_AGENT = (
     "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
 )
 
+_cached_innertube_api_key: str | None = None
+
+
+def extract_innertube_key_from_html(html_text: str) -> str | None:
+    """Extracts INNERTUBE_API_KEY from YouTube HTML using regex patterns."""
+    if not html_text:
+        return None
+    patterns = [
+        r'"INNERTUBE_API_KEY":\s*"([^"]+)"',
+        r'"innertubeApiKey":\s*"([^"]+)"',
+        r'INNERTUBE_API_KEY\s*[:=]\s*["\']([^"\']+)["\']',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, html_text)
+        if match and match.group(1).strip():
+            return match.group(1).strip()
+    return None
+
+
+async def get_innertube_api_key(
+    client: httpx.AsyncClient,
+    video_id: str | None = None,
+) -> str:
+    """
+    Dynamically retrieves YouTube's InnerTube API key by inspecting YouTube pages
+    (watch page -> embed page -> homepage fallback -> default key).
+    """
+    global _cached_innertube_api_key
+
+    urls: list[str] = []
+    if video_id:
+        urls.append(f"https://www.youtube.com/watch?v={video_id}")
+        urls.append(f"https://www.youtube.com/embed/{video_id}")
+    urls.append("https://www.youtube.com/")
+
+    for url in urls:
+        try:
+            res = await client.get(url)
+            if res.status_code == 200 and res.text:
+                extracted = extract_innertube_key_from_html(res.text)
+                if extracted:
+                    _logger.debug("Clé InnerTube extraite dynamiquement depuis %s: %s***", url, extracted[:10])
+                    _cached_innertube_api_key = extracted
+                    return extracted
+        except Exception as exc:
+            _logger.debug("Échec de récupération de la clé InnerTube depuis %s: %s", url, exc)
+
+    if _cached_innertube_api_key:
+        return _cached_innertube_api_key
+    return DEFAULT_INNERTUBE_API_KEY
+
 
 def extract_youtube_video_id(url: str) -> str | None:
     """Extract 11-char YouTube video ID from various URL formats (watch, youtu.be, shorts, embed, live)."""
@@ -157,12 +208,8 @@ async def fetch_and_parse_youtube_video(
             follow_redirects=True,
             headers=headers,
         ) as client:
-            # 1. Fetch watch page to extract Innertube API key
-            watch_res = await client.get(watch_url)
-            html_text = watch_res.text
-
-            api_key_match = re.search(r'"INNERTUBE_API_KEY":\s*"([a-zA-Z0-9_-]+)"', html_text)
-            api_key = api_key_match.group(1) if api_key_match else DEFAULT_INNERTUBE_API_KEY
+            # 1. Dynamically retrieve InnerTube API key from YouTube page HTML
+            api_key = await get_innertube_api_key(client, video_id=video_id)
 
             # 2. Query InnerTube API player endpoint with Android client
             inner_url = INNERTUBE_URL.format(api_key=api_key)

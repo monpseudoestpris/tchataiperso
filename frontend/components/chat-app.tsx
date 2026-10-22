@@ -17,7 +17,7 @@ import { BlogModal } from "@/components/blog-modal";
 import { CodeCanvas } from "@/components/code-canvas";
 import { ImageStudioModal } from "@/components/image-studio-modal";
 import { SkillsPanel } from "@/components/skills-panel";
-import { ApiError, api, attachUrl, errorMessage, streamMessage, type Attachment, type AuthUser, type Config, type Conversation, type DocumentExtraction, type Memory, type Message } from "@/lib/api";
+import { ApiError, api, attachUrl, errorMessage, skillToSlug, streamMessage, type Attachment, type AuthUser, type Config, type Conversation, type DocumentExtraction, type Memory, type Message, type Skill } from "@/lib/api";
 import { collectConversationCanvasFiles, createZipBlob, extractCanvasFiles, hasExplicitCanvasFiles, triggerBlobDownload } from "@/lib/code-canvas";
 
 const DEFAULT_THEMES = [
@@ -238,9 +238,27 @@ function MessageView({
     setTimeout(() => setZipDownloaded(false), 2000);
   }
 
+  function renderNodeWithMentions(node: ReactNode): ReactNode {
+    if (typeof node === "string") {
+      const parts = node.split(/(@[a-zA-Z0-9_\u00C0-\u017F-]+)/g);
+      if (parts.length <= 1) return node;
+      return parts.map((part, index) => {
+        if (part.startsWith("@") && part.length > 1) {
+          return <span key={index} className="mention-pill">{part}</span>;
+        }
+        return part;
+      });
+    }
+    if (Array.isArray(node)) {
+      return node.map((child, i) => <span key={i}>{renderNodeWithMentions(child)}</span>);
+    }
+    return node;
+  }
+
   return <article className={`message ${isUser ? "from-user" : "from-assistant"}`} aria-label={isUser ? "Votre message" : "Réponse de l’assistant"}>
     {!isUser && <div className="message-author"><BrandMark small /><span>cLAIr</span>{isDeepSearchResult && !streaming && <span className="deepsearch-badge"><Compass size={11} />DeepSearch</span>}{isExplicitCanvas && <span className="codecanvas-badge"><Code2 size={11} />Canvas Code</span>}{streaming && <span className="streaming-label">en train d’écrire</span>}</div>}
     {message.content ? <div className={`markdown ${streaming ? "is-streaming" : ""}`}><ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins} components={{
+      p: ({ children }) => <p>{isUser ? renderNodeWithMentions(children) : children}</p>,
       a: ({ children, href }) => <a href={href} target="_blank" rel="noreferrer">{children}</a>,
       pre: ({ children }) => <div className="code-block"><div className="code-label"><span>Code</span>{onOpenCanvas && canvasFiles.length > 0 && <button type="button" className="code-open-canvas" onClick={() => onOpenCanvas(message.id, canvasFiles[0]?.path, !isExplicitCanvas)}><Code2 size={11} />Ouvrir dans le Canvas</button>}</div><pre>{children}</pre></div>,
       table: ({ children }) => <div className="table-scroll"><table>{children}</table></div>,
@@ -288,6 +306,10 @@ export function ChatApp() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [conversation, setConversation] = useState<Conversation | null>(null);
   const [memories, setMemories] = useState<Memory[]>([]);
+  const [skills, setSkills] = useState<Skill[]>([]);
+  const [streamingConversationIds, setStreamingConversationIds] = useState<string[]>([]);
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+  const [mentionIndex, setMentionIndex] = useState(0);
   const [model, setModel] = useState("");
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -324,7 +346,10 @@ export function ChatApp() {
   const [urlInputValue, setUrlInputValue] = useState("");
   const [urlLoading, setUrlLoading] = useState(false);
   const [urlError, setUrlError] = useState("");
-  const controllerRef = useRef<AbortController | null>(null);
+  const streamControllersRef = useRef<Map<string, AbortController>>(new Map());
+  const streamingDeltasRef = useRef<Map<string, { assistantId: string; userMessage: Message; text: string; status: string }>>(new Map());
+  const conversationIdRef = useRef<string | null>(null);
+  conversationIdRef.current = conversation?.id ?? null;
   const fileRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
@@ -332,10 +357,13 @@ export function ChatApp() {
   const [atBottom, setAtBottom] = useState(true);
 
   async function loadWorkspace(signal?: AbortSignal) {
-    const [settings, chats, savedMemories] = await Promise.all([
-      api<Config>("/config", { signal }), api<Conversation[]>("/conversations", { signal }), api<Memory[]>("/memories", { signal }),
+    const [settings, chats, savedMemories, userSkills] = await Promise.all([
+      api<Config>("/config", { signal }),
+      api<Conversation[]>("/conversations", { signal }),
+      api<Memory[]>("/memories", { signal }),
+      api<Skill[]>("/skills", { signal }).catch(() => [] as Skill[]),
     ]);
-    setConfig(settings); setModel(settings.default_model); setConversations(chats); setMemories(savedMemories);
+    setConfig(settings); setModel(settings.default_model); setConversations(chats); setMemories(savedMemories); setSkills(userSkills);
   }
 
   async function bootstrap(signal?: AbortSignal) {
@@ -357,18 +385,23 @@ export function ChatApp() {
       .then(async current => {
         if (!active) return;
         setUser(current);
-        const [settings, chats, savedMemories] = await Promise.all([
+        const [settings, chats, savedMemories, userSkills] = await Promise.all([
           api<Config>("/config", { signal: controller.signal }),
           api<Conversation[]>("/conversations", { signal: controller.signal }),
           api<Memory[]>("/memories", { signal: controller.signal }),
+          api<Skill[]>("/skills", { signal: controller.signal }).catch(() => [] as Skill[]),
         ]);
         if (!active) return;
-        setConfig(settings); setModel(settings.default_model); setConversations(chats); setMemories(savedMemories);
+        setConfig(settings); setModel(settings.default_model); setConversations(chats); setMemories(savedMemories); setSkills(userSkills);
       }).catch(err => {
         if (!active || (err instanceof ApiError && err.status === 401)) return;
         setAuthError(`Connexion au serveur impossible. ${errorMessage(err)}`);
       }).finally(() => { if (active) { setAuthReady(true); setBusy(null); } });
-    return () => { active = false; controller.abort(); controllerRef.current?.abort(); };
+    return () => {
+      active = false;
+      controller.abort();
+      streamControllersRef.current.forEach(c => c.abort());
+    };
   }, []);
 
   useEffect(() => {
@@ -389,10 +422,93 @@ export function ChatApp() {
   }, [conversation?.messages, atBottom, streamingId, status]);
 
   const messages = useMemo(() => conversation?.messages ?? [], [conversation?.messages]);
-  const working = busy !== null;
-  const sending = busy === "send";
+  const isCurrentStreaming = Boolean(conversation?.id && streamingConversationIds.includes(conversation.id));
+  const working = busy !== null && busy !== "send";
+  const sending = isCurrentStreaming || busy === "send";
   const needsVision = attachments.some(file => file.mime_type.startsWith("image/") && !file.has_extraction) && !config?.demo_mode && !config?.models.find(item => item.id === model)?.vision;
-  const canSend = !!config && !working && config.features.chat && !needsVision && (!!draft.trim() || attachments.length > 0);
+  const canSend = !!config && !working && !isCurrentStreaming && config.features.chat && !needsVision && (!!draft.trim() || attachments.length > 0);
+
+  const filteredMentionSkills = useMemo(() => {
+    if (mentionQuery === null) return [];
+    const q = mentionQuery.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    return skills.filter(skill => {
+      if (!q) return true;
+      const slug = skillToSlug(skill.name);
+      const nameNorm = skill.name.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+      const words = nameNorm.split(/[^a-z0-9]+/).filter(Boolean);
+      return (
+        slug.includes(q) ||
+        nameNorm.includes(q) ||
+        words.some(w => w.startsWith(q))
+      );
+    }).slice(0, 8);
+  }, [skills, mentionQuery]);
+
+  function findMentionQuery(text: string, cursorPos: number): { query: string; start: number; end: number } | null {
+    const before = text.slice(0, cursorPos);
+    const match = before.match(/(?:^|\s)@([a-zA-Z0-9_\u00C0-\u017F-]*)$/);
+    if (!match) return null;
+    const query = match[1];
+    const atPos = before.lastIndexOf("@");
+    return { query, start: atPos, end: cursorPos };
+  }
+
+  function skillMatchesTag(skill: Skill, tag: string): boolean {
+    const cleanTag = tag.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    const slug = skillToSlug(skill.name);
+    const nameNorm = skill.name.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    const words = nameNorm.split(/[^a-z0-9]+/).filter(Boolean);
+    return (
+      slug === cleanTag ||
+      slug.startsWith(cleanTag) ||
+      words.some(w => w.startsWith(cleanTag) || cleanTag.startsWith(w)) ||
+      (cleanTag.length >= 3 && slug.includes(cleanTag))
+    );
+  }
+
+  function extractMentionedSkillIds(text: string, allSkills: Skill[]): string[] {
+    const matches = Array.from(text.matchAll(/@([a-zA-Z0-9_\u00C0-\u017F-]+)/g));
+    if (!matches.length || !allSkills.length) return [];
+    const matchedIds = new Set<string>();
+    for (const match of matches) {
+      const tag = match[1];
+      for (const skill of allSkills) {
+        if (skillMatchesTag(skill, tag)) {
+          matchedIds.add(skill.id);
+        }
+      }
+    }
+    return Array.from(matchedIds);
+  }
+
+  function insertMention(skill: Skill) {
+    const textarea = textareaRef.current;
+    const cursorPos = textarea?.selectionStart ?? draft.length;
+    const mention = findMentionQuery(draft, cursorPos);
+    const slug = skillToSlug(skill.name);
+    const insertText = `@${slug} `;
+    if (mention) {
+      const before = draft.slice(0, mention.start);
+      const after = draft.slice(mention.end);
+      const nextVal = `${before}${insertText}${after}`;
+      setDraft(nextVal);
+      setMentionQuery(null);
+      setTimeout(() => {
+        if (textareaRef.current) {
+          const newPos = before.length + insertText.length;
+          textareaRef.current.focus();
+          textareaRef.current.setSelectionRange(newPos, newPos);
+        }
+      }, 0);
+    }
+  }
+
+  function stopCurrentStream() {
+    if (conversation?.id) {
+      const controller = streamControllersRef.current.get(conversation.id);
+      controller?.abort();
+    }
+  }
   const searchProviders = config?.search_providers ?? (config?.features.web_search ? ["searxng", "brave"] : []);
   const hasPrimarySearch = searchProviders.includes("searxng") || searchProviders.includes("brave");
   const hasDuckDuckGo = searchProviders.includes("duckduckgo_instant_answers");
@@ -534,11 +650,21 @@ export function ChatApp() {
   }
 
   async function openConversation(id: string) {
-    if (working) return;
+    if (busy === "switch") return;
     setBusy("switch"); setError(""); setSidebarOpen(false);
     try {
       const loaded = await api<Conversation>(`/conversations/${id}`);
       const warning = await discardUploads(attachments);
+      const inProgress = streamingDeltasRef.current.get(id);
+      if (inProgress && inProgress.assistantId) {
+        const empty: Message = { id: inProgress.assistantId, role: "assistant", content: inProgress.text, created_at: new Date().toISOString(), attachments: [], sources: [] };
+        loaded.messages = [...(loaded.messages ?? []), empty];
+        setStreamingId(inProgress.assistantId);
+        setStatus(inProgress.status);
+      } else {
+        setStreamingId(null);
+        setStatus("");
+      }
       const hasCanvas = (loaded.messages ?? []).some(msg => msg.role === "assistant" && hasExplicitCanvasFiles(msg.content));
       setConversation(loaded); setModel(loaded.model); setDraft(""); setAttachments([]); setAtBottom(true);
       setCanvasMessageId(null); setCanvasSelectedPath(null); setCanvasIncludeUnnamed(false);
@@ -549,11 +675,12 @@ export function ChatApp() {
   }
 
   async function newConversation() {
-    if (working) return;
+    if (busy === "cleanup" || busy === "switch") return;
     setBusy("cleanup");
     const warning = await discardUploads(attachments);
     setConversation(null); setDraft(""); setAttachments([]); setModel(config?.default_model ?? ""); setError(""); setSidebarOpen(false); setAtBottom(true);
     setCanvasMessageId(null); setCanvasSelectedPath(null); setCanvasIncludeUnnamed(false);
+    setStreamingId(null); setStatus("");
     if (!codeMode) setCanvasOpen(false);
     if (warning) setError(warning);
     setBusy(null);
@@ -631,16 +758,23 @@ export function ChatApp() {
     if (!canSend || !config) return;
     const text = draft.trim();
     const files = attachments;
-    const controller = new AbortController(); controllerRef.current = controller;
+    const messageSkillIds = extractMentionedSkillIds(text, skills);
+    const controller = new AbortController();
     setBusy("send"); setError(""); setStatus("Connexion au modèle…"); setDraft(""); setAttachments([]); setAtBottom(true);
+    setMentionQuery(null);
     let activeId = conversation?.id;
     let persisted = false;
     let assistantId = "";
     try {
       if (!activeId) {
         const created = await api<Conversation>("/conversations", { method: "POST", body: JSON.stringify({ model }), signal: controller.signal });
-        activeId = created.id; setConversation({ ...created, messages: created.messages ?? [] });
+        activeId = created.id;
+        conversationIdRef.current = activeId;
+        setConversation({ ...created, messages: created.messages ?? [] });
       }
+      streamControllersRef.current.set(activeId, controller);
+      setStreamingConversationIds(old => (old.includes(activeId!) ? old : [...old, activeId!]));
+
       const useDeepSearch = deepSearch && config.features.web_search;
       const useWebSearch = (webSearch || deepSearch) && config.features.web_search;
       const useCodeMode = codeMode;
@@ -651,39 +785,99 @@ export function ChatApp() {
         setCanvasOpen(true);
       }
       let accumulatedText = "";
-      await streamMessage(activeId, { content: text, model, web_search: useWebSearch, deep_search: useDeepSearch, code_mode: useCodeMode, attachment_ids: files.map(item => item.id) }, controller.signal, event => {
-        if (event.type === "meta") {
-          persisted = true; assistantId = event.data.assistant_message_id; setStreamingId(assistantId);
-          if (useCodeMode) setCanvasMessageId(assistantId);
-          const empty: Message = { id: assistantId, role: "assistant", content: "", created_at: new Date().toISOString(), attachments: [], sources: [] };
-          setConversation(old => old ? { ...old, messages: [...(old.messages ?? []), event.data.user_message, empty] } : old);
-          setStatus(useCodeMode ? "Canvas Code · Architecture du projet…" : "Le modèle réfléchit…");
-        } else if (event.type === "status") setStatus(event.data.message);
-        else if (event.type === "delta") {
-          setStatus("");
-          accumulatedText += event.data.text;
-          if (!canvasOpen && (useCodeMode || hasExplicitCanvasFiles(accumulatedText))) {
-            setCanvasMessageId(assistantId);
-            setContextOpen(false);
-            setSkillsOpen(false);
-            setCanvasOpen(true);
+      await streamMessage(
+        activeId,
+        {
+          content: text,
+          model,
+          web_search: useWebSearch,
+          deep_search: useDeepSearch,
+          code_mode: useCodeMode,
+          attachment_ids: files.map(item => item.id),
+          skill_ids: messageSkillIds,
+        },
+        controller.signal,
+        event => {
+          if (event.type === "meta") {
+            persisted = true; assistantId = event.data.assistant_message_id;
+            const empty: Message = { id: assistantId, role: "assistant", content: "", created_at: new Date().toISOString(), attachments: [], sources: [] };
+            streamingDeltasRef.current.set(activeId!, {
+              assistantId,
+              userMessage: event.data.user_message,
+              text: "",
+              status: useCodeMode ? "Canvas Code · Architecture du projet…" : "Le modèle réfléchit…",
+            });
+            if (conversationIdRef.current === activeId) {
+              setStreamingId(assistantId);
+              if (useCodeMode) setCanvasMessageId(assistantId);
+              setConversation(old => (old && old.id === activeId ? { ...old, messages: [...(old.messages ?? []), event.data.user_message, empty] } : old));
+              setStatus(useCodeMode ? "Canvas Code · Architecture du projet…" : "Le modèle réfléchit…");
+            }
+          } else if (event.type === "status") {
+            const inProgress = streamingDeltasRef.current.get(activeId!);
+            if (inProgress) inProgress.status = event.data.message;
+            if (conversationIdRef.current === activeId) setStatus(event.data.message);
+          } else if (event.type === "delta") {
+            const inProgress = streamingDeltasRef.current.get(activeId!);
+            if (inProgress) {
+              inProgress.text += event.data.text;
+              inProgress.status = "";
+            }
+            accumulatedText += event.data.text;
+            if (conversationIdRef.current === activeId) {
+              setStatus("");
+              if (!canvasOpen && (useCodeMode || hasExplicitCanvasFiles(accumulatedText))) {
+                setCanvasMessageId(assistantId);
+                setContextOpen(false);
+                setSkillsOpen(false);
+                setCanvasOpen(true);
+              }
+              setConversation(old => (old && old.id === activeId ? {
+                ...old,
+                messages: (old.messages ?? []).map(item => item.id === assistantId ? { ...item, content: item.content + event.data.text } : item)
+              } : old));
+            }
+          } else if (event.type === "done") {
+            streamingDeltasRef.current.delete(activeId!);
+            if (conversationIdRef.current === activeId) {
+              setConversation(old => (old && old.id === activeId ? {
+                ...event.data.conversation,
+                skills: event.data.conversation.skills ?? old.skills ?? [],
+                messages: event.data.conversation.messages ?? (old.messages ?? []).map(item => item.id === assistantId ? event.data.message : item)
+              } : old));
+            }
           }
-          setConversation(old => old ? { ...old, messages: (old.messages ?? []).map(item => item.id === assistantId ? { ...item, content: item.content + event.data.text } : item) } : old);
-        } else if (event.type === "done") {
-          setConversation(old => ({ ...event.data.conversation, skills: event.data.conversation.skills ?? old?.skills ?? [], messages: event.data.conversation.messages ?? (old?.messages ?? []).map(item => item.id === assistantId ? event.data.message : item) }));
         }
-      });
+      );
       const loaded = await api<Conversation>(`/conversations/${activeId}`);
-      setConversation(loaded); await refreshConversations();
+      if (conversationIdRef.current === activeId) setConversation(loaded);
+      await refreshConversations();
     } catch (err) {
       const aborted = err instanceof DOMException && err.name === "AbortError";
-      setError(aborted ? "Génération interrompue. Les messages déjà enregistrés restent dans l’historique." : errorMessage(err));
-      if (!persisted) { setDraft(text); setAttachments(files); }
-      if (activeId) {
-        try { setConversation(await api<Conversation>(`/conversations/${activeId}`)); await refreshConversations(); }
-        catch { /* Preserve the existing history if the backend is unavailable. */ }
+      if (conversationIdRef.current === activeId) {
+        setError(aborted ? "Génération interrompue. Les messages déjà enregistrés restent dans l’historique." : errorMessage(err));
+        if (!persisted) { setDraft(text); setAttachments(files); }
       }
-    } finally { controllerRef.current = null; setStreamingId(null); setBusy(null); setStatus(""); textareaRef.current?.focus(); }
+      if (activeId) {
+        try {
+          const fresh = await api<Conversation>(`/conversations/${activeId}`);
+          if (conversationIdRef.current === activeId) setConversation(fresh);
+          await refreshConversations();
+        } catch { /* Preserve history */ }
+      }
+    } finally {
+      if (activeId) {
+        streamControllersRef.current.delete(activeId);
+        setStreamingConversationIds(old => old.filter(id => id !== activeId));
+        streamingDeltasRef.current.delete(activeId);
+      }
+      if (conversationIdRef.current === activeId) {
+        setStreamingId(null);
+        setBusy(null);
+        setStatus("");
+        textareaRef.current?.focus();
+      }
+    }
   }
 
   async function saveMemory(event: FormEvent) {
@@ -812,7 +1006,36 @@ export function ChatApp() {
   }
 
   function composerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
-    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); }
+    if (mentionQuery !== null && filteredMentionSkills.length > 0) {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setMentionIndex(i => (i + 1) % filteredMentionSkills.length);
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setMentionIndex(i => (i - 1 + filteredMentionSkills.length) % filteredMentionSkills.length);
+        return;
+      }
+      if (event.key === "Enter" || event.key === "Tab") {
+        event.preventDefault();
+        insertMention(filteredMentionSkills[mentionIndex]);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setMentionQuery(null);
+        return;
+      }
+    }
+    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+      event.preventDefault();
+      if (isCurrentStreaming) {
+        setStatus("Réponse en cours dans cette discussion… Cliquez sur Arrêter ou patientez avant d’envoyer.");
+        return;
+      }
+      void send();
+    }
   }
 
   if (!authReady) return <div className="auth-loading" role="status"><LoaderCircle className="spin" size={20} />Vérification de la session…</div>;
@@ -939,9 +1162,14 @@ export function ChatApp() {
                 return (
                   <div key={item.id} className={`history-item ${conversation?.id === item.id ? "is-active" : ""}`}>
                     <div className="history-item-main">
-                      <button type="button" className="history-select" disabled={working} onClick={() => void openConversation(item.id)}>
+                      <button type="button" className="history-select" disabled={busy === "switch"} onClick={() => void openConversation(item.id)}>
                         <MessageCircle size={15} />
                         <span>{item.title}</span>
+                        {streamingConversationIds.includes(item.id) && (
+                          <span title="Réponse en cours…">
+                            <LoaderCircle size={12} className="spin history-streaming-icon" />
+                          </span>
+                        )}
                       </button>
                       {(itemKeywords.length > 0 || (groupMode === "date" && itemTheme)) && (
                         <div className="history-item-meta">
@@ -1004,7 +1232,7 @@ export function ChatApp() {
       <div className="workspace">
         <section className="chat-panel" aria-label="Conversation">
           <div className="chat-skills-toolbar"><span>{conversation?.skills?.length ? conversation.skills.map(skill => skill.name).join(" · ") : "Aucune compétence active"}</span><button type="button" onClick={() => { setContextOpen(false); setSkillsOpen(true); }}><Sparkles size={15} />Compétences<small>{conversation?.skills?.length ?? 0}</small></button></div>
-          {skillsOpen && <SkillsPanel conversation={conversation} model={model} config={config} onClose={() => setSkillsOpen(false)} onConversationChange={setConversation} onRefreshConversations={refreshConversations} />}
+          {skillsOpen && <SkillsPanel conversation={conversation} model={model} config={config} onClose={() => setSkillsOpen(false)} onConversationChange={setConversation} onRefreshConversations={refreshConversations} onSkillsChange={setSkills} />}
           <div className="chat-scroll" ref={messagesRef} onScroll={() => { const el = messagesRef.current; if (el) setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 120); }}>
             {!messages.length && busy !== "switch" ? <div className="welcome"><div className="welcome-eyebrow"><span /> UN PEU DE CLARTÉ, BEAUCOUP DE POSSIBILITÉS</div><BrandMark /><h1>Qu’avez-vous en tête<span> aujourd’hui ?</span></h1><p>Un espace pour vos questions, vos idées et vos projets.<br />Commencez quelque part. On avance ensemble.</p><div className="suggestions">{suggestions.map((item, index) => <button type="button" className="suggestion" key={item.title} disabled={working} onClick={() => { if (index === 3) { openImageStudio(item.prompt); } else if (index === 1) { openBlogModal(item.prompt); } else { setDraft(item.prompt); textareaRef.current?.focus(); } }}><span className={`suggestion-icon suggestion-icon-${index}`}><item.icon size={19} strokeWidth={1.6} /></span><strong>{item.title}</strong><span>{item.description}</span><ChevronRight size={15} className="suggestion-arrow" /></button>)}</div><div className="welcome-note"><Brain size={14} /><span>Les souvenirs que vous choisissez gardent le fil d’une conversation à l’autre.</span></div></div> : busy === "switch" ? <div className="loading-conversation"><LoaderCircle size={23} className="spin" />Ouverture de votre conversation…</div> : <div className="messages"><div className="conversation-heading"><div className="conversation-heading-top"><span>CONVERSATION</span>{conversation?.theme && <button type="button" className={`conversation-theme-badge tone-${themeTone(conversation.theme)}`} onClick={() => { setGroupMode("theme"); setSelectedTheme(old => (old === conversation.theme ? "" : (conversation.theme ?? ""))); setSidebarOpen(true); }} title={`Voir toutes les discussions du thème « ${conversation.theme} »`}>{conversation.theme}</button>}<div className="conversation-heading-actions">{conversation && <button type="button" className="conversation-meta-btn" disabled={working} onClick={() => openEditDialog(conversation)} title="Modifier le titre, le thème et les mots-clés"><Pencil size={12} /><span>Éditer</span></button>}{conversation && <button type="button" className="conversation-meta-btn" disabled={working} onClick={() => void classifyConversation(conversation.id, true)} title="Régénérer le titre, le thème et les mots-clés automatiquement (Mistral Small)">{busy === "classify" ? <LoaderCircle size={12} className="spin" /> : <WandSparkles size={12} />}<span>Auto-tags IA</span></button>}</div></div><h1>{conversation?.title}</h1>{!!conversation?.keywords?.length && <div className="conversation-keywords-row" aria-label="Mots-clés de la discussion">{conversation.keywords.map(kw => <button key={kw} type="button" className={`conversation-keyword-chip ${selectedKeyword.toLocaleLowerCase("fr") === kw.toLocaleLowerCase("fr") ? "is-active" : ""}`} onClick={() => { toggleKeywordFilter(kw); setSidebarOpen(true); }} title={`Filtrer les discussions avec #${kw}`}>#{kw}</button>)}</div>}</div>{messages.map(message => <MessageView key={message.id} message={message} streaming={streamingId === message.id} onOpenCanvas={openCanvasForMessage} />)}<div ref={bottomRef} /></div>}
           </div>
@@ -1015,6 +1243,59 @@ export function ChatApp() {
             {showDuckDuckGoNotice && <div className="search-notice" id="web-search-hint" role="status"><Globe2 size={13} />DuckDuckGo fournit des réponses instantanées et des sujets associés ; couverture limitée.</div>}
             {needsVision && <div className="vision-notice" role="status"><CircleAlert size={13} />Pour analyser vos images, choisissez un modèle compatible avec la vision.</div>}
             {status && <div className="generation-status" role="status"><LoaderCircle size={13} className="spin" />{status}</div>}
+
+            {mentionQuery !== null && (
+              <div className="mention-autocomplete-menu" role="listbox" aria-label="Compétences disponibles">
+                <div className="mention-menu-header">
+                  <Sparkles size={13} />
+                  <span>Compétences ({filteredMentionSkills.length})</span>
+                  <small>↑↓ pour naviguer, Entrée pour insérer</small>
+                </div>
+                {filteredMentionSkills.length > 0 ? (
+                  <div className="mention-menu-list">
+                    {filteredMentionSkills.map((skill, index) => {
+                      const isSelected = index === mentionIndex;
+                      const slug = skillToSlug(skill.name);
+                      return (
+                        <button
+                          key={skill.id}
+                          type="button"
+                          role="option"
+                          aria-selected={isSelected}
+                          className={`mention-item ${isSelected ? "is-selected" : ""}`}
+                          onMouseDown={event => {
+                            event.preventDefault();
+                            insertMention(skill);
+                          }}
+                          onMouseEnter={() => setMentionIndex(index)}
+                        >
+                          <span className="mention-item-handle">@{slug}</span>
+                          <span className="mention-item-name">{skill.name}</span>
+                          <span className="mention-item-prompt">{skill.prompt}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="mention-menu-empty">
+                    <p>Aucune compétence ne correspond à <code>@{mentionQuery}</code>.</p>
+                    <button
+                      type="button"
+                      className="mention-create-btn"
+                      onMouseDown={event => {
+                        event.preventDefault();
+                        setMentionQuery(null);
+                        setSkillsOpen(true);
+                      }}
+                    >
+                      <Plus size={13} />
+                      <span>Créer une compétence (@prof, @feynman…)</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
             <form className={`composer ${deepSearch ? "deepsearch-mode" : ""} ${codeMode ? "codecanvas-mode" : ""}`} onSubmit={event => void send(event)}>
               {deepSearch && <div className="deepsearch-mode-label"><Compass size={14} /><span><strong>Mode DeepSearch</strong> · Exploration internationale jusqu’à 40 sites via SearXNG, traduction et synthèse globale</span><button type="button" onClick={() => setDeepSearch(false)}><X size={12} />Désactiver</button></div>}
               {codeMode && <div className="codecanvas-mode-label"><Code2 size={14} /><span><strong>Mode Code · Canvas</strong> · L’éditeur multi-fichiers s’ouvre en direct avec aperçu web et téléchargement <code>.zip</code></span><button type="button" onClick={() => setCodeMode(false)}><X size={12} />Désactiver</button></div>}
@@ -1023,8 +1304,31 @@ export function ChatApp() {
                 const isWeb = item.mime_type.startsWith("text/html") || !!item.source_url || item.filename.startsWith("🌐");
                 return <div className="pending-entry" key={item.id}><div className="pending-file">{isYoutube ? <SquarePlay size={15} color="#dc2626" /> : isWeb ? <Globe2 size={15} /> : <FileText size={15} />}<span>{item.filename}</span><IconButton label={`Retirer ${item.filename}`} disabled={working} onClick={() => void removeAttachment(item.id)}><X size={13} /></IconButton></div><AttachmentAnalysis attachment={item} /></div>;
               })}</div>}
-              <label className="sr-only" htmlFor="composer">Votre message</label><textarea id="composer" ref={textareaRef} value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={composerKeyDown} placeholder={codeMode ? "Décrivez l’application, le script ou le projet multi-fichiers à coder dans le Canvas…" : deepSearch ? "Quel sujet voulez-vous explorer en profondeur avec SearXNG ?" : "Une question, une idée, un début de quelque chose…"} rows={2} maxLength={20000} disabled={working || !config} aria-describedby="composer-hint" />
-              <div className="composer-toolbar"><div className="composer-tools"><input className="sr-only" type="file" ref={fileRef} multiple accept=".txt,.md,.csv,.json,.pdf,.docx,image/png,image/jpeg,image/webp" onChange={event => void uploadFiles(event.target.files)} tabIndex={-1} /><IconButton label="Joindre jusqu’à 5 fichiers (20 Mo par document, 8 Mo par image)" disabled={working || !config} onClick={() => fileRef.current?.click()}><Paperclip size={19} /></IconButton><IconButton label="Analyser un lien web ou vidéo YouTube (URL)" disabled={working || !config} onClick={() => { setUrlError(""); setUrlInputValue(""); setShowUrlModal(true); }}><Link2 size={19} /></IconButton><span className="tool-divider" /><button type="button" className={`tool-button ${webSearch && !deepSearch ? "active" : ""}`} disabled={working || !config?.features.web_search} aria-pressed={webSearch && !deepSearch} title={webSearchTooltip} aria-describedby={showDuckDuckGoNotice ? "web-search-hint" : undefined} onClick={() => { setWebSearch(old => !old); setDeepSearch(false); }}><Globe2 size={16} /><span>Web</span>{webSearch && !deepSearch && <Check size={12} />}</button><button type="button" className={`tool-button deepsearch-trigger ${deepSearch ? "active" : ""}`} disabled={working || !config?.features.web_search} aria-pressed={deepSearch} title={config?.features.web_search ? "DeepSearch : recherche large multi-requêtes via SearXNG et synthèse globale approfondie" : webSearchTooltip} onClick={() => { setDeepSearch(old => !old); setWebSearch(false); }}><Compass size={16} /><span>DeepSearch</span>{deepSearch && <Check size={12} />}</button><button type="button" className={`tool-button codecanvas-trigger ${codeMode ? "active" : ""}`} disabled={working || !config} aria-pressed={codeMode} title="Mode Code Canvas : générer une application ou un projet multi-fichiers dans l’éditeur interactif avec téléchargement .zip" onClick={toggleCodeMode}><Code2 size={16} /><span>Code · Canvas</span>{codeMode && <Check size={12} />}</button><button type="button" className="tool-button studio-trigger" disabled={working} title="Ouvrir le Studio Image dédié (Ideogram, amélioration de prompt, visualisation et galerie)" onClick={() => openImageStudio(draft.trim())}><ImagePlus size={16} /><span>Studio Image</span></button></div><div className="composer-submit"><span className="enter-hint">↵ pour envoyer</span>{sending ? <button className="send-button stop-button" type="button" onClick={() => controllerRef.current?.abort()} aria-label="Interrompre la génération" title="Interrompre la génération"><Square size={14} fill="currentColor" /></button> : <button className="send-button" type="submit" disabled={!canSend} aria-label="Envoyer le message">{busy === "upload" ? <LoaderCircle size={19} className="spin" /> : <ArrowUp size={20} />}</button>}</div></div>
+              <label className="sr-only" htmlFor="composer">Votre message</label>
+              <textarea
+                id="composer"
+                ref={textareaRef}
+                value={draft}
+                onChange={event => {
+                  const val = event.target.value;
+                  setDraft(val);
+                  const cursorPos = event.target.selectionStart ?? val.length;
+                  const mention = findMentionQuery(val, cursorPos);
+                  if (mention) {
+                    setMentionQuery(mention.query);
+                    setMentionIndex(0);
+                  } else {
+                    setMentionQuery(null);
+                  }
+                }}
+                onKeyDown={composerKeyDown}
+                placeholder={codeMode ? "Décrivez l’application, le script ou le projet multi-fichiers à coder dans le Canvas…" : deepSearch ? "Quel sujet voulez-vous explorer en profondeur avec SearXNG ?" : "Une question, une idée, ou tapez @ (ex. @prof, @feynman)…"}
+                rows={2}
+                maxLength={20000}
+                disabled={working || !config}
+                aria-describedby="composer-hint"
+              />
+              <div className="composer-toolbar"><div className="composer-tools"><input className="sr-only" type="file" ref={fileRef} multiple accept=".txt,.md,.csv,.json,.pdf,.docx,image/png,image/jpeg,image/webp" onChange={event => void uploadFiles(event.target.files)} tabIndex={-1} /><IconButton label="Joindre jusqu’à 5 fichiers (20 Mo par document, 8 Mo par image)" disabled={working || !config} onClick={() => fileRef.current?.click()}><Paperclip size={19} /></IconButton><IconButton label="Analyser un lien web ou vidéo YouTube (URL)" disabled={working || !config} onClick={() => { setUrlError(""); setUrlInputValue(""); setShowUrlModal(true); }}><Link2 size={19} /></IconButton><span className="tool-divider" /><button type="button" className={`tool-button ${webSearch && !deepSearch ? "active" : ""}`} disabled={working || !config?.features.web_search} aria-pressed={webSearch && !deepSearch} title={webSearchTooltip} aria-describedby={showDuckDuckGoNotice ? "web-search-hint" : undefined} onClick={() => { setWebSearch(old => !old); setDeepSearch(false); }}><Globe2 size={16} /><span>Web</span>{webSearch && !deepSearch && <Check size={12} />}</button><button type="button" className={`tool-button deepsearch-trigger ${deepSearch ? "active" : ""}`} disabled={working || !config?.features.web_search} aria-pressed={deepSearch} title={config?.features.web_search ? "DeepSearch : recherche large multi-requêtes via SearXNG et synthèse globale approfondie" : webSearchTooltip} onClick={() => { setDeepSearch(old => !old); setWebSearch(false); }}><Compass size={16} /><span>DeepSearch</span>{deepSearch && <Check size={12} />}</button><button type="button" className={`tool-button codecanvas-trigger ${codeMode ? "active" : ""}`} disabled={working || !config} aria-pressed={codeMode} title="Mode Code Canvas : générer une application ou un projet multi-fichiers dans l’éditeur interactif avec téléchargement .zip" onClick={toggleCodeMode}><Code2 size={16} /><span>Code · Canvas</span>{codeMode && <Check size={12} />}</button><button type="button" className="tool-button studio-trigger" disabled={working} title="Ouvrir le Studio Image dédié (Ideogram, amélioration de prompt, visualisation et galerie)" onClick={() => openImageStudio(draft.trim())}><ImagePlus size={16} /><span>Studio Image</span></button></div><div className="composer-submit"><span className="enter-hint">↵ pour envoyer</span>{isCurrentStreaming ? <button className="send-button stop-button" type="button" onClick={stopCurrentStream} aria-label="Interrompre la génération" title="Interrompre la génération"><Square size={14} fill="currentColor" /></button> : <button className="send-button" type="submit" disabled={!canSend} aria-label="Envoyer le message">{busy === "upload" ? <LoaderCircle size={19} className="spin" /> : <ArrowUp size={20} />}</button>}</div></div>
             </form>
             <div className="composer-footnote" id="composer-hint"><span>cLAIr peut se tromper. Gardez un regard critique sur les réponses.</span><span>Maj + Entrée pour un saut de ligne</span></div>
           </div>

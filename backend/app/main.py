@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import re
+import unicodedata
 from contextlib import asynccontextmanager
 from datetime import timedelta, timezone
 from pathlib import Path
@@ -129,6 +130,35 @@ def conversation_json(item: Conversation, detail: bool = False) -> dict:
 
 def sse(name: str, value: dict) -> str:
     return f"event: {name}\ndata: {json.dumps(value, ensure_ascii=False)}\n\n"
+
+
+def extract_mentioned_skills(content: str, user_skills: list[Skill]) -> list[Skill]:
+    """Finds user skills mentioned in the content via @slug or @name (e.g. @prof, @feynman)."""
+    raw_tags = re.findall(r"@([a-zA-Z0-9_\u00C0-\u017F-]+)", content)
+    if not raw_tags or not user_skills:
+        return []
+    resolved: list[Skill] = []
+    for tag in raw_tags:
+        tag_norm = unicodedata.normalize("NFKD", tag).encode("ascii", "ignore").decode("ascii").lower().strip("-_")
+        if not tag_norm:
+            continue
+        for skill in user_skills:
+            if skill in resolved:
+                continue
+            skill_norm = unicodedata.normalize("NFKD", skill.name).encode("ascii", "ignore").decode("ascii").lower().strip()
+            skill_slug = re.sub(r"[^a-z0-9]+", "-", skill_norm).strip("-")
+            skill_words = [w for w in re.split(r"[^a-z0-9]+", skill_norm) if w]
+            matches = (
+                tag_norm == skill_slug
+                or tag_norm in skill_words
+                or skill_slug.startswith(tag_norm)
+                or any(w.startswith(tag_norm) for w in skill_words)
+                or (len(skill_slug) >= 3 and tag_norm.startswith(skill_slug))
+                or (len(tag_norm) >= 3 and tag_norm in skill_slug)
+            )
+            if matches:
+                resolved.append(skill)
+    return resolved
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -818,6 +848,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             sources = []
             try:
                 yield sse("meta", {"user_message": user_message, "assistant_message_id": assistant_id})
+                with sessions() as db:
+                    u_skills = list(db.scalars(select(Skill).where(Skill.user_id == user.id)))
+                    init_active_skills = [s.name for s in (extract_mentioned_skills(body.content, u_skills) + [s for s in u_skills if s.id in body.skill_ids])]
+                if init_active_skills:
+                    yield sse("status", {"message": f"Compétence active · {' · '.join(init_active_skills)}…"})
                 has_web_attachment = any(
                     item.mime_type.startswith("text/html") or (isinstance(item.extraction, dict) and item.extraction.get("url"))
                     for item in attachments
@@ -948,8 +983,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     conversation = get_conversation(db, conversation_id, user.id)
                     memories = [item.content for item in db.scalars(select(Memory).where(
                         Memory.user_id == user.id).order_by(Memory.created_at))]
-                    skills = [{"name": link.skill.name, "prompt": link.skill.prompt}
-                              for link in conversation.skill_links]
+                    u_skills = list(db.scalars(select(Skill).where(Skill.user_id == user.id)))
+                    explicit_skills = [s for s in u_skills if s.id in body.skill_ids]
+                    mentioned_skills = extract_mentioned_skills(body.content, u_skills)
+                    conv_skills = [link.skill for link in conversation.skill_links]
+                    merged_skills = []
+                    seen_skill_ids = set()
+                    for s in (mentioned_skills + explicit_skills + conv_skills):
+                        if s.id not in seen_skill_ids:
+                            seen_skill_ids.add(s.id)
+                            merged_skills.append(s)
+                    skills = [{"name": s.name, "prompt": s.prompt} for s in merged_skills]
                     history = [{"role": item.role, "content": item.content, "attachments": [
                         {"filename": attachment.filename, "mime_type": attachment.mime_type,
                          "extracted_text": attachment.extracted_text, "extraction": attachment.extraction,

@@ -11,10 +11,13 @@ from app.config import Settings
 from app.main import create_app
 from app.models import Base, User
 from app.youtube import (
+    DEFAULT_INNERTUBE_API_KEY,
+    extract_innertube_key_from_html,
     extract_youtube_video_id,
     fetch_and_parse_youtube_video,
     format_duration,
     format_transcript_paragraphs,
+    get_innertube_api_key,
     select_best_caption_track,
 )
 
@@ -70,6 +73,65 @@ class TestYouTubeHelpers(unittest.TestCase):
         tracks.append({"languageCode": "fr", "baseUrl": "http://fr-manual"})
         chosen2 = select_best_caption_track(tracks)
         self.assertEqual(chosen2["baseUrl"], "http://fr-manual")
+
+    def test_extract_innertube_key_from_html(self):
+        # Standard UPPERCASE key in JSON
+        html1 = '<html><script>var ytcfg = {"INNERTUBE_API_KEY": "AIzaSyDynamicKey123", "INNERTUBE_CONTEXT": {}}</script></html>'
+        self.assertEqual(extract_innertube_key_from_html(html1), "AIzaSyDynamicKey123")
+
+        # CamelCase innertubeApiKey
+        html2 = '<html><script>window.yt = {"innertubeApiKey": "AIzaSyCamelKey456"};</script></html>'
+        self.assertEqual(extract_innertube_key_from_html(html2), "AIzaSyCamelKey456")
+
+        # Key not present
+        html3 = '<html><script>var empty = 1;</script></html>'
+        self.assertIsNone(extract_innertube_key_from_html(html3))
+        self.assertIsNone(extract_innertube_key_from_html(""))
+
+
+class TestYouTubeDynamicApiKey(unittest.IsolatedAsyncioTestCase):
+    async def test_get_innertube_api_key_from_watch_page(self):
+        mock_watch = '<html><script>"INNERTUBE_API_KEY": "AIzaWatchDynamicKey"</script></html>'
+
+        async def fake_get(url, **kwargs):
+            return httpx.Response(200, text=mock_watch, request=httpx.Request("GET", str(url)))
+
+        with patch("httpx.AsyncClient.get", side_effect=fake_get):
+            async with httpx.AsyncClient() as client:
+                key = await get_innertube_api_key(client, video_id="testvid123")
+                self.assertEqual(key, "AIzaWatchDynamicKey")
+
+    async def test_get_innertube_api_key_embed_fallback(self):
+        # Watch page has no key (e.g. restricted), embed page has the key
+        async def fake_get(url, **kwargs):
+            url_str = str(url)
+            if "/watch" in url_str:
+                return httpx.Response(200, text="<html>No key here</html>", request=httpx.Request("GET", url_str))
+            if "/embed" in url_str:
+                return httpx.Response(
+                    200,
+                    text='<html><script>"innertubeApiKey": "AIzaEmbedDynamicKey"</script></html>',
+                    request=httpx.Request("GET", url_str),
+                )
+            return httpx.Response(404, request=httpx.Request("GET", url_str))
+
+        with patch("httpx.AsyncClient.get", side_effect=fake_get):
+            async with httpx.AsyncClient() as client:
+                key = await get_innertube_api_key(client, video_id="embedvid456")
+                self.assertEqual(key, "AIzaEmbedDynamicKey")
+
+    async def test_get_innertube_api_key_default_fallback(self):
+        # All requests fail with 500/404 or empty
+        import app.youtube as yt_mod
+        yt_mod._cached_innertube_api_key = None
+
+        async def fake_get(url, **kwargs):
+            return httpx.Response(500, text="error", request=httpx.Request("GET", str(url)))
+
+        with patch("httpx.AsyncClient.get", side_effect=fake_get):
+            async with httpx.AsyncClient() as client:
+                key = await get_innertube_api_key(client, video_id="failedvid")
+                self.assertEqual(key, DEFAULT_INNERTUBE_API_KEY)
 
 
 class TestYouTubeEndpointIntegration(unittest.TestCase):

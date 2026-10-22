@@ -1,24 +1,33 @@
 # Relais — 22 octobre 2026
 
 - Réalisé :
-  - **Résolution du rebase `git pull --rebase origin work` (`d463e40` sur `29511a2`)** :
-    - Intégration conjointe des fonctionnalités locales (`d463e40` : blogs d'actualité IA, studio d'images Ideogram, DeepSearch multilingue, Code Canvas, recherche principale SearXNG, reformulation de requêtes, extraction d'URLs web/YouTube, thèmes et mots-clés de conversation, rendu KaTeX) et distantes (`29511a2` : secours DuckDuckGo Instant Answers, variable `DUCKDUCKGO_ENABLED`, `search_providers` dans `/api/config`, erreur explicite en cas de recherche web vide, notices et attributions DuckDuckGo dans l'interface et le prompt système).
-    - Chaîne de priorité de recherche web unifiée dans `backend/app/providers.py` : SearXNG (`SEARXNG_URL`) -> Brave Search (`BRAVE_API_KEY`) -> DuckDuckGo Instant Answers (`DUCKDUCKGO_ENABLED=true`), avec conservation des erreurs amont et propagation de `search_notice` / `provider`.
-    - Mise à jour de `backend/app/cli.py` pour reconnaître les révisions Alembic `0007_add_blogs_and_posts` et `0008_add_blog_theme` lors de `prepare_schema`.
-    - Normalisation des titres entourés de guillemets/espaces dans `classify_conversation` (`backend/app/providers.py`).
-  - **Fonctionnalités précédentes conservées (`d463e40`)** :
-    - 21 thèmes visuels immersifs pour les blogs, actualisation 100% manuelle à la demande (`auto_refresh=False` par défaut), modèle rapide dédié `BLOG_MODEL` (`google/gemini-3.5-flash-lite`) avec repli sur `default_model`, et isolation stricte multi-comptes.
-- Fichiers résolus et modifiés :
-  - Configuration & documentation : `.env.example`, `README.md`, `docs/services.md`, `docs/architecture.md`, `HANDOFF.md`.
-  - Backend : `backend/app/config.py`, `backend/app/context.py`, `backend/app/main.py`, `backend/app/providers.py`, `backend/app/cli.py`.
-  - Tests backend : `backend/tests/test_api.py`, `backend/tests/test_providers.py`.
-  - Frontend : `frontend/app/layout.tsx`, `frontend/app/globals.css`, `frontend/lib/api.ts`, `frontend/components/chat-app.tsx`.
+  - **Extraction dynamique de la clé InnerTube YouTube (Guide 2025 Mohammed Aqib)** :
+    - Extraction dynamique de `INNERTUBE_API_KEY` à la volée via regex robuste (`"INNERTUBE_API_KEY":"..."`, `"innertubeApiKey":"..."`, assignations variables) depuis le HTML de la page de la vidéo.
+    - Stratégie de repli multi-niveaux : page de lecture (`/watch?v=...`) -> page d'intégration (`/embed/...`) -> page d'accueil YouTube (`/`) -> clé par défaut de secours.
+    - Appel du point de terminaison InnerTube `/youtubei/v1/player?key={api_key}` avec le contexte client `ANDROID` (`clientVersion: 20.10.38`), récupération des pistes de sous-titres, et parsing XML des sous-titres avec horodatages en paragraphes cohérents.
+    - Mise en cache mémoire de la dernière clé fonctionnelle pour limiter les requêtes superflues.
+  - **Accès aux compétences individuelles par message (`@prof`, `@feynman`, etc.)** :
+    - Menu contextuel d'autocomplétion interactif dans la zone de saisie du chat dès la frappe de `@` : navigation fléchée (Haut/Bas), sélection Entrée/Tab, insertion automatique de `@{tag} ` et reprise immédiate du focus.
+    - Résolution intelligente côté backend et frontend : correspondance sur le slug (`@professeur`, `@prof`, `@richard-feynman`, `@feynman`), sur n'importe quel mot clé du nom de la compétence ou préfixe.
+    - Application strictement par message : les compétences mentionnées ou transmises via `skill_ids` dans `SendMessage` s'injectent dans le contexte LLM pour la réponse courante sans modifier la liste permanente `conversation_skills` de la discussion.
+    - Notice visuelle en début de flux SSE : `Compétence active · {nom}…` et mise en valeur des tags `@mention` dans les messages utilisateurs (badges stylisés `.mention-pill`).
+    - Panneau de compétences enrichi : affichage des raccourcis `@slug` pour chaque compétence, rappel du déclencheur `@`, et modèles prêts à l'emploi (`Professeur` / `@prof`, `Richard Feynman` / `@feynman`, `Revue de code` / `@code`).
+  - **Saisie et application 100% asynchrones (non bloquantes)** :
+    - Découplage de `working` et `busy === "send"` : envoyer un message ne bloque plus l'interface.
+    - Le champ de texte (textarea) reste actif et modifiable pendant la génération : l'utilisateur peut préparer son prochain message, coller du texte ou prendre des notes sans attendre la fin du flux.
+    - Navigation fluide entre conversations : l'utilisateur peut basculer sur une autre conversation ou cliquer sur « Nouvelle conversation » pendant qu'une réponse se génère en arrière-plan.
+    - Gestion multi-flux avec contrôleurs d'interruption par conversation (`streamControllersRef`) et indicateur visuel de génération en arrière-plan dans la barre latérale (`.history-streaming-icon`).
+    - Bouton Arrêter (`Square`) contextuel pour interrompre la génération active du tchat affiché sans impacter les autres flux.
+- Fichiers modifiés :
+  - Backend : `backend/app/youtube.py`, `backend/app/schemas.py`, `backend/app/main.py`.
+  - Tests backend : `backend/tests/test_youtube.py`, `backend/tests/test_api.py`.
+  - Frontend : `frontend/lib/api.ts`, `frontend/components/chat-app.tsx`, `frontend/components/skills-panel.tsx`, `frontend/app/globals.css`.
+  - Suivi : `HANDOFF.md`.
 - Vérifications exécutées :
   - `python3 -m py_compile backend/app/*.py backend/tests/*.py` : 0 erreur.
-  - Suite complète de tests backend dans le conteneur `clair-api` : **185/185 tests réussis** (`test_api.py` : 45, `test_blogs.py` : 6, `test_context.py` : 23, `test_migrations.py` : 2, `test_providers.py` : 98, `test_web.py` : 5, `test_youtube.py` : 6).
+  - Suite complète de tests backend dans le conteneur `clair-api` : **190/190 tests réussis** (`test_youtube.py` : 10/10 avec tests unitaires de clé dynamique et repli, `test_api.py` : 46, `test_blogs.py` : 6, `test_context.py` : 23, `test_migrations.py` : 2, `test_providers.py` : 98, `test_web.py` : 5).
   - Typecheck TypeScript (`npm --prefix frontend run typecheck`) : 0 erreur.
-  - Build Next.js (`npm --prefix frontend run build`) : compilation réussie.
 - Problèmes connus :
   - Aucun.
 - Prochaine action :
-  - Travailler directement sur la branche `main` (désormais alignée en fast-forward avec `work` sur l'ensemble de l'historique) et faire un `git pull --rebase` avant de commencer de nouveaux développements si des modifications ont été faites à distance.
+  - Tester l'extraction de transcription YouTube sur une vidéo réelle depuis l'interface ou l'API.

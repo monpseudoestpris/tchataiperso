@@ -135,10 +135,27 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+export function skillToSlug(name: string): string {
+  return name
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
 /** Parses complete SSE frames while retaining partial UTF-8 and multiline data. */
 export async function streamMessage(
   conversationId: string,
-  body: { content: string; model: string; web_search: boolean; deep_search?: boolean; code_mode?: boolean; attachment_ids: string[] },
+  body: {
+    content: string;
+    model: string;
+    web_search: boolean;
+    deep_search?: boolean;
+    code_mode?: boolean;
+    attachment_ids: string[];
+    skill_ids?: string[];
+  },
   signal: AbortSignal,
   onEvent: (event: StreamEvent) => void,
 ) {
