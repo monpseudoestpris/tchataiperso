@@ -2,6 +2,7 @@ import json
 import ipaddress
 import re
 from pathlib import Path
+from typing import Any
 
 from dotenv import dotenv_values
 from pydantic import PrivateAttr, SecretStr, field_validator, model_validator
@@ -9,6 +10,20 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 _REPO_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
+
+
+DEFAULT_IMAGE_MODELS: list[dict[str, str]] = [
+    {"id": "ideogram", "name": "Ideogram v2 (Sélection auto)", "provider": "ideogram"},
+    {"id": "google/gemini-3-pro-image", "name": "Google Gemini 3 Pro Image (Imagen 3)", "provider": "openrouter"},
+    {"id": "google/gemini-3.1-flash-image", "name": "Google Gemini 3.1 Flash Image", "provider": "openrouter"},
+    {"id": "google/gemini-2.5-flash-image", "name": "Google Gemini 2.5 Flash Image", "provider": "openrouter"},
+    {"id": "black-forest-labs/flux-3-image", "name": "FLUX 3 Image (Black Forest Labs)", "provider": "openrouter"},
+    {"id": "black-forest-labs/flux-3-image-klein", "name": "FLUX 3 Image Klein (Rapide)", "provider": "openrouter"},
+    {"id": "openai/gpt-image-2.5-sunburst", "name": "OpenAI GPT Image 2.5 Sunburst", "provider": "openrouter"},
+    {"id": "openai/gpt-image-2.5-flare", "name": "OpenAI GPT Image 2.5 Flare", "provider": "openrouter"},
+    {"id": "bytedance-seed/seedream-5-0-flash", "name": "ByteDance Seedream 5.0 Flash", "provider": "openrouter"},
+    {"id": "recraft/recraft-v4.1-flash", "name": "Recraft v4.1 Flash (Design & Vector)", "provider": "openrouter"},
+]
 
 
 def _clean_api_key(value: str | SecretStr | None) -> str:
@@ -76,6 +91,8 @@ class Settings(BaseSettings):
     search_query_model: str = "mistralai/mistral-small-3.2-24b-instruct"
     blog_model: str = "google/gemini-3.5-flash-lite"
     image_prompt_model: str = "openai/gpt-6-luna"
+    image_models: str = ""
+    default_image_model: str = "ideogram"
 
     @field_validator("llm_api_key", "brave_api_key", "mistral_api_key", "ideogram_api_key", "eod_historical_data_key", mode="before")
     @classmethod
@@ -196,6 +213,43 @@ class Settings(BaseSettings):
             raise ValueError("LLM_MODELS doit être un tableau JSON de modèles; DEFAULT_MODEL doit être présent") from exc
 
     @property
+    def available_image_models(self) -> list[dict[str, Any]]:
+        self.refresh_from_env_file()
+        if self.demo_mode:
+            return []
+        has_ideogram = self.enabled(self.ideogram_api_key)
+        has_openrouter = self.enabled(self.llm_api_key)
+        candidates = DEFAULT_IMAGE_MODELS
+        if self.image_models.strip():
+            try:
+                parsed = json.loads(self.image_models)
+                if isinstance(parsed, list) and parsed:
+                    candidates = parsed
+            except Exception:
+                pass
+        filtered: list[dict[str, Any]] = []
+        for item in candidates:
+            provider = item.get("provider", "openrouter")
+            if provider == "ideogram" and not has_ideogram:
+                continue
+            if provider == "openrouter" and not has_openrouter:
+                continue
+            filtered.append({
+                "id": str(item["id"]),
+                "name": str(item.get("name", item["id"])),
+                "provider": provider,
+            })
+        return filtered
+
+    @property
+    def effective_default_image_model(self) -> str:
+        models = self.available_image_models
+        ids = {m["id"] for m in models}
+        if self.default_image_model in ids:
+            return self.default_image_model
+        return models[0]["id"] if models else self.default_image_model
+
+    @property
     def origins(self) -> list[str]:
         if self.cors_origins.strip().startswith("["):
             return json.loads(self.cors_origins)
@@ -229,7 +283,7 @@ class Settings(BaseSettings):
                 cleaned = _clean_api_key(parsed[env_name])
                 if cleaned or force is False:
                     setattr(self, field_name, SecretStr(cleaned))
-        str_fields = ("llm_base_url", "ocr_model", "vision_model", "default_model", "llm_models", "summary_model", "search_query_model", "blog_model")
+        str_fields = ("llm_base_url", "ocr_model", "vision_model", "default_model", "llm_models", "summary_model", "search_query_model", "blog_model", "image_prompt_model", "image_models", "default_image_model")
         for field_name in str_fields:
             if field_name in self._explicit_fields:
                 continue

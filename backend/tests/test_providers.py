@@ -784,6 +784,39 @@ def test_ideogram_uses_multipart_then_downloads_without_api_key_or_dns(settings,
     assert len(requests) == 2
 
 
+def test_openrouter_image_generation_b64(settings, transport):
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 30
+    b64_payload = base64.b64encode(png).decode("utf-8")
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        assert request.method == "POST"
+        assert request.url.path == "/v1/images"
+        assert request.headers["authorization"] == "Bearer fake-llm-secret"
+        body = json.loads(request.content.decode("utf-8"))
+        assert body["model"] == "google/gemini-3-pro-image"
+        assert body["prompt"] == "Un paysage lunaire"
+        assert body["aspect_ratio"] == "16:9"
+        assert body["negative_prompt"] == "pas de flou"
+        return httpx.Response(200, json={
+            "created": 1234567890,
+            "data": [
+                {
+                    "b64_json": b64_payload,
+                    "media_type": "image/png",
+                }
+            ]
+        })
+
+    transport(handler)
+    result = asyncio.run(providers.generate_image(
+        settings, "Un paysage lunaire", "16:9", negative_prompt="pas de flou", model="google/gemini-3-pro-image"
+    ))
+    assert result == (png, "image/png")
+    assert len(requests) == 1
+
+
 @pytest.mark.parametrize("url", [
     "https://localhost/image.png",
     "https://sub.localhost/image.png",

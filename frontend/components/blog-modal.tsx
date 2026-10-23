@@ -548,7 +548,7 @@ export function BlogModal({ onClose, initialPrompt = "" }: BlogModalProps) {
                   {filteredBlogs.map(item => {
                     const isSelected = !isCreating && selectedBlogId === item.id;
                     return (
-                      <li key={item.id}>
+                      <li key={item.id} className="blog-nav-item-row">
                         <button
                           type="button"
                           className={`blog-nav-item ${isSelected ? "is-selected" : ""}`}
@@ -562,20 +562,6 @@ export function BlogModal({ onClose, initialPrompt = "" }: BlogModalProps) {
                               <span className="blog-nav-theme-emoji">{getBlogTheme(item.theme).emoji}</span>
                               <span>{item.title}</span>
                             </span>
-                            <div className="blog-nav-item-badges">
-                              <button
-                                type="button"
-                                className="blog-item-delete-btn"
-                                onClick={e => {
-                                  e.stopPropagation();
-                                  handleRequestDeleteBlog(item);
-                                }}
-                                title={`Supprimer le blog « ${item.title} »`}
-                                aria-label={`Supprimer le blog ${item.title}`}
-                              >
-                                <Trash2 size={12} />
-                              </button>
-                            </div>
                           </div>
                           <span className="blog-nav-prompt">🔍 {item.prompt}</span>
                           <div className="blog-nav-meta">
@@ -584,6 +570,15 @@ export function BlogModal({ onClose, initialPrompt = "" }: BlogModalProps) {
                               {item.posts_count} {item.posts_count > 1 ? "éditions" : "édition"}
                             </span>
                           </div>
+                        </button>
+                        <button
+                          type="button"
+                          className="blog-item-delete-btn"
+                          onClick={() => handleRequestDeleteBlog(item)}
+                          title={`Supprimer le blog « ${item.title} »`}
+                          aria-label={`Supprimer le blog ${item.title}`}
+                        >
+                          <Trash2 size={12} />
                         </button>
                       </li>
                     );

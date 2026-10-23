@@ -14,7 +14,7 @@ engines:
   - name: abcnyheter
     disabled: false
   - name: andisearch
-    disabled: false
+    disabled: true
   - name: ayo
     disabled: false
   - name: baidu
@@ -38,13 +38,13 @@ engines:
   - name: tineye
     disabled: false
   - name: fastbot
-    disabled: false
+    disabled: true
   - name: fireball
-    disabled: false
+    disabled: true
   - name: fynd
     disabled: false
   - name: gabanza
-    disabled: false
+    disabled: true
   - name: gmx
     disabled: false
   - name: google
@@ -60,15 +60,15 @@ engines:
   - name: qwant
     disabled: false
   - name: searchmysite
-    disabled: false
+    disabled: true
   - name: sogou
-    disabled: false
+    disabled: true
   - name: privacywall
     disabled: false
   - name: tagesschau
     disabled: false
   - name: tusksearch
-    disabled: false
+    disabled: true
   - name: yandex
     disabled: false
   - name: yahoo
@@ -88,7 +88,7 @@ engines:
   - name: wikivoyage
     disabled: false
   - name: wolframalpha
-    disabled: false
+    disabled: true
   - name: seznam
     disabled: false
   - name: naver
@@ -98,7 +98,7 @@ engines:
   - name: reloado
     disabled: false
   - name: resulthunter
-    disabled: false
+    disabled: true
   - name: searchch
     disabled: false
   - name: vuhuv

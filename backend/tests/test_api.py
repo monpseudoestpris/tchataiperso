@@ -667,7 +667,7 @@ def test_oversize_image_is_rejected_before_ocr(client, settings, monkeypatch):
 def test_mock_image_generation_saved_in_history(tmp_path, monkeypatch):
     settings = Settings(_env_file=None, app_data_dir=tmp_path, ideogram_api_key="image", demo_mode=False)
 
-    async def generate(_settings, prompt, ratio, negative_prompt=None):
+    async def generate(_settings, prompt, ratio, negative_prompt=None, **kwargs):
         assert prompt == "Un chat" and ratio == "1:1"
         return b"image-data", "image/png"
 
@@ -693,7 +693,7 @@ def test_dedicated_image_studio_gallery_improve_download_and_delete(tmp_path, mo
             return f"Un renard roux sans {negative_prompt}"
         return "Un renard roux dans une forêt enneigée au lever du soleil, lumière dorée"
 
-    async def generate(_settings, prompt, ratio, negative_prompt=None):
+    async def generate(_settings, prompt, ratio, negative_prompt=None, **kwargs):
         assert prompt == "Un renard roux dans une forêt enneigée au lever du soleil, lumière dorée"
         assert ratio == "16:9"
         if negative_prompt:
@@ -731,6 +731,34 @@ def test_dedicated_image_studio_gallery_improve_download_and_delete(tmp_path, mo
         assert client.get("/api/images").json() == []
         assert client.get(item["url"]).status_code == 404
         assert list((tmp_path / "uploads").iterdir()) == []
+
+
+def test_multi_model_image_generation_with_openrouter(tmp_path, monkeypatch):
+    settings = Settings(_env_file=None, app_data_dir=tmp_path, llm_api_key="llm", demo_mode=False)
+
+    async def generate(_settings, prompt, ratio, negative_prompt=None, model="ideogram"):
+        assert prompt == "Un robot astronaute"
+        assert ratio == "1:1"
+        assert model == "google/gemini-3-pro-image"
+        return b"\x89PNG\r\n\x1a\nrobot-image", "image/png"
+
+    monkeypatch.setattr(providers, "generate_image", generate)
+    with authenticated_client(settings) as client:
+        config = client.get("/api/config").json()
+        assert config["features"]["image_generation"] is True
+        assert any(m["id"] == "google/gemini-3-pro-image" for m in config["image_models"])
+
+        # Attempting ideogram without ideogram key raises 503
+        bad = client.post("/api/images", json={"prompt": "Un chat", "model": "ideogram"})
+        assert bad.status_code == 503
+
+        # Generating with google/gemini-3-pro-image works
+        created = client.post("/api/images", json={"prompt": "Un robot astronaute", "model": "google/gemini-3-pro-image"})
+        assert created.status_code == 201
+        item = created.json()
+        assert item["mime_type"] == "image/png"
+        assert item["filename"].startswith("gemini-3-pro-image-")
+
 
 
 def test_summary_includes_old_document_text_and_preserves_unsummarized_turns(tmp_path, monkeypatch):

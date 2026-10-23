@@ -70,7 +70,7 @@ async def _search_single_query(searxng_url: str, query: str, limit: int = 12) ->
                     "language": "all",
                     "time_range": "week",
                 },
-                headers={"Accept": "application/json"},
+                headers={"Accept": "application/json", "X-Forwarded-For": "127.0.0.1"},
             )
             if response.status_code == 200:
                 results = response.json().get("results", [])
@@ -91,7 +91,7 @@ async def _search_single_query(searxng_url: str, query: str, limit: int = 12) ->
                     "categories": "news,general",
                     "language": "all",
                 },
-                headers={"Accept": "application/json"},
+                headers={"Accept": "application/json", "X-Forwarded-For": "127.0.0.1"},
             )
             if response.status_code == 200:
                 results = response.json().get("results", [])

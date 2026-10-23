@@ -380,10 +380,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "themes": list(CONVERSATION_THEMES),
                 "search_providers": search_providers,
                 "image_prompt_model": settings.image_prompt_model,
+                "image_models": settings.available_image_models,
+                "default_image_model": settings.effective_default_image_model,
                 "features": {"chat": settings.demo_mode or settings.enabled(settings.llm_api_key),
                              "web_search": settings.web_search_enabled,
                              "ocr": settings.enabled(settings.mistral_api_key),
-                             "image_generation": settings.enabled(settings.ideogram_api_key)}}
+                             "image_generation": bool(settings.available_image_models)}}
 
     @app.get("/api/conversations")
     def list_conversations(
@@ -1242,8 +1244,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/images", status_code=201)
     async def create_studio_image(body: CreateImage, user: User = Depends(current_user)):
-        if not settings.enabled(settings.ideogram_api_key):
-            raise HTTPException(503, "La génération d'image nécessite IDEOGRAM_API_KEY et un mode IA réel")
+        is_ideogram = body.model == "ideogram"
+        if is_ideogram and not settings.enabled(settings.ideogram_api_key):
+            raise HTTPException(503, "La génération d'image avec Ideogram nécessite IDEOGRAM_API_KEY et un mode IA réel")
+        if not is_ideogram and not settings.enabled(settings.llm_api_key):
+            raise HTTPException(503, "La génération d'image avec ce modèle nécessite LLM_API_KEY et un mode IA réel")
         if body.aspect_ratio not in IMAGE_ASPECT_RATIOS:
             raise HTTPException(422, "Ratio d'image non pris en charge")
         with sessions() as db:
@@ -1254,16 +1259,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await lock.acquire()
         path = None
         try:
-            content, mime = await providers.generate_image(settings, body.prompt, body.aspect_ratio, body.negative_prompt)
+            content, mime = await providers.generate_image(
+                settings, body.prompt, body.aspect_ratio, body.negative_prompt, model=body.model
+            )
             storage_name = str(uuid4())
             path = upload_dir / storage_name
             path.write_bytes(content)
             extension = {"image/png": "png", "image/webp": "webp", "image/gif": "gif"}.get(mime, "jpg")
+            model_prefix = "ideogram" if is_ideogram else re.sub(r"[^a-zA-Z0-9_-]", "-", body.model.split("/")[-1])[:24]
             with sessions() as db:
                 image_id = str(uuid4())
                 item = GeneratedImage(
                     id=image_id, user_id=user.id, prompt=body.prompt, aspect_ratio=body.aspect_ratio,
-                    filename=f"ideogram-{image_id[:8]}.{extension}", mime_type=mime,
+                    filename=f"{model_prefix}-{image_id[:8]}.{extension}", mime_type=mime,
                     size=len(content), storage_name=storage_name,
                 )
                 db.add(item)
@@ -1306,8 +1314,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/conversations/{conversation_id}/images", status_code=201)
     async def create_image(conversation_id: str, body: CreateImage, user: User = Depends(current_user)):
-        if not settings.enabled(settings.ideogram_api_key):
-            raise HTTPException(503, "La génération d'image nécessite IDEOGRAM_API_KEY et un mode IA réel")
+        is_ideogram = body.model == "ideogram"
+        if is_ideogram and not settings.enabled(settings.ideogram_api_key):
+            raise HTTPException(503, "La génération d'image avec Ideogram nécessite IDEOGRAM_API_KEY et un mode IA réel")
+        if not is_ideogram and not settings.enabled(settings.llm_api_key):
+            raise HTTPException(503, "La génération d'image avec ce modèle nécessite LLM_API_KEY et un mode IA réel")
         if body.aspect_ratio not in IMAGE_ASPECT_RATIOS:
             raise HTTPException(422, "Ratio d'image non pris en charge")
         lock = claim(user.id, conversation_id)
@@ -1316,18 +1327,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             with sessions() as db:
                 get_conversation(db, conversation_id, user.id)
-            content, mime = await providers.generate_image(settings, body.prompt, body.aspect_ratio, body.negative_prompt)
+            content, mime = await providers.generate_image(
+                settings, body.prompt, body.aspect_ratio, body.negative_prompt, model=body.model
+            )
             storage_name = str(uuid4())
             path = upload_dir / storage_name
             path.write_bytes(content)
+            model_label = "Ideogram" if is_ideogram else body.model
+            model_prefix = "ideogram" if is_ideogram else re.sub(r"[^a-zA-Z0-9_-]", "-", body.model.split("/")[-1])[:24]
             with sessions() as db:
                 conversation = get_conversation(db, conversation_id, user.id)
                 prompt = Message(conversation_id=conversation_id, role="user", content=f"Génère une image : {body.prompt}")
-                answer = Message(conversation_id=conversation_id, role="assistant", content=f"Image générée avec Ideogram : {body.prompt}")
+                answer = Message(conversation_id=conversation_id, role="assistant", content=f"Image générée avec {model_label} : {body.prompt}")
                 db.add_all([prompt, answer])
                 db.flush()
                 extension = {"image/png": "png", "image/webp": "webp", "image/gif": "gif"}.get(mime, "jpg")
-                attachment = Attachment(user_id=user.id, filename=f"ideogram.{extension}", mime_type=mime,
+                attachment = Attachment(user_id=user.id, filename=f"{model_prefix}.{extension}", mime_type=mime,
                                         size=len(content), storage_name=storage_name, message_id=answer.id)
                 db.add(attachment)
                 conversation.updated_at = now()

@@ -310,6 +310,24 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
     (config?.models?.some(m => m.id === "openai/gpt-6-luna") ? "openai/gpt-6-luna" : config?.default_model || "openai/gpt-6-luna");
   const [improveModel, setImproveModel] = useState<string>(preferredModel);
 
+  const availableImageModels =
+    config?.image_models && config.image_models.length > 0
+      ? config.image_models
+      : [{ id: "ideogram", name: "Ideogram v2 (Sélection auto)", provider: "ideogram" as const }];
+
+  const initialGenModel = config?.default_image_model || availableImageModels[0]?.id || "ideogram";
+  const [generationModel, setGenerationModel] = useState<string>(initialGenModel);
+
+  useEffect(() => {
+    if (config?.default_image_model && availableImageModels.some(m => m.id === config.default_image_model)) {
+      setGenerationModel(config.default_image_model);
+    } else if (availableImageModels.length > 0 && !availableImageModels.some(m => m.id === generationModel)) {
+      setGenerationModel(availableImageModels[0].id);
+    }
+  }, [config?.default_image_model, config?.image_models]);
+
+  const selectedGenModel = availableImageModels.find(m => m.id === generationModel) || availableImageModels[0];
+
   useEffect(() => {
     if (config?.image_prompt_model) {
       setImproveModel(config.image_prompt_model);
@@ -341,7 +359,13 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
   }, []);
 
   const selected = images.find(item => item.id === selectedId) ?? images[0] ?? null;
-  const canGenerate = !!config?.features.image_generation && !config.demo_mode && !!prompt.trim() && prompt.length <= 4000 && !busy;
+  const canGenerate =
+    !!config?.features.image_generation &&
+    !config.demo_mode &&
+    availableImageModels.length > 0 &&
+    !!prompt.trim() &&
+    prompt.length <= 4000 &&
+    !busy;
   const canImprove = !!config?.features.chat && !config.demo_mode && !!prompt.trim() && prompt.length <= 4000 && !busy;
 
   async function improvePrompt() {
@@ -393,6 +417,7 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
           prompt: prompt.trim(),
           aspect_ratio: aspectRatio,
           negative_prompt: negativePrompt.trim() || undefined,
+          model: generationModel,
         }),
       });
       setImages(current => [created, ...current]);
@@ -469,7 +494,7 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
               <ImagePlus size={18} />
             </span>
             <div>
-              <span className="eyebrow">STUDIO CRÉATIF · IDEOGRAM</span>
+              <span className="eyebrow">STUDIO CRÉATIF · MULTI-MODÈLES</span>
               <h2 id="image-studio-title">Studio Image</h2>
             </div>
           </div>
@@ -494,7 +519,7 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
           <div className="image-studio-notice" role="status">
             <CircleAlert size={16} />
             <span>
-              La génération d’images nécessite une clé <code>IDEOGRAM_API_KEY</code> active côté serveur. Vous pouvez toujours consulter et télécharger vos images sauvegardées.
+              La génération d’images nécessite une clé <code>IDEOGRAM_API_KEY</code> ou <code>LLM_API_KEY</code> (OpenRouter) active côté serveur. Vous pouvez toujours consulter et télécharger vos images sauvegardées.
             </span>
           </div>
         )}
@@ -721,6 +746,30 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
                 </div>
               </div>
 
+              <div className="image-model-gen-section">
+                <div className="image-model-gen-header">
+                  <span className="image-section-label">Modèle de génération d’image</span>
+                  <span className="image-model-provider-badge">
+                    {selectedGenModel?.provider === "ideogram" ? "Ideogram API" : "OpenRouter API"}
+                  </span>
+                </div>
+                <div className="image-model-gen-select-wrapper">
+                  <select
+                    className="image-model-gen-select"
+                    value={generationModel}
+                    onChange={e => setGenerationModel(e.target.value)}
+                    disabled={!!busy}
+                    aria-label="Modèle de génération d’image"
+                  >
+                    {availableImageModels.map(m => (
+                      <option key={m.id} value={m.id}>
+                        {m.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
               <div className="image-ratio-section">
                 <span className="image-section-label">Format de l’image</span>
                 <div className="image-ratio-grid" role="radiogroup" aria-label="Format d’image">
@@ -745,12 +794,12 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
                 {busy === "generate" ? (
                   <>
                     <LoaderCircle className="spin" size={17} />
-                    <span>Création de l’image avec Ideogram…</span>
+                    <span>Création avec {selectedGenModel?.name?.split("(")[0]?.trim() || "l'IA"}…</span>
                   </>
                 ) : (
                   <>
                     <Sparkles size={17} />
-                    <span>Générer et sauvegarder l’image</span>
+                    <span>Générer avec {selectedGenModel?.name?.split("(")[0]?.trim() || "l'IA"}</span>
                   </>
                 )}
               </button>

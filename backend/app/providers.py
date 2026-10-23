@@ -1066,7 +1066,7 @@ async def _search_searxng(settings: Any, query: str, limit: int = 5) -> list[dic
             response = await client.get(
                 settings.searxng_url.rstrip("/") + "/search",
                 params={"q": query, "format": "json"},
-                headers={"Accept": "application/json"},
+                headers={"Accept": "application/json", "X-Forwarded-For": "127.0.0.1"},
             )
         _check_response(response, "SearXNG")
         payload = _json(response, "SearXNG")
@@ -1403,49 +1403,127 @@ def _image_signature_matches(content: bytes, mime_type: str) -> bool:
     )
 
 
-async def generate_image(settings: Any, prompt: str, aspect_ratio: str, negative_prompt: str | None = None) -> tuple[bytes, str]:
-    key = _key(settings, "ideogram_api_key", "Ideogram")
-    ratio = aspect_ratio.replace(":", "x")
-    if ratio not in {"1x1", "16x9", "9x16", "4x3", "3x4", "3x2", "2x3", "10x16", "16x10", "1x3", "3x1"}:
-        raise ProviderError("Le format d'image demandé n'est pas pris en charge.")
-    files: dict[str, tuple[None, str]] = {
-        "prompt": (None, prompt),
-        "aspect_ratio": (None, ratio),
+async def generate_image(
+    settings: Any,
+    prompt: str,
+    aspect_ratio: str,
+    negative_prompt: str | None = None,
+    model: str = "ideogram",
+) -> tuple[bytes, str]:
+    if model == "ideogram":
+        key = _key(settings, "ideogram_api_key", "Ideogram")
+        ratio = aspect_ratio.replace(":", "x")
+        if ratio not in {"1x1", "16x9", "9x16", "4x3", "3x4", "3x2", "2x3", "10x16", "16x10", "1x3", "3x1"}:
+            raise ProviderError("Le format d'image demandé n'est pas pris en charge.")
+        files: dict[str, tuple[None, str]] = {
+            "prompt": (None, prompt),
+            "aspect_ratio": (None, ratio),
+        }
+        if negative_prompt and negative_prompt.strip():
+            files["negative_prompt"] = (None, negative_prompt.strip())
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(180.0, connect=10.0), follow_redirects=False) as client:
+                response = await client.post(
+                    "https://api.ideogram.ai/v2/image/generate/auto",
+                    headers={"Api-Key": key},
+                    files=files,
+                )
+            _check_response(response, "Ideogram")
+            data = _json(response, "Ideogram").get("data", [])
+            if not isinstance(data, list) or not data or not isinstance(data[0], dict):
+                raise ProviderError("Ideogram n'a pas renvoyé d'image.")
+            url = await _check_download_url(settings, data[0].get("url"))
+            # Separate client: never forward the Ideogram API key to its image CDN.
+            async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=False) as client:
+                async with client.stream("GET", url) as download:
+                    _check_response(download, "Téléchargement Ideogram")
+                    mime_type = download.headers.get("content-type", "").split(";")[0].strip().lower()
+                    if mime_type not in {"image/png", "image/jpeg", "image/webp", "image/gif"}:
+                        raise ProviderError("Ideogram a renvoyé un format d'image non pris en charge.")
+                    size_header = download.headers.get("content-length", "")
+                    if size_header.isdigit() and int(size_header) > _MAX_IMAGE_BYTES:
+                        raise ProviderError("L'image Ideogram dépasse la limite de 10 Mio.")
+                    content = bytearray()
+                    async for chunk in download.aiter_bytes():
+                        if len(content) + len(chunk) > _MAX_IMAGE_BYTES:
+                            raise ProviderError("L'image Ideogram dépasse la limite de 10 Mio.")
+                        content.extend(chunk)
+            image = bytes(content)
+            if not _image_signature_matches(image, mime_type):
+                raise ProviderError("Le fichier renvoyé par Ideogram n'est pas une image valide.")
+            return image, mime_type
+        except httpx.TimeoutException:
+            raise ProviderError("La génération ou le téléchargement Ideogram a dépassé le délai autorisé.") from None
+        except httpx.HTTPError:
+            raise ProviderError("Impossible de joindre Ideogram ou de télécharger son image.") from None
+
+    # Multi-model image generation via OpenRouter Image API
+    key = _key(settings, "llm_api_key", "du fournisseur IA")
+    endpoint = f"{settings.llm_base_url.rstrip('/')}/images"
+    body: dict[str, Any] = {
+        "model": model,
+        "prompt": prompt,
+        "aspect_ratio": aspect_ratio,
     }
     if negative_prompt and negative_prompt.strip():
-        files["negative_prompt"] = (None, negative_prompt.strip())
+        body["negative_prompt"] = negative_prompt.strip()
+
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(180.0, connect=10.0), follow_redirects=False) as client:
             response = await client.post(
-                "https://api.ideogram.ai/v2/image/generate/auto",
-                headers={"Api-Key": key},
-                files=files,
+                endpoint,
+                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                json=body,
             )
-        _check_response(response, "Ideogram")
-        data = _json(response, "Ideogram").get("data", [])
+        _check_response(response, "Générateur d'images")
+        data = _json(response, "Générateur d'images").get("data", [])
         if not isinstance(data, list) or not data or not isinstance(data[0], dict):
-            raise ProviderError("Ideogram n'a pas renvoyé d'image.")
-        url = await _check_download_url(settings, data[0].get("url"))
-        # Separate client: never forward the Ideogram API key to its image CDN.
-        async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=False) as client:
-            async with client.stream("GET", url) as download:
-                _check_response(download, "Téléchargement Ideogram")
-                mime_type = download.headers.get("content-type", "").split(";")[0].strip().lower()
-                if mime_type not in {"image/png", "image/jpeg", "image/webp", "image/gif"}:
-                    raise ProviderError("Ideogram a renvoyé un format d'image non pris en charge.")
-                size_header = download.headers.get("content-length", "")
-                if size_header.isdigit() and int(size_header) > _MAX_IMAGE_BYTES:
-                    raise ProviderError("L'image Ideogram dépasse la limite de 10 Mio.")
-                content = bytearray()
-                async for chunk in download.aiter_bytes():
-                    if len(content) + len(chunk) > _MAX_IMAGE_BYTES:
-                        raise ProviderError("L'image Ideogram dépasse la limite de 10 Mio.")
-                    content.extend(chunk)
-        image = bytes(content)
-        if not _image_signature_matches(image, mime_type):
-            raise ProviderError("Le fichier renvoyé par Ideogram n'est pas une image valide.")
+            raise ProviderError("Le modèle d'image n'a pas renvoyé d'image.")
+        item = data[0]
+        b64_json = item.get("b64_json")
+        if b64_json:
+            try:
+                image = base64.b64decode(b64_json)
+            except Exception:
+                raise ProviderError("Les données de l'image renvoyée sont corrompues.")
+            mime_type = item.get("media_type") or "image/png"
+        elif item.get("url"):
+            download_url = item["url"]
+            async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=True) as client:
+                async with client.stream("GET", download_url) as download:
+                    _check_response(download, "Téléchargement d'image")
+                    mime_type = download.headers.get("content-type", "").split(";")[0].strip().lower()
+                    if mime_type not in {"image/png", "image/jpeg", "image/webp", "image/gif"}:
+                        mime_type = "image/png"
+                    size_header = download.headers.get("content-length", "")
+                    if size_header.isdigit() and int(size_header) > _MAX_IMAGE_BYTES:
+                        raise ProviderError("L'image dépasse la limite de 10 Mio.")
+                    content = bytearray()
+                    async for chunk in download.aiter_bytes():
+                        if len(content) + len(chunk) > _MAX_IMAGE_BYTES:
+                            raise ProviderError("L'image dépasse la limite de 10 Mio.")
+                        content.extend(chunk)
+            image = bytes(content)
+        else:
+            raise ProviderError("Le générateur d'images n'a fourni ni données ni URL d'image.")
+
+        if len(image) > _MAX_IMAGE_BYTES:
+            raise ProviderError("L'image dépasse la limite de 10 Mio.")
+
+        # Detect actual signature
+        if image.startswith(b"\x89PNG\r\n\x1a\n"):
+            mime_type = "image/png"
+        elif image.startswith(b"\xff\xd8\xff"):
+            mime_type = "image/jpeg"
+        elif image.startswith(b"RIFF") and image[8:12] == b"WEBP":
+            mime_type = "image/webp"
+        elif image[:6] in (b"GIF87a", b"GIF89a"):
+            mime_type = "image/gif"
+        elif not _image_signature_matches(image, mime_type):
+            raise ProviderError("Le fichier renvoyé par le générateur n'est pas une image reconnue.")
+
         return image, mime_type
     except httpx.TimeoutException:
-        raise ProviderError("La génération ou le téléchargement Ideogram a dépassé le délai autorisé.") from None
+        raise ProviderError("La génération d'image a dépassé le délai autorisé.") from None
     except httpx.HTTPError:
-        raise ProviderError("Impossible de joindre Ideogram ou de télécharger son image.") from None
+        raise ProviderError("Impossible de joindre le fournisseur de génération d'images.") from None

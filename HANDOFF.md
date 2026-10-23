@@ -1,3 +1,90 @@
+# Relais — 23 octobre 2026 (correction de l'erreur d'hydratation HTML <button> imbriqué dans BlogModal)
+
+- Réalisé :
+  - **Correction de la violation HTML / erreur d'hydratation React dans `BlogModal`** :
+    - Résolution de l'erreur `In HTML, <button> cannot be a descendant of <button>. This will cause a hydration error.` signalée dans les logs de `clair-web-1`.
+    - Dans `frontend/components/blog-modal.tsx`, le bouton de suppression `<button className="blog-item-delete-btn">` était imbriqué à l'intérieur du bouton de sélection du blog `<button className="blog-nav-item">`.
+    - Désimbrication des boutons : les deux boutons sont désormais frères directs au sein de `<li className="blog-nav-item-row">`.
+    - Ajustement des styles CSS dans `frontend/app/globals.css` :
+      - `.blog-nav-item-row` positionné en `relative`.
+      - `.blog-item-delete-btn` positionné en `absolute` en haut à droite avec `z-index: 2` et opacité contrôlée sur hover de la ligne.
+      - `.blog-nav-item-top` doté d'un `padding-right: 22px` pour éviter tout chevauchement avec le bouton corbeille sur les titres longs.
+  - **Audit global de l'arborescence frontend** :
+    - Analyse AST complète via l'API TypeScript sur l'ensemble des fichiers `.tsx` du projet pour vérifier l'absence d'autres éléments interactifs illégaux imbriqués (`button` dans `button`, `a` dans `a`, `button` dans `a`, `a` dans `button`). Résultat : 0 autre anomalie détectée.
+- Fichiers modifiés :
+  - `frontend/components/blog-modal.tsx`, `frontend/app/globals.css`, `HANDOFF.md`.
+- Vérifications exécutées :
+  - Analyse AST TypeScript JSX : 0 bouton ou lien imbriqué sur tout le frontend.
+  - Vérification des types frontend : 0 erreur (`npm --prefix frontend run typecheck`).
+  - Compilation de production Next.js : succès (`npm --prefix frontend run build`).
+  - Hot reload dans le conteneur en direct `tchataiperso-clair-web-1` : recompilation immédiate validée (`✓ Compiled in 380ms`).
+- Problèmes connus : aucun.
+- Prochaine action : ouvrir la modale « Mes Blogs d’actualités » dans le navigateur et constater la disparition de l'erreur d'hydratation dans les logs.
+
+---
+
+# Relais — 23 octobre 2026 (analyse et assainissement des logs SearXNG / Web Search)
+
+- Réalisé :
+  - **Diagnostic des logs SearXNG** :
+    - Confirmation que les requêtes web aboutissent bien (statut 200 OK côté API, plus de 130 résultats agrégés sur la recherche Elden Ring).
+    - Identification de l'erreur `ERROR:searx.botdetection: X-Forwarded-For nor X-Real-IP header is set!` liée à l'absence d'en-tête client transmis par httpx vers SearXNG.
+    - Identification des warnings SearXNG : SearXNG étant un méta-moteur interrogeant 50 moteurs en parallèle, plusieurs moteurs externes (Google, Qwant, DuckDuckGo) bloquent périodiquement les scrapers (CAPTCHA/403) et sont temporairement suspendus sans impacter les autres (Bing, Yahoo, Seznam, Yep, etc.). Certains moteurs étaient par ailleurs définitivement en erreur (AndiSearch avec token obligatoire, Gabanza avec certificat SSL expiré, Sogou avec AttributeError, Tusksearch en 401).
+  - **Corrections et optimisations** :
+    - Ajout de l'en-tête `X-Forwarded-For: 127.0.0.1` dans `backend/app/providers.py` et `backend/app/blog.py` lors des requêtes vers SearXNG, éliminant totalement l'erreur de botdetection.
+    - Désactivation des moteurs obsolètes / cassés dans `searxng/settings.yml` (`andisearch`, `fastbot`, `fireball`, `gabanza`, `resulthunter`, `searchmysite`, `sogou`, `tusksearch`, `wolframalpha`).
+    - Redémarrage des conteneurs `tchataiperso-clair-api-1` et `tchataiperso-clair-searxng-1`.
+- Fichiers modifiés :
+  - `backend/app/providers.py`, `backend/app/blog.py`, `searxng/settings.yml`, `HANDOFF.md`.
+- Vérifications exécutées :
+  - Compilation Python : 0 erreur (`python3 -m py_compile backend/app/*.py backend/tests/*.py`).
+  - Test en direct de recherche SearXNG depuis l'API sur `bugs invocations elden ring convergence 3.0.3` : 3 sources extraites avec succès en sous-seconde.
+  - Inspection des logs `docker logs tchataiperso-clair-searxng-1` : disparition complète de l'erreur `searx.botdetection` et des erreurs sur les moteurs désactivés.
+- Problèmes connus : aucun.
+- Prochaine action : continuer les recherches web dans le chat.
+
+---
+
+# Relais — 23 octobre 2026 (génération d'images multi-modèles : Ideogram, Google Imagen & OpenRouter)
+
+- Réalisé :
+  - **Prise en charge multi-modèles de génération d'images** (`backend/app/config.py`, `backend/app/providers.py`, `backend/app/schemas.py`, `backend/app/main.py`) :
+    - Définition des modèles de génération d'images supportés (`DEFAULT_IMAGE_MODELS`) : Ideogram v2 (sélection auto), Google Gemini 3 Pro Image (Imagen 3), Google Gemini 3.1 Flash Image, Google Gemini 2.5 Flash Image, FLUX 3 Image & Klein (Black Forest Labs), OpenAI GPT Image 2.5 (Sunburst & Flare), ByteDance Seedream 5.0 Flash, Recraft v4.1 Flash.
+    - Routage automatique dans `providers.generate_image` :
+      - Si `model == "ideogram"` : appel direct vers l'API Ideogram (`/v2/image/generate/auto`) avec `IDEOGRAM_API_KEY`.
+      - Si `model != "ideogram"` : appel vers l'endpoint Images d'OpenRouter (`/images`) avec `LLM_API_KEY`, décodage `b64_json` ou flux HTTP `url`, et détection sécurisée du format d'image.
+    - Ajout du champ `model` dans le schéma `CreateImage` avec assainissement.
+    - Exposition dynamique dans `/api/config` des `image_models` filtrés selon les clés API configurées (`has_ideogram`, `has_openrouter`), et activation de la fonctionnalité `image_generation` si au moins un fournisseur est actif.
+    - Préfixage des fichiers sauvegardés selon le modèle sélectionné (ex: `ideogram-xxxx`, `gemini-3-pro-image-xxxx`, `flux-3-image-xxxx`).
+  - **Interface utilisateur du Studio Image** (`frontend/components/image-studio-modal.tsx`, `frontend/app/globals.css`, `frontend/lib/api.ts`) :
+    - Ajout du type `ImageModel` et mise à jour de `Config` dans `frontend/lib/api.ts`.
+    - Sélecteur de modèle dédié pour la génération d'images affichant le badge fournisseur (Ideogram API ou OpenRouter API).
+    - Transmission du modèle sélectionné (`generationModel`) lors de la génération.
+    - Bouton de génération dynamique affichant le modèle actif (« Générer avec Google Gemini 3 Pro Image », « Générer avec Ideogram v2 », etc.).
+    - Entête actualisé en « STUDIO CRÉATIF · MULTI-MODÈLES ».
+  - **Déploiement et tests** :
+    - 220/220 tests unitaires et d'intégration validés (avec tests spécifiques d'image OpenRouter en base64 et tests d'API multi-modèles).
+    - Validation TypeScript frontend (0 erreur) et compilation de production Next.js réussie.
+    - Conteneurs `tchataiperso-clair-api-1` et `tchataiperso-clair-web-1` redémarrés et sains.
+    - Tests directs en conditions réelles validés avec succès sur `google/gemini-2.5-flash-image` (1.56 Mo PNG) et `google/gemini-3-pro-image` (1.82 Mo PNG en format 16:9).
+- Fichiers modifiés :
+  - `backend/app/config.py`, `backend/app/schemas.py`, `backend/app/providers.py`, `backend/app/main.py`.
+  - `backend/tests/test_api.py`, `backend/tests/test_providers.py`.
+  - `frontend/lib/api.ts`, `frontend/components/image-studio-modal.tsx`, `frontend/app/globals.css`.
+  - `HANDOFF.md`.
+- Vérifications exécutées :
+  - Compilation Python : 0 erreur (`python3 -m py_compile backend/app/*.py backend/tests/*.py`).
+  - Suite complète backend : 220/220 tests passés avec succès (`docker exec ... pytest /home/app/tests`).
+  - Validation TypeScript frontend : 0 erreur (`npm --prefix frontend run typecheck`).
+  - Compilation de production Next.js : succès (`npm --prefix frontend run build`).
+  - Test en direct avec Google Gemini 2.5 Flash Image : statut 200 OK, image PNG de 1 565 198 octets générée.
+  - Test en direct avec Google Gemini 3 Pro Image (Imagen 3) : statut 200 OK, image PNG de 1 821 284 octets générée en 16:9.
+  - Absence totale de secrets/clés API dans le diff Git.
+- Problèmes connus : aucun.
+- Prochaine action : ouvrir le Studio Image, sélectionner dans la liste déroulante un modèle Google Imagen (ou FLUX, OpenAI, Ideogram), entrer un prompt et générer votre création.
+
+---
+
 # Relais — 23 octobre 2026 (Ideogram auto selection /v2/image/generate/auto & prompt négatif)
 
 - Réalisé :

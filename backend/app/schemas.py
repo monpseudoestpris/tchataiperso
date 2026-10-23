@@ -218,6 +218,7 @@ class CreateImage(BaseModel):
     prompt: str = Field(min_length=1, max_length=4000)
     aspect_ratio: str = "1:1"
     negative_prompt: str | None = Field(default=None, max_length=2000)
+    model: str = Field(default="ideogram", max_length=150)
 
     @field_validator("prompt")
     @classmethod
@@ -234,6 +235,13 @@ class CreateImage(BaseModel):
             return None
         cleaned = value.strip()
         return cleaned or None
+
+    @field_validator("model")
+    @classmethod
+    def sanitize_image_model(cls, value: str | None) -> str:
+        if not value or not value.strip():
+            return "ideogram"
+        return value.strip()
 
 
 class ImproveImagePrompt(BaseModel):

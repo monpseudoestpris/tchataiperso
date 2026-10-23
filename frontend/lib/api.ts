@@ -1,8 +1,11 @@
 export type Model = { id: string; name: string; vision: boolean };
+export type ImageModel = { id: string; name: string; provider: "ideogram" | "openrouter" };
 export type Config = {
   models: Model[];
   default_model: string;
   image_prompt_model?: string;
+  image_models?: ImageModel[];
+  default_image_model?: string;
   themes?: string[];
   features: { chat: boolean; web_search: boolean; ocr: boolean; image_generation: boolean };
   search_providers?: string[];
