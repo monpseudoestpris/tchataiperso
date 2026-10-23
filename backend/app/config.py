@@ -75,6 +75,7 @@ class Settings(BaseSettings):
     summary_model: str = "openai/gpt-4o-mini"
     search_query_model: str = "mistralai/mistral-small-3.2-24b-instruct"
     blog_model: str = "google/gemini-3.5-flash-lite"
+    image_prompt_model: str = "openai/gpt-6-luna"
 
     @field_validator("llm_api_key", "brave_api_key", "mistral_api_key", "ideogram_api_key", "eod_historical_data_key", mode="before")
     @classmethod

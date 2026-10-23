@@ -38,6 +38,7 @@ services:
       IDEOGRAM_API_KEY: ${IDEOGRAM_API_KEY:-}
       EOD_HISTORICAL_DATA_KEY: ${EOD_HISTORICAL_DATA_KEY:-}
       BLOG_MODEL: ${BLOG_MODEL:-google/gemini-3.5-flash-lite}
+      IMAGE_PROMPT_MODEL: ${IMAGE_PROMPT_MODEL:-openai/gpt-6-luna}
       # scripts/compose.sh --lan y ajoute l'origine http://<IP-LAN>:3001.
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3001,http://127.0.0.1:3001}
     volumes:

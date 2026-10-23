@@ -379,6 +379,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"models": settings.models, "default_model": settings.default_model, "demo_mode": settings.demo_mode,
                 "themes": list(CONVERSATION_THEMES),
                 "search_providers": search_providers,
+                "image_prompt_model": settings.image_prompt_model,
                 "features": {"chat": settings.demo_mode or settings.enabled(settings.llm_api_key),
                              "web_search": settings.web_search_enabled,
                              "ocr": settings.enabled(settings.mistral_api_key),
@@ -1232,8 +1233,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def improve_image(body: ImproveImagePrompt, user: User = Depends(current_user)):
         if settings.demo_mode or not settings.enabled(settings.llm_api_key):
             raise HTTPException(503, "L'amélioration du prompt nécessite une clé LLM_API_KEY et le mode IA réel")
+        model = (body.model.strip() if body.model and body.model.strip() else None) or settings.image_prompt_model or settings.default_model
         try:
-            prompt = await providers.improve_image_prompt(settings, settings.default_model, body.prompt)
+            prompt = await providers.improve_image_prompt(settings, model, body.prompt, body.style_keywords, body.negative_prompt)
         except providers.ProviderError as exc:
             raise HTTPException(502, str(exc)) from exc
         return {"prompt": prompt}
@@ -1252,7 +1254,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await lock.acquire()
         path = None
         try:
-            content, mime = await providers.generate_image(settings, body.prompt, body.aspect_ratio)
+            content, mime = await providers.generate_image(settings, body.prompt, body.aspect_ratio, body.negative_prompt)
             storage_name = str(uuid4())
             path = upload_dir / storage_name
             path.write_bytes(content)
@@ -1314,7 +1316,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             with sessions() as db:
                 get_conversation(db, conversation_id, user.id)
-            content, mime = await providers.generate_image(settings, body.prompt, body.aspect_ratio)
+            content, mime = await providers.generate_image(settings, body.prompt, body.aspect_ratio, body.negative_prompt)
             storage_name = str(uuid4())
             path = upload_dir / storage_name
             path.write_bytes(content)

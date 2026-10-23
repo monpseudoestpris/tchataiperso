@@ -2,8 +2,8 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
-  Check, CircleAlert, Copy, Download, Expand, ExternalLink, ImagePlus,
-  LoaderCircle, Minimize2, RotateCcw, Sparkles, Trash2, WandSparkles, X,
+  Ban, Check, CircleAlert, Copy, Download, Expand, ExternalLink, ImagePlus,
+  LoaderCircle, Minimize2, RotateCcw, SlidersHorizontal, Sparkles, Trash2, WandSparkles, X,
 } from "lucide-react";
 import { api, errorMessage, type Config, type GeneratedImage } from "@/lib/api";
 
@@ -31,6 +31,35 @@ const STYLE_CATEGORIES: { id: StyleCategory; label: string }[] = [
   { id: "photo", label: "Photo & Cinéma" },
   { id: "art", label: "Illustration & Art" },
   { id: "digital", label: "3D, Pop & Rétro" },
+];
+
+const SUGGESTED_STYLE_KEYWORDS = [
+  "familial (pour une affiche)",
+  "vaporeux",
+  "terrifiant",
+  "rouge",
+  "cinématique",
+  "sombre & dramatique",
+  "lumineux & solaire",
+  "rétrofuturiste",
+  "cyberpunk",
+  "aquarelle",
+  "pastel doux",
+  "minimaliste",
+  "vintage 70s",
+  "noir et blanc",
+  "vue du ciel"
+];
+
+const SUGGESTED_NEGATIVE_PROMPTS = [
+  "flou & basse qualité",
+  "texte & filigrane",
+  "mauvaise anatomie",
+  "membres déformés",
+  "visage asymétrique",
+  "bruit excessif",
+  "grain lourd",
+  "couleurs ternes",
 ];
 
 const STYLE_PRESETS: StylePreset[] = [
@@ -238,7 +267,58 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
   const [error, setError] = useState("");
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [zoomed, setZoomed] = useState(false);
+  const [styleKeywords, setStyleKeywords] = useState("");
+  const [negativePrompt, setNegativePrompt] = useState("");
   const promptRef = useRef<HTMLTextAreaElement>(null);
+
+  function toggleNegativePrompt(tag: string) {
+    if (busy) return;
+    setNegativePrompt(current => {
+      const items = current
+        .split(",")
+        .map(s => s.trim())
+        .filter(Boolean);
+      const existsIndex = items.findIndex(item => item.toLowerCase() === tag.toLowerCase());
+      if (existsIndex >= 0) {
+        items.splice(existsIndex, 1);
+      } else {
+        items.push(tag);
+      }
+      return items.join(", ");
+    });
+  }
+
+  function toggleStyleKeyword(tag: string) {
+    if (busy) return;
+    setStyleKeywords(current => {
+      const items = current
+        .split(",")
+        .map(s => s.trim())
+        .filter(Boolean);
+      const existsIndex = items.findIndex(item => item.toLowerCase() === tag.toLowerCase());
+      if (existsIndex >= 0) {
+        items.splice(existsIndex, 1);
+      } else {
+        items.push(tag);
+      }
+      return items.join(", ");
+    });
+  }
+
+  const preferredModel =
+    config?.image_prompt_model ||
+    (config?.models?.some(m => m.id === "openai/gpt-6-luna") ? "openai/gpt-6-luna" : config?.default_model || "openai/gpt-6-luna");
+  const [improveModel, setImproveModel] = useState<string>(preferredModel);
+
+  useEffect(() => {
+    if (config?.image_prompt_model) {
+      setImproveModel(config.image_prompt_model);
+    } else if (config?.models?.some(m => m.id === "openai/gpt-6-luna")) {
+      setImproveModel("openai/gpt-6-luna");
+    } else if (config?.default_model) {
+      setImproveModel(config.default_model);
+    }
+  }, [config?.image_prompt_model, config?.default_model, config?.models]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -272,7 +352,12 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
     try {
       const result = await api<{ prompt: string }>("/images/improve", {
         method: "POST",
-        body: JSON.stringify({ prompt: original }),
+        body: JSON.stringify({
+          prompt: original,
+          model: improveModel,
+          style_keywords: styleKeywords.trim() || undefined,
+          negative_prompt: negativePrompt.trim() || undefined,
+        }),
       });
       setPreviousPrompt(original);
       setPrompt(result.prompt);
@@ -304,7 +389,11 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
     try {
       const created = await api<GeneratedImage>("/images", {
         method: "POST",
-        body: JSON.stringify({ prompt: prompt.trim(), aspect_ratio: aspectRatio }),
+        body: JSON.stringify({
+          prompt: prompt.trim(),
+          aspect_ratio: aspectRatio,
+          negative_prompt: negativePrompt.trim() || undefined,
+        }),
       });
       setImages(current => [created, ...current]);
       setSelectedId(created.id);
@@ -444,6 +533,106 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
                 }}
               />
 
+              <div className="image-keywords-section">
+                <div className="image-keywords-header">
+                  <div className="image-keywords-title">
+                    <SlidersHorizontal size={12} />
+                    <span>Mots-clés de style & ambiance</span>
+                    <span className="image-keywords-badge">guidage IA</span>
+                  </div>
+                  {styleKeywords.trim() && (
+                    <button
+                      type="button"
+                      className="image-keywords-clear"
+                      onClick={() => setStyleKeywords("")}
+                      disabled={!!busy}
+                    >
+                      Effacer
+                    </button>
+                  )}
+                </div>
+                <input
+                  type="text"
+                  className="image-keywords-input"
+                  value={styleKeywords}
+                  onChange={e => setStyleKeywords(e.target.value)}
+                  placeholder="Ex : familial (pour une affiche), vaporeux, terrifiant, rouge..."
+                  disabled={!!busy}
+                  maxLength={300}
+                />
+                <div className="image-keywords-chips" aria-label="Suggestions de style">
+                  {SUGGESTED_STYLE_KEYWORDS.map(tag => {
+                    const active = styleKeywords
+                      .split(",")
+                      .map(s => s.trim().toLowerCase())
+                      .includes(tag.toLowerCase());
+                    return (
+                      <button
+                        key={tag}
+                        type="button"
+                        className={`image-keyword-chip ${active ? "is-active" : ""}`}
+                        onClick={() => toggleStyleKeyword(tag)}
+                        disabled={!!busy}
+                        title={active ? `Retirer « ${tag} »` : `Ajouter « ${tag} »`}
+                      >
+                        {active && <Check size={10} />}
+                        <span>{tag}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="image-negative-section">
+                <div className="image-negative-header">
+                  <div className="image-negative-title">
+                    <Ban size={12} />
+                    <span>Prompt négatif (ce qu’on ne veut pas)</span>
+                    <span className="image-negative-badge">exclusion</span>
+                  </div>
+                  {negativePrompt.trim() && (
+                    <button
+                      type="button"
+                      className="image-negative-clear"
+                      onClick={() => setNegativePrompt("")}
+                      disabled={!!busy}
+                    >
+                      Effacer
+                    </button>
+                  )}
+                </div>
+                <input
+                  type="text"
+                  className="image-negative-input"
+                  value={negativePrompt}
+                  onChange={e => setNegativePrompt(e.target.value)}
+                  placeholder="Ex : flou, texte, filigrane, membres déformés, basse qualité, mauvaise anatomie..."
+                  disabled={!!busy}
+                  maxLength={2000}
+                />
+                <div className="image-negative-chips" aria-label="Suggestions d'exclusions">
+                  {SUGGESTED_NEGATIVE_PROMPTS.map(tag => {
+                    const active = negativePrompt
+                      .split(",")
+                      .map(s => s.trim().toLowerCase())
+                      .includes(tag.toLowerCase());
+                    return (
+                      <button
+                        key={tag}
+                        type="button"
+                        className={`image-negative-chip ${active ? "is-active" : ""}`}
+                        onClick={() => toggleNegativePrompt(tag)}
+                        disabled={!!busy}
+                        title={active ? `Retirer « ${tag} »` : `Exclure « ${tag} »`}
+                      >
+                        {active && <Check size={10} />}
+                        <span>{tag}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
               <div className="image-studio-prompt-tools">
                 <button
                   type="button"
@@ -452,13 +641,31 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
                   onClick={() => void improvePrompt()}
                   title={
                     config?.features.chat && !config.demo_mode
-                      ? "Enrichir les détails visuels, la lumière et la composition avec l’IA"
+                      ? `Enrichir les détails visuels, la lumière et la composition avec ${config?.models?.find(m => m.id === improveModel)?.name || "l'IA"}`
                       : "Nécessite LLM_API_KEY et le mode IA réel"
                   }
                 >
                   {busy === "improve" ? <LoaderCircle className="spin" size={15} /> : <WandSparkles size={15} />}
                   <span>{busy === "improve" ? "Amélioration en cours…" : "Améliorer le prompt"}</span>
                 </button>
+                {config?.models && config.models.length > 0 && (
+                  <div className="image-model-selector-wrapper" title="Modèle d'IA utilisé pour enrichir le prompt">
+                    <Sparkles size={12} className="image-model-icon" />
+                    <select
+                      className="image-model-select"
+                      value={improveModel}
+                      onChange={e => setImproveModel(e.target.value)}
+                      disabled={!!busy}
+                      aria-label="Modèle IA d'amélioration de prompt"
+                    >
+                      {config.models.map(m => (
+                        <option key={m.id} value={m.id}>
+                          {m.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 {previousPrompt !== null && (
                   <button
                     type="button"

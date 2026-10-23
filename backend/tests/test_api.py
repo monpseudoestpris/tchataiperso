@@ -667,7 +667,7 @@ def test_oversize_image_is_rejected_before_ocr(client, settings, monkeypatch):
 def test_mock_image_generation_saved_in_history(tmp_path, monkeypatch):
     settings = Settings(_env_file=None, app_data_dir=tmp_path, ideogram_api_key="image", demo_mode=False)
 
-    async def generate(_settings, prompt, ratio):
+    async def generate(_settings, prompt, ratio, negative_prompt=None):
         assert prompt == "Un chat" and ratio == "1:1"
         return b"image-data", "image/png"
 
@@ -685,13 +685,19 @@ def test_mock_image_generation_saved_in_history(tmp_path, monkeypatch):
 def test_dedicated_image_studio_gallery_improve_download_and_delete(tmp_path, monkeypatch):
     settings = Settings(_env_file=None, app_data_dir=tmp_path, ideogram_api_key="image", llm_api_key="llm", demo_mode=False)
 
-    async def improve(_settings, model, prompt):
+    async def improve(_settings, model, prompt, style_keywords=None, negative_prompt=None):
         assert prompt == "Un renard"
+        if style_keywords:
+            return f"Un renard roux style {style_keywords}"
+        if negative_prompt:
+            return f"Un renard roux sans {negative_prompt}"
         return "Un renard roux dans une forêt enneigée au lever du soleil, lumière dorée"
 
-    async def generate(_settings, prompt, ratio):
+    async def generate(_settings, prompt, ratio, negative_prompt=None):
         assert prompt == "Un renard roux dans une forêt enneigée au lever du soleil, lumière dorée"
         assert ratio == "16:9"
+        if negative_prompt:
+            assert negative_prompt == "flou"
         return b"\x89PNG\r\n\x1a\nstudio-image", "image/png"
 
     monkeypatch.setattr(providers, "improve_image_prompt", improve)
@@ -701,7 +707,11 @@ def test_dedicated_image_studio_gallery_improve_download_and_delete(tmp_path, mo
         assert improved.status_code == 200
         assert improved.json() == {"prompt": "Un renard roux dans une forêt enneigée au lever du soleil, lumière dorée"}
 
-        created = client.post("/api/images", json={"prompt": improved.json()["prompt"], "aspect_ratio": "16:9"})
+        with_style = client.post("/api/images/improve", json={"prompt": "Un renard", "style_keywords": "vaporeux, terrifiant"})
+        assert with_style.status_code == 200
+        assert with_style.json() == {"prompt": "Un renard roux style vaporeux, terrifiant"}
+
+        created = client.post("/api/images", json={"prompt": improved.json()["prompt"], "aspect_ratio": "16:9", "negative_prompt": "flou"})
         assert created.status_code == 201
         item = created.json()
         assert item["aspect_ratio"] == "16:9"

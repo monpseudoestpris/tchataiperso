@@ -221,6 +221,21 @@ def test_improve_image_prompt_returns_enriched_visual_prompt(settings, transport
     assert result == "Un phare isolé sur une falaise rocheuse sous un orage dramatique, photographie cinématographique."
 
 
+def test_improve_image_prompt_integrates_style_keywords(settings, transport):
+    def handler(request):
+        payload = json.loads(request.content)
+        assert payload["model"] == "configured/model"
+        assert "DIRECTIVE MAJEURE DE STYLE ET D'AMBIANCE" in payload["messages"][0]["content"]
+        assert "familial (pour une affiche), vaporeux, terrifiant, rouge" in payload["messages"][0]["content"]
+        assert "familial (pour une affiche), vaporeux, terrifiant, rouge" in payload["messages"][1]["content"]
+        assert "Un chat astronaute" in payload["messages"][1]["content"]
+        return httpx.Response(200, json={"choices": [{"message": {"content": "Un chat astronaute terrifiant et vaporeux aux reflets rouge écarlate dans un style d'affiche familiale."}}]})
+
+    transport(handler)
+    result = asyncio.run(providers.improve_image_prompt(settings, "configured/model", "Un chat astronaute", style_keywords="familial (pour une affiche), vaporeux, terrifiant, rouge"))
+    assert result == "Un chat astronaute terrifiant et vaporeux aux reflets rouge écarlate dans un style d'affiche familiale."
+
+
 def test_brave_filters_unsafe_links_and_returns_text_sources(settings, transport):
     def handler(request):
         assert request.url.host == "api.search.brave.com"
@@ -736,9 +751,10 @@ def test_ideogram_uses_multipart_then_downloads_without_api_key_or_dns(settings,
         requests.append(request)
         if request.url.host == "api.ideogram.ai":
             assert request.method == "POST"
+            assert request.url.path == "/v2/image/generate/auto"
             assert request.headers["api-key"] == "fake-ideogram-secret"
             assert multipart_fields(request) == {
-                "prompt": "Un renard dans la neige", "aspect_ratio": "16x9", "rendering_speed": "TURBO",
+                "prompt": "Un renard dans la neige", "aspect_ratio": "16x9",
             }
             return httpx.Response(200, json={"data": [{"url": "https://images.example/image.png?signature=example"}]})
         assert request.method == "GET"
@@ -749,6 +765,22 @@ def test_ideogram_uses_multipart_then_downloads_without_api_key_or_dns(settings,
 
     transport(handler)
     assert asyncio.run(providers.generate_image(settings, "Un renard dans la neige", "16:9")) == (png, "image/png")
+    assert len(requests) == 2
+
+    requests.clear()
+    def handler_neg(request):
+        requests.append(request)
+        if request.url.host == "api.ideogram.ai":
+            assert request.method == "POST"
+            assert request.url.path == "/v2/image/generate/auto"
+            assert multipart_fields(request) == {
+                "prompt": "Un chat", "aspect_ratio": "1x1", "negative_prompt": "flou, déformé",
+            }
+            return httpx.Response(200, json={"data": [{"url": "https://images.example/image.png?signature=example"}]})
+        return httpx.Response(200, headers={"content-type": "image/png"}, stream=Chunks(png[:10], png[10:]))
+
+    transport(handler_neg)
+    assert asyncio.run(providers.generate_image(settings, "Un chat", "1:1", negative_prompt="flou, déformé")) == (png, "image/png")
     assert len(requests) == 2
 
 

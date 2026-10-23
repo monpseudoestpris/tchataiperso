@@ -1,3 +1,109 @@
+# Relais — 23 octobre 2026 (Ideogram auto selection /v2/image/generate/auto & prompt négatif)
+
+- Réalisé :
+  - **Migration vers la sélection automatique de modèle Ideogram** (`backend/app/providers.py`) :
+    - Remplacement de l'endpoint vers `https://api.ideogram.ai/v2/image/generate/auto` (spécification officielle Ideogram pour la sélection automatique du meilleur modèle selon le contenu du prompt).
+    - Transmission de `prompt`, `aspect_ratio` et du paramètre optionnel `negative_prompt`.
+  - **Prise en charge du prompt négatif (éléments à exclure)** :
+    - Ajout du champ `negative_prompt: str | None = Field(default=None, max_length=2000)` dans `CreateImage` et `ImproveImagePrompt` (`backend/app/schemas.py`).
+    - Prise en charge dans les endpoints `/api/images`, `/api/conversations/{id}/images` et `/api/images/improve` (`backend/app/main.py`).
+    - Intégration de la consigne d'exclusion dans `improve_image_prompt` (`backend/app/providers.py`) afin que GPT-6 Luna éloigne également la description positive des éléments rejetés.
+    - Transmission directe de `negative_prompt` au générateur Ideogram lors de la génération.
+  - **Interface utilisateur du Studio Image** (`frontend/components/image-studio-modal.tsx`, `frontend/app/globals.css`) :
+    - Ajout d'une section dédiée ambrée « Prompt négatif (ce qu'on ne veut pas) » avec icône d'interdiction `Ban`, champ de saisie libre et bouton d'effacement.
+    - Suggestions rapides d'exclusions cliquables : `flou & basse qualité`, `texte & filigrane`, `mauvaise anatomie`, `membres déformés`, `visage asymétrique`, `bruit excessif`, `grain lourd`, `couleurs ternes`.
+    - Transmission de `negative_prompt` lors de la génération et de l'amélioration de prompt.
+  - **Déploiement et tests** :
+    - Fichiers backend synchronisés et conteneurs redémarrés.
+    - Validation directe en conditions réelles de l'endpoint Ideogram `/v2/image/generate/auto` (avec `dry_run=true`, réponse 200 OK avec devis tarifaire validé).
+    - 218/218 tests unitaires et d'intégration validés.
+- Fichiers modifiés :
+  - `backend/app/schemas.py`, `backend/app/providers.py`, `backend/app/main.py`.
+  - `backend/tests/test_providers.py`, `backend/tests/test_api.py`.
+  - `frontend/components/image-studio-modal.tsx`, `frontend/app/globals.css`.
+  - `HANDOFF.md`.
+- Vérifications exécutées :
+  - Compilation Python : 0 erreur (`python3 -m py_compile backend/app/*.py backend/tests/*.py`).
+  - Suite complète backend : 218/218 tests passés avec succès (`docker exec ... pytest tests/`).
+  - Validation TypeScript frontend : 0 erreur (`npm --prefix frontend run typecheck`).
+  - Compilation de production Next.js : succès (`npm --prefix frontend run build`).
+  - Test en direct avec la clé Ideogram sur `https://api.ideogram.ai/v2/image/generate/auto?dry_run=true` : statut 200 OK (`price_quote`).
+  - Vérification de l'absence totale de secrets/clés API dans le diff Git.
+- Problèmes connus : aucun.
+- Prochaine action : ouvrir le Studio Image, saisir un sujet et des éléments indésirables dans le « Prompt négatif », puis générer l'image avec la sélection automatique Ideogram.
+
+---
+
+# Relais — 23 octobre 2026 (mots-clés de style & guidage d'amélioration d'image avec GPT-6 Luna)
+
+- Réalisé :
+  - **Prise en charge des mots-clés de style & d'ambiance dans l'amélioration de prompt d'image** :
+    - Mise à jour du schéma backend `ImproveImagePrompt` (`backend/app/schemas.py`) avec le champ facultatif `style_keywords: str | None = Field(default=None, max_length=500)` et assainissement.
+    - Transmission de `style_keywords` dans l'endpoint `/api/images/improve` (`backend/app/main.py`).
+    - Intégration prioritaire dans les directives système de `providers.improve_image_prompt` (`backend/app/providers.py`) : directive majeure exigeant d'incarner fidèlement les mots-clés (ex: familial pour une affiche, vaporeux, terrifiant, rouge...) dans la composition, les dominantes de couleur, la lumière et l'émotion de la scène.
+    - Ajout de tests unitaires dédiés (`backend/tests/test_providers.py`, `backend/tests/test_api.py`) validant l'intégration des mots-clés et leur transmission.
+  - **Interface utilisateur dédiée aux mots-clés de style dans le Studio Image** (`frontend/components/image-studio-modal.tsx`, `frontend/app/globals.css`) :
+    - Ajout d'une section stylisée « Mots-clés de style & ambiance (guidage IA) » avec champ de saisie libre (`placeholder` suggérant les exemples demandés).
+    - Bouton rapide d'effacement (« Effacer ») lorsque du texte est saisi.
+    - Badges cliquables / suggestions rapides : `familial (pour une affiche)`, `vaporeux`, `terrifiant`, `rouge`, `cinématique`, `sombre & dramatique`, `lumineux & solaire`, `rétrofuturiste`, `cyberpunk`, `aquarelle`, `pastel doux`, `minimaliste`, `vintage 70s`.
+    - Clic interactif pour activer/désactiver ou ajouter/retirer un mot-clé de la liste séparée par des virgules.
+    - Envoi synchronisé de `style_keywords` lors du clic sur « Améliorer le prompt ».
+  - **Déploiement et tests** :
+    - Build de production Next.js regénéré et déployé dans `tchataiperso-clair-web-1`.
+    - Fichiers backend synchronisés et conteneurs redémarrés.
+    - Test direct en conditions réelles avec GPT-6 Luna : validation de l'intégration simultanée de « familial (pour une affiche) », « vaporeux » et « rouge » dans une description riche de 1492 caractères.
+- Fichiers modifiés :
+  - `backend/app/schemas.py`, `backend/app/providers.py`, `backend/app/main.py`.
+  - `backend/tests/test_providers.py`, `backend/tests/test_api.py`.
+  - `frontend/components/image-studio-modal.tsx`, `frontend/app/globals.css`.
+  - `HANDOFF.md`.
+- Vérifications exécutées :
+  - Compilation Python sans erreur (`python3 -m py_compile backend/app/*.py backend/tests/*.py`).
+  - Suite complète backend : 218/218 tests passés avec succès (`docker exec ... pytest tests/`).
+  - Validation TypeScript frontend : 0 erreur (`npm --prefix frontend run typecheck`).
+  - Compilation de production Next.js : succès (`npm --prefix frontend run build`).
+  - Test en direct avec GPT-6 Luna combinant « groupe d'aventuriers dans une forêt » avec les mots-clés `familial (pour une affiche), vaporeux, rouge` (1492 caractères, directives respectées).
+  - Absence de tout secret ou clé API dans le diff Git.
+- Problèmes connus : aucun.
+- Prochaine action : ouvrir le Studio Image, saisir un sujet ainsi que des mots-clés de style (ou cliquer sur les badges rapides), puis cliquer sur « Améliorer le prompt » pour visualiser la composition générée par GPT-6 Luna.
+
+---
+
+# Relais — 23 octobre 2026 (amélioration des prompts studio image & modèle GPT-6 Luna)
+
+- Réalisé :
+  - **Refonte de l'amélioration de prompt dans le Studio Image** (`backend/app/providers.py`) :
+    - Élaboration de directives système expertes pour générer des prompts complets, denses et exhaustifs (100 à 250 mots) décrivant systématiquement : sujet principal et matières, environnement et arrière-plan immersifs, cadrage cinématographique et composition, éclairage volumétrique et ombres, palette de couleurs et textures, style artistique et rendu technique (photographique 35mm f/1.4, 3D Octane / Unreal Engine 5, piqué 8k), ainsi que la préservation stricte entre guillemets du texte souhaité.
+    - Hausse du plafond de complétion (`max_tokens: 1400`) et ajustement de la température (`0.7`) pour une description visuelle riche et vivante.
+    - Nettoyage automatique des préambules (« Voici le prompt... ») et balises superflues.
+    - Mécanisme de secours (fallback) automatique vers `default_model` en cas d'erreur statut (400, 404, 422) sur le modèle sélectionné.
+  - **Intégration du modèle dédié GPT-6 Luna (`openai/gpt-6-luna`)** :
+    - Ajout du paramètre `image_prompt_model: str = "openai/gpt-6-luna"` dans `backend/app/config.py`, `.env` et `compose.yaml`.
+    - Support du modèle configurable dans `ImproveImagePrompt` (`backend/app/schemas.py`) et transmission dynamique via `backend/app/main.py`.
+    - Exposition de `image_prompt_model` dans l'endpoint `/api/config`.
+  - **Sélecteur de modèle et expérience utilisateur dans le Studio Image** (`frontend/components/image-studio-modal.tsx`, `frontend/app/globals.css`, `frontend/lib/api.ts`) :
+    - Intégration d'un sélecteur de modèle dédié à côté du bouton « Améliorer le prompt », pré-sélectionnant automatiquement GPT-6 Luna tout en permettant de basculer vers un autre modèle de la configuration.
+    - Bulle d'aide contextualisée indiquant le modèle actif utilisé pour l'amélioration.
+  - **Déploiement et tests** :
+    - Validation directe en conditions réelles avec `openai/gpt-6-luna` sur OpenRouter via `improve_image_prompt` (génération d'un prompt complet et soigné de 1468 caractères).
+    - Fichiers backend synchronisés et conteneurs `tchataiperso-clair-api-1` et `tchataiperso-clair-web-1` mis à jour et sains.
+- Fichiers modifiés :
+  - `backend/app/config.py`, `backend/app/main.py`, `backend/app/providers.py`, `backend/app/schemas.py`.
+  - `compose.yaml`, `.env`.
+  - `frontend/components/image-studio-modal.tsx`, `frontend/lib/api.ts`, `frontend/app/globals.css`.
+  - `HANDOFF.md`.
+- Vérifications exécutées :
+  - Compilation Python sans erreur (`python3 -m py_compile backend/app/*.py backend/tests/*.py`).
+  - Suite complète backend : 217/217 tests passés avec succès (`docker exec ... pytest tests/`).
+  - Validation TypeScript frontend : 0 erreur (`npm --prefix frontend run typecheck`).
+  - Compilation de production Next.js : succès (`npm --prefix frontend run build`).
+  - Test en direct de l'API avec GPT-6 Luna : validation de l'amélioration d'un prompt court (« un petit robot jardinier » -> description visuelle complète de 1468 caractères).
+  - Vérification de l'absence totale de secrets/clés API dans le diff Git.
+- Problèmes connus : aucun.
+- Prochaine action : ouvrir le Studio Image, saisir un sujet et cliquer sur « Améliorer le prompt » pour constater le prompt complet généré par GPT-6 Luna.
+
+---
+
 # Relais — 22 octobre 2026 (correction mode finances, Air Liquide, EODHD & Yahoo Finance)
 
 - Réalisé :

@@ -217,6 +217,7 @@ class ImproveSkillPrompt(BaseModel):
 class CreateImage(BaseModel):
     prompt: str = Field(min_length=1, max_length=4000)
     aspect_ratio: str = "1:1"
+    negative_prompt: str | None = Field(default=None, max_length=2000)
 
     @field_validator("prompt")
     @classmethod
@@ -226,9 +227,20 @@ class CreateImage(BaseModel):
             raise ValueError("Le prompt ne peut pas être vide")
         return value
 
+    @field_validator("negative_prompt")
+    @classmethod
+    def sanitize_negative_prompt(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
 
 class ImproveImagePrompt(BaseModel):
     prompt: str = Field(min_length=1, max_length=4000)
+    model: str | None = Field(default=None, max_length=150)
+    style_keywords: str | None = Field(default=None, max_length=500)
+    negative_prompt: str | None = Field(default=None, max_length=2000)
 
     @field_validator("prompt")
     @classmethod
@@ -237,6 +249,14 @@ class ImproveImagePrompt(BaseModel):
         if not value:
             raise ValueError("Le prompt ne peut pas être vide")
         return value
+
+    @field_validator("model", "style_keywords", "negative_prompt")
+    @classmethod
+    def sanitize_optional_str(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
 
 
 class CreateBlog(BaseModel):
