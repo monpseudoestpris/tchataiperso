@@ -36,7 +36,10 @@ services:
       BRAVE_API_KEY: ${BRAVE_API_KEY:-}
       MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
       IDEOGRAM_API_KEY: ${IDEOGRAM_API_KEY:-}
+      EOD_HISTORICAL_DATA_KEY: ${EOD_HISTORICAL_DATA_KEY:-}
       BLOG_MODEL: ${BLOG_MODEL:-google/gemini-3.5-flash-lite}
+      # scripts/compose.sh --lan y ajoute l'origine http://<IP-LAN>:3001.
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3001,http://127.0.0.1:3001}
     volumes:
       - uploads_data:/app/data
       - ./.env:/app/.env:ro
@@ -62,8 +65,10 @@ services:
     environment:
       BACKEND_URL: http://clair-api:8001
       NODE_ENV: production
+      ALLOWED_DEV_ORIGINS: ${ALLOWED_DEV_ORIGINS:-}
     ports:
-      - "127.0.0.1:3001:3001"
+      # WEB_BIND=0.0.0.0 (scripts/compose.sh --lan) expose le site au réseau local.
+      - "${WEB_BIND:-127.0.0.1}:3001:3001"
     depends_on:
       clair-api:
         condition: service_healthy

@@ -140,6 +140,7 @@ class SendMessage(BaseModel):
     web_search: bool = False
     deep_search: bool = False
     code_mode: bool = False
+    finance_mode: bool = False
     attachment_ids: list[str] = Field(default_factory=list, max_length=5)
     skill_ids: list[str] = Field(default_factory=list, max_length=10)
 

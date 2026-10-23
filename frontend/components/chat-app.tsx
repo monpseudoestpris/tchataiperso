@@ -4,7 +4,7 @@ import {
   ArrowDown, ArrowUp, BookOpen, Brain, Check, ChevronDown, ChevronLeft, ChevronRight,
   CircleAlert, Code2, Compass, Copy, ExternalLink, FileCode2, FileText, FolderArchive,
   Globe2, ImagePlus, Link2, LoaderCircle, LogOut, Menu, MessageCircle, Newspaper, PanelLeftClose, Paperclip,
-  Pencil, Plus, Search, RefreshCw, Shield, Sparkles, Square, SquarePlay, Trash2, WandSparkles, X,
+  Pencil, Plus, Search, RefreshCw, Shield, Sparkles, Square, SquarePlay, Trash2, TrendingUp, WandSparkles, X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
@@ -124,12 +124,12 @@ function IconButton({ label, children, className = "", ...props }: { label: stri
   return <button type="button" className={`icon-button ${className}`} aria-label={label} title={label} {...props}>{children}</button>;
 }
 
-function AttachmentAnalysis({ attachment }: { attachment: Attachment }) {
+function AttachmentAnalysis({ attachment, isFinance }: { attachment: Attachment; isFinance?: boolean }) {
   const [extraction, setExtraction] = useState<DocumentExtraction | null>();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [pageIndex, setPageIndex] = useState(0);
-  const [rawText, setRawText] = useState(true);
+  const [rawText, setRawText] = useState(!isFinance);
   async function load() {
     setLoading(true); setError("");
     try {
@@ -139,10 +139,13 @@ function AttachmentAnalysis({ attachment }: { attachment: Attachment }) {
     finally { setLoading(false); }
   }
   const page = extraction?.pages[pageIndex];
-  return <details className="attachment-analysis" onToggle={event => {
+  return <details className={`attachment-analysis ${isFinance ? "finance-analysis" : ""}`} onToggle={event => {
     if (event.currentTarget.open && extraction === undefined && !loading && !error) void load();
   }}>
-    <summary><BookOpen size={14} />Contenu extrait{attachment.page_count ? <span>{attachment.page_count} p.</span> : null}</summary>
+    <summary>
+      {isFinance ? <TrendingUp size={14} /> : <BookOpen size={14} />}
+      {isFinance ? "Données financières détaillées Yahoo Finance (valorisation, bilan, historique des cours)" : <>Contenu extrait{attachment.page_count ? <span>{attachment.page_count} p.</span> : null}</>}
+    </summary>
     {loading && <p className="analysis-status" role="status"><LoaderCircle size={14} className="spin" />Chargement de l’analyse…</p>}
     {error && <div className="analysis-status" role="alert"><p>{error}</p><IconButton label="Réessayer le chargement" onClick={() => void load()}><RefreshCw size={15} /></IconButton></div>}
     {extraction === null && <p className="analysis-status">Analyse indisponible pour cette pièce jointe. Joignez à nouveau le fichier pour l’analyser.</p>}
@@ -151,7 +154,7 @@ function AttachmentAnalysis({ attachment }: { attachment: Attachment }) {
         <IconButton label="Page précédente" disabled={pageIndex === 0} onClick={() => setPageIndex(index => index - 1)}><ChevronLeft size={16} /></IconButton>
         <label>Page <select value={pageIndex} onChange={event => setPageIndex(Number(event.target.value))}>{extraction.pages.map((item, index) => <option key={item.index} value={index}>{item.index + 1}</option>)}</select> / {extraction.pages.length}</label>
         <IconButton label="Page suivante" disabled={pageIndex === extraction.pages.length - 1} onClick={() => setPageIndex(index => index + 1)}><ChevronRight size={16} /></IconButton>
-        <span>{page.method === "vision" ? "OCR + vision" : page.method === "local" ? "Extraction locale" : "OCR"}</span>
+        <span>{page.method === "vision" ? "OCR + vision" : page.method === "local" ? (isFinance ? "Yahoo Finance API" : "Extraction locale") : "OCR"}</span>
       </div>
       <div className="analysis-format" role="group" aria-label="Format de lecture">
         <button type="button" aria-pressed={rawText} onClick={() => setRawText(true)}><FileText size={13} />Texte brut</button>
@@ -159,7 +162,7 @@ function AttachmentAnalysis({ attachment }: { attachment: Attachment }) {
       </div>
       <div className="analysis-content" aria-live="polite">
         {extraction.warnings.map((warning, index) => <p className="analysis-warning" key={index}>{warning}</p>)}
-        <section className="analysis-section"><h4>Transcription OCR · page {page.index + 1}</h4>
+        <section className="analysis-section"><h4>{isFinance ? "Tableaux et indicateurs financiers Yahoo Finance" : `Transcription OCR · page ${page.index + 1}`}</h4>
           {page.markdown.trim() ? rawText ? <pre className="analysis-transcript">{page.markdown}</pre> : <div className="markdown"><ReactMarkdown skipHtml remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins} components={{
             img: ({ alt }) => <span className="analysis-image-label">[{alt || "Illustration"}]</span>,
             a: ({ children, href }) => <a href={href} target="_blank" rel="noreferrer">{children}</a>,
@@ -181,7 +184,63 @@ function AttachmentAnalysis({ attachment }: { attachment: Attachment }) {
 
 function AttachmentView({ attachment }: { attachment: Attachment }) {
   const isYoutube = attachment.filename.startsWith("🎬") || attachment.mime_type.includes("youtube");
+  const isFinance = attachment.filename.startsWith("📈") || attachment.mime_type.includes("finance");
   const isWeb = attachment.mime_type.startsWith("text/html") || !!attachment.source_url || attachment.filename.startsWith("🌐");
+
+  if (isFinance) {
+    const meta = attachment.finance_meta;
+    const isEOD = meta?.provider === "eodhd" || attachment.mime_type.includes("source=eod") || attachment.filename.includes("EOD Historical Data");
+    const symbol = meta?.symbol || attachment.filename.match(/\(([A-Za-z0-9\.\^=_-]+)\)/)?.[1] || "";
+    const shortName = meta?.short_name || meta?.long_name || attachment.filename.replace(/^📈\s*/, "").replace(/\s*·.*$/, "");
+    const price = meta?.price;
+    const currency = meta?.currency || (symbol.endsWith(".US") ? "USD" : "EUR");
+    const changePct = meta?.change_percent;
+    const sourceLabel = meta?.source_label || (isEOD ? "EOD Historical Data API" : "Yahoo Finance API");
+    const externalLabel = isEOD ? "EODHD" : "Yahoo Finance";
+    const externalUrl = meta?.url || attachment.source_url || (isEOD ? `https://eodhd.com/financial-summary/${symbol}` : (symbol ? `https://finance.yahoo.com/quote/${symbol}` : "https://finance.yahoo.com"));
+
+    return (
+      <div className="finance-attachment-card" role="region" aria-label={`Données financières pour ${shortName}`}>
+        <div className="finance-card-header">
+          <div className="finance-card-identity">
+            <span className="finance-card-icon"><TrendingUp size={16} /></span>
+            <div>
+              <div className="finance-card-title-row">
+                <strong className="finance-card-name">{shortName}</strong>
+                {symbol && <span className="finance-symbol-badge">{symbol}</span>}
+                <span className="finance-source-tag"><TrendingUp size={11} /> {sourceLabel}</span>
+              </div>
+              <p className="finance-card-sub">Cours de bourse et états financiers téléchargés en direct</p>
+            </div>
+          </div>
+          <div className="finance-card-side">
+            {price != null && (
+              <div className="finance-card-quote">
+                <span className="finance-quote-price">{price} <small>{currency}</small></span>
+                {changePct != null && (
+                  <span className={`finance-quote-change ${changePct >= 0 ? "is-up" : "is-down"}`}>
+                    {changePct >= 0 ? "+" : ""}{changePct.toFixed(2)}%
+                  </span>
+                )}
+              </div>
+            )}
+            <a
+              className="finance-card-external-btn"
+              href={externalUrl}
+              target="_blank"
+              rel="noreferrer"
+              title={`Ouvrir la cotation en direct sur ${externalLabel}`}
+            >
+              <span>{externalLabel}</span>
+              <ExternalLink size={12} />
+            </a>
+          </div>
+        </div>
+        <AttachmentAnalysis attachment={attachment} isFinance={true} />
+      </div>
+    );
+  }
+
   return <div className="attachment-entry">
     {attachment.mime_type.startsWith("image/")
       ? <a className="message-image" href={attachment.url} target="_blank" rel="noreferrer"><img src={attachment.url} alt={attachment.filename} loading="lazy" /><span>{attachment.filename}<ExternalLink size={13} /></span></a>
@@ -210,6 +269,11 @@ function MessageView({
   const sources = message.sources ?? [];
   const searchNotices = [...new Set(sources.flatMap(source => source.provider === "duckduckgo_instant_answers" && source.search_notice ? [source.search_notice] : []))];
   const exploredQueries = Array.from(new Set(sources.map(item => item.query?.trim()).filter((item): item is string => Boolean(item))));
+  const hasFinance = sources.some(source => source.provider === "yahoo_finance" || source.provider === "eodhd") ||
+    message.attachments?.some(item => item.filename.startsWith("📈") || item.mime_type.includes("finance"));
+  const financeSources = sources.filter(source => source.provider === "yahoo_finance" || source.provider === "eodhd");
+  const financeProviders = [...new Set(financeSources.map(source => source.provider === "eodhd" ? "EOD Historical Data" : "Yahoo Finance"))];
+  const financeSymbols = [...new Set(financeSources.map(source => /\(([^()]+)\)\s*$/.exec(source.title ?? "")?.[1]).filter((item): item is string => Boolean(item)))];
   const isDeepSearchResult = exploredQueries.length > 0 || sources.length > 5;
   const visibleSources = showAllSources ? sources : sources.slice(0, 8);
   const explicitCanvasFiles = useMemo(
@@ -256,7 +320,15 @@ function MessageView({
   }
 
   return <article className={`message ${isUser ? "from-user" : "from-assistant"}`} aria-label={isUser ? "Votre message" : "Réponse de l’assistant"}>
-    {!isUser && <div className="message-author"><BrandMark small /><span>cLAIr</span>{isDeepSearchResult && !streaming && <span className="deepsearch-badge"><Compass size={11} />DeepSearch</span>}{isExplicitCanvas && <span className="codecanvas-badge"><Code2 size={11} />Canvas Code</span>}{streaming && <span className="streaming-label">en train d’écrire</span>}</div>}
+    {!isUser && <div className="message-author"><BrandMark small /><span>cLAIr</span>{isDeepSearchResult && !streaming && <span className="deepsearch-badge"><Compass size={11} />DeepSearch</span>}{isExplicitCanvas && <span className="codecanvas-badge"><Code2 size={11} />Canvas Code</span>}{hasFinance && <span className="finance-badge" title="Cours et données financières téléchargés en direct"><TrendingUp size={11} />Finances & Bourse</span>}{streaming && <span className="streaming-label">en train d’écrire</span>}</div>}
+    {!isUser && financeSources.length > 0 && <div className="finance-live-banner" role="note" aria-label="Données financières téléchargées en direct">
+      <span className="finance-live-icon"><TrendingUp size={18} /></span>
+      <div className="finance-live-text">
+        <strong>Données boursières en direct</strong>
+        <small>{financeSymbols.length ? `${financeSymbols.join(" · ")} — ` : ""}téléchargées via l’API {financeProviders.join(" + ")}</small>
+      </div>
+      <div className="finance-live-providers">{financeProviders.map(name => <span key={name} className={`finance-live-pill ${name.startsWith("EOD") ? "is-eod" : "is-yahoo"}`}>{name}</span>)}</div>
+    </div>}
     {message.content ? <div className={`markdown ${streaming ? "is-streaming" : ""}`}><ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins} components={{
       p: ({ children }) => <p>{isUser ? renderNodeWithMentions(children) : children}</p>,
       a: ({ children, href }) => <a href={href} target="_blank" rel="noreferrer">{children}</a>,
@@ -284,12 +356,14 @@ function MessageView({
     {!!message.attachments?.length && <div className="message-attachments">{message.attachments.map(item => <AttachmentView key={item.id} attachment={item} />)}</div>}
     {!!sources.length && <div className={`sources ${isDeepSearchResult ? "sources-deepsearch" : ""}`}>
       <div className="sources-header">
-        <p>{isDeepSearchResult ? <><Compass size={13} /> Synthèse DeepSearch · {sources.length} sources croisées</> : <><Globe2 size={13} /> Résultats de recherche ({sources.length})</>}</p>
+        <p>{isDeepSearchResult ? <><Compass size={13} /> Synthèse DeepSearch · {sources.length} sources croisées</> : <><Globe2 size={13} /> Résultats de recherche & données ({sources.length})</>}</p>
         {sources.length > 8 && <button type="button" className="sources-toggle" onClick={() => setShowAllSources(old => !old)}>{showAllSources ? "Réduire" : `Voir les ${sources.length} sources`}</button>}
       </div>
       {exploredQueries.length > 0 && <div className="sources-queries" aria-label="Pistes explorées sur SearXNG">{exploredQueries.map(q => <span key={q} className="source-query-pill"><Search size={10} />{q}</span>)}</div>}
-      <div className="sources-links">{visibleSources.map((source, index) => <a key={`${source.url}-${index}`} href={source.url} target="_blank" rel="noreferrer" title={source.query ? `[Piste : ${source.query}]\n${source.snippet ?? ""}` : source.snippet}><span>{index + 1}</span><span>{source.title || new URL(source.url).hostname}</span>{source.provider === "duckduckgo_instant_answers" && <small className="source-provider">DuckDuckGo</small>}<ExternalLink size={12} /></a>)}</div>
+      <div className="sources-links">{visibleSources.map((source, index) => <a key={`${source.url}-${index}`} href={source.url} target="_blank" rel="noreferrer" title={source.query ? `[Piste : ${source.query}]\n${source.snippet ?? ""}` : source.snippet}><span>{index + 1}</span><span>{source.title || new URL(source.url).hostname}</span>{source.provider === "yahoo_finance" ? <small className="source-provider source-provider-finance">Yahoo Finance</small> : source.provider === "eodhd" ? <small className="source-provider source-provider-finance">EOD Historical Data</small> : source.provider === "duckduckgo_instant_answers" ? <small className="source-provider">DuckDuckGo</small> : null}<ExternalLink size={12} /></a>)}</div>
       {searchNotices.map(notice => <p className="source-notice" key={notice}><CircleAlert size={12} />{notice}</p>)}
+      {sources.some(source => source.provider === "yahoo_finance") && <p className="source-attribution source-attribution-finance"><TrendingUp size={12} />Cours de bourse et états financiers téléchargés en direct sur <a href="https://finance.yahoo.com" target="_blank" rel="noreferrer">Yahoo Finance<ExternalLink size={10} /></a>.</p>}
+      {sources.some(source => source.provider === "eodhd") && <p className="source-attribution source-attribution-finance"><TrendingUp size={12} />Cotations et historique téléchargés en direct via <a href="https://eodhd.com" target="_blank" rel="noreferrer">EOD Historical Data<ExternalLink size={10} /></a>.</p>}
       {sources.some(source => source.provider === "duckduckgo_instant_answers") && <p className="source-attribution">Réponses instantanées fournies par <a href="https://duckduckgo.com" target="_blank" rel="noreferrer">DuckDuckGo<ExternalLink size={10} /></a>.</p>}
     </div>}
     {!isUser && message.content && !streaming && <div className="message-actions"><button type="button" onClick={copy} aria-label={copied ? "Réponse copiée" : "Copier la réponse"}>{copied ? <Check size={14} /> : <Copy size={14} />}{copied ? "Copié" : "Copier"}</button><span>{new Date(message.created_at).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}</span></div>}
@@ -316,6 +390,7 @@ export function ChatApp() {
   const [webSearch, setWebSearch] = useState(false);
   const [deepSearch, setDeepSearch] = useState(false);
   const [codeMode, setCodeMode] = useState(false);
+  const [financeMode, setFinanceMode] = useState(false);
   const [canvasOpen, setCanvasOpen] = useState(false);
   const [canvasMessageId, setCanvasMessageId] = useState<string | null>(null);
   const [canvasSelectedPath, setCanvasSelectedPath] = useState<string | null>(null);
@@ -793,6 +868,7 @@ export function ChatApp() {
           web_search: useWebSearch,
           deep_search: useDeepSearch,
           code_mode: useCodeMode,
+          finance_mode: financeMode,
           attachment_ids: files.map(item => item.id),
           skill_ids: messageSkillIds,
         },
@@ -1296,13 +1372,15 @@ export function ChatApp() {
               </div>
             )}
 
-            <form className={`composer ${deepSearch ? "deepsearch-mode" : ""} ${codeMode ? "codecanvas-mode" : ""}`} onSubmit={event => void send(event)}>
+            <form className={`composer ${deepSearch ? "deepsearch-mode" : ""} ${codeMode ? "codecanvas-mode" : ""} ${financeMode ? "finance-mode" : ""}`} onSubmit={event => void send(event)}>
               {deepSearch && <div className="deepsearch-mode-label"><Compass size={14} /><span><strong>Mode DeepSearch</strong> · Exploration internationale jusqu’à 40 sites via SearXNG, traduction et synthèse globale</span><button type="button" onClick={() => setDeepSearch(false)}><X size={12} />Désactiver</button></div>}
               {codeMode && <div className="codecanvas-mode-label"><Code2 size={14} /><span><strong>Mode Code · Canvas</strong> · L’éditeur multi-fichiers s’ouvre en direct avec aperçu web et téléchargement <code>.zip</code></span><button type="button" onClick={() => setCodeMode(false)}><X size={12} />Désactiver</button></div>}
+              {financeMode && <div className="finance-mode-label"><TrendingUp size={14} /><span><strong>Mode Finances & Bourse</strong> · Téléchargement automatique des cours et données financières (EOD Historical Data & Yahoo Finance) pour les entreprises ou tickers mentionnés</span><button type="button" onClick={() => setFinanceMode(false)}><X size={12} />Désactiver</button></div>}
               {!!attachments.length && <div className="pending-attachments">{attachments.map(item => {
                 const isYoutube = item.filename.startsWith("🎬") || item.mime_type.includes("youtube");
+                const isFinance = item.filename.startsWith("📈") || item.mime_type.includes("finance");
                 const isWeb = item.mime_type.startsWith("text/html") || !!item.source_url || item.filename.startsWith("🌐");
-                return <div className="pending-entry" key={item.id}><div className="pending-file">{isYoutube ? <SquarePlay size={15} color="#dc2626" /> : isWeb ? <Globe2 size={15} /> : <FileText size={15} />}<span>{item.filename}</span><IconButton label={`Retirer ${item.filename}`} disabled={working} onClick={() => void removeAttachment(item.id)}><X size={13} /></IconButton></div><AttachmentAnalysis attachment={item} /></div>;
+                return <div className="pending-entry" key={item.id}><div className="pending-file">{isYoutube ? <SquarePlay size={15} color="#dc2626" /> : isFinance ? <TrendingUp size={15} color="#059669" /> : isWeb ? <Globe2 size={15} /> : <FileText size={15} />}<span>{item.filename}</span><IconButton label={`Retirer ${item.filename}`} disabled={working} onClick={() => void removeAttachment(item.id)}><X size={13} /></IconButton></div><AttachmentAnalysis attachment={item} /></div>;
               })}</div>}
               <label className="sr-only" htmlFor="composer">Votre message</label>
               <textarea
@@ -1322,13 +1400,13 @@ export function ChatApp() {
                   }
                 }}
                 onKeyDown={composerKeyDown}
-                placeholder={codeMode ? "Décrivez l’application, le script ou le projet multi-fichiers à coder dans le Canvas…" : deepSearch ? "Quel sujet voulez-vous explorer en profondeur avec SearXNG ?" : "Une question, une idée, ou tapez @ (ex. @prof, @feynman)…"}
+                placeholder={financeMode ? "Posez une question sur une entreprise, un ticker ou un indice (ex. Stellantis, Apple, LVMH, CAC 40)…" : codeMode ? "Décrivez l’application, le script ou le projet multi-fichiers à coder dans le Canvas…" : deepSearch ? "Quel sujet voulez-vous explorer en profondeur avec SearXNG ?" : "Une question, une idée, ou tapez @ (ex. @prof, @feynman)…"}
                 rows={2}
                 maxLength={20000}
                 disabled={working || !config}
                 aria-describedby="composer-hint"
               />
-              <div className="composer-toolbar"><div className="composer-tools"><input className="sr-only" type="file" ref={fileRef} multiple accept=".txt,.md,.csv,.json,.pdf,.docx,image/png,image/jpeg,image/webp" onChange={event => void uploadFiles(event.target.files)} tabIndex={-1} /><IconButton label="Joindre jusqu’à 5 fichiers (20 Mo par document, 8 Mo par image)" disabled={working || !config} onClick={() => fileRef.current?.click()}><Paperclip size={19} /></IconButton><IconButton label="Analyser un lien web ou vidéo YouTube (URL)" disabled={working || !config} onClick={() => { setUrlError(""); setUrlInputValue(""); setShowUrlModal(true); }}><Link2 size={19} /></IconButton><span className="tool-divider" /><button type="button" className={`tool-button ${webSearch && !deepSearch ? "active" : ""}`} disabled={working || !config?.features.web_search} aria-pressed={webSearch && !deepSearch} title={webSearchTooltip} aria-describedby={showDuckDuckGoNotice ? "web-search-hint" : undefined} onClick={() => { setWebSearch(old => !old); setDeepSearch(false); }}><Globe2 size={16} /><span>Web</span>{webSearch && !deepSearch && <Check size={12} />}</button><button type="button" className={`tool-button deepsearch-trigger ${deepSearch ? "active" : ""}`} disabled={working || !config?.features.web_search} aria-pressed={deepSearch} title={config?.features.web_search ? "DeepSearch : recherche large multi-requêtes via SearXNG et synthèse globale approfondie" : webSearchTooltip} onClick={() => { setDeepSearch(old => !old); setWebSearch(false); }}><Compass size={16} /><span>DeepSearch</span>{deepSearch && <Check size={12} />}</button><button type="button" className={`tool-button codecanvas-trigger ${codeMode ? "active" : ""}`} disabled={working || !config} aria-pressed={codeMode} title="Mode Code Canvas : générer une application ou un projet multi-fichiers dans l’éditeur interactif avec téléchargement .zip" onClick={toggleCodeMode}><Code2 size={16} /><span>Code · Canvas</span>{codeMode && <Check size={12} />}</button><button type="button" className="tool-button studio-trigger" disabled={working} title="Ouvrir le Studio Image dédié (Ideogram, amélioration de prompt, visualisation et galerie)" onClick={() => openImageStudio(draft.trim())}><ImagePlus size={16} /><span>Studio Image</span></button></div><div className="composer-submit"><span className="enter-hint">↵ pour envoyer</span>{isCurrentStreaming ? <button className="send-button stop-button" type="button" onClick={stopCurrentStream} aria-label="Interrompre la génération" title="Interrompre la génération"><Square size={14} fill="currentColor" /></button> : <button className="send-button" type="submit" disabled={!canSend} aria-label="Envoyer le message">{busy === "upload" ? <LoaderCircle size={19} className="spin" /> : <ArrowUp size={20} />}</button>}</div></div>
+              <div className="composer-toolbar"><div className="composer-tools"><input className="sr-only" type="file" ref={fileRef} multiple accept=".txt,.md,.csv,.json,.pdf,.docx,image/png,image/jpeg,image/webp" onChange={event => void uploadFiles(event.target.files)} tabIndex={-1} /><IconButton label="Joindre jusqu’à 5 fichiers (20 Mo par document, 8 Mo par image)" disabled={working || !config} onClick={() => fileRef.current?.click()}><Paperclip size={19} /></IconButton><IconButton label="Analyser un lien web ou vidéo YouTube (URL)" disabled={working || !config} onClick={() => { setUrlError(""); setUrlInputValue(""); setShowUrlModal(true); }}><Link2 size={19} /></IconButton><span className="tool-divider" /><button type="button" className={`tool-button ${webSearch && !deepSearch ? "active" : ""}`} disabled={working || !config?.features.web_search} aria-pressed={webSearch && !deepSearch} title={webSearchTooltip} aria-describedby={showDuckDuckGoNotice ? "web-search-hint" : undefined} onClick={() => { setWebSearch(old => !old); setDeepSearch(false); }}><Globe2 size={16} /><span>Web</span>{webSearch && !deepSearch && <Check size={12} />}</button><button type="button" className={`tool-button deepsearch-trigger ${deepSearch ? "active" : ""}`} disabled={working || !config?.features.web_search} aria-pressed={deepSearch} title={config?.features.web_search ? "DeepSearch : recherche large multi-requêtes via SearXNG et synthèse globale approfondie" : webSearchTooltip} onClick={() => { setDeepSearch(old => !old); setWebSearch(false); }}><Compass size={16} /><span>DeepSearch</span>{deepSearch && <Check size={12} />}</button><button type="button" className={`tool-button codecanvas-trigger ${codeMode ? "active" : ""}`} disabled={working || !config} aria-pressed={codeMode} title="Mode Code Canvas : générer une application ou un projet multi-fichiers dans l’éditeur interactif avec téléchargement .zip" onClick={toggleCodeMode}><Code2 size={16} /><span>Code · Canvas</span>{codeMode && <Check size={12} />}</button><button type="button" className={`tool-button finance-trigger ${financeMode ? "active" : ""}`} disabled={working} aria-pressed={financeMode} title="Mode Finances & Bourse : télécharger automatiquement les cotations en temps réel et données financières sur Yahoo Finance" onClick={() => setFinanceMode(old => !old)}><TrendingUp size={16} /><span>Finances</span>{financeMode && <Check size={12} />}</button><button type="button" className="tool-button studio-trigger" disabled={working} title="Ouvrir le Studio Image dédié (Ideogram, amélioration de prompt, visualisation et galerie)" onClick={() => openImageStudio(draft.trim())}><ImagePlus size={16} /><span>Studio Image</span></button></div><div className="composer-submit"><span className="enter-hint">↵ pour envoyer</span>{isCurrentStreaming ? <button className="send-button stop-button" type="button" onClick={stopCurrentStream} aria-label="Interrompre la génération" title="Interrompre la génération"><Square size={14} fill="currentColor" /></button> : <button className="send-button" type="submit" disabled={!canSend} aria-label="Envoyer le message">{busy === "upload" ? <LoaderCircle size={19} className="spin" /> : <ArrowUp size={20} />}</button>}</div></div>
             </form>
             <div className="composer-footnote" id="composer-hint"><span>cLAIr peut se tromper. Gardez un regard critique sur les réponses.</span><span>Maj + Entrée pour un saut de ligne</span></div>
           </div>

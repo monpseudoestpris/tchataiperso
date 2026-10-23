@@ -225,10 +225,14 @@ async def fetch_and_parse_web_url(
     domain = parsed.hostname or ""
 
     from .youtube import extract_youtube_video_id, fetch_and_parse_youtube_video
+    from .finance import is_yahoo_finance_url, is_eodhd_url, fetch_and_parse_yahoo_finance
 
     video_id = extract_youtube_video_id(clean_url)
     if video_id:
         return await fetch_and_parse_youtube_video(settings, clean_url, video_id)
+
+    if is_yahoo_finance_url(clean_url) or is_eodhd_url(clean_url):
+        return await fetch_and_parse_yahoo_finance(settings, clean_url)
 
     headers = {
         "User-Agent": DEFAULT_USER_AGENT,

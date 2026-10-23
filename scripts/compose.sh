@@ -27,6 +27,17 @@ else:
   target.write_bytes(contents + b'SEARXNG_SECRET=' + secrets.token_hex(32).encode() + newline)
 PY
 fi
+lan_mode=false
+args=()
+for arg in "$@"; do
+  if [[ "$arg" == --lan ]]; then lan_mode=true; else args+=("$arg"); fi
+done
+set -- ${args[@]+"${args[@]}"}
+if [[ "$lan_mode" == true ]]; then
+  # shellcheck source=scripts/lan.sh
+  source "$repo_dir/scripts/lan.sh"
+  enable_lan_mode
+fi
 compose_files=(-f compose.yaml)
 if [[ "${1:-}" == dev ]]; then
   compose_files+=(-f compose.dev.yaml)
@@ -66,6 +77,9 @@ print_site_link() {
     printf '\033]8;;%s\033\\%s\033]8;;\033\\\n' "$site_url" "$site_url"
   else
     printf '%s\n' "$site_url"
+  fi
+  if [[ -n "${LAN_URL:-}" ]]; then
+    printf 'Réseau local (autres machines) : %s\n' "$LAN_URL"
   fi
   printf 'Ctrl+clic sur le lien pour ouvrir le navigateur.\n'
 }

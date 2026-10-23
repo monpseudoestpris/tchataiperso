@@ -58,6 +58,7 @@ class Settings(BaseSettings):
     vision_model: str = ""
     ideogram_api_key: SecretStr = SecretStr("")
     ideogram_image_hosts: str = "ideogram.ai"
+    eod_historical_data_key: SecretStr = SecretStr("")
     cors_origins: str = "http://localhost:3001,http://127.0.0.1:3001"
     session_cookie_name: str = "tchat_session"
     session_cookie_secure: bool = False
@@ -75,7 +76,7 @@ class Settings(BaseSettings):
     search_query_model: str = "mistralai/mistral-small-3.2-24b-instruct"
     blog_model: str = "google/gemini-3.5-flash-lite"
 
-    @field_validator("llm_api_key", "brave_api_key", "mistral_api_key", "ideogram_api_key", mode="before")
+    @field_validator("llm_api_key", "brave_api_key", "mistral_api_key", "ideogram_api_key", "eod_historical_data_key", mode="before")
     @classmethod
     def sanitize_secret_keys(cls, value):
         if isinstance(value, SecretStr):
@@ -218,7 +219,7 @@ class Settings(BaseSettings):
             return
         self._env_mtime_ns = mtime_ns
         parsed = dotenv_values(env_path)
-        secret_fields = ("llm_api_key", "brave_api_key", "mistral_api_key", "ideogram_api_key")
+        secret_fields = ("llm_api_key", "brave_api_key", "mistral_api_key", "ideogram_api_key", "eod_historical_data_key")
         for field_name in secret_fields:
             if field_name in self._explicit_fields:
                 continue

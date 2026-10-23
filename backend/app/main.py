@@ -46,11 +46,19 @@ def stamp(value) -> str:
 
 def attachment_json(item: Attachment) -> dict:
     url_source = item.extraction.get("url") if isinstance(item.extraction, dict) else None
+    finance_meta = None
+    if isinstance(item.extraction, dict) and item.extraction.get("model") in ("yahoo-finance", "eod-historical-data"):
+        finance_meta = {
+            k: item.extraction.get(k)
+            for k in ("symbol", "short_name", "long_name", "price", "currency", "change_percent", "exchange", "url",
+                      "provider", "source_label")
+            if item.extraction.get(k) is not None
+        }
     return {"id": item.id, "filename": item.filename, "mime_type": item.mime_type, "size": item.size,
             "url": f"/api/attachments/{item.id}/file", "created_at": stamp(item.created_at),
             "extracted_chars": len(item.extracted_text), "has_extraction": bool(item.extraction),
             "page_count": len(item.extraction["pages"]) if item.extraction and "pages" in item.extraction else 0,
-            "source_url": url_source}
+            "source_url": url_source, "finance_meta": finance_meta}
 
 
 def generated_image_json(item: GeneratedImage) -> dict:
@@ -816,6 +824,50 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         attachments.append(web_att)
                     except Exception as exc:
                         _logger.warning("Échec d'analyse automatique de l'URL %s: %s", target_url, exc)
+
+                # Auto-fetch real-time financial & stock data (EOD Historical Data, Yahoo Finance)
+                # In deep_search mode, financial data is only fetched if explicitly requested via finance_mode
+                from .finance import process_message_finance_inquiries
+                u_skills_pre = list(db.scalars(select(Skill).where(Skill.user_id == user.id)))
+                active_skill_prompts = [
+                    s.prompt.lower()
+                    for s in (extract_mentioned_skills(body.content, u_skills_pre) + [s for s in u_skills_pre if s.id in body.skill_ids])
+                ]
+                has_finance_skill = any("financ" in p or "bours" in p for p in active_skill_prompts)
+                is_finance_active = body.finance_mode or (has_finance_skill and not body.deep_search)
+                previous_finance_targets: list[str] = []
+                recent_turns: list[dict[str, str]] = []
+                for past in conversation.messages:
+                    if past.id == message.id:
+                        continue
+                    recent_turns.append({"role": past.role, "content": past.content})
+                    for past_att in past.attachments:
+                        ext = past_att.extraction if isinstance(past_att.extraction, dict) else {}
+                        if ext.get("model") in ("yahoo-finance", "eod-historical-data") and ext.get("symbol"):
+                            sym = str(ext["symbol"])
+                            if sym in previous_finance_targets:
+                                previous_finance_targets.remove(sym)
+                            previous_finance_targets.insert(0, sym)
+                entity_resolver = None
+                if not settings.demo_mode and settings.enabled(settings.llm_api_key) and not body.deep_search:
+                    async def entity_resolver(text: str, previous: list[str]) -> list[str]:
+                        return await providers.extract_finance_targets(settings, text, previous, recent_turns[-4:])
+                finance_failures: list[str] = []
+                try:
+                    if not body.deep_search or body.finance_mode:
+                        finance_atts = await process_message_finance_inquiries(
+                            settings, body.content, attachments, user.id, message.id, upload_dir,
+                            finance_mode=is_finance_active,
+                            previous_targets=previous_finance_targets,
+                            entity_resolver=entity_resolver,
+                            failures=finance_failures,
+                        )
+                        for f_att in finance_atts:
+                            db.add(f_att)
+                            attachments.append(f_att)
+                except Exception as exc:
+                    _logger.warning("Échec lors de la recherche financière: %s", exc)
+
                 conversation.model = model
                 conversation.updated_at = now()
                 auto_title_eligible = False
@@ -853,6 +905,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     init_active_skills = [s.name for s in (extract_mentioned_skills(body.content, u_skills) + [s for s in u_skills if s.id in body.skill_ids])]
                 if init_active_skills:
                     yield sse("status", {"message": f"Compétence active · {' · '.join(init_active_skills)}…"})
+                finance_items = [
+                    item for item in attachments
+                    if item.filename.startswith("📈") or (isinstance(item.extraction, dict) and item.extraction.get("model") in ("yahoo-finance", "eod-historical-data"))
+                ]
+                for f_item in finance_items:
+                    ext = f_item.extraction if isinstance(f_item.extraction, dict) else {}
+                    symbol = ext.get("symbol") or "Actif"
+                    short_name = ext.get("short_name") or f_item.filename
+                    price = ext.get("price")
+                    curr = ext.get("currency") or "USD"
+                    chg = ext.get("change_percent")
+                    chg_str = f" ({chg:+.2f}%)" if chg is not None else ""
+                    price_str = f"{price} {curr}{chg_str}" if price is not None else ""
+                    is_eod = ext.get("model") == "eod-historical-data" or ext.get("provider") == "eodhd"
+                    provider_name = "EOD Historical Data" if is_eod else "Yahoo Finance"
+                    sources.append({
+                        "title": f"{provider_name} · {short_name} ({symbol})",
+                        "url": ext.get("url") or (f"https://eodhd.com/financial-summary/{symbol}" if is_eod else f"https://finance.yahoo.com/quote/{symbol}"),
+                        "snippet": f"Cours : {price_str} · Données financières téléchargées en direct via l'API {ext.get('source_label') or provider_name}.",
+                        "provider": "eodhd" if is_eod else "yahoo_finance",
+                    })
+                if finance_failures:
+                    yield sse("status", {"message": f"⚠️ Données financières introuvables pour : {', '.join(finance_failures)}"})
+                elif finance_items:
+                    providers_used = sorted({s["title"].split(" · ")[0] for s in sources if s.get("provider") in ("eodhd", "yahoo_finance")})
+                    yield sse("status", {"message": f"📈 Données live téléchargées · {' + '.join(providers_used)}"})
+
                 has_web_attachment = any(
                     item.mime_type.startswith("text/html") or (isinstance(item.extraction, dict) and item.extraction.get("url"))
                     for item in attachments
@@ -862,7 +941,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         item.filename.startswith("🎬") or (isinstance(item.extraction, dict) and item.extraction.get("model") == "youtube-transcript")
                         for item in attachments
                     )
-                    status_text = "Analyse de la vidéo YouTube et de sa transcription…" if has_youtube else "Analyse et synthèse des pages web jointes…"
+                    has_finance = bool(finance_items)
+                    if has_youtube:
+                        status_text = "Analyse de la vidéo YouTube et de sa transcription…"
+                    elif has_finance:
+                        symbols_label = ", ".join(
+                            f_item.extraction.get("symbol", "Actif")
+                            for f_item in finance_items
+                            if isinstance(f_item.extraction, dict) and f_item.extraction.get("symbol")
+                        ) or "marché"
+                        status_text = f"Données financières en direct ({symbols_label}) · Synthèse des cours en cours…"
+                    else:
+                        status_text = "Analyse et synthèse des pages web jointes…"
                     yield sse("status", {"message": status_text})
                 if body.deep_search:
                     raw_query = body.content.strip()[:1500]
@@ -1060,8 +1150,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         if len(accumulated) > 160000:
                             raise providers.ProviderError("La réponse dépasse la limite autorisée")
                         yield sse("delta", {"text": chunk})
+                    if not accumulated.strip():
+                        # Some reasoning models occasionally spend the whole turn
+                        # thinking and close the stream without visible content.
+                        _logger.warning("Réponse vide du modèle %s ; nouvelle tentative", model)
+                        yield sse("status", {"message": "Réponse vide du modèle · nouvelle tentative…"})
+                        retry_context = context + [{"role": "system", "content": (
+                            "Ta tentative précédente n'a produit aucun texte visible. Réponds maintenant directement "
+                            "à l'utilisateur en t'appuyant sur les données disponibles ; si une donnée manque, dis-le "
+                            "explicitement plutôt que de ne rien répondre.")}]
+                        async for chunk in providers.stream_chat(settings, retry_context, model):
+                            accumulated += chunk
+                            if len(accumulated) > 160000:
+                                raise providers.ProviderError("La réponse dépasse la limite autorisée")
+                            yield sse("delta", {"text": chunk})
                 if not accumulated.strip():
-                    raise providers.ProviderError("Le fournisseur a retourné une réponse vide")
+                    raise providers.ProviderError("Le fournisseur a retourné une réponse vide (deux tentatives). Réessayez ou changez de modèle.")
                 generated_meta: dict | None = None
                 if needs_classification:
                     use_real_classifier = (

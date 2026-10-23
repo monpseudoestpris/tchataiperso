@@ -16,6 +16,18 @@ export type Attachment = {
   has_extraction?: boolean;
   page_count?: number;
   source_url?: string | null;
+  finance_meta?: {
+    symbol?: string;
+    short_name?: string;
+    long_name?: string;
+    price?: number;
+    currency?: string;
+    change_percent?: number;
+    exchange?: string;
+    url?: string;
+    provider?: string;
+    source_label?: string;
+  } | null;
 };
 export type GeneratedImage = {
   id: string;
@@ -153,6 +165,7 @@ export async function streamMessage(
     web_search: boolean;
     deep_search?: boolean;
     code_mode?: boolean;
+    finance_mode?: boolean;
     attachment_ids: string[];
     skill_ids?: string[];
   },

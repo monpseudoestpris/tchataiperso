@@ -33,6 +33,18 @@ Après l'installation initiale, lancez les trois services avec rechargement auto
 
 Le site est accessible sur http://localhost:3001. Les modifications dans `backend/app` relancent FastAPI ; celles du frontend sont prises en compte par Next.js sans reconstruire l'image. `Ctrl+C` arrête les services sans supprimer les données. Après une modification des dépendances ou du `.env`, relancez la commande. Ce mode utilise les mêmes données PostgreSQL et fichiers joints que le lancement Docker normal.
 
+### Accès depuis une autre machine du réseau local
+
+Ajoutez `--lan` pour rendre le site accessible via l'adresse IP de la machine, en plus de http://localhost:3001 :
+
+```bash
+./scripts/compose.sh up --build -d --wait --lan  # production
+./scripts/compose.sh dev --lan                   # développement Docker
+./scripts/dev.sh --lan                           # développement sans Docker
+```
+
+Le script détecte l'IP locale (forçable avec `LAN_IP=192.168.x.y`), affiche l'URL `http://<IP>:3001`, publie le port 3001 sur toutes les interfaces et ajoute cette origine à `CORS_ORIGINS`. L'API (8001) reste liée à `127.0.0.1` : le proxy Next lui transmet les requêtes. Ouvrez le port 3001 dans le pare-feu si besoin (`sudo ufw allow 3001/tcp`). Relancez sans `--lan` pour revenir au mode local seul. Le trafic est en HTTP clair : réservez ce mode à un réseau de confiance et n'exposez pas ce port sur Internet.
+
 Les routes de données exigent une session. L'inscription est fermée : un administrateur connecté crée une invitation dans le panneau Utilisateurs, puis transmet le lien à usage unique. Les conversations, mémoires et pièces jointes sont cloisonnées par compte dans la base partagée. Derrière HTTPS, configurez `SESSION_COOKIE_SECURE=true` avant de démarrer le backend; ne publiez pas le backend directement.
 
 ## Brancher vos API

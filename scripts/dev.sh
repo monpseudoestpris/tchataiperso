@@ -6,6 +6,14 @@ if [[ ! -x backend/.venv/bin/uvicorn || ! -d frontend/node_modules ]]; then
   echo 'Exécutez ./scripts/install.sh --local au préalable.' >&2
   exit 1
 fi
+web_host=127.0.0.1
+if [[ "${1:-}" == --lan ]]; then
+  # shellcheck source=scripts/lan.sh
+  source "$repo_dir/scripts/lan.sh"
+  enable_lan_mode
+  web_host=0.0.0.0
+  printf 'Local : http://localhost:3001 — Réseau local : %s\n' "$LAN_URL"
+fi
 backend_pid=''
 frontend_pid=''
 cleanup() {
@@ -23,7 +31,7 @@ backend_pid=$!
 (
   cd frontend
   export BACKEND_URL=http://127.0.0.1:8001
-  exec node node_modules/next/dist/bin/next dev --hostname 127.0.0.1 --port 3001
+  exec node node_modules/next/dist/bin/next dev --hostname "$web_host" --port 3001
 ) &
 frontend_pid=$!
 wait -n "$backend_pid" "$frontend_pid"
