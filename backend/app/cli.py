@@ -43,6 +43,7 @@ def prepare_schema(settings: Settings) -> None:
         "0006_add_conversation_metadata",
         "0007_add_blogs_and_posts",
         "0008_add_blog_theme",
+        "0009_add_deep_search_reports",
     }:
         raise SystemExit(f"Révision de base non reconnue : {current}")
 

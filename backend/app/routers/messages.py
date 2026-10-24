@@ -1,0 +1,819 @@
+import asyncio
+from collections.abc import AsyncIterator
+import logging
+import re
+import unicodedata
+from uuid import uuid4
+
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import StreamingResponse
+from sqlalchemy import select
+from sqlalchemy.orm import sessionmaker
+
+from .. import providers
+from ..config import Settings
+from ..context import build_context
+from ..deep_search import execute_deep_search
+from ..deep_search_html import generate_report_html
+from ..deps import check_model, claim, current_user, get_conversation, get_sessions, get_settings, get_upload_dir
+from ..documents import extraction_text
+from ..finance import process_message_finance_inquiries
+from ..models import Attachment, Conversation, DeepSearchReport, Message, Memory, Skill, User, now
+from ..schemas import DeepSearchPlanResponse, PlanDeepSearch, SendMessage
+from ..serializers import conversation_json, deep_search_report_json, extract_mentioned_skills, message_json, sse
+from ..web import fetch_and_parse_web_url
+
+
+_DEFAULT_STREAM_CHAT = providers.stream_chat
+_DEFAULT_CLASSIFY_CONVERSATION = providers.classify_conversation
+_DEFAULT_REWRITE_SEARCH_QUERY = providers.rewrite_search_query
+_logger = logging.getLogger("uvicorn.error")
+
+router = APIRouter(tags=["messages"])
+
+
+@router.post("/api/conversations/{conversation_id}/messages")
+async def send_message(
+    conversation_id: str,
+    body: SendMessage,
+    request: Request,
+    user: User = Depends(current_user),
+    settings: Settings = Depends(get_settings),
+    sessions: sessionmaker = Depends(get_sessions),
+):
+    upload_dir = get_upload_dir(request)
+    if not settings.demo_mode and not settings.enabled(settings.llm_api_key):
+        raise HTTPException(503, "Configurez LLM_API_KEY ou activez explicitement DEMO_MODE pour une simulation")
+    if not body.content.strip() and not body.attachment_ids:
+        raise HTTPException(422, "Écrivez un message ou joignez un document")
+    if (body.web_search or body.deep_search) and not settings.web_search_enabled:
+        raise HTTPException(503, "La recherche web nécessite SearXNG, BRAVE_API_KEY ou DUCKDUCKGO_ENABLED en mode IA réel")
+    lock = claim(request, user.id, conversation_id)
+    await lock.acquire()
+    try:
+        with sessions() as db:
+            conversation = get_conversation(db, conversation_id, user.id)
+            model = body.model or conversation.model
+            # Fable 5.1 est strictement dédié à la planification stratégique.
+            # Pour la suite (synthèse globale, rapport d'analyse), bascule automatique sur un modèle rapide et économique.
+            if body.deep_search and (not body.model or model == getattr(settings, "deep_search_plan_model", "anthropic/claude-fable-5.1")):
+                synthesis_model = getattr(settings, "deep_search_synthesis_model", None) or "google/gemini-3.8-flash"
+                if any(m["id"] == synthesis_model for m in settings.models):
+                    model = synthesis_model
+            model_info = check_model(settings, model)
+            attachments = []
+            for attachment_id in body.attachment_ids:
+                item = db.scalar(
+                    select(Attachment)
+                    .where(Attachment.id == attachment_id, Attachment.user_id == user.id)
+                    .with_for_update()
+                )
+                if not item or item.message_id:
+                    raise HTTPException(422, "Pièce jointe introuvable ou déjà utilisée")
+                attachments.append(item)
+            if sum(item.mime_type.startswith("image/") for item in attachments) > 4:
+                raise HTTPException(422, "Joignez au maximum 4 images par message pour qu'elles soient toutes analysées")
+            for item in attachments:
+                if (
+                    item.mime_type.startswith("image/")
+                    and not item.extracted_text
+                    and not model_info["vision"]
+                    and not settings.demo_mode
+                ):
+                    raise HTTPException(422, "Joignez à nouveau cette image pour l'analyser, ou choisissez un modèle vision.")
+            message = Message(conversation_id=conversation_id, role="user", content=body.content.strip())
+            db.add(message)
+            db.flush()
+            for item in attachments:
+                item.message_id = message.id
+
+            # Auto-parse any web URLs contained directly in the message text
+            raw_urls = re.findall(r'https?://[^\s<>"]+', body.content)
+            existing_urls = {
+                att.extraction.get("url")
+                for att in attachments
+                if isinstance(att.extraction, dict) and att.extraction.get("url")
+            }
+            urls_to_fetch = []
+            for u in raw_urls:
+                clean_u = u.rstrip(".,;:!?)'\"")
+                if clean_u and clean_u not in existing_urls and clean_u not in urls_to_fetch:
+                    urls_to_fetch.append(clean_u)
+
+            for target_url in urls_to_fetch[:3]:
+                try:
+                    u_fn, u_cnt, u_mime, u_txt, u_extr = await fetch_and_parse_web_url(settings, target_url)
+                    u_storage = str(uuid4())
+                    u_path = upload_dir / u_storage
+                    u_path.write_bytes(u_cnt)
+                    web_att = Attachment(
+                        user_id=user.id,
+                        filename=u_fn,
+                        mime_type=u_mime,
+                        size=len(u_cnt),
+                        storage_name=u_storage,
+                        extracted_text=u_txt,
+                        extraction=u_extr,
+                        message_id=message.id,
+                    )
+                    db.add(web_att)
+                    attachments.append(web_att)
+                except Exception as exc:
+                    _logger.warning("Échec d'analyse automatique de l'URL %s: %s", target_url, exc)
+
+            # Auto-fetch real-time financial & stock data (EOD Historical Data, Yahoo Finance)
+            u_skills_pre = list(db.scalars(select(Skill).where(Skill.user_id == user.id)))
+            active_skill_prompts = [
+                s.prompt.lower()
+                for s in (extract_mentioned_skills(body.content, u_skills_pre) + [s for s in u_skills_pre if s.id in body.skill_ids])
+            ]
+            has_finance_skill = any("financ" in p or "bours" in p for p in active_skill_prompts)
+            is_finance_active = body.finance_mode or (has_finance_skill and not body.deep_search)
+            previous_finance_targets: list[str] = []
+            recent_turns: list[dict[str, str]] = []
+            for past in conversation.messages:
+                if past.id == message.id:
+                    continue
+                recent_turns.append({"role": past.role, "content": past.content})
+                for past_att in past.attachments:
+                    ext = past_att.extraction if isinstance(past_att.extraction, dict) else {}
+                    if ext.get("model") in ("yahoo-finance", "eod-historical-data") and ext.get("symbol"):
+                        sym = str(ext["symbol"])
+                        if sym in previous_finance_targets:
+                            previous_finance_targets.remove(sym)
+                        previous_finance_targets.insert(0, sym)
+            entity_resolver = None
+            if not settings.demo_mode and settings.enabled(settings.llm_api_key) and not body.deep_search:
+                async def entity_resolver(text: str, previous: list[str]) -> list[str]:
+                    return await providers.extract_finance_targets(settings, text, previous, recent_turns[-4:])
+            finance_failures: list[str] = []
+            try:
+                if not body.deep_search or body.finance_mode:
+                    finance_atts = await process_message_finance_inquiries(
+                        settings,
+                        body.content,
+                        attachments,
+                        user.id,
+                        message.id,
+                        upload_dir,
+                        finance_mode=is_finance_active,
+                        previous_targets=previous_finance_targets,
+                        entity_resolver=entity_resolver,
+                        failures=finance_failures,
+                    )
+                    for f_att in finance_atts:
+                        db.add(f_att)
+                        attachments.append(f_att)
+            except Exception as exc:
+                _logger.warning("Échec lors de la recherche financière: %s", exc)
+
+            conversation.model = model
+            conversation.updated_at = now()
+            auto_title_eligible = False
+            if not conversation.messages or len(conversation.messages) <= 1:
+                if conversation.title == "Nouvelle conversation":
+                    auto_title_eligible = True
+                    conversation.title = (body.content.strip() or attachments[0].filename)[:70]
+            needs_classification = auto_title_eligible or not conversation.theme or not conversation.keywords
+            initial_title = conversation.title
+            prompt_for_meta = body.content.strip() or (attachments[0].filename if attachments else "")
+            db.commit()
+            db.refresh(message)
+            user_message = message_json(message)
+            assistant_id = str(uuid4())
+    except providers.ProviderError as exc:
+        lock.release()
+        raise HTTPException(502, str(exc)) from exc
+    except Exception:
+        lock.release()
+        raise
+
+    async def _search_with_limit(query_text: str, limit: int) -> list[dict[str, str]]:
+        try:
+            return await providers.search_web(settings, query_text, limit=limit)
+        except TypeError:
+            return await providers.search_web(settings, query_text)
+
+    async def _stream_chat_with_keepalive(
+        chat_context: list[dict],
+        target_model: str,
+        ping_interval: float = 2.0,
+    ) -> AsyncIterator[tuple[str, bool]]:
+        aiterator = providers.stream_chat(settings, chat_context, target_model).__aiter__()
+        pending: asyncio.Task | None = None
+        while True:
+            if pending is None:
+                pending = asyncio.create_task(aiterator.__anext__())
+            done, _ = await asyncio.wait([pending], timeout=ping_interval)
+            if done:
+                try:
+                    chunk = pending.result()
+                    pending = None
+                    yield (chunk, False)
+                except StopAsyncIteration:
+                    pending = None
+                    break
+            else:
+                yield (": keepalive\n\n", True)
+
+    async def stream():
+        accumulated = ""
+        sources = []
+        try:
+            yield sse("meta", {"user_message": user_message, "assistant_message_id": assistant_id})
+            with sessions() as db:
+                u_skills = list(db.scalars(select(Skill).where(Skill.user_id == user.id)))
+                init_active_skills = [
+                    s.name
+                    for s in (extract_mentioned_skills(body.content, u_skills) + [s for s in u_skills if s.id in body.skill_ids])
+                ]
+            if init_active_skills:
+                yield sse("status", {"message": f"Compétence active · {' · '.join(init_active_skills)}…"})
+            finance_items = [
+                item
+                for item in attachments
+                if item.filename.startswith("📈")
+                or (isinstance(item.extraction, dict) and item.extraction.get("model") in ("yahoo-finance", "eod-historical-data"))
+            ]
+            for f_item in finance_items:
+                ext = f_item.extraction if isinstance(f_item.extraction, dict) else {}
+                symbol = ext.get("symbol") or "Actif"
+                short_name = ext.get("short_name") or f_item.filename
+                price = ext.get("price")
+                curr = ext.get("currency") or "USD"
+                chg = ext.get("change_percent")
+                chg_str = f" ({chg:+.2f}%)" if chg is not None else ""
+                price_str = f"{price} {curr}{chg_str}" if price is not None else ""
+                is_eod = ext.get("model") == "eod-historical-data" or ext.get("provider") == "eodhd"
+                provider_name = "EOD Historical Data" if is_eod else "Yahoo Finance"
+                sources.append({
+                    "title": f"{provider_name} · {short_name} ({symbol})",
+                    "url": ext.get("url") or (f"https://eodhd.com/financial-summary/{symbol}" if is_eod else f"https://finance.yahoo.com/quote/{symbol}"),
+                    "snippet": f"Cours : {price_str} · Données financières téléchargées en direct via l'API {ext.get('source_label') or provider_name}.",
+                    "provider": "eodhd" if is_eod else "yahoo_finance",
+                })
+            if finance_failures:
+                yield sse("status", {"message": f"⚠️ Données financières introuvables pour : {', '.join(finance_failures)}"})
+            elif finance_items:
+                providers_used = sorted({s["title"].split(" · ")[0] for s in sources if s.get("provider") in ("eodhd", "yahoo_finance")})
+                yield sse("status", {"message": f"📈 Données live téléchargées · {' + '.join(providers_used)}"})
+
+            has_web_attachment = any(
+                item.mime_type.startswith("text/html") or (isinstance(item.extraction, dict) and item.extraction.get("url"))
+                for item in attachments
+            )
+            if has_web_attachment and not body.deep_search and not body.web_search:
+                has_youtube = any(
+                    item.filename.startswith("🎬")
+                    or (isinstance(item.extraction, dict) and item.extraction.get("model") == "youtube-transcript")
+                    for item in attachments
+                )
+                has_finance = bool(finance_items)
+                if has_youtube:
+                    status_text = "Analyse de la vidéo YouTube et de sa transcription…"
+                elif has_finance:
+                    symbols_label = ", ".join(
+                        f_item.extraction.get("symbol", "Actif")
+                        for f_item in finance_items
+                        if isinstance(f_item.extraction, dict) and f_item.extraction.get("symbol")
+                    ) or "marché"
+                    status_text = f"Données financières en direct ({symbols_label}) · Synthèse des cours en cours…"
+                else:
+                    status_text = "Analyse et synthèse des pages web jointes…"
+                yield sse("status", {"message": status_text})
+            findings: list[str] = []
+            if body.deep_search:
+                raw_query = body.content.strip()[:1500]
+                with sessions() as db:
+                    conversation = get_conversation(db, conversation_id, user.id)
+                    search_summary = conversation.summary
+                    search_context = [
+                        {"role": item.role, "content": item.content}
+                        for item in conversation.messages[:-1][-4:]
+                    ]
+                async for event in execute_deep_search(
+                    settings=settings,
+                    query=raw_query,
+                    summary=search_summary,
+                    recent_turns=search_context,
+                    search_fn=_search_with_limit,
+                    initial_queries=body.deep_search_queries,
+                    max_iterations=5,
+                    max_sources=None,
+                ):
+                    if event["type"] == "status":
+                        yield sse("status", {"message": event["message"]})
+                    elif event["type"] == "ping":
+                        yield ": keepalive\n\n"
+                    elif event["type"] == "done":
+                        sources = event["sources"]
+                        findings = event.get("findings", [])
+            elif body.web_search:
+                query = body.content.strip()[:1000]
+                with sessions() as db:
+                    conversation = get_conversation(db, conversation_id, user.id)
+                    search_summary = conversation.summary
+                    search_context = [
+                        {"role": item.role, "content": item.content}
+                        for item in conversation.messages[:-1][-4:]
+                    ]
+                if (
+                    providers.stream_chat is _DEFAULT_STREAM_CHAT
+                    or providers.rewrite_search_query is not _DEFAULT_REWRITE_SEARCH_QUERY
+                ):
+                    yield sse("status", {"message": "Reformulation de la recherche…"})
+                    try:
+                        query = await providers.rewrite_search_query(
+                            settings, query, search_summary, search_context,
+                        )
+                    except providers.ProviderError as exc:
+                        _logger.warning("Reformulation de recherche indisponible; question originale conservée: %s", exc)
+                        yield sse("status", {"message": "Reformulation indisponible; recherche avec la question originale…"})
+                yield sse("status", {"message": "Recherche web en cours…"})
+                sources = await providers.search_web(settings, query)
+                if not sources:
+                    raise providers.ProviderError(
+                        "Aucune source web exploitable n’a été trouvée. "
+                        "Reformulez ou désactivez Web pour continuer sans recherche."
+                    )
+                if notice := sources[0].get("search_notice"):
+                    yield sse("status", {"message": notice})
+            # Summarize old turns, retaining the complete persisted history.
+            with sessions() as db:
+                conversation = get_conversation(db, conversation_id, user.id)
+                history = conversation.messages
+                cutoff = max(0, len(history) - 6)
+                should_summarize = (
+                    len(history) - conversation.summary_through >= settings.summary_every_messages
+                    and cutoff > conversation.summary_through
+                )
+                previous_summary = conversation.summary
+                transcript_parts = []
+                transcript_size = 0
+                summary_cutoff = conversation.summary_through
+                for item in history[conversation.summary_through:cutoff]:
+                    item_text = f"{item.role}: {item.content[:4000]}"
+                    for attachment in item.attachments:
+                        attachment_text = (
+                            extraction_text(attachment.extraction, 4000)
+                            if attachment.extraction
+                            else attachment.extracted_text[:4000]
+                        )
+                        item_text += f"\n[Pièce jointe : {attachment.filename}]\n{attachment_text}"
+                    item_text = item_text[:12000]
+                    if transcript_parts and transcript_size + len(item_text) > 24000:
+                        break
+                    transcript_parts.append(item_text)
+                    transcript_size += len(item_text)
+                    summary_cutoff += 1
+                transcript = "\n".join(transcript_parts)
+            if should_summarize:
+                yield sse("status", {"message": "Mise à jour du résumé de la conversation…"})
+                try:
+                    if settings.demo_mode:
+                        summary = (
+                            "[Résumé de démonstration, extraits du dialogue]\n"
+                            + (previous_summary + "\n" + transcript)[-settings.max_summary_chars:]
+                        )
+                    else:
+                        summary = await providers.summarize(
+                            settings, settings.summary_model, previous_summary, transcript
+                        )
+                    with sessions() as db:
+                        conversation = get_conversation(db, conversation_id, user.id)
+                        conversation.summary = summary[:settings.max_summary_chars]
+                        conversation.summary_through = summary_cutoff
+                        db.commit()
+                except providers.ProviderError:
+                    yield sse("status", {"message": "Résumé temporairement indisponible ; utilisation des messages récents dans la limite du contexte."})
+            with sessions() as db:
+                conversation = get_conversation(db, conversation_id, user.id)
+                memories = [
+                    item.content
+                    for item in db.scalars(select(Memory).where(Memory.user_id == user.id).order_by(Memory.created_at))
+                ]
+                u_skills = list(db.scalars(select(Skill).where(Skill.user_id == user.id)))
+                explicit_skills = [s for s in u_skills if s.id in body.skill_ids]
+                mentioned_skills = extract_mentioned_skills(body.content, u_skills)
+                conv_skills = [link.skill for link in conversation.skill_links]
+                merged_skills = []
+                seen_skill_ids = set()
+                for s in (mentioned_skills + explicit_skills + conv_skills):
+                    if s.id not in seen_skill_ids:
+                        seen_skill_ids.add(s.id)
+                        merged_skills.append(s)
+                skills = [{"name": s.name, "prompt": s.prompt} for s in merged_skills]
+                history = [
+                    {
+                        "role": item.role,
+                        "content": item.content,
+                        "attachments": [
+                            {
+                                "filename": attachment.filename,
+                                "mime_type": attachment.mime_type,
+                                "extracted_text": attachment.extracted_text,
+                                "extraction": attachment.extraction,
+                                "path": str(upload_dir / attachment.storage_name),
+                            }
+                            for attachment in item.attachments
+                        ],
+                    }
+                    for item in conversation.messages[conversation.summary_through:]
+                ]
+                summary = conversation.summary
+            if settings.demo_mode:
+                if body.code_mode:
+                    prompt_summary = (body.content.strip() or "Application de démonstration")[:80]
+                    response = (
+                        f"Voici un projet multi-fichiers généré en **Mode Code Canvas** pour : « {prompt_summary} ».\n\n"
+                        "```html path=\"index.html\"\n"
+                        "<!DOCTYPE html>\n<html lang=\"fr\">\n<head>\n  <meta charset=\"UTF-8\" />\n"
+                        "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />\n"
+                        "  <title>Application Canvas</title>\n  <link rel=\"stylesheet\" href=\"styles.css\" />\n"
+                        "</head>\n<body>\n  <main class=\"app-card\">\n    <h1>Application Canvas</h1>\n"
+                        f"    <p id=\"subtitle\">{prompt_summary}</p>\n"
+                        "    <button id=\"action-btn\" type=\"button\">Tester l'interaction</button>\n"
+                        "    <output id=\"output\"></output>\n  </main>\n  <script src=\"app.js\"></script>\n</body>\n</html>\n"
+                        "```\n\n"
+                        "```css path=\"styles.css\"\n"
+                        "body { margin: 0; font-family: system-ui, sans-serif; background: #0f172a; color: #f8fafc; display: grid; place-items: center; min-height: 100vh; }\n"
+                        ".app-card { background: #1e293b; border: 1px solid #334155; border-radius: 16px; padding: 28px; max-width: 420px; text-align: center; box-shadow: 0 20px 40px rgba(0,0,0,0.35); }\n"
+                        "button { margin-top: 12px; padding: 10px 18px; border-radius: 10px; border: 0; background: #6366f1; color: white; font-weight: 600; cursor: pointer; }\n"
+                        "output { display: block; margin-top: 14px; color: #38bdf8; font-weight: 600; }\n"
+                        "```\n\n"
+                        "```javascript path=\"app.js\"\n"
+                        "const btn = document.getElementById('action-btn');\n"
+                        "const out = document.getElementById('output');\n"
+                        "let count = 0;\n"
+                        "btn?.addEventListener('click', () => {\n"
+                        "  count += 1;\n"
+                        "  if (out) out.textContent = `Interaction #${count} exécutée avec succès !`;\n"
+                        "});\n"
+                        "```\n\n"
+                        "```markdown path=\"README.md\"\n"
+                        f"# Projet Canvas\n\nDemande : {prompt_summary}\n\n## Fichiers\n- `index.html`\n- `styles.css`\n- `app.js`\n```\n"
+                    )
+                else:
+                    response = (
+                        "**Mode démonstration — aucune IA externe n'est appelée.**\n\n"
+                        f"Votre message a été enregistré : « {body.content.strip() or 'Document joint'} ».\n\n"
+                        "L'historique, les pièces jointes et les souvenirs fonctionnent localement. "
+                        "Configurez une clé LLM et désactivez DEMO_MODE pour obtenir de vraies réponses."
+                    )
+                for offset in range(0, len(response), 32):
+                    chunk = response[offset:offset + 32]
+                    accumulated += chunk
+                    yield sse("delta", {"text": chunk})
+                    await asyncio.sleep(0.005)
+            else:
+                context = build_context(
+                    settings,
+                    summary,
+                    memories,
+                    history,
+                    sources,
+                    model_info["vision"],
+                    skills,
+                    deep_search=body.deep_search,
+                    code_mode=body.code_mode,
+                    findings=findings if body.deep_search else None,
+                )
+                if body.deep_search:
+                    status_label = f"DeepSearch · Synthèse globale et rapport approfondi ({len(sources)} source{'s' if len(sources) != 1 else ''})…"
+                elif body.code_mode:
+                    status_label = "Canvas Code · Conception et génération des fichiers…"
+                else:
+                    status_label = "Rédaction de la réponse…"
+                yield sse("status", {"message": status_label})
+                async for chunk, is_ping in _stream_chat_with_keepalive(context, model):
+                    if is_ping:
+                        yield chunk
+                    else:
+                        accumulated += chunk
+                        if len(accumulated) > 160000:
+                            raise providers.ProviderError("La réponse dépasse la limite autorisée")
+                        yield sse("delta", {"text": chunk})
+                if not accumulated.strip():
+                    _logger.warning("Réponse vide du modèle %s ; nouvelle tentative", model)
+                    yield sse("status", {"message": "Réponse vide du modèle · nouvelle tentative…"})
+                    retry_context = context + [{
+                        "role": "system",
+                        "content": (
+                            "Ta tentative précédente n'a produit aucun texte visible. Réponds maintenant directement "
+                            "à l'utilisateur en t'appuyant sur les données disponibles ; si une donnée manque, dis-le "
+                            "explicitement plutôt que de ne rien répondre."
+                        ),
+                    }]
+                    async for chunk, is_ping in _stream_chat_with_keepalive(retry_context, model):
+                        if is_ping:
+                            yield chunk
+                        else:
+                            accumulated += chunk
+                            if len(accumulated) > 160000:
+                                raise providers.ProviderError("La réponse dépasse la limite autorisée")
+                            yield sse("delta", {"text": chunk})
+            if not accumulated.strip():
+                raise providers.ProviderError("Le fournisseur a retourné une réponse vide (deux tentatives). Réessayez ou changez de modèle.")
+            generated_meta: dict | None = None
+            if needs_classification:
+                use_real_classifier = (
+                    not settings.demo_mode
+                    and settings.enabled(settings.llm_api_key)
+                    and (
+                        providers.stream_chat is _DEFAULT_STREAM_CHAT
+                        or providers.classify_conversation is not _DEFAULT_CLASSIFY_CONVERSATION
+                    )
+                )
+                if use_real_classifier:
+                    yield sse("status", {"message": "Organisation · Titre, thème et mots-clés…"})
+                    try:
+                        generated_meta = await providers.classify_conversation(
+                            settings, prompt_for_meta, accumulated, current_title=initial_title,
+                        )
+                    except providers.ProviderError as exc:
+                        _logger.warning("Classification automatique indisponible; repli local: %s", exc)
+                        generated_meta = providers.fallback_conversation_metadata(
+                            prompt_for_meta, accumulated, current_title=initial_title,
+                        )
+                        generated_meta["keep_initial_title"] = True
+                else:
+                    generated_meta = providers.fallback_conversation_metadata(
+                        prompt_for_meta, accumulated, current_title=initial_title,
+                    )
+                    generated_meta["keep_initial_title"] = True
+            with sessions() as db:
+                conversation = get_conversation(db, conversation_id, user.id)
+                answer = Message(id=assistant_id, conversation_id=conversation_id, role="assistant", content=accumulated, sources=sources)
+                db.add(answer)
+                if generated_meta:
+                    if auto_title_eligible and not generated_meta.get("keep_initial_title") and generated_meta.get("title"):
+                        conversation.title = generated_meta["title"][:200]
+                    if not conversation.theme and generated_meta.get("theme"):
+                        conversation.theme = generated_meta["theme"][:80]
+                    if not conversation.keywords and generated_meta.get("keywords"):
+                        conversation.keywords = generated_meta["keywords"][:5]
+                conversation.updated_at = now()
+
+                deep_search_report_id: str | None = None
+                if body.deep_search:
+                    report_title = (
+                        conversation.title
+                        if conversation.title != "Nouvelle conversation"
+                        else (body.content.strip()[:120] or "Rapport d'analyse DeepSearch")
+                    )
+                    created_at_dt = now()
+                    html_content = generate_report_html(
+                        title=report_title,
+                        topic=body.content.strip(),
+                        markdown_content=accumulated,
+                        sources=sources,
+                        created_at_str=created_at_dt.strftime("%d/%m/%Y à %H:%M"),
+                    )
+                    report = DeepSearchReport(
+                        user_id=user.id,
+                        conversation_id=conversation_id,
+                        message_id=assistant_id,
+                        title=report_title,
+                        topic=body.content.strip(),
+                        markdown_content=accumulated,
+                        html_content=html_content,
+                        sources=sources,
+                        created_at=created_at_dt,
+                    )
+                    db.add(report)
+                    db.flush()
+                    deep_search_report_id = report.id
+
+                db.commit()
+                db.refresh(conversation)
+                db.refresh(answer)
+                yield sse("done", {
+                    "message": message_json(answer),
+                    "conversation": conversation_json(conversation),
+                    "deep_search_report_id": deep_search_report_id,
+                })
+        except asyncio.CancelledError:
+            raise
+        except providers.ProviderError as exc:
+            yield sse("error", {"message": str(exc)})
+        except Exception as exc:
+            _logger.exception("Erreur dans stream message: %s", exc)
+            yield sse("error", {"message": "Impossible de terminer la réponse. Votre message reste enregistré ; réessayez."})
+        finally:
+            lock.release()
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/api/conversations/{conversation_id}/deep-search/plan", response_model=DeepSearchPlanResponse)
+async def plan_conversation_deep_search(
+    conversation_id: str,
+    body: PlanDeepSearch,
+    user: User = Depends(current_user),
+    settings: Settings = Depends(get_settings),
+    sessions: sessionmaker = Depends(get_sessions),
+):
+    if not settings.demo_mode and not settings.enabled(settings.llm_api_key):
+        raise HTTPException(503, "Configurez LLM_API_KEY ou activez explicitement DEMO_MODE pour une simulation")
+    if not settings.web_search_enabled:
+        raise HTTPException(503, "La recherche web nécessite SearXNG, BRAVE_API_KEY ou DUCKDUCKGO_ENABLED en mode IA réel")
+
+    with sessions() as db:
+        conversation = get_conversation(db, conversation_id, user.id)
+        search_summary = conversation.summary
+        search_context = [
+            {"role": item.role, "content": item.content}
+            for item in conversation.messages[-4:]
+        ]
+
+    raw_query = body.content.strip()[:1500]
+    try:
+        try:
+            queries = await providers.plan_deep_search_queries(
+                settings, raw_query, search_summary, search_context, max_queries=8,
+            )
+        except TypeError:
+            queries = await providers.plan_deep_search_queries(
+                settings, raw_query, search_summary, search_context,
+            )
+    except providers.ProviderError as exc:
+        _logger.warning("Planification DeepSearch indisponible: %s", exc)
+        queries = [raw_query]
+
+    return DeepSearchPlanResponse(queries=queries)
+
+
+@router.post("/api/deep-search/plan", response_model=DeepSearchPlanResponse)
+async def plan_direct_deep_search(
+    body: PlanDeepSearch,
+    user: User = Depends(current_user),
+    settings: Settings = Depends(get_settings),
+):
+    if not settings.demo_mode and not settings.enabled(settings.llm_api_key):
+        raise HTTPException(503, "Configurez LLM_API_KEY ou activez explicitement DEMO_MODE pour une simulation")
+    if not settings.web_search_enabled:
+        raise HTTPException(503, "La recherche web nécessite SearXNG, BRAVE_API_KEY ou DUCKDUCKGO_ENABLED en mode IA réel")
+
+    raw_query = body.content.strip()[:1500]
+    try:
+        try:
+            queries = await providers.plan_deep_search_queries(
+                settings, raw_query, "", [], max_queries=8,
+            )
+        except TypeError:
+            queries = await providers.plan_deep_search_queries(
+                settings, raw_query, "", [],
+            )
+    except providers.ProviderError as exc:
+        _logger.warning("Planification DeepSearch indisponible: %s", exc)
+        queries = [raw_query]
+
+    return DeepSearchPlanResponse(queries=queries)
+
+
+@router.get("/api/deep-search/reports")
+def list_deep_search_reports(
+    user: User = Depends(current_user),
+    sessions: sessionmaker = Depends(get_sessions),
+):
+    with sessions() as db:
+        items = list(
+            db.scalars(
+                select(DeepSearchReport)
+                .where(DeepSearchReport.user_id == user.id)
+                .order_by(DeepSearchReport.created_at.desc())
+            )
+        )
+        return [deep_search_report_json(item) for item in items]
+
+
+@router.get("/api/deep-search/reports/{report_id}")
+def get_deep_search_report(
+    report_id: str,
+    user: User = Depends(current_user),
+    sessions: sessionmaker = Depends(get_sessions),
+):
+    with sessions() as db:
+        report = db.scalar(
+            select(DeepSearchReport).where(
+                DeepSearchReport.id == report_id, DeepSearchReport.user_id == user.id
+            )
+        )
+        if not report:
+            raise HTTPException(404, "Rapport DeepSearch introuvable")
+        return deep_search_report_json(report, include_html=True)
+
+
+@router.get("/api/deep-search/reports/{report_id}/html")
+def get_deep_search_report_html(
+    report_id: str,
+    download: bool = False,
+    user: User = Depends(current_user),
+    sessions: sessionmaker = Depends(get_sessions),
+):
+    with sessions() as db:
+        report = db.scalar(
+            select(DeepSearchReport).where(
+                DeepSearchReport.id == report_id, DeepSearchReport.user_id == user.id
+            )
+        )
+        if not report:
+            raise HTTPException(404, "Rapport DeepSearch introuvable")
+
+        headers = {}
+        if download:
+            clean_ascii = unicodedata.normalize("NFKD", report.title).encode("ascii", "ignore").decode("ascii")
+            clean_filename = re.sub(r"[^a-zA-Z0-9_\-]", "_", clean_ascii).strip("_")[:40] or "rapport-deepsearch"
+            headers["Content-Disposition"] = f'attachment; filename="{clean_filename}.html"'
+
+        return Response(
+            content=report.html_content,
+            media_type="text/html; charset=utf-8",
+            headers=headers,
+        )
+
+
+@router.delete("/api/deep-search/reports/{report_id}")
+def delete_deep_search_report(
+    report_id: str,
+    user: User = Depends(current_user),
+    sessions: sessionmaker = Depends(get_sessions),
+):
+    with sessions() as db:
+        report = db.scalar(
+            select(DeepSearchReport).where(
+                DeepSearchReport.id == report_id, DeepSearchReport.user_id == user.id
+            )
+        )
+        if not report:
+            raise HTTPException(404, "Rapport DeepSearch introuvable")
+        db.delete(report)
+        db.commit()
+        return {"ok": True}
+
+
+@router.post("/api/deep-search/reports/from-message/{message_id}")
+def create_or_get_report_from_message(
+    message_id: str,
+    user: User = Depends(current_user),
+    sessions: sessionmaker = Depends(get_sessions),
+):
+    with sessions() as db:
+        existing = db.scalar(
+            select(DeepSearchReport).where(
+                DeepSearchReport.message_id == message_id, DeepSearchReport.user_id == user.id
+            )
+        )
+        if existing:
+            return deep_search_report_json(existing, include_html=True)
+
+        message = db.scalar(
+            select(Message)
+            .join(Conversation)
+            .where(
+                Message.id == message_id,
+                Message.role == "assistant",
+                Conversation.user_id == user.id,
+            )
+        )
+        if not message:
+            raise HTTPException(404, "Message introuvable")
+
+        conv = message.conversation
+        report_title = conv.title if conv and conv.title != "Nouvelle conversation" else "Rapport d'analyse DeepSearch"
+        topic = report_title
+        if conv and conv.messages:
+            prev_users = [m.content for m in conv.messages if m.role == "user" and m.created_at <= message.created_at]
+            if prev_users:
+                topic = prev_users[-1]
+
+        created_at_dt = message.created_at
+        html_doc = generate_report_html(
+            title=report_title,
+            topic=topic,
+            markdown_content=message.content,
+            sources=message.sources or [],
+            created_at_str=created_at_dt.strftime("%d/%m/%Y à %H:%M"),
+        )
+        new_report = DeepSearchReport(
+            user_id=user.id,
+            conversation_id=conv.id if conv else None,
+            message_id=message.id,
+            title=report_title,
+            topic=topic,
+            markdown_content=message.content,
+            html_content=html_doc,
+            sources=message.sources or [],
+            created_at=created_at_dt,
+        )
+        db.add(new_report)
+        db.commit()
+        db.refresh(new_report)
+        return deep_search_report_json(new_report, include_html=True)
+
+
+

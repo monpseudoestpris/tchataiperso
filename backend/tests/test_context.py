@@ -122,10 +122,10 @@ def test_multiple_documents_share_context_without_losing_last_details():
 
 
 def test_deep_search_context_expands_sources_and_injects_synthesis_instructions():
-    settings = Settings(_env_file=None, max_context_chars=60000)
+    settings = Settings(_env_file=None, max_context_chars=120000)
     sources = [
         {"title": f"Source {index}", "url": f"https://example.org/{index}", "query": f"piste {index}", "snippet": f"EXTRAIT_{index} " * 40}
-        for index in range(1, 41)
+        for index in range(1, 101)
     ]
     context = build_context(
         settings, "Résumé", ["Souvenir"],
@@ -136,7 +136,7 @@ def test_deep_search_context_expands_sources_and_injects_synthesis_instructions(
     assert "Traduis systématiquement" in context[0]["content"]
     reference_block = context[1]["content"]
     assert "Requête : piste 1" in reference_block
-    assert "EXTRAIT_40" in reference_block
+    assert "EXTRAIT_100" in reference_block
     assert sum(len(message["content"]) for message in context) <= settings.max_context_chars
 
 

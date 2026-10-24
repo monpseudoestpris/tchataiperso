@@ -79,6 +79,7 @@ class Message(Base):
     sources: Mapped[list] = mapped_column(JSON, default=list)
     conversation: Mapped[Conversation] = relationship(back_populates="messages")
     attachments: Mapped[list["Attachment"]] = relationship(back_populates="message")
+    deep_search_reports: Mapped[list["DeepSearchReport"]] = relationship(back_populates="message", cascade="all, delete-orphan")
 
 
 class Attachment(Base):
@@ -167,4 +168,21 @@ class BlogPost(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
     blog: Mapped[Blog] = relationship(back_populates="posts")
+
+
+class DeepSearchReport(Base):
+    __tablename__ = "deep_search_reports"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    conversation_id: Mapped[str | None] = mapped_column(ForeignKey("conversations.id", ondelete="SET NULL"), nullable=True, index=True)
+    message_id: Mapped[str | None] = mapped_column(ForeignKey("messages.id", ondelete="SET NULL"), nullable=True, index=True)
+    title: Mapped[str] = mapped_column(String(255))
+    topic: Mapped[str] = mapped_column(Text)
+    markdown_content: Mapped[str] = mapped_column(Text)
+    html_content: Mapped[str] = mapped_column(Text)
+    sources: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+    message: Mapped[Message | None] = relationship(back_populates="deep_search_reports")
+
 

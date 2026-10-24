@@ -39,6 +39,9 @@ services:
       EOD_HISTORICAL_DATA_KEY: ${EOD_HISTORICAL_DATA_KEY:-}
       BLOG_MODEL: ${BLOG_MODEL:-google/gemini-3.5-flash-lite}
       IMAGE_PROMPT_MODEL: ${IMAGE_PROMPT_MODEL:-openai/gpt-6-luna}
+      DEEP_SEARCH_MAX_TOKENS: ${DEEP_SEARCH_MAX_TOKENS:-12288}
+      DEEP_SEARCH_PLAN_MODEL: ${DEEP_SEARCH_PLAN_MODEL:-anthropic/claude-fable-5.1}
+      DEEP_SEARCH_SYNTHESIS_MODEL: ${DEEP_SEARCH_SYNTHESIS_MODEL:-google/gemini-3.8-flash}
       # scripts/compose.sh --lan y ajoute l'origine http://<IP-LAN>:3001.
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3001,http://127.0.0.1:3001}
     volumes:

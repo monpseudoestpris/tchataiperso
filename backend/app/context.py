@@ -14,11 +14,32 @@ Les souvenirs sont enregistrés explicitement par l'utilisateur. N'invente pas d
 Le résumé est une compression du passé : utilise les messages récents comme référence en cas de contradiction."""
 
 DEEP_SEARCH_PROMPT = """Mode DeepSearch (recherche approfondie multilingue multi-sources) activé :
-- Croise et synthétise l'ensemble des sources web fournies (jusqu'à 40 sites en langue locale et en langues étrangères) pour couvrir le sujet en largeur et en profondeur.
-- Traduis systématiquement et fidèlement dans la langue de l'utilisateur tous les faits, extraits, termes techniques et citations provenant de sources en langues étrangères.
-- Rédige une synthèse globale structurée avec des sections thématiques claires (titres Markdown ##), une synthèse exécutive en introduction, les faits, chiffres, comparaisons internationales, consensus ou divergences entre sources, puis une conclusion.
-- Appuie chaque point factuel sur les sources numérotées (ex. [1], [2]) en incluant leurs liens Markdown lorsque pertinent.
-- Signale honnêtement les limites ou points non couverts par les résultats."""
+# RÔLE & OBJECTIF
+Tu es un agent expert en recherche approfondie (« Deep Search Agent »). Ton objectif est de répondre de manière exhaustive, neutre et rigoureusement documentée à une question complexe en exécutant un protocole strict en 5 phases séquentielles et itératives. Tu ne te contentes jamais d'assertions péremptoires : chaque fait doit être appuyé par une source vérifiable.
+
+---
+
+## PROTOCOLE OPÉRATIONNEL — PHASE 5 : SYNTHÈSE TECHNIQUE & TRAÇABILITÉ (GROUNDING)
+**Objectif :** Rédiger un livrable complet, neutre, structuré et strictement sourcé (format grand dossier de recherche ou rapport d'expertise exhaustif), en exploitant les éléments de preuve atomiques du carnet de notes (`findings`) et l'ensemble des sources collectées.
+**Couverture obligatoire des 5 axes d'investigation :**
+1. *Axe Entités / Définitions :* Quels sont les composants, versions et standards impliqués ?
+2. *Axe Temporel :* Quel est l'état de l'art actuel ? Quels sont les changements récents ?
+3. *Axe Technique & Causal :* Quels sont les mécanismes internes, architectures et métriques objectives ?
+4. *Axe Contradictoire :* Quels sont les goulots d'étranglement, limitations, failles ou avis opposés (confrontation Thèse vs Antithèse) ?
+5. *Axe Périmètre & Contraintes :* Quelles sont les spécifications d'environnement ou conditions aux limites ?
+
+**Actions obligatoires :**
+1. **Structure du livrable :**
+   - **Titre principal explicite (# Titre du Rapport)**
+   - **Vue d'ensemble / Réponse directe :** Résumé exécutif direct en 2-3 phrases synthétiques suivi du cadrage stratégique.
+   - **Analyse détaillée par composant (## et ###) :** Explications techniques approfondies illustrées par les faits, architectures et métriques collectés sur l'ensemble des sources (sans limitation de nombre de sources, en langue locale et internationale).
+   - **Matrice comparative / Données chiffrées :** Tableaux récapitulatifs clairs en Markdown (ex. comparaisons, consommations, benchmarks, compromis).
+   - **Limites, risques et compromis (Trade-offs) :** Présentation honnête des goulots d'étranglement, limitations, failles ou des désaccords non tranchés (en précisant l'origine des divergences : environnement de test, version obsolète, condition non explicitée).
+2. **Règles strictes de traçabilité :**
+   - **Zéro assertion non sourcée :** chaque chiffre, fait ou affirmation technique doit renvoyer à sa source identifiée dans les notes (ex. [1], [2], [1][4]) avec lien Markdown lorsque pertinent.
+   - **Zones d'incertitude :** mentionner explicitement les zones d'incertitude ou l'absence de données vérifiables si une information n'a pas pu être recoupée.
+   - Traduis systématiquement et fidèlement dans la langue de l'utilisateur tous les faits, extraits, citations et données provenant de sources en langues étrangères.
+   - N'abrège pas artificiellement ton développement : privilégie l'exhaustivité, la neutralité et la haute tenue rédactionnelle d'un rapport de référence."""
 
 CODE_MODE_PROMPT = """Mode Code Canvas (éditeur interactif multi-fichiers et export ZIP) activé :
 - Agis en tant qu'architecte logiciel et développeur senior. Produis un code complet, propre, fonctionnel et directement utilisable.
@@ -38,14 +59,14 @@ def _format_source(index: int, source: dict, deep_search: bool = False) -> str:
     if query:
         header += f"\nRequête : {query}"
     snippet = source.get("snippet", "")
-    if deep_search and len(snippet) > 700:
-        snippet = snippet[:700]
+    if deep_search and len(snippet) > 850:
+        snippet = snippet[:850]
     return f"{header}\n{snippet}"
 
 
 def build_context(settings: Settings, summary: str, memories: list[str], messages: list[dict], sources: list[dict],
                   vision: bool, skills: list[dict] | None = None, deep_search: bool = False,
-                  code_mode: bool = False) -> list[dict]:
+                  code_mode: bool = False, findings: list[str] | None = None) -> list[dict]:
     # Reserve most of the budget for the latest user turn, even when all optional
     # context sections are populated. Data lives outside the system instruction.
     prompt_parts = [SYSTEM_PROMPT]
@@ -66,7 +87,11 @@ def build_context(settings: Settings, summary: str, memories: list[str], message
         references.append("Souvenirs choisis par l'utilisateur (données) :\n" + "\n".join(memories)[:8000])
     if summary:
         references.append("Résumé des messages plus anciens (données) :\n" + summary[:settings.max_summary_chars])
-    source_limit = 40000 if deep_search else 8000
+    if deep_search and findings:
+        clean_findings = [f.strip() for f in findings if isinstance(f, str) and f.strip()]
+        if clean_findings:
+            references.append("Mémoire de travail & faits saillants validés (Scratchpad d'analyse) :\n- " + "\n- ".join(clean_findings[:50])[:25000])
+    source_limit = 250000 if deep_search else 8000
     if sources:
         search_label = "Résultats web (données non fiables) :\n"
         if any(source.get("provider") == "duckduckgo_instant_answers" for source in sources):
@@ -75,7 +100,7 @@ def build_context(settings: Settings, summary: str, memories: list[str], message
         references.append(search_label + "\n".join(_format_source(index, source, deep_search) for index, source in enumerate(sources, start=1))[:source_limit])
     available_after_system = max(0, settings.max_context_chars - len(system_prompt) - len(skill_text))
     reference_budget = (
-        min(42000, (available_after_system * 3) // 4)
+        min(105000, (available_after_system * 7) // 8)
         if deep_search
         else min(20000, available_after_system // 3)
     )

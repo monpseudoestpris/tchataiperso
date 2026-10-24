@@ -1,4 +1,21 @@
-export type Model = { id: string; name: string; vision: boolean };
+export type Model = {
+  id: string;
+  name: string;
+  vision: boolean;
+  description?: string;
+  context_length?: number;
+  pricing?: {
+    prompt?: string;
+    completion?: string;
+    input_cache_read?: string;
+    [key: string]: any;
+  };
+  prompt_price_1m?: number;
+  completion_price_1m?: number;
+  input_cache_read_price_1m?: number | null;
+  provider?: string;
+  reasoning?: boolean;
+};
 export type ImageModel = { id: string; name: string; provider: "ideogram" | "openrouter" };
 export type Config = {
   models: Model[];
@@ -61,7 +78,21 @@ export type DocumentExtraction = {
   warnings: string[];
 };
 export type Source = { title: string; url: string; snippet?: string; query?: string; provider?: string; search_notice?: string };
-export type Message = { id: string; role: string; content: string; created_at: string; attachments: Attachment[]; sources: Source[] };
+export type Message = { id: string; role: string; content: string; created_at: string; attachments: Attachment[]; sources: Source[]; deep_search_report_id?: string | null };
+export type DeepSearchReport = {
+  id: string;
+  user_id: string;
+  conversation_id?: string | null;
+  message_id?: string | null;
+  title: string;
+  topic: string;
+  markdown_content: string;
+  html_content?: string;
+  sources: Source[];
+  sources_count: number;
+  created_at: string;
+  html_url: string;
+};
 export type Skill = { id: string; name: string; prompt: string; created_at: string; updated_at: string };
 export type BlogCard = {
   title: string;
@@ -168,6 +199,7 @@ export async function streamMessage(
     model: string;
     web_search: boolean;
     deep_search?: boolean;
+    deep_search_queries?: string[];
     code_mode?: boolean;
     finance_mode?: boolean;
     attachment_ids: string[];
@@ -272,5 +304,38 @@ export async function deleteBlogPost(blogId: string, postId: string): Promise<vo
     method: "DELETE",
   });
 }
+
+export async function planDeepSearch(
+  conversationId: string | null | undefined,
+  content: string,
+): Promise<string[]> {
+  const url = conversationId ? `/conversations/${conversationId}/deep-search/plan` : "/deep-search/plan";
+  const res = await api<{ queries: string[] }>(url, {
+    method: "POST",
+    body: JSON.stringify({ content }),
+  });
+  return res.queries || [];
+}
+
+export async function fetchDeepSearchReports(): Promise<DeepSearchReport[]> {
+  return api<DeepSearchReport[]>("/deep-search/reports");
+}
+
+export async function fetchDeepSearchReport(id: string): Promise<DeepSearchReport> {
+  return api<DeepSearchReport>(`/deep-search/reports/${id}`);
+}
+
+export async function deleteDeepSearchReport(id: string): Promise<void> {
+  return api<void>(`/deep-search/reports/${id}`, {
+    method: "DELETE",
+  });
+}
+
+export async function createReportFromMessage(messageId: string): Promise<DeepSearchReport> {
+  return api<DeepSearchReport>(`/deep-search/reports/from-message/${messageId}`, {
+    method: "POST",
+  });
+}
+
 
 

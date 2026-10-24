@@ -143,6 +143,7 @@ class SendMessage(BaseModel):
     finance_mode: bool = False
     attachment_ids: list[str] = Field(default_factory=list, max_length=5)
     skill_ids: list[str] = Field(default_factory=list, max_length=10)
+    deep_search_queries: list[str] | None = Field(default=None, max_length=20)
 
     @field_validator("attachment_ids")
     @classmethod
@@ -157,6 +158,22 @@ class SendMessage(BaseModel):
         if len(values) != len(set(values)):
             raise ValueError("Compétences dupliquées")
         return values
+
+    @field_validator("deep_search_queries")
+    @classmethod
+    def sanitize_deep_search_queries(cls, values: list[str] | None) -> list[str] | None:
+        if values is None:
+            return None
+        cleaned = [" ".join(q.split())[:300] for q in values if isinstance(q, str) and q.strip()]
+        return cleaned[:20]
+
+
+class PlanDeepSearch(BaseModel):
+    content: str = Field(min_length=1, max_length=20000)
+
+
+class DeepSearchPlanResponse(BaseModel):
+    queries: list[str]
 
 
 class CreateMemory(BaseModel):

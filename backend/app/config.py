@@ -87,8 +87,11 @@ class Settings(BaseSettings):
     llm_max_tokens: int = 2048
     summary_temperature: float = 0.2
     summary_max_tokens: int = 900
+    deep_search_max_tokens: int = 12288
     summary_model: str = "openai/gpt-4o-mini"
     search_query_model: str = "mistralai/mistral-small-3.2-24b-instruct"
+    deep_search_plan_model: str = "anthropic/claude-fable-5.1"
+    deep_search_synthesis_model: str = "google/gemini-3.8-flash"
     blog_model: str = "google/gemini-3.5-flash-lite"
     image_prompt_model: str = "openai/gpt-6-luna"
     image_models: str = ""
@@ -158,14 +161,14 @@ class Settings(BaseSettings):
             raise ValueError("Les températures doivent être comprises entre 0 et 2")
         return value
 
-    @field_validator("llm_max_tokens", "summary_max_tokens")
+    @field_validator("llm_max_tokens", "summary_max_tokens", "deep_search_max_tokens")
     @classmethod
     def valid_max_tokens(cls, value: int) -> int:
         if not 1 <= value <= 100000:
             raise ValueError("Le nombre maximal de tokens doit être compris entre 1 et 100000")
         return value
 
-    @field_validator("summary_model", "search_query_model")
+    @field_validator("summary_model", "search_query_model", "deep_search_plan_model")
     @classmethod
     def valid_auxiliary_model(cls, value: str) -> str:
         value = value.strip()
@@ -196,7 +199,7 @@ class Settings(BaseSettings):
         return value
 
     @property
-    def models(self) -> list[dict]:
+    def configured_models(self) -> list[dict]:
         try:
             values = json.loads(self.llm_models)
             if not isinstance(values, list) or not values:
@@ -205,12 +208,39 @@ class Settings(BaseSettings):
             for item in values:
                 if not isinstance(item, dict) or not isinstance(item.get("id"), str) or not item["id"].strip():
                     raise ValueError()
-                result.append({"id": item["id"], "name": str(item.get("name", item["id"])), "vision": bool(item.get("vision", False))})
+                result.append({
+                    "id": item["id"],
+                    "name": str(item.get("name", item["id"])),
+                    "vision": bool(item.get("vision", False)),
+                    "provider": item["id"].split("/")[0] if "/" in item["id"] else "custom",
+                })
             if self.default_model not in {item["id"] for item in result}:
                 raise ValueError()
             return result
         except (ValueError, TypeError, KeyError) as exc:
             raise ValueError("LLM_MODELS doit être un tableau JSON de modèles; DEFAULT_MODEL doit être présent") from exc
+
+    def get_models(self, force_refresh: bool = False) -> list[dict[str, Any]]:
+        self.refresh_from_env_file()
+        fallback = self.configured_models
+        if self.demo_mode or not self.enabled(self.llm_api_key):
+            return fallback
+
+        from .openrouter import fetch_openrouter_models
+        key = _clean_api_key(self.llm_api_key)
+        dynamic = fetch_openrouter_models(api_key=key, base_url=self.llm_base_url, force_refresh=force_refresh)
+        if dynamic:
+            known_ids = {m["id"] for m in dynamic}
+            if self.default_model and self.default_model not in known_ids:
+                fallback_entry = next((m for m in fallback if m["id"] == self.default_model), None)
+                if fallback_entry:
+                    dynamic.insert(0, fallback_entry)
+            return dynamic
+        return fallback
+
+    @property
+    def models(self) -> list[dict]:
+        return self.get_models(force_refresh=False)
 
     @property
     def available_image_models(self) -> list[dict[str, Any]]:
@@ -283,7 +313,7 @@ class Settings(BaseSettings):
                 cleaned = _clean_api_key(parsed[env_name])
                 if cleaned or force is False:
                     setattr(self, field_name, SecretStr(cleaned))
-        str_fields = ("llm_base_url", "ocr_model", "vision_model", "default_model", "llm_models", "summary_model", "search_query_model", "blog_model", "image_prompt_model", "image_models", "default_image_model")
+        str_fields = ("llm_base_url", "ocr_model", "vision_model", "default_model", "llm_models", "summary_model", "search_query_model", "deep_search_plan_model", "deep_search_synthesis_model", "blog_model", "image_prompt_model", "image_models", "default_image_model")
         for field_name in str_fields:
             if field_name in self._explicit_fields:
                 continue

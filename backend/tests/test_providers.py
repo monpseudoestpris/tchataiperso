@@ -39,6 +39,8 @@ def settings():
         demo_mode=False,
         duckduckgo_enabled=False,
         search_query_model="mistralai/mistral-small-3.2-24b-instruct",
+        deep_search_plan_model="anthropic/claude-fable-5.1",
+        deep_search_synthesis_model="google/gemini-3.8-flash",
         searxng_url="",
         brave_api_key=SecretStr("fake-brave-secret"),
         mistral_api_key=SecretStr("fake-mistral-secret"),
@@ -902,15 +904,18 @@ def test_plan_deep_search_queries_and_followup_and_deduplication(settings, trans
         payload = json.loads(request.content)
         calls.append(payload)
         if len(calls) == 1:
+            assert payload["model"] == settings.deep_search_plan_model
             assert "anglais" in payload["messages"][0]["content"]
             return httpx.Response(200, json={"choices": [{"message": {"content": (
                 '```json\n[" SearXNG architecture ", "SearXNG search engines benchmark", "SearXNG architecture", "SearXNG confidentialité"]\n```'
             )}}]})
         if len(calls) == 2:
+            assert payload["model"] == settings.deep_search_synthesis_model
             assert "langue étrangère" in payload["messages"][0]["content"]
             return httpx.Response(200, json={"choices": [{"message": {"content": (
                 '["SearXNG search engines benchmark", "SearXNG Redis cache performance"]'
             )}}]})
+        assert payload["model"] == settings.deep_search_synthesis_model
         return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps([
             {"id": 0, "title": "Documentation officielle", "snippet": "Extrait traduit en français"},
             {"id": 1, "title": "Comparatif SearXNG", "snippet": "Second extrait traduit"},
@@ -947,10 +952,79 @@ def test_plan_deep_search_queries_and_followup_and_deduplication(settings, trans
     assert translated[0]["snippet"] == "Extrait traduit en français"
     assert translated[0]["url"] == "https://docs.searxng.org/admin/"
 
-    # Verify default cap is 40 unique sites.
-    many = [{"title": f"Site {i}", "url": f"https://site-{i}.example.org/", "snippet": f"Texte {i}"} for i in range(50)]
+    # Verify default cap is 100 unique sites, and max_total=None is uncapped.
+    many = [{"title": f"Site {i}", "url": f"https://site-{i}.example.org/", "snippet": f"Texte {i}"} for i in range(120)]
     capped = providers.merge_web_sources([], many, query="test")
-    assert len(capped) == 40
+    assert len(capped) == 100
+    uncapped = providers.merge_web_sources([], many, query="test", max_total=None)
+    assert len(uncapped) == 120
+
+
+def test_parse_query_list_formatting_and_quotes():
+    # 1. Normalisation des guillemets typographiques et des expressions exactes
+    raw_json = '["\\\"active recall\\\" Dunlosky meta-analysis", "«répétition espacée» mémoire révision,"]'
+    parsed = providers._parse_query_list(raw_json, max_queries=4)
+    assert parsed == [
+        '"active recall" Dunlosky meta-analysis',
+        '"répétition espacée" mémoire révision',
+    ]
+
+    # 2. Format en lignes avec puces et guillemets
+    raw_lines = """
+    - "learning styles" myth debunked.
+    * "charge cognitive" Sweller 1988;
+    """
+    parsed_lines = providers._parse_query_list(raw_lines, max_queries=4)
+    assert parsed_lines == [
+        '"learning styles" myth debunked',
+        '"charge cognitive" Sweller 1988',
+    ]
+
+
+def test_plan_deep_search_queries_uses_powerful_model_and_falls_back(settings, transport):
+    called_models = []
+
+    def handler(request):
+        payload = json.loads(request.content)
+        called_models.append(payload["model"])
+        # First call uses anthropic/claude-fable-5.1; simulate a 404/503 to test fallback
+        if len(called_models) == 1:
+            assert payload["model"] == "anthropic/claude-fable-5.1"
+            sys_content = payload["messages"][0]["content"]
+            assert "# RÔLE & OBJECTIF" in sys_content
+            assert "PHASE 1 : DÉCOMPOSITION & PLANIFICATION INITIALE" in sys_content
+            assert "PHASE 2 : GÉNÉRATION DE REQUÊTES & RETRIEVAL MULTI-SOURCES" in sys_content
+            assert "Axe Entités / Définitions" in sys_content
+            assert "Axe Temporel" in sys_content
+            assert "Axe Technique & Causal" in sys_content
+            assert "Axe Contradictoire" in sys_content
+            assert "Axe Périmètre & Contraintes" in sys_content
+            assert "Requête Factuelle / Directe" in sys_content
+            assert "Requête Contradictoire / Critique" in sys_content
+            assert "MÉTHODE DE DÉCOMPOSITION STRATÉGIQUE" in sys_content
+            assert "ARBRE DE RECHERCHE" in sys_content
+            assert "DÉCOMPOSITION EN SOUS-PROBLÈMES ET DÉMARCHE THÈSE / ANTITHÈSE" in sys_content
+            assert "L'axe des entités et des concepts (Quoi / Qui)" in sys_content
+            assert "L'axe temporel et dynamique (Quand)" in sys_content
+            assert "L'axe technique et causal (Comment / Pourquoi)" in sys_content
+            assert "L'axe contradictoire et comparatif (La confrontation / Thèse vs Antithèse)" in sys_content
+            assert "L'axe du périmètre et des contraintes (Où / Dans quel cadre)" in sys_content
+            assert "VRAM requise par niveau de quantification" in sys_content
+            return httpx.Response(503, json={"error": "Model temporarily unavailable"})
+        # Second call falls back to fallback model
+        assert payload["model"] == settings.search_query_model
+        return httpx.Response(200, json={"choices": [{"message": {"content": (
+            '["Architecture quantique 2026", "Quantum computing error correction benchmarks"]'
+        )}}]})
+
+    transport(handler)
+    queries = asyncio.run(providers.plan_deep_search_queries(
+        settings, "Quel avenir pour l'informatique quantique ?", "", [],
+    ))
+    assert called_models == ["anthropic/claude-fable-5.1", settings.search_query_model]
+    assert len(queries) == 2
+    assert "Architecture quantique 2026" in queries
+
 
 
 def test_settings_reloads_updated_env_file_live_and_strips_quotes(tmp_path, monkeypatch):
@@ -992,6 +1066,29 @@ def test_chat_stream_raises_max_tokens_in_code_canvas_mode(settings, transport):
         ))
     )
     assert "index.html" in "".join(chunks)
+
+
+def test_chat_stream_raises_max_tokens_in_deep_search_mode(settings, transport):
+    def handler(request):
+        payload = json.loads(request.content)
+        assert payload["max_tokens"] == 12288
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=Chunks(
+            b'data: {"choices":[{"delta":{"content":"# Grand Rapport DeepSearch\\n\\n## 1. Introduction\\n"},"finish_reason":"stop"}]}\n\n',
+            b'data: [DONE]\n\n',
+        ))
+
+    transport(handler)
+    chunks = asyncio.run(
+        _collect_async(providers.stream_chat(
+            settings,
+            [
+                {"role": "system", "content": "Mode DeepSearch (recherche approfondie multilingue multi-sources) activé :"},
+                {"role": "user", "content": "Rapport sur l'IA"},
+            ],
+            "example/model",
+        ))
+    )
+    assert "Grand Rapport DeepSearch" in "".join(chunks)
 
 
 async def _collect_async(async_iter):

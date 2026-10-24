@@ -863,14 +863,20 @@ def test_deep_search_executes_multi_wave_searxng_and_global_synthesis(tmp_path, 
     searched_queries = []
     captured_context = {}
 
-    async def plan_initial(_settings, query, summary, recent_turns):
+    followup_calls = 0
+
+    async def plan_initial(_settings, query, summary, recent_turns, max_queries=8):
         assert query == "Analyse complète de l'hydrogène vert"
         return ["hydrogène vert électrolyse coûts", "hydrogène vert industrie décarbonation"]
 
-    async def plan_followup(_settings, query, initial_queries, sources):
-        assert initial_queries == ["hydrogène vert électrolyse coûts", "hydrogène vert industrie décarbonation"]
-        assert len(sources) == 3
-        return ["hydrogène vert projets Europe 2026"]
+    async def plan_followup(_settings, query, initial_queries, sources, max_queries=4):
+        nonlocal followup_calls
+        followup_calls += 1
+        if followup_calls == 1:
+            assert initial_queries == ["hydrogène vert électrolyse coûts", "hydrogène vert industrie décarbonation"]
+            assert len(sources) == 3
+            return ["hydrogène vert projets Europe 2026"]
+        return []
 
     async def search(_settings, query, limit=5):
         assert limit == 10
@@ -918,6 +924,106 @@ def test_deep_search_executes_multi_wave_searxng_and_global_synthesis(tmp_path, 
         saved_sources = client.get(f"/api/conversations/{item}").json()["messages"][-1]["sources"]
         assert len(saved_sources) == 4
         assert saved_sources[0]["query"] == "hydrogène vert électrolyse coûts"
+
+        # Verify DeepSearch report persistence and HTML endpoints
+        done_payload = stream_events[-1][1]
+        report_id = done_payload.get("deep_search_report_id")
+        assert report_id is not None
+
+        # 1. Detail endpoint
+        rep_resp = client.get(f"/api/deep-search/reports/{report_id}")
+        assert rep_resp.status_code == 200
+        rep_data = rep_resp.json()
+        assert rep_data["id"] == report_id
+        assert "hydrogène vert" in rep_data["topic"].lower()
+        assert len(rep_data["sources"]) == 4
+        assert "<!DOCTYPE html>" in rep_data["html_content"]
+
+        # 2. Standalone HTML page view
+        html_resp = client.get(f"/api/deep-search/reports/{report_id}/html")
+        assert html_resp.status_code == 200
+        assert "text/html" in html_resp.headers["content-type"]
+        assert "<!DOCTYPE html>" in html_resp.text
+        assert "Grand Rapport DeepSearch" in html_resp.text
+        assert "hydrogène vert" in html_resp.text.lower()
+
+        # 3. HTML download
+        dl_resp = client.get(f"/api/deep-search/reports/{report_id}/html?download=1")
+        assert dl_resp.status_code == 200
+        assert "attachment" in dl_resp.headers.get("content-disposition", "")
+
+        # 4. List reports
+        list_resp = client.get("/api/deep-search/reports")
+        assert list_resp.status_code == 200
+        assert any(r["id"] == report_id for r in list_resp.json())
+
+        # 5. From-message endpoint
+        msg_id = done_payload["message"]["id"]
+        from_msg = client.post(f"/api/deep-search/reports/from-message/{msg_id}")
+        assert from_msg.status_code == 200
+        assert from_msg.json()["id"] == report_id
+
+        # 6. Delete report
+        del_resp = client.delete(f"/api/deep-search/reports/{report_id}")
+        assert del_resp.status_code == 200
+        assert client.get(f"/api/deep-search/reports/{report_id}").status_code == 404
+
+
+def test_deep_search_plan_endpoints_and_custom_queries(tmp_path, monkeypatch):
+    settings = Settings(_env_file=None, app_data_dir=tmp_path, demo_mode=False, llm_api_key="secret",
+                        searxng_url="http://clair-searxng:8080")
+
+    async def fake_plan(_settings, query, summary, recent_turns, max_queries=8):
+        return ["piste plan 1", "piste plan 2", "piste plan 3"]
+
+    searched_queries = []
+    async def fake_search(_settings, query, limit=5):
+        searched_queries.append(query)
+        return [{"title": f"Titre {query}", "url": f"https://example.org/{len(searched_queries)}", "snippet": "Extrait"}]
+
+    async def fake_followup(_settings, query, initial_queries, sources, max_queries=4):
+        return []
+
+    async def fake_translate(_settings, sources, question):
+        return sources
+
+    async def fake_stream(_settings, messages, model):
+        yield "Rapport finalisé."
+
+    monkeypatch.setattr(providers, "plan_deep_search_queries", fake_plan)
+    monkeypatch.setattr(providers, "plan_deep_search_followup", fake_followup)
+    monkeypatch.setattr(providers, "search_web", fake_search)
+    monkeypatch.setattr(providers, "translate_deep_search_sources", fake_translate)
+    monkeypatch.setattr(providers, "stream_chat", fake_stream)
+
+    with authenticated_client(settings) as client:
+        item = conversation(client)
+
+        # 1. Endpoint avec ID conversation
+        res_conv = client.post(f"/api/conversations/{item}/deep-search/plan", json={
+            "content": "Quels sont les réacteurs nucléaires SMR en 2026 ?",
+        })
+        assert res_conv.status_code == 200
+        assert res_conv.json()["queries"] == ["piste plan 1", "piste plan 2", "piste plan 3"]
+
+        # 2. Endpoint direct sans ID conversation
+        res_direct = client.post("/api/deep-search/plan", json={
+            "content": "Quels sont les réacteurs nucléaires SMR en 2026 ?",
+        })
+        assert res_direct.status_code == 200
+        assert res_direct.json()["queries"] == ["piste plan 1", "piste plan 2", "piste plan 3"]
+
+        # 3. Exécution avec plan modifié par l'utilisateur
+        custom_plan = ["SMR NuScale bilan financier", "SMR Rolls-Royce calendrier UK"]
+        res_msg = client.post(f"/api/conversations/{item}/messages", json={
+            "content": "Quels sont les réacteurs nucléaires SMR en 2026 ?",
+            "deep_search": True,
+            "deep_search_queries": custom_plan,
+        })
+        stream_events = events(res_msg)
+        assert stream_events[-1][0] == "done"
+        assert searched_queries == custom_plan
+
 
 
 def test_code_mode_streams_multi_file_canvas_in_demo_and_real_modes(tmp_path, monkeypatch):
