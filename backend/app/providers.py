@@ -1451,6 +1451,90 @@ async def improve_sound_prompt(
         raise ProviderError("Impossible de joindre le fournisseur IA pour améliorer le prompt sonore.") from None
 
 
+async def improve_music_prompt(
+    settings: Any,
+    model: str,
+    prompt: str,
+    style_keywords: str | None = None,
+    duration_hint: float | None = None,
+    instrumental: bool | None = None,
+) -> str:
+    """Enrich a music prompt musically for ElevenLabs Eleven Music (https://elevenlabs.io/app/music)."""
+    key = _key(settings, "llm_api_key", "du fournisseur IA")
+    system_content = (
+        "Tu es un producteur de musique professionnel et un compositeur expert dans la conception de prompts pour le modèle ElevenLabs Music (https://elevenlabs.io/app/music).\n"
+        "Ta mission est de sublimer et transformer l'idée musicale brute de l'utilisateur en un prompt musical riche, immersif, évocateur et précis.\n\n"
+        "Directives impératives :\n"
+        "1. LANGUE ANGLAISE STRICTEMENT OBLIGATOIRE : Le modèle ElevenLabs Music fonctionne de façon optimale avec des termes de production musicale en anglais. Tu DOIS TOUJOURS rédiger le prompt final EN ANGLAIS (ex: upbeat tempo, warm vinyl crackle, atmospheric synthesizers, driving drums, fingerpicked acoustic guitar, emotional strings crescendo), même si la demande initiale est formulée en français.\n"
+        "2. DÉCRIS AVEC PRÉCISION :\n"
+        "   - Le genre et le style musical précis (ex: cinematic orchestral trailer, lo-fi chillhop, synthwave 80s, indie acoustic folk, deep house, neo-classical piano).\n"
+        "   - L'instrumentation maîtresse et les textures sonores (ex: grand piano, 808 sub bass, brass section, warm cello, Rhodes organ, live drum groove).\n"
+        "   - L'ambiance émotionnelle et l'énergie (ex: melancholic, uplifting, nostalgic, tense, dreamy, serene, anthemic).\n"
+        "   - Le tempo indicatif (BPM) et la pulsation rythmique (ex: 85 BPM relaxed groove, 128 BPM energetic four-on-the-floor beat).\n"
+        "   - L'orientation vocale ou instrumentale : si instrumental uniquement, spécifie explicitement une orchestration pure sans voix. Si chanté, précise le timbre de voix (ex: soulful female lead vocals, gentle airy whispered vocals) ou des repères de structure ([Intro], [Verse], [Chorus], [Outro]).\n"
+        "3. ATTENTION AUX DROITS D'AUTEUR : Ne mentionne JAMAIS de nom d'artistes protégés ou de groupes célèbres (ex: ne dis pas 'comme Daft Punk' ou 'style Hans Zimmer' car ElevenLabs bloque ces requêtes) ; décris plutôt les caractéristiques techniques du style sonore (ex: 'French touch retro funk with vocoder synths', 'epic symphonic soundtrack with brass stabs and driving ostinato strings').\n"
+        "4. LONGUEUR : Entre 120 et 600 caractères (maximum 1000 caractères). Évite le remplissage superflu.\n"
+        "5. Retourne UNIQUEMENT le prompt musical amélioré EN ANGLAIS. N'ajoute aucun préambule, aucun commentaire, aucun guillemet d'encadrement, ni bloc markdown."
+    )
+    user_content = prompt
+    extras = []
+    if style_keywords and style_keywords.strip():
+        extras.append(f"Style / genres musicaux souhaités : {style_keywords.strip()}")
+    if duration_hint is not None and duration_hint > 0:
+        extras.append(f"Durée visée : environ {int(duration_hint)} secondes")
+    if instrumental is True:
+        extras.append("Morceau purement instrumental (strictement sans paroles ni voix)")
+    elif instrumental is False:
+        extras.append("Chanson avec voix / chant expressif et mélodique")
+    if extras:
+        user_content = f"Idée musicale initiale : {prompt}\n" + "\n".join(extras)
+
+    messages = [
+        {"role": "system", "content": system_content},
+        {"role": "user", "content": user_content},
+    ]
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=False) as client:
+            response = await client.post(
+                settings.llm_base_url.rstrip("/") + "/chat/completions",
+                headers={"Authorization": f"Bearer {key}"},
+                json={"model": model, "messages": messages, "stream": False,
+                      "temperature": 0.7, "max_tokens": 500},
+            )
+            if response.status_code in (400, 404, 422) and model != getattr(settings, "default_model", ""):
+                alt_model = getattr(settings, "default_model", "")
+                if alt_model:
+                    response = await client.post(
+                        settings.llm_base_url.rstrip("/") + "/chat/completions",
+                        headers={"Authorization": f"Bearer {key}"},
+                        json={"model": alt_model, "messages": messages, "stream": False,
+                              "temperature": 0.7, "max_tokens": 500},
+                    )
+        _check_response(response, "Fournisseur IA")
+        payload = _json(response, "Fournisseur IA")
+        try:
+            content = payload["choices"][0]["message"]["content"]
+            if not isinstance(content, str) or not content.strip():
+                raise ValueError
+            cleaned = content.strip()
+            if cleaned.startswith("```") and cleaned.endswith("```"):
+                cleaned = re.sub(r"^```(?:markdown|text)?\s*|\s*```$", "", cleaned, flags=re.IGNORECASE).strip()
+            if (cleaned.startswith('"') and cleaned.endswith('"')) or (cleaned.startswith('«') and cleaned.endswith('»')):
+                cleaned = cleaned[1:-1].strip()
+            cleaned = re.sub(r"^(?:Music\s+Prompt(?:\s+amélioré)?\s*:\s*)", "", cleaned, flags=re.IGNORECASE).strip()
+            if len(cleaned) > 2000:
+                cleaned = cleaned[:2000].rsplit(" ", 1)[0]
+            if not cleaned:
+                raise ValueError
+            return cleaned
+        except (ValueError, TypeError, KeyError, IndexError):
+            raise ProviderError("Le fournisseur IA a renvoyé un prompt musical amélioré invalide.") from None
+    except httpx.TimeoutException:
+        raise ProviderError("L'amélioration du prompt musical a dépassé le délai autorisé.") from None
+    except httpx.HTTPError:
+        raise ProviderError("Impossible de joindre le fournisseur IA pour améliorer le prompt musical.") from None
+
+
 def _safe_web_url(value: Any) -> bool:
     if not isinstance(value, str):
         return False
@@ -2142,6 +2226,48 @@ async def translate_sound_prompt_to_english(settings: Any, prompt: str) -> str:
         return cleaned
 
 
+async def translate_music_prompt_to_english(settings: Any, prompt: str) -> str:
+    """Translate a music prompt to evocative English for ElevenLabs Music if needed."""
+    if not prompt or not prompt.strip():
+        return prompt
+    cleaned = prompt.strip()
+    if _is_probably_english(cleaned):
+        return cleaned
+    if not settings.enabled(settings.llm_api_key):
+        return cleaned
+
+    model = getattr(settings, "search_query_model", "") or getattr(settings, "default_model", "")
+    key = _key(settings, "llm_api_key", "du fournisseur IA")
+    system_content = (
+        "You are an expert music director. Translate the user's music idea into an evocative English music description for the ElevenLabs Music AI model.\n"
+        "Rules:\n"
+        "1. Output ONLY the English description.\n"
+        "2. Preserve instruments, mood, tempo, rhythmic elements and genre.\n"
+        "3. Do NOT mention copyrighted artist or band names.\n"
+        "4. Do not include explanations, quotes, or preambles."
+    )
+    messages = [
+        {"role": "system", "content": system_content},
+        {"role": "user", "content": cleaned},
+    ]
+    try:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=False) as client:
+            response = await client.post(
+                settings.llm_base_url.rstrip("/") + "/chat/completions",
+                headers={"Authorization": f"Bearer {key}"},
+                json={"model": model, "messages": messages, "stream": False,
+                      "temperature": 0.3, "max_tokens": 250},
+            )
+        _check_response(response, "Fournisseur IA")
+        payload = _json(response, "Fournisseur IA")
+        translated = payload["choices"][0]["message"]["content"].strip()
+        if (translated.startswith('"') and translated.endswith('"')) or (translated.startswith('«') and translated.endswith('»')):
+            translated = translated[1:-1].strip()
+        return translated if translated else cleaned
+    except Exception:
+        return cleaned
+
+
 _MAX_SOUND_BYTES = 25 * 1024 * 1024  # 25 MiB audio limit
 
 
@@ -2211,3 +2337,413 @@ async def generate_sound_effect(
         raise ProviderError("La génération de l'effet sonore ElevenLabs a dépassé le délai autorisé.") from None
     except httpx.HTTPError as exc:
         raise ProviderError(f"Impossible de joindre le service ElevenLabs : {exc}") from None
+
+
+async def generate_music(
+    settings: Any,
+    text: str,
+    duration_seconds: float | None = None,
+    force_instrumental: bool = True,
+    model_id: str | None = None,
+    output_format: str = "mp3_44100_128",
+) -> tuple[bytes, str]:
+    """Generate original music via ElevenLabs Eleven Music API (https://elevenlabs.io/app/music)."""
+    key = _key(settings, "eleven_labs_key", "ElevenLabs")
+    endpoint = "https://api.elevenlabs.io/v1/music"
+    params: dict[str, str] = {}
+    if output_format and output_format.strip():
+        params["output_format"] = output_format.strip()
+
+    model = model_id.strip() if model_id and model_id.strip() else "music_v1"
+    payload: dict[str, Any] = {
+        "prompt": text.strip()[:4000],
+        "force_instrumental": bool(force_instrumental),
+        "model_id": model,
+    }
+    if duration_seconds is not None and duration_seconds > 0:
+        clamped_duration = max(3.0, min(300.0, float(duration_seconds)))
+        payload["music_length_ms"] = int(clamped_duration * 1000)
+
+    headers = {
+        "xi-api-key": key,
+        "Content-Type": "application/json",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(180.0, connect=10.0), follow_redirects=False) as client:
+            response = await client.post(endpoint, params=params, headers=headers, json=payload)
+
+        if response.status_code != 200:
+            err_msg = "Erreur ElevenLabs Music"
+            try:
+                err_data = response.json()
+                if isinstance(err_data, dict):
+                    detail = err_data.get("detail", {})
+                    if isinstance(detail, dict):
+                        err_msg = detail.get("message") or str(detail)
+                    elif isinstance(detail, str):
+                        err_msg = detail
+                    elif "message" in err_data:
+                        err_msg = str(err_data["message"])
+                    if "prompt_suggestion" in err_data:
+                        err_msg += f" (Suggestion : {err_data['prompt_suggestion']})"
+            except Exception:
+                err_msg = f"HTTP {response.status_code} : {response.text[:200]}"
+            raise ProviderError(f"ElevenLabs Music a renvoyé une erreur ({response.status_code}) : {err_msg}")
+
+        content = response.content
+        if not content:
+            raise ProviderError("ElevenLabs Music a renvoyé un contenu audio vide.")
+        if len(content) > _MAX_SOUND_BYTES:
+            raise ProviderError("Le fichier musical ElevenLabs dépasse la limite maximale.")
+
+        mime_type = response.headers.get("content-type", "").split(";")[0].strip().lower()
+        if not mime_type or mime_type == "application/octet-stream":
+            mime_type = "audio/wav" if "pcm" in output_format else "audio/mpeg"
+
+        return content, mime_type
+    except httpx.TimeoutException:
+        raise ProviderError("La composition musicale ElevenLabs a dépassé le délai autorisé.") from None
+    except httpx.HTTPError as exc:
+        raise ProviderError(f"Impossible de joindre le service ElevenLabs Music : {exc}") from None
+
+
+def fallback_study_material(
+    transcript: str,
+    kind: str = "flashcards",
+    count: int = 10,
+    difficulty: str = "medium",
+    topic: str = "",
+) -> dict[str, Any]:
+    """Génération heuristique de secours pour flashcards ou questions de quizz."""
+    count = max(1, min(count, 30))
+    clean_topic = topic.strip() or "le sujet abordé"
+
+    lines = [line.strip() for line in transcript.splitlines() if line.strip()]
+    extracted_defs: list[tuple[str, str]] = []
+
+    for line in lines:
+        match = re.match(r"[-*•]?\s*\*\*([^*]+?)(?:\s*:)?\*\*\s*[:\-]?\s*(.+)", line)
+        if match:
+            k = match.group(1).strip().rstrip(":")
+            v = match.group(2).strip()
+            lower_k = k.lower()
+            if len(v) > 10 and not any(lower_k.startswith(x) for x in ("bonne réponse", "recto", "verso", "explication", "option", "question")):
+                extracted_defs.append((k, v))
+
+    if kind == "flashcards":
+        cards: list[dict[str, Any]] = []
+        for i, (k, v) in enumerate(extracted_defs[:count]):
+            cards.append({
+                "id": i + 1,
+                "category": "Définition & Rôle",
+                "recto": f"Qu'est-ce que « {k} » et quel est son rôle principal ?",
+                "verso": v,
+            })
+
+        templates = [
+            ("Concept Clé", f"Quelle est la notion fondamentale au cœur de : {clean_topic} ?", f"La compréhension des principes structurants et de leur mise en application dans le contexte de {clean_topic}."),
+            ("Objectif", f"Quel est l'objectif premier recherché lorsqu'on étudie : {clean_topic} ?", "Maîtriser les rouages essentiels pour appliquer la méthode avec rigueur et autonomie."),
+            ("Méthodologie", f"Quelle est la première démarche recommandée pour aborder : {clean_topic} ?", "Analyser le cadre d'intervention, définir les objectifs et identifier les prérequis clés."),
+            ("Règle d'or", f"Quelle est la règle cardinale à respecter concernant : {clean_topic} ?", "Vérifier la cohérence de chaque étape et toujours valider ses conclusions sur des faits observables."),
+            ("Piège fréquent", f"Quel est le piège ou l'erreur courante à éviter avec : {clean_topic} ?", "Se précipiter sur une solution superficielle sans avoir examiné les causes profondes ni les alternatives."),
+            ("Cas pratique", f"Comment met-on concrètement en œuvre : {clean_topic} au quotidien ?", "En procédant par étapes itératives, en testant au fur et à mesure et en ajustant selon les résultats."),
+            ("Vérification", f"Comment s'assurer de la validité d'une démarche sur : {clean_topic} ?", "Mettre en place des critères d'évaluation clairs et confronter la solution aux cas limites."),
+            ("Subtilité", f"Quelle distinction importante faut-il opérer dans : {clean_topic} ?", "Distinguer les symptômes immédiats des causes structurelles sous-jacentes."),
+            ("Approfondissement", f"Qu'est-ce qui caractérise une maîtrise avancée de : {clean_topic} ?", "La capacité à anticiper les imprévus, à optimiser les processus et à expliquer clairement les choix retenus."),
+            ("Synthèse", f"En résumé, quel est l'apport majeur de la discussion sur : {clean_topic} ?", "Clarifier les notions clés et fournir des repères solides pour agir efficacement."),
+        ]
+
+        while len(cards) < count:
+            idx = len(cards)
+            tmpl = templates[idx % len(templates)]
+            diff_note = " (Niveau avancé)" if difficulty == "hard" else (" (Niveau basique)" if difficulty == "easy" else "")
+            cards.append({
+                "id": idx + 1,
+                "category": tmpl[0],
+                "recto": tmpl[1] + (diff_note if idx >= len(templates) else ""),
+                "verso": tmpl[2],
+            })
+
+        return {
+            "kind": "flashcards",
+            "count": count,
+            "difficulty": difficulty,
+            "topic": clean_topic,
+            "flashcards": cards[:count],
+            "questions": [],
+        }
+
+    else:
+        questions: list[dict[str, Any]] = []
+        for i, (k, v) in enumerate(extracted_defs[:count]):
+            questions.append({
+                "id": i + 1,
+                "question": f"Concernant « {k} », quelle affirmation est exacte ?",
+                "options": [
+                    v[:120],
+                    f"C'est un concept obsolète qui ne concerne pas {clean_topic}.",
+                    f"Cela ne s'applique que dans des contextes théoriques sans utilité pratique.",
+                    f"C'est l'opposé direct des principes recommandés pour {clean_topic}.",
+                ],
+                "answer": 0,
+                "explanation": f"« {k} » correspond précisément à : {v[:200]}.",
+            })
+
+        quiz_templates = [
+            (
+                f"Quelle est la finalité principale abordée au sujet de : {clean_topic} ?",
+                [
+                    "Structurer une démarche rigoureuse pour résoudre efficacement le problème posé.",
+                    "Ignorer les contraintes réelles pour appliquer une théorie pure.",
+                    "Déléguer intégralement l'analyse sans vérifier la cohérence des résultats.",
+                    "Remplacer les méthodes éprouvées par un processus aléatoire.",
+                ],
+                0,
+                f"L'objectif de {clean_topic} est de garantir une démarche méthodique et reproductible.",
+            ),
+            (
+                f"Face à une difficulté dans la mise en œuvre de : {clean_topic}, que convient-il de faire ?",
+                [
+                    "Décomposer le problème en sous-parties identifiables et tester pas à pas.",
+                    "Abandonner immédiatement l'approche choisie.",
+                    "Ignorer les anomalies constatées et continuer.",
+                    "Supposer que le résultat est nécessairement correct sans le tester.",
+                ],
+                0,
+                "La décomposition méthodique permet d'isoler les points de friction et de valider chaque sous-étape.",
+            ),
+            (
+                f"Quel est l'un des pièges fréquents à éviter sur : {clean_topic} ?",
+                [
+                    "La précipitation sans analyse préalable du contexte.",
+                    "L'utilisation d'outils adaptés aux besoins.",
+                    "La relecture attentive des consignes ou données.",
+                    "La vérification systématique des résultats intermédiaires.",
+                ],
+                0,
+                "Agir dans la précipitation sans cadrage mène à des erreurs d'interprétation et des incohérences.",
+            ),
+            (
+                f"Dans l'analyse de : {clean_topic}, pourquoi privilégier des faits tangibles ?",
+                [
+                    "Pour éliminer l'arbitraire et appuyer ses décisions sur des éléments solides.",
+                    "Parce que les intuitions sont toujours plus fiables que les données.",
+                    "Uniquement pour remplir des exigences administratives.",
+                    "Pour compliquer inutilement le raisonnement.",
+                ],
+                0,
+                "L'objectivité des faits observables garantit la pertinence et la robustesse des conclusions.",
+            ),
+            (
+                f"Quel réflexe caractérise une bonne pratique dans : {clean_topic} ?",
+                [
+                    "Documenter ses choix et vérifier les hypothèses de travail.",
+                    "Ne jamais modifier son point de vue même devant une preuve contradictoire.",
+                    "Travailler sans plan ni fil conducteur.",
+                    "Négliger la cohérence d'ensemble au profit de détails superflus.",
+                ],
+                0,
+                "La traçabilité et la mise à l'épreuve des hypothèses sont les piliers de toute démarche rigoureuse.",
+            ),
+        ]
+
+        while len(questions) < count:
+            idx = len(questions)
+            tmpl = quiz_templates[idx % len(quiz_templates)]
+            questions.append({
+                "id": idx + 1,
+                "question": tmpl[0] + (f" (Question {idx+1})" if idx >= len(quiz_templates) else ""),
+                "options": tmpl[1],
+                "answer": tmpl[2],
+                "explanation": tmpl[3],
+            })
+
+        return {
+            "kind": "quiz",
+            "count": count,
+            "difficulty": difficulty,
+            "topic": clean_topic,
+            "flashcards": [],
+            "questions": questions[:count],
+        }
+
+
+async def generate_study_material(
+    settings: Any,
+    transcript: str,
+    kind: str = "flashcards",
+    count: int = 10,
+    difficulty: str = "medium",
+    topic: str = "",
+    model: str = "",
+) -> dict[str, Any]:
+    """Génère des flashcards ou des questions de quizz sur mesure à partir de la discussion."""
+    count = max(1, min(count, 30))
+    clean_topic = topic.strip() or "cette discussion"
+
+    if getattr(settings, "demo_mode", False) or not settings.enabled(getattr(settings, "llm_api_key", None)):
+        return fallback_study_material(transcript, kind, count, difficulty, clean_topic)
+
+    key = _key(settings, "llm_api_key", "du fournisseur IA")
+    chosen_model = model or getattr(settings, "default_model", "mistralai/mistral-small-3.2-24b-instruct")
+
+    diff_desc = {
+        "easy": "Niveau FACILE / DÉBUTANT : notions fondamentales, définitions directes, vocabulaire accessible, concepts clés immédiats sans piège.",
+        "medium": "Niveau MOYEN / INTERMÉDIAIRE : compréhension des mécanismes, cas pratiques d'application, distinctions entre concepts proches, pièges classiques.",
+        "hard": "Niveau DIFFICILE / EXPERT : cas limites, pièges subtils, analyse critique approfondie, diagnostic d'erreurs fréquentes, synthèse méthodologique exigeante.",
+    }.get(difficulty, "Niveau MOYEN / INTERMÉDIAIRE")
+
+    if kind == "flashcards":
+        prompt_instruction = (
+            f"Tu es un formateur pédagogique d'excellence. À partir de la conversation fournie, génère exactement {count} flashcards de révision active (recto/verso) sur le sujet « {clean_topic} ».\n"
+            f"Difficulté demandée : {diff_desc}\n"
+            "Chaque flashcard doit inciter au rappel actif :\n"
+            f"- 'id' : entier de 1 à {count}\n"
+            "- 'category' : libellé court du domaine ou de l'axe (ex: 'Définition', 'Point Clé', 'Mécanisme', 'Piège à éviter', 'Méthode', 'Règle d'or')\n"
+            "- 'recto' : question stimulante ou concept précis à restituer de mémoire\n"
+            "- 'verso' : réponse complète, rigoureuse et didactique\n\n"
+            "Retourne EXCLUSIVEMENT un objet JSON valide avec cette structure stricte :\n"
+            "{\n"
+            f'  "topic": "{clean_topic}",\n'
+            '  "flashcards": [\n'
+            '    {\n'
+            '      "id": 1,\n'
+            '      "category": "...",\n'
+            '      "recto": "...",\n'
+            '      "verso": "..."\n'
+            '    }\n'
+            '  ]\n'
+            "}"
+        )
+    else:
+        prompt_instruction = (
+            f"Tu es un formateur pédagogique d'excellence. À partir de la conversation fournie, conçois un quizz interactif de {count} questions à choix multiples (QCM) sur le sujet « {clean_topic} ».\n"
+            f"Difficulté demandée : {diff_desc}\n"
+            "Chaque question doit comporter :\n"
+            f"- 'id' : entier de 1 à {count}\n"
+            "- 'question' : énoncé clair et précis de la question\n"
+            "- 'options' : tableau d'exactement 4 options plausibles mais distinctes (chaîne de caractères chacune)\n"
+            "- 'answer' : indice entier (0, 1, 2 ou 3) désignant l'unique bonne réponse dans le tableau options\n"
+            "- 'explanation' : explication didactique et bienveillante justifiant pourquoi cette réponse est la bonne et pourquoi les autres sont erronées ou incomplètes\n\n"
+            "Retourne EXCLUSIVEMENT un objet JSON valide avec cette structure stricte :\n"
+            "{\n"
+            f'  "topic": "{clean_topic}",\n'
+            '  "questions": [\n'
+            '    {\n'
+            '      "id": 1,\n'
+            '      "question": "...",\n'
+            '      "options": ["Option A", "Option B", "Option C", "Option D"],\n'
+            '      "answer": 0,\n'
+            '      "explanation": "..."\n'
+            '    }\n'
+            '  ]\n'
+            "}"
+        )
+
+    context_text = transcript[:8000] if transcript else f"Sujet : {clean_topic}"
+    messages = [
+        {"role": "system", "content": prompt_instruction},
+        {"role": "user", "content": f"Voici les échanges de la discussion :\n\n{context_text}"},
+    ]
+
+    tokens_needed = min(max(count * 200, 1000), 4000)
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=False) as client:
+            response = await client.post(
+                settings.llm_base_url.rstrip("/") + "/chat/completions",
+                headers={"Authorization": f"Bearer {key}"},
+                json={
+                    "model": chosen_model,
+                    "messages": messages,
+                    "stream": False,
+                    "temperature": 0.3,
+                    "max_tokens": tokens_needed,
+                },
+            )
+            if response.status_code in (400, 404, 422):
+                alt_model = getattr(settings, "default_model", "")
+                if alt_model and alt_model != chosen_model:
+                    response = await client.post(
+                        settings.llm_base_url.rstrip("/") + "/chat/completions",
+                        headers={"Authorization": f"Bearer {key}"},
+                        json={
+                            "model": alt_model,
+                            "messages": messages,
+                            "stream": False,
+                            "temperature": 0.3,
+                            "max_tokens": tokens_needed,
+                        },
+                    )
+        _check_response(response, "Fournisseur IA")
+        payload = _json(response, "Fournisseur IA")
+        content = payload["choices"][0]["message"]["content"]
+        if not isinstance(content, str):
+            raise ValueError("Réponse IA non textuelle")
+
+        cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", content.strip(), flags=re.IGNORECASE | re.DOTALL).strip()
+        match = re.search(r"\{[\s\S]*\}", cleaned)
+        data = json.loads(match.group(0) if match else cleaned)
+
+        if kind == "flashcards":
+            raw_cards = data.get("flashcards", [])
+            valid_cards: list[dict[str, Any]] = []
+            if isinstance(raw_cards, list):
+                for idx, c in enumerate(raw_cards):
+                    if isinstance(c, dict) and c.get("recto") and c.get("verso"):
+                        valid_cards.append({
+                            "id": idx + 1,
+                            "category": str(c.get("category") or "Point Clé")[:40],
+                            "recto": str(c["recto"]).strip(),
+                            "verso": str(c["verso"]).strip(),
+                        })
+            if len(valid_cards) < count:
+                fb = fallback_study_material(transcript, "flashcards", count, difficulty, clean_topic)
+                extra = fb["flashcards"][len(valid_cards):count]
+                for extra_card in extra:
+                    extra_card["id"] = len(valid_cards) + 1
+                    valid_cards.append(extra_card)
+            return {
+                "kind": "flashcards",
+                "count": len(valid_cards[:count]),
+                "difficulty": difficulty,
+                "topic": str(data.get("topic") or clean_topic),
+                "flashcards": valid_cards[:count],
+                "questions": [],
+            }
+        else:
+            raw_questions = data.get("questions", [])
+            valid_questions: list[dict[str, Any]] = []
+            if isinstance(raw_questions, list):
+                for idx, q in enumerate(raw_questions):
+                    if isinstance(q, dict) and q.get("question") and isinstance(q.get("options"), list) and len(q["options"]) >= 2:
+                        opts = [str(o).strip() for o in q["options"][:4]]
+                        while len(opts) < 4:
+                            opts.append(f"Option {len(opts) + 1}")
+                        ans = q.get("answer", 0)
+                        if not isinstance(ans, int) or ans < 0 or ans >= len(opts):
+                            ans = 0
+                        valid_questions.append({
+                            "id": idx + 1,
+                            "question": str(q["question"]).strip(),
+                            "options": opts,
+                            "answer": ans,
+                            "explanation": str(q.get("explanation") or "Réponse correcte selon les principes abordés.").strip(),
+                        })
+            if len(valid_questions) < count:
+                fb = fallback_study_material(transcript, "quiz", count, difficulty, clean_topic)
+                extra = fb["questions"][len(valid_questions):count]
+                for extra_q in extra:
+                    extra_q["id"] = len(valid_questions) + 1
+                    valid_questions.append(extra_q)
+            return {
+                "kind": "quiz",
+                "count": len(valid_questions[:count]),
+                "difficulty": difficulty,
+                "topic": str(data.get("topic") or clean_topic),
+                "flashcards": [],
+                "questions": valid_questions[:count],
+            }
+
+    except Exception:
+        return fallback_study_material(transcript, kind, count, difficulty, clean_topic)
+

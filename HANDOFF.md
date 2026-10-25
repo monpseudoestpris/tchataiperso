@@ -1,3 +1,108 @@
+# Relais — 25 octobre 2026 (Intégration de la Génération de Musique ElevenLabs Music — https://elevenlabs.io/app/music)
+
+- Réalisé :
+  - **Moteur de composition musicale ElevenLabs Music** (`backend/app/providers.py`, `backend/app/routers/sounds.py`, `backend/app/schemas.py`, `backend/app/serializers.py`) :
+    - *Génération musicale via API officielle* (`generate_music`) : appel direct à `POST https://api.elevenlabs.io/v1/music` avec paramètres `model_id` (`music_v1` ou `music_v2_5`), `music_length_ms` (durée cible en millisecondes), `force_instrumental` (morceau purement instrumental ou chanson avec voix) et `output_format` (MP3 128k, MP3 192k HD, WAV PCM 44.1k).
+    - *Amélioration musicale par IA* (`improve_music_prompt`) : enrichissement acoustique et stylistique en anglais spécialisé pour Eleven Music (genres, instrumentation précise comme Rhodes, 808 bass, violoncelle, tempo BPM, ambiance émotionnelle, dynamique, structure de tags `[Intro]`, `[Verse]`, `[Chorus]`, tout en protégeant contre le blocage des noms d'artistes sous copyright).
+    - *Traduction musicale vers l'anglais* (`translate_music_prompt_to_english`) : conversion instantanée des prompts français vers l'anglais musical pour une synthèse optimale par ElevenLabs.
+    - *Modèles disponibles exposés* : `GET /api/sounds/music-models` (`music_v1` et `music_v2_5`) et indicateur d'état `features.music_generation: true` dans `GET /api/config`.
+  - **Persistance et modèle de données** (`backend/app/models.py`, `backend/app/main.py`, `backend/app/cli.py`, `backend/migrations/versions/0013_add_music_columns.py`) :
+    - Évolution de `GeneratedSound` : ajout des colonnes `sound_type` (`sound_effect` ou `music`), `instrumental` (booléen) et `model_id` (identifiant du modèle).
+    - Migration Alembic `0013_add_music_columns.py` créée avec auto-migration progressive au démarrage dans `lifespan` FastAPI.
+  - **Interface utilisateur « Studio Audio & Musique »** (`frontend/components/sound-studio-modal.tsx`, `frontend/components/chat-app.tsx`, `frontend/lib/api.ts`, `frontend/app/globals.css`) :
+    - *Onglets dédiés* :
+      - 🔊 **Effets Sonores & Bruitages** : générateur Text-to-Sound-Effects existant optimisé.
+      - 🎵 **Génération de Musique** : nouvel espace complet dédié à Eleven Music avec bandeau officiel et lien direct `https://elevenlabs.io/app/music`, inspirations par styles (Bande originale épique, Lo-Fi Chillhop, Synthwave 80s, Jazz Lounge, Folk acoustique, Deep House, Méditation zen, Néoclassique, Trap), toggle interactif « Instrumental pur » vs « Avec voix / chant », sélecteur de modèle `music_v1` / `music_v2_5`, réglage de durée (Auto ou 10s à 300s / 5 min), et boutons d'amélioration/traduction de prompt.
+      - 📁 **Audiothèque** : historique complet filtrable en un clic (« Tous », « Bruitages », « Musiques »), avec badges distinctifs, écoute, téléchargement, copie et insertion directe dans la discussion.
+    - *Boutons d'accès dans le tchat* :
+      - Barre supérieure (`topbar-right`) : bouton « Sons & Musique ».
+      - Barre du compositeur : bouton d'outil « Sons & Musique » avec insertion adaptée `[Musique : ...]`.
+  - **Validation & Tests** :
+    - Nouveaux tests unitaires et d'intégration validés (`backend/tests/test_sounds.py`) : 5/5 passés (incluant cycle complet musique, filtrage par type, modèles et streaming).
+    - Suite de tests ciblés validée : 23/23 tests passés (`pytest test_sounds.py test_study_material.py test_deep_search.py test_learn_mode.py test_migrations.py`).
+    - Typecheck Next.js validé : 0 erreur (`npm --prefix frontend run typecheck`).
+    - Build Next.js de production validé : 0 erreur (`npm --prefix frontend run build`).
+    - Conteneurs Docker relancés en mode dev (`compose.yaml` + `compose.dev.yaml`) : `clair-api` et `clair-web` sains et opérationnels (`HTTP 200 OK`).
+- Fichiers modifiés / créés :
+  - Créés : `backend/migrations/versions/0013_add_music_columns.py`.
+  - Modifiés : `backend/app/models.py`, `backend/app/providers.py`, `backend/app/routers/sounds.py`, `backend/app/routers/system.py`, `backend/app/schemas.py`, `backend/app/serializers.py`, `backend/app/main.py`, `backend/app/cli.py`, `backend/tests/test_sounds.py`, `frontend/lib/api.ts`, `frontend/components/sound-studio-modal.tsx`, `frontend/components/chat-app.tsx`, `frontend/app/globals.css`, `HANDOFF.md`.
+- Vérifications exécutées :
+  - `python3 -m py_compile backend/app/*.py backend/app/routers/*.py backend/migrations/versions/*.py` : 0 erreur.
+  - `PYTHONPATH=backend backend/.venv/bin/pytest backend/tests/test_sounds.py backend/tests/test_study_material.py backend/tests/test_deep_search.py backend/tests/test_learn_mode.py backend/tests/test_migrations.py` : 23/23 passés.
+  - `npm --prefix frontend run typecheck` : 0 erreur.
+  - `npm --prefix frontend run build` : 0 erreur.
+  - `docker compose -f compose.yaml -f compose.dev.yaml up -d --build clair-api clair-web` : conteneurs démarrés et `healthy`.
+  - `curl -I http://127.0.0.1:3001/` : `HTTP/1.1 200 OK`.
+  - `curl -s http://127.0.0.1:8001/api/config` : `"features":{"sound_effects":true,"music_generation":true}`.
+  - `curl -s http://127.0.0.1:8001/api/sounds/music-models` : liste des modèles Eleven Music `music_v1` et `music_v2_5`.
+- Problèmes connus : aucun.
+- Prochaine action : ouvrir `http://localhost:3001` (ou l'accès réseau LAN `http://192.168.1.28:3001`), cliquer sur « Sons & Musique » dans la barre supérieure ou la barre de saisie, se rendre dans l'onglet « Génération de Musique » et composer un morceau de musique personnalisé avec ElevenLabs Music.
+
+---
+
+# Relais — 25 octobre 2026 (Résolution : Débordement à droite de la barre d'outils du compositeur & Génération Flashcards / Quizz)
+
+- Réalisé :
+  - **Correction du débordement en bas à droite de la barre de message** (`frontend/app/globals.css`) :
+    - *Diagnostic* : Avec l'accumulation des modes et boutons d'outils (`Web AUTO`, `DeepSearch`, `Apprendre`, `Code · Canvas`, `Finances`, `Studio Image`, `Effets Sonores`, `Flash / Quizz`), la largeur cumulée de `.composer-tools` dépassait la largeur maximale de `.composer-area` (890px - 72px de padding = 818px). Le bouton d'envoi `(↑)` et la mention `↵ pour envoyer` se retrouvaient expulsés en dehors du conteneur blanc à droite.
+    - *Correctifs appliqués* :
+      - `.composer` : ajout de `overflow: hidden;` empêchant tout débordement hors du conteneur.
+      - `.composer-area` : élargissement harmonieux de la largeur utile `width: min(100%, 960px);` et resserrement des marges `padding: 12px 28px 20px;`, offrant plus de 80px supplémentaires à l'intérieur.
+      - `.composer-toolbar` : passage en flexbox réactif avec alignement bas `align-items: flex-end;` et `flex-wrap: wrap; gap: 8px 12px;`.
+      - `.composer-tools` : ajout de `flex-wrap: wrap; gap: 4px 6px; min-width: 0; flex: 1;`.
+      - `.tool-button` : ajout de `white-space: nowrap;` (empêchant les retours à la ligne inesthétiques comme « Code · » sur deux lignes) et hauteur optimisée à 28px (`padding: 0 8px;`).
+      - `.composer-submit` : ancrage systématique à l'extrémité droite (`margin-left: auto; align-self: flex-end; flex-shrink: 0;`).
+      - `.enter-hint` : masquage élégant sur écrans moyens/étroits (`@media (max-width: 1240px)`), libérant ~90px immédiatement.
+  - **Moteur de génération de révision active (Flashcards & Quizz QCM)** (`backend/app/providers.py`, `backend/app/schemas.py`, `backend/app/routers/conversations.py`) :
+    - *Génération sur mesure par IA* (`generate_study_material`) : prend le fil de discussion de la conversation, le sujet ciblé, le format (`flashcards` ou `quiz`), le nombre de cartes (1 à 30) et la difficulté (`easy`, `medium`, `hard`) pour concevoir des questions stimulantes au format JSON strict.
+    - *Difficulté graduée* :
+      - `easy` (Facile / Débutant) : définitions directes, vocabulaire clé et notions fondamentales sans piège.
+      - `medium` (Moyen / Intermédiaire) : compréhension des mécanismes, distinctions subtiles, cas pratiques et pièges classiques.
+      - `hard` (Difficile / Avancé) : cas limites, analyse critique approfondie, diagnostics d'erreurs et synthèse méthodologique.
+    - *Générateur de secours contextuel & mode démo* (`fallback_study_material`) : extrait automatiquement les définitions et concepts clés des échanges utilisateur/assistant pour garantir un résultat instantané même en cas de timeout réseau, d'absence de clé ou en mode démo.
+    - *Nouvel endpoint API dédié* : `POST /api/conversations/{conversation_id}/study` avec validation Pydantic (`GenerateStudyMaterialRequest`, `StudyMaterialResponse`).
+  - **Composant UI interactif « Flashcards & Quizz »** (`frontend/components/study-modal.tsx`) :
+    - *Sélecteur de format à deux grandes cartes visuelles* :
+      - 📇 **Flashcards 3D** (Cartes mémoire interactives Recto / Verso avec flip 3D animé, touches Espace / Flèches et auto-évaluation en temps réel « Maîtrisée » ou « À revoir »).
+      - 🎯 **Quizz QCM** (Questionnaire à 4 options avec validation instantanée vert/rouge, explications didactiques détaillées, calcul de score en direct, barre de progression et trophée final).
+    - *Réglages ergonomiques instantanés* :
+      - Puces rapides pour le nombre de cartes : `5` (Express ~3 min), `10` (Standard ~6 min), `15` (Approfondi ~10 min), `20` (Examen ~15 min), ou saisie personnalisée (1 à 30).
+      - Sélecteur de niveau : `🟢 Facile`, `🟡 Moyen`, `🔴 Difficile`.
+      - Champ de sujet pré-rempli avec le thème de la conversation, personnalisable pour cibler un axe précis.
+    - *Barre d'outils de résultats* :
+      - Bouton « Ajuster / Régénérer » pour ajuster les paramètres sans perdre l'état.
+      - Bouton « Créer le Quizz » / « Créer les Flashcards » pour basculer en un clic sur l'autre format sur le même sujet.
+      - Bouton « Copier » le contenu Markdown complet dans le presse-papier.
+      - Bouton « Insérer dans le tchat » pour injecter l'entraînement directement dans la discussion.
+  - **Dynamisation des composants Flashcards & Quiz** (`frontend/components/learn-flashcards.tsx`, `frontend/components/learn-quiz.tsx`) :
+    - Adaptation des libellés et grilles pour refléter dynamiquement le nombre exact de cartes sélectionnées (`total`) au lieu d'une valeur fixe.
+  - **Points d'accès 1-clic dans l'interface du tchat** (`frontend/components/chat-app.tsx`, `frontend/app/globals.css`) :
+    - Bouton « Flash / Quizz » dans la barre supérieure (`topbar-right`) dès qu'une conversation est ouverte, aux côtés de Sortie.
+    - Bouton « Flash / Quizz » dans l'en-tête de la discussion (`conversation-heading-actions`), à côté d'Éditer et Auto-tags IA.
+    - Bouton « Flash / Quizz » dans la barre d'outils du compositeur de message (`study-trigger`).
+    - Adaptation responsive complète pour mobile et thème sombre / clair.
+  - **Validation & Tests** :
+    - Nouveaux tests unitaires et d'intégration validés (`backend/tests/test_study_material.py`) : 4/4 réussis.
+    - Suite de tests ciblés validée : 21/21 tests passés (`pytest test_study_material.py test_deep_search.py test_learn_mode.py test_sounds.py test_migrations.py`).
+    - Typecheck Next.js validé : 0 erreur (`npm --prefix frontend run typecheck`).
+    - Build Next.js de production validé : 0 erreur (`npm --prefix frontend run build`).
+    - Rebuild et redémarrage des conteneurs Docker `clair-api` et `clair-web` en mode dev (`-f compose.yaml -f compose.dev.yaml`) : conteneurs opérationnels et `healthy`.
+    - Port `3001` testé avec succès (`HTTP 200 OK`).
+- Fichiers modifiés / créés :
+  - Créés : `backend/tests/test_study_material.py`, `frontend/components/study-modal.tsx`.
+  - Modifiés : `backend/app/providers.py`, `backend/app/routers/conversations.py`, `backend/app/schemas.py`, `frontend/lib/api.ts`, `frontend/components/learn-flashcards.tsx`, `frontend/components/learn-quiz.tsx`, `frontend/components/chat-app.tsx`, `frontend/app/globals.css`, `HANDOFF.md`.
+- Vérifications exécutées :
+  - `python3 -m py_compile backend/app/*.py backend/app/routers/*.py backend/tests/*.py` : 0 erreur.
+  - `PYTHONPATH=backend backend/.venv/bin/pytest backend/tests/test_study_material.py backend/tests/test_deep_search.py backend/tests/test_learn_mode.py backend/tests/test_sounds.py backend/tests/test_migrations.py` : 21/21 passés.
+  - `npm --prefix frontend run typecheck` : 0 erreur.
+  - `npm --prefix frontend run build` : 0 erreur.
+  - `docker compose -f compose.yaml -f compose.dev.yaml up -d --build clair-api clair-web` : conteneurs démarrés et `healthy`.
+  - `curl -I http://127.0.0.1:3001` : réponse `HTTP/1.1 200 OK`.
+- Problèmes connus : aucun.
+- Prochaine action : ouvrir une conversation sur `http://localhost:3001` (ou `http://192.168.1.28:3001`), cliquer sur « Flash / Quizz » dans la barre supérieure, l'en-tête de conversation ou la barre du compositeur, choisir le format (Flashcards ou Quizz), le nombre de cartes et la difficulté, puis lancer l'entraînement interactif.
+
+---
+
 # Relais — 25 octobre 2026 (Effets Sonores & Bruitages : Intégration ElevenLabs Text-to-Sound-Effects, Traduction et Optimisation Anglaise Automatique)
 
 - Réalisé :

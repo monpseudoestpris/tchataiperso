@@ -9,7 +9,13 @@ from ..chat_export_html import generate_chat_export_html
 from ..config import Settings
 from ..deps import check_model, current_user, get_conversation, get_sessions, get_settings, get_upload_dir
 from ..models import Conversation, User, now
-from ..schemas import ClassifyConversationRequest, CreateConversation, UpdateConversation
+from ..schemas import (
+    ClassifyConversationRequest,
+    CreateConversation,
+    GenerateStudyMaterialRequest,
+    StudyMaterialResponse,
+    UpdateConversation,
+)
 from ..serializers import conversation_json
 
 
@@ -282,5 +288,42 @@ def get_conversation_html(
             media_type="text/html; charset=utf-8",
             headers=headers,
         )
+
+
+@router.post("/api/conversations/{conversation_id}/study", response_model=StudyMaterialResponse)
+async def generate_conversation_study_material(
+    conversation_id: str,
+    body: GenerateStudyMaterialRequest,
+    user: User = Depends(current_user),
+    settings: Settings = Depends(get_settings),
+    sessions: sessionmaker = Depends(get_sessions),
+):
+    with sessions() as db:
+        conv = get_conversation(db, conversation_id, user.id)
+        if not conv.messages:
+            raise HTTPException(422, "La conversation doit comporter au moins un message pour générer des révisions.")
+
+        parts: list[str] = []
+        if conv.summary:
+            parts.append(f"Résumé contextuel : {conv.summary}")
+        for m in conv.messages:
+            if m.content and m.content.strip():
+                role_label = "Utilisateur" if m.role == "user" else "Assistant"
+                parts.append(f"{role_label} : {m.content.strip()}")
+        transcript = "\n\n".join(parts)
+        topic = (body.topic or "").strip() or conv.title or conv.theme or "Sujet abordé"
+        model = conv.model
+
+    result = await providers.generate_study_material(
+        settings=settings,
+        transcript=transcript,
+        kind=body.kind,
+        count=body.count,
+        difficulty=body.difficulty,
+        topic=topic,
+        model=model,
+    )
+    return StudyMaterialResponse(**result)
+
 
 

@@ -79,6 +79,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if "family_group_id" not in user_columns:
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE users ADD COLUMN family_group_id VARCHAR(36)"))
+        if "generated_sounds" in inspector.get_table_names():
+            sound_columns = {column["name"] for column in inspector.get_columns("generated_sounds")}
+            with engine.begin() as conn:
+                if "sound_type" not in sound_columns:
+                    conn.execute(text("ALTER TABLE generated_sounds ADD COLUMN sound_type VARCHAR(30) NOT NULL DEFAULT 'sound_effect'"))
+                if "instrumental" not in sound_columns:
+                    conn.execute(text("ALTER TABLE generated_sounds ADD COLUMN instrumental BOOLEAN"))
+                if "model_id" not in sound_columns:
+                    conn.execute(text("ALTER TABLE generated_sounds ADD COLUMN model_id VARCHAR(50)"))
         for table in ("conversations", "attachments", "memories"):
             if "user_id" not in {column["name"] for column in inspector.get_columns(table)}:
                 raise RuntimeError("Base non migrée; exécutez les étapes `migrate-schema`, `create-admin` et `migrate-legacy` du README.")

@@ -15,6 +15,7 @@ def test_sound_effects_endpoints_and_lifecycle(tmp_path, monkeypatch):
     settings = Settings(
         _env_file=None,
         app_data_dir=tmp_path,
+        database_url=f"sqlite:///{tmp_path}/sfx.db",
         eleven_labs_key="fake-elevenlabs-key",
         llm_api_key="fake-llm-key",
         demo_mode=False,
@@ -133,6 +134,7 @@ def test_sound_creation_requires_eleven_labs_key(tmp_path):
     settings = Settings(
         _env_file=None,
         app_data_dir=tmp_path,
+        database_url=f"sqlite:///{tmp_path}/nokey.db",
         eleven_labs_key="",
         demo_mode=False,
     )
@@ -177,4 +179,136 @@ async def test_providers_generate_sound_effect_success(monkeypatch):
         loop=False,
     )
     assert content == b"audio-bytes-ok"
+    assert mime == "audio/mpeg"
+
+
+def test_music_generation_endpoints_and_lifecycle(tmp_path, monkeypatch):
+    settings = Settings(
+        _env_file=None,
+        app_data_dir=tmp_path,
+        database_url=f"sqlite:///{tmp_path}/music.db",
+        eleven_labs_key="fake-elevenlabs-key",
+        llm_api_key="fake-llm-key",
+        demo_mode=False,
+    )
+
+    async def fake_improve_music(_settings, model, prompt, style_keywords=None, duration_hint=None, instrumental=None):
+        assert "lo-fi" in prompt.lower() or "chill" in prompt.lower()
+        return "Warm vintage Rhodes chords, relaxed 80 BPM hip-hop drums, tape saturation, rainy atmosphere"
+
+    async def fake_translate_music(_settings, prompt):
+        return "Calm jazz piano melody with soft brushed drums and acoustic upright bass"
+
+    async def fake_generate_music(_settings, text, duration_seconds=None, force_instrumental=True, model_id=None, output_format="mp3_44100_128"):
+        assert "rhodes" in text.lower() or "piano" in text.lower() or "jazz" in text.lower()
+        assert duration_seconds == 45.0
+        assert force_instrumental is True
+        assert model_id == "music_v1"
+        return b"\xff\xfb\x90\x00fake-music-mp3-bytes", "audio/mpeg"
+
+    monkeypatch.setattr(providers, "improve_music_prompt", fake_improve_music)
+    monkeypatch.setattr(providers, "translate_music_prompt_to_english", fake_translate_music)
+    monkeypatch.setattr(providers, "generate_music", fake_generate_music)
+
+    from test_api import authenticated_client
+
+    with authenticated_client(settings) as client:
+        # Check music models endpoint
+        models_res = client.get("/api/sounds/music-models")
+        assert models_res.status_code == 200
+        models_data = models_res.json()
+        assert any(m["id"] == "music_v1" for m in models_data)
+
+        # Improve music prompt
+        imp_res = client.post(
+            "/api/sounds/improve",
+            json={
+                "prompt": "musique lo-fi pour étudier",
+                "sound_type": "music",
+                "instrumental": True,
+                "duration_hint": 45.0,
+            },
+        )
+        assert imp_res.status_code == 200
+        assert "Rhodes" in imp_res.json()["prompt"]
+
+        # Translate music prompt
+        trans_res = client.post(
+            "/api/sounds/translate",
+            json={
+                "prompt": "musique de piano jazz",
+                "sound_type": "music",
+            },
+        )
+        assert trans_res.status_code == 200
+        assert "piano" in trans_res.json()["prompt"].lower()
+
+        # Generate music track
+        create_res = client.post(
+            "/api/sounds",
+            json={
+                "prompt": imp_res.json()["prompt"],
+                "sound_type": "music",
+                "duration_seconds": 45.0,
+                "instrumental": True,
+                "model_id": "music_v1",
+                "output_format": "mp3_44100_128",
+            },
+        )
+        assert create_res.status_code == 201
+        track = create_res.json()
+        assert track["id"]
+        assert track["sound_type"] == "music"
+        assert track["duration_seconds"] == 45.0
+        assert track["instrumental"] is True
+        assert track["model_id"] == "music_v1"
+        assert track["url"] == f"/api/sounds/{track['id']}/file"
+
+        # List with filter
+        music_list = client.get("/api/sounds?type=music").json()
+        assert len(music_list) == 1
+        assert music_list[0]["id"] == track["id"]
+
+        sfx_list = client.get("/api/sounds?type=sound_effect").json()
+        assert len(sfx_list) == 0
+
+        # Stream audio
+        file_res = client.get(track["url"])
+        assert file_res.status_code == 200
+        assert file_res.content == b"\xff\xfb\x90\x00fake-music-mp3-bytes"
+
+
+@pytest.mark.asyncio
+async def test_providers_generate_music_success(monkeypatch):
+    settings = Settings(
+        _env_file=None,
+        eleven_labs_key="test-key",
+        demo_mode=False,
+    )
+
+    class MockTransport(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+            assert request.url.path == "/v1/music"
+            assert request.url.params["output_format"] == "mp3_44100_128"
+            assert request.headers["xi-api-key"] == "test-key"
+            import json
+            payload = json.loads(request.content.decode("utf-8"))
+            assert payload["prompt"] == "ambient space drone"
+            assert payload["music_length_ms"] == 30000
+            assert payload["force_instrumental"] is True
+            assert payload["model_id"] == "music_v1"
+            return httpx.Response(200, content=b"music-bytes-ok", headers={"content-type": "audio/mpeg"})
+
+    real_async_client = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: real_async_client(transport=MockTransport()))
+
+    content, mime = await providers.generate_music(
+        settings,
+        "ambient space drone",
+        duration_seconds=30.0,
+        force_instrumental=True,
+        model_id="music_v1",
+        output_format="mp3_44100_128",
+    )
+    assert content == b"music-bytes-ok"
     assert mime == "audio/mpeg"

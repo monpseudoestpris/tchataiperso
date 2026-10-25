@@ -17,9 +17,11 @@ import type { Flashcard } from "@/lib/api";
 
 type LearnFlashcardsProps = {
   flashcards: Flashcard[];
+  title?: string;
+  subtitle?: string;
 };
 
-export function LearnFlashcards({ flashcards: initialFlashcards }: LearnFlashcardsProps) {
+export function LearnFlashcards({ flashcards: initialFlashcards, title, subtitle }: LearnFlashcardsProps) {
   const [cards, setCards] = useState<Flashcard[]>(initialFlashcards);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isFlipped, setIsFlipped] = useState(false);
@@ -140,10 +142,14 @@ export function LearnFlashcards({ flashcards: initialFlashcards }: LearnFlashcar
             <Sparkles size={14} />
             <span>Rappel Actif Espacé</span>
           </div>
-          <h2>📇 20 Flashcards Interactives de Mémorisation Active</h2>
+          <h2>📇 {title || `${total} Flashcards Interactives de Mémorisation Active`}</h2>
           <p>
-            Ancrez durablement les 20 concepts fondamentaux. Retournez chaque carte au clic ou avec la barre{" "}
-            <strong>Espace</strong> pour révéler la réponse modèle.
+            {subtitle || (
+              <>
+                Ancrez durablement les {total} concepts fondamentaux. Retournez chaque carte au clic ou avec la barre{" "}
+                <strong>Espace</strong> pour révéler la réponse modèle.
+              </>
+            )}
           </p>
         </div>
 
@@ -208,7 +214,7 @@ export function LearnFlashcards({ flashcards: initialFlashcards }: LearnFlashcar
             title="Afficher l'ensemble des 20 cartes en grille"
           >
             <LayoutGrid size={14} />
-            <span>Grille (20)</span>
+            <span>Grille ({total})</span>
           </button>
         </div>
       </div>

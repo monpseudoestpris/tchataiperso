@@ -354,18 +354,29 @@ SOUND_OUTPUT_FORMATS_ALLOWED = {
 
 
 class CreateSound(BaseModel):
-    prompt: str = Field(min_length=1, max_length=1000)
-    duration_seconds: float | None = Field(default=None, ge=0.5, le=30.0)
+    prompt: str = Field(min_length=1, max_length=4100)
+    sound_type: str = Field(default="sound_effect", max_length=30)
+    duration_seconds: float | None = Field(default=None, ge=0.5, le=300.0)
     prompt_influence: float | None = Field(default=0.3, ge=0.0, le=1.0)
     output_format: str = Field(default="mp3_44100_128", max_length=50)
     loop: bool = False
+    instrumental: bool | None = None
+    model_id: str | None = Field(default=None, max_length=50)
+
+    @field_validator("sound_type")
+    @classmethod
+    def validate_sound_type(cls, value: str) -> str:
+        cleaned = value.strip().lower()
+        if cleaned not in {"sound_effect", "music"}:
+            return "sound_effect"
+        return cleaned
 
     @field_validator("prompt")
     @classmethod
     def trim_sound_prompt(cls, value: str) -> str:
         value = value.strip()
         if not value:
-            raise ValueError("La description du son ne peut pas être vide")
+            raise ValueError("La description sonore ou musicale ne peut pas être vide")
         return value
 
     @field_validator("output_format")
@@ -378,11 +389,21 @@ class CreateSound(BaseModel):
 
 
 class ImproveSoundPrompt(BaseModel):
-    prompt: str = Field(min_length=1, max_length=2000)
+    prompt: str = Field(min_length=1, max_length=4100)
+    sound_type: str = Field(default="sound_effect", max_length=30)
     model: str | None = Field(default=None, max_length=150)
     style_keywords: str | None = Field(default=None, max_length=500)
-    duration_hint: float | None = Field(default=None, ge=0.5, le=30.0)
+    duration_hint: float | None = Field(default=None, ge=0.5, le=300.0)
     loop: bool = False
+    instrumental: bool | None = None
+
+    @field_validator("sound_type")
+    @classmethod
+    def validate_sound_type(cls, value: str) -> str:
+        cleaned = value.strip().lower()
+        if cleaned not in {"sound_effect", "music"}:
+            return "sound_effect"
+        return cleaned
 
     @field_validator("prompt")
     @classmethod
@@ -439,4 +460,44 @@ class UpdateBlog(BaseModel):
         if not value:
             raise ValueError("Ce champ ne peut pas être vide")
         return value
+
+
+class FlashcardItem(BaseModel):
+    id: int
+    category: str = "Point Clé"
+    recto: str
+    verso: str
+
+
+class QuizQuestionItem(BaseModel):
+    id: int
+    question: str
+    options: list[str]
+    answer: int
+    explanation: str
+
+
+class GenerateStudyMaterialRequest(BaseModel):
+    kind: Literal["flashcards", "quiz"] = "flashcards"
+    count: int = Field(default=10, ge=1, le=30)
+    difficulty: Literal["easy", "medium", "hard"] = "medium"
+    topic: str | None = Field(default=None, max_length=200)
+
+    @field_validator("topic")
+    @classmethod
+    def trim_optional_topic(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        return value or None
+
+
+class StudyMaterialResponse(BaseModel):
+    kind: Literal["flashcards", "quiz"]
+    count: int
+    difficulty: Literal["easy", "medium", "hard"]
+    topic: str
+    flashcards: list[FlashcardItem] = Field(default_factory=list)
+    questions: list[QuizQuestionItem] = Field(default_factory=list)
+
 

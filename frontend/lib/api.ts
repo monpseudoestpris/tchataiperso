@@ -24,7 +24,14 @@ export type Config = {
   image_models?: ImageModel[];
   default_image_model?: string;
   themes?: string[];
-  features: { chat: boolean; web_search: boolean; ocr: boolean; image_generation: boolean; sound_effects?: boolean };
+  features: {
+    chat: boolean;
+    web_search: boolean;
+    ocr: boolean;
+    image_generation: boolean;
+    sound_effects?: boolean;
+    music_generation?: boolean;
+  };
   search_providers?: string[];
   demo_mode: boolean;
 };
@@ -63,12 +70,15 @@ export type GeneratedImage = {
 };
 export type GeneratedSound = {
   id: string;
+  sound_type?: "sound_effect" | "music";
   prompt: string;
   english_prompt?: string;
   duration_seconds?: number | null;
   prompt_influence?: number | null;
   output_format: string;
   loop?: boolean;
+  instrumental?: boolean | null;
+  model_id?: string | null;
   filename: string;
   mime_type: string;
   size: number;
@@ -441,16 +451,20 @@ export async function createLearnReportFromMessage(messageId: string): Promise<L
   });
 }
 
-export async function fetchGeneratedSounds(): Promise<GeneratedSound[]> {
-  return api<GeneratedSound[]>("/sounds");
+export async function fetchGeneratedSounds(type?: "sound_effect" | "music"): Promise<GeneratedSound[]> {
+  const query = type ? `?type=${type}` : "";
+  return api<GeneratedSound[]>(`/sounds${query}`);
 }
 
 export async function createGeneratedSound(payload: {
   prompt: string;
+  sound_type?: "sound_effect" | "music";
   duration_seconds?: number | null;
   prompt_influence?: number | null;
   output_format?: string;
   loop?: boolean;
+  instrumental?: boolean | null;
+  model_id?: string | null;
 }): Promise<GeneratedSound> {
   return api<GeneratedSound>("/sounds", {
     method: "POST",
@@ -460,9 +474,11 @@ export async function createGeneratedSound(payload: {
 
 export async function improveSoundPrompt(payload: {
   prompt: string;
+  sound_type?: "sound_effect" | "music";
   style_keywords?: string;
   duration_hint?: number | null;
   loop?: boolean;
+  instrumental?: boolean | null;
   model?: string;
 }): Promise<{ prompt: string }> {
   return api<{ prompt: string }>("/sounds/improve", {
@@ -473,6 +489,7 @@ export async function improveSoundPrompt(payload: {
 
 export async function translateSoundPrompt(payload: {
   prompt: string;
+  sound_type?: "sound_effect" | "music";
 }): Promise<{ prompt: string }> {
   return api<{ prompt: string }>("/sounds/translate", {
     method: "POST",
@@ -485,6 +502,35 @@ export async function deleteGeneratedSound(id: string): Promise<void> {
     method: "DELETE",
   });
 }
+
+export type StudyMaterialRequest = {
+  kind: "flashcards" | "quiz";
+  count: number;
+  difficulty: "easy" | "medium" | "hard";
+  topic?: string;
+};
+
+export type StudyMaterialResponse = {
+  kind: "flashcards" | "quiz";
+  count: number;
+  difficulty: "easy" | "medium" | "hard";
+  topic: string;
+  flashcards: Flashcard[];
+  questions: QuizQuestion[];
+};
+
+export async function generateStudyMaterial(
+  conversationId: string,
+  payload: StudyMaterialRequest,
+  init?: RequestInit
+): Promise<StudyMaterialResponse> {
+  return api<StudyMaterialResponse>(`/conversations/${conversationId}/study`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+    ...init,
+  });
+}
+
 
 
 

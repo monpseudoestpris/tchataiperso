@@ -74,14 +74,23 @@ def generated_image_json(item: GeneratedImage) -> dict:
     }
 
 
+MUSIC_MODELS = [
+    {"id": "music_v1", "name": "Eleven Music v1 (Standard — Recommandé)", "badge": "v1"},
+    {"id": "music_v2_5", "name": "Eleven Music v2.5 (Studio — Haute fidélité)", "badge": "v2.5"},
+]
+
+
 def generated_sound_json(item: GeneratedSound) -> dict:
     return {
         "id": item.id,
+        "sound_type": getattr(item, "sound_type", "sound_effect") or "sound_effect",
         "prompt": item.prompt,
         "duration_seconds": item.duration_seconds,
         "prompt_influence": item.prompt_influence,
         "output_format": item.output_format,
         "loop": bool(item.loop),
+        "instrumental": getattr(item, "instrumental", None),
+        "model_id": getattr(item, "model_id", None),
         "filename": item.filename,
         "mime_type": item.mime_type,
         "size": item.size,

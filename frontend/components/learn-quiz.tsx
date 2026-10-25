@@ -16,9 +16,11 @@ import type { QuizQuestion } from "@/lib/api";
 
 type LearnQuizProps = {
   questions: QuizQuestion[];
+  title?: string;
+  subtitle?: string;
 };
 
-export function LearnQuiz({ questions }: LearnQuizProps) {
+export function LearnQuiz({ questions, title, subtitle }: LearnQuizProps) {
   const [selectedAnswers, setSelectedAnswers] = useState<Record<number, number>>({});
   const total = questions.length;
 
@@ -62,10 +64,11 @@ export function LearnQuiz({ questions }: LearnQuizProps) {
             <Award size={14} />
             <span>Évaluation Didactique</span>
           </div>
-          <h2>🎯 Quizz d'Auto-évaluation & Entraînement ({total} Questions)</h2>
+          <h2>🎯 {title || `Quizz d'Auto-évaluation & Entraînement (${total} Questions)`}</h2>
           <p>
-            Validez votre assimilation des concepts et réflexes méthodologiques. Chaque question propose 4
-            options et affiche la justification experte immédiatement après votre choix.
+            {subtitle || (
+              "Validez votre assimilation des concepts et réflexes méthodologiques. Chaque question propose 4 options et affiche la justification experte immédiatement après votre choix."
+            )}
           </p>
         </div>
 

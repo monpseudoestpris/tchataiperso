@@ -42,6 +42,7 @@ def config(settings: Settings = Depends(get_settings)):
             "ocr": settings.enabled(settings.mistral_api_key),
             "image_generation": bool(settings.available_image_models),
             "sound_effects": settings.enabled(settings.eleven_labs_key),
+            "music_generation": settings.enabled(settings.eleven_labs_key),
         },
     }
 

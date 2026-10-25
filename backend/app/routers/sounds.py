@@ -11,7 +11,7 @@ from ..config import Settings
 from ..deps import claim, current_user, get_sessions, get_settings, get_upload_dir
 from ..models import GeneratedSound, User
 from ..schemas import CreateSound, ImproveSoundPrompt
-from ..serializers import (MAX_GENERATED_SOUNDS, SOUND_OUTPUT_FORMATS,
+from ..serializers import (MAX_GENERATED_SOUNDS, MUSIC_MODELS, SOUND_OUTPUT_FORMATS,
                           generated_sound_json)
 
 
@@ -20,23 +20,29 @@ router = APIRouter(tags=["sounds"])
 
 @router.get("/api/sounds")
 def list_generated_sounds(
+    type: str | None = None,
     user: User = Depends(current_user),
     sessions: sessionmaker = Depends(get_sessions),
 ):
     with sessions() as db:
+        stmt = select(GeneratedSound).where(GeneratedSound.user_id == user.id)
+        if type in ("sound_effect", "music"):
+            stmt = stmt.where(GeneratedSound.sound_type == type)
+        stmt = stmt.order_by(GeneratedSound.created_at.desc(), GeneratedSound.id.desc())
         return [
             generated_sound_json(item)
-            for item in db.scalars(
-                select(GeneratedSound)
-                .where(GeneratedSound.user_id == user.id)
-                .order_by(GeneratedSound.created_at.desc(), GeneratedSound.id.desc())
-            )
+            for item in db.scalars(stmt)
         ]
 
 
 @router.get("/api/sounds/formats")
 def list_sound_formats():
     return SOUND_OUTPUT_FORMATS
+
+
+@router.get("/api/sounds/music-models")
+def list_music_models():
+    return MUSIC_MODELS
 
 
 @router.post("/api/sounds/improve")
@@ -53,14 +59,24 @@ async def improve_sound(
         or settings.default_model
     )
     try:
-        prompt = await providers.improve_sound_prompt(
-            settings,
-            model,
-            body.prompt,
-            style_keywords=body.style_keywords,
-            duration_hint=body.duration_hint,
-            loop=body.loop,
-        )
+        if body.sound_type == "music":
+            prompt = await providers.improve_music_prompt(
+                settings,
+                model,
+                body.prompt,
+                style_keywords=body.style_keywords,
+                duration_hint=body.duration_hint,
+                instrumental=body.instrumental,
+            )
+        else:
+            prompt = await providers.improve_sound_prompt(
+                settings,
+                model,
+                body.prompt,
+                style_keywords=body.style_keywords,
+                duration_hint=body.duration_hint,
+                loop=body.loop,
+            )
     except providers.ProviderError as exc:
         raise HTTPException(502, str(exc)) from exc
     return {"prompt": prompt}
@@ -75,7 +91,10 @@ async def translate_sound(
     if settings.demo_mode or not settings.enabled(settings.llm_api_key):
         raise HTTPException(503, "La traduction nécessite une clé LLM_API_KEY et le mode IA réel")
     try:
-        prompt = await providers.translate_sound_prompt_to_english(settings, body.prompt)
+        if body.sound_type == "music":
+            prompt = await providers.translate_music_prompt_to_english(settings, body.prompt)
+        else:
+            prompt = await providers.translate_sound_prompt_to_english(settings, body.prompt)
     except providers.ProviderError as exc:
         raise HTTPException(502, str(exc)) from exc
     return {"prompt": prompt}
@@ -92,7 +111,7 @@ async def create_sound_effect(
     if settings.demo_mode or not settings.enabled(settings.eleven_labs_key):
         raise HTTPException(
             503,
-            "La génération d'effets sonores nécessite une clé ELEVEN_LABS_KEY valide dans le fichier .env",
+            "La génération audio nécessite une clé ELEVEN_LABS_KEY valide dans le fichier .env",
         )
     upload_dir = get_upload_dir(request)
     with sessions() as db:
@@ -108,31 +127,45 @@ async def create_sound_effect(
     await lock.acquire()
     path = None
     try:
-        # ElevenLabs requires English for optimal acoustic sound synthesis
-        english_prompt = await providers.translate_sound_prompt_to_english(settings, body.prompt)
-        content, mime = await providers.generate_sound_effect(
-            settings,
-            english_prompt,
-            duration_seconds=body.duration_seconds,
-            prompt_influence=body.prompt_influence,
-            output_format=body.output_format,
-            loop=body.loop,
-        )
+        is_music = body.sound_type == "music"
+        if is_music:
+            english_prompt = await providers.translate_music_prompt_to_english(settings, body.prompt)
+            content, mime = await providers.generate_music(
+                settings,
+                english_prompt,
+                duration_seconds=body.duration_seconds,
+                force_instrumental=True if body.instrumental is None else bool(body.instrumental),
+                model_id=body.model_id or "music_v1",
+                output_format=body.output_format,
+            )
+        else:
+            english_prompt = await providers.translate_sound_prompt_to_english(settings, body.prompt)
+            content, mime = await providers.generate_sound_effect(
+                settings,
+                english_prompt,
+                duration_seconds=body.duration_seconds,
+                prompt_influence=body.prompt_influence,
+                output_format=body.output_format,
+                loop=body.loop,
+            )
         storage_name = str(uuid4())
         path = upload_dir / storage_name
         path.write_bytes(content)
         extension = "wav" if "wav" in mime or "pcm" in body.output_format else "mp3"
-        safe_prefix = re.sub(r"[^a-zA-Z0-9_-]", "-", body.prompt[:16]).strip("-") or "sound"
+        safe_prefix = re.sub(r"[^a-zA-Z0-9_-]", "-", body.prompt[:16]).strip("-") or ("music" if is_music else "sound")
         with sessions() as db:
             sound_id = str(uuid4())
             item = GeneratedSound(
                 id=sound_id,
                 user_id=user.id,
+                sound_type="music" if is_music else "sound_effect",
                 prompt=body.prompt,
                 duration_seconds=body.duration_seconds,
-                prompt_influence=body.prompt_influence,
+                prompt_influence=body.prompt_influence if not is_music else None,
                 output_format=body.output_format,
-                loop=body.loop,
+                loop=body.loop if not is_music else False,
+                instrumental=body.instrumental if is_music else None,
+                model_id=body.model_id if is_music else None,
                 filename=f"{safe_prefix}-{sound_id[:8]}.{extension}",
                 mime_type=mime,
                 size=len(content),

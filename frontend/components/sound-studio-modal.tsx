@@ -2,8 +2,9 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
-  AudioWaveform, Check, CircleAlert, Copy, Download, Languages, LoaderCircle,
-  Pause, Play, RotateCcw, Search, Sparkles, Trash2, Volume2, VolumeX, WandSparkles, X
+  AudioWaveform, Check, CircleAlert, Copy, Download, ExternalLink, Languages,
+  LoaderCircle, Mic, Music, Music2, Pause, Play, Radio, RotateCcw, Search,
+  Sparkles, Trash2, Volume2, VolumeX, WandSparkles, X
 } from "lucide-react";
 import {
   api, errorMessage, type Config, type GeneratedSound,
@@ -13,6 +14,7 @@ import {
 type SoundStudioModalProps = {
   config: Config | null;
   initialPrompt?: string;
+  initialTab?: "effects" | "music" | "library";
   onClose: () => void;
   onSendToChat?: (sound: GeneratedSound) => void;
 };
@@ -92,6 +94,94 @@ const SUGGESTED_SOUNDS: { label: string; prompt: string; category: SoundCategory
   },
 ];
 
+type MusicCategory = "all" | "cinema" | "lofi" | "synthwave" | "jazz" | "rock" | "electro" | "zen" | "classical" | "hiphop";
+
+const MUSIC_CATEGORIES: { id: MusicCategory; label: string }[] = [
+  { id: "all", label: "Tous les genres" },
+  { id: "cinema", label: "🎬 Bande originale & Épique" },
+  { id: "lofi", label: "🎧 Lo-Fi Chill & Détente" },
+  { id: "synthwave", label: "🕹️ Synthwave & Rétro 80s" },
+  { id: "jazz", label: "🎹 Jazz Lounge & Piano" },
+  { id: "rock", label: "🎸 Rock & Guitares" },
+  { id: "electro", label: "⚡ Électro & Dance" },
+  { id: "zen", label: "🌿 Méditation & Ambiant" },
+  { id: "classical", label: "🎻 Néoclassique & Cordes" },
+  { id: "hiphop", label: "🥁 Hip-Hop & Trap" },
+];
+
+const SUGGESTED_MUSIC: { label: string; prompt: string; category: MusicCategory; duration: number; instrumental: boolean }[] = [
+  {
+    label: "🎬 Épopée symphonique de film",
+    prompt: "Epic cinematic orchestral track with dramatic ostinato strings, brass swells, heavy taiko drums and soaring French horn melody",
+    category: "cinema",
+    duration: 60,
+    instrumental: true,
+  },
+  {
+    label: "🎧 Lo-Fi Chillhop d'étude",
+    prompt: "Mellow lo-fi chillhop beat with dusty Rhodes electric piano chords, soft warm sub bass, crackling vinyl atmosphere and relaxed jazzy groove",
+    category: "lofi",
+    duration: 45,
+    instrumental: true,
+  },
+  {
+    label: "🕹️ Cyberpunk Synthwave 80s",
+    prompt: "High-energy 80s retro synthwave with pulsing analog bassline, neon synth arpeggios, gated reverb drums and futuristic driving pace",
+    category: "synthwave",
+    duration: 45,
+    instrumental: true,
+  },
+  {
+    label: "🎹 Jazz Lounge feutré",
+    prompt: "Smooth midnight jazz lounge ballad featuring delicate acoustic grand piano improvisation, gentle brushed drums and warm upright double bass",
+    category: "jazz",
+    duration: 60,
+    instrumental: true,
+  },
+  {
+    label: "🎸 Folk acoustique & Guitare",
+    prompt: "Warm acoustic indie folk track with fingerpicked steel-string guitars, rustic cello accompaniment and gentle stomping wooden percussion",
+    category: "rock",
+    duration: 45,
+    instrumental: true,
+  },
+  {
+    label: "⚡ Deep House mélodique",
+    prompt: "Euphoric melodic deep house groove at 124 BPM with bouncy sub bass, atmospheric vocal chops, shimmering synth plucks and punchy four-on-the-floor kick",
+    category: "electro",
+    duration: 60,
+    instrumental: true,
+  },
+  {
+    label: "🌿 Méditation & Bols tibétains",
+    prompt: "Tranquil ambient meditation soundscape with singing bowls, soft ethereal drone pads, gentle bamboo wind chimes and distant mountain breeze",
+    category: "zen",
+    duration: 60,
+    instrumental: true,
+  },
+  {
+    label: "🎻 Adagio néoclassique poignant",
+    prompt: "Deeply emotional neoclassical adagio with expressive solo cello, minimalist grand piano chords and tender soaring string quartet swell",
+    category: "classical",
+    duration: 60,
+    instrumental: true,
+  },
+  {
+    label: "🥁 Trap atmosphérique moderne",
+    prompt: "Dark ambient trap instrumental featuring heavy gliding 808 sub bass, crisp rolling hi-hats, mysterious bell melodies and spaced-out reverb",
+    category: "hiphop",
+    duration: 45,
+    instrumental: true,
+  },
+  {
+    label: "🎤 Pop Indie lumineuse (Avec chant)",
+    prompt: "Catchy indie pop song with uplifting acoustic guitar, bright melodic synth hooks, punchy drums and sweet expressive female vocals singing about summer road trips",
+    category: "rock",
+    duration: 60,
+    instrumental: false,
+  },
+];
+
 const SOUND_FORMATS = [
   { id: "mp3_44100_128", name: "MP3 44.1 kHz (128 kbps — Recommandé)", badge: "Standard" },
   { id: "mp3_44100_192", name: "MP3 44.1 kHz (192 kbps — Haute fidélité)", badge: "HD" },
@@ -99,7 +189,12 @@ const SOUND_FORMATS = [
   { id: "pcm_44100", name: "WAV / PCM 44.1 kHz (Non compressé)", badge: "Studio" },
 ];
 
-const DURATION_PRESETS = [
+const MUSIC_MODELS = [
+  { id: "music_v1", name: "Eleven Music v1 (Standard — Recommandé)", badge: "v1", desc: "Polyvalent, rapide et équilibré" },
+  { id: "music_v2_5", name: "Eleven Music v2.5 (Studio — Haute fidélité)", badge: "v2.5", desc: "Arrangement dynamique et acoustique studio avancée" },
+];
+
+const SFX_DURATION_PRESETS = [
   { value: 0, label: "Auto (IA)" },
   { value: 1.5, label: "1.5s" },
   { value: 3.0, label: "3s" },
@@ -107,6 +202,17 @@ const DURATION_PRESETS = [
   { value: 10.0, label: "10s" },
   { value: 15.0, label: "15s" },
   { value: 20.0, label: "20s" },
+];
+
+const MUSIC_DURATION_PRESETS = [
+  { value: 0, label: "Auto (IA)" },
+  { value: 15, label: "15s" },
+  { value: 30, label: "30s" },
+  { value: 45, label: "45s" },
+  { value: 60, label: "1 min" },
+  { value: 90, label: "1:30" },
+  { value: 120, label: "2 min" },
+  { value: 180, label: "3 min" },
 ];
 
 function formatTime(seconds: number): string {
@@ -119,14 +225,14 @@ function formatTime(seconds: number): string {
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} o`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} Ko`;
-  return `${(bytes / (1024 * 1024)).toFixed(2)} Mo`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} Mo`;
 }
 
 function formatDate(iso: string): string {
   try {
     const d = new Date(iso);
     return d.toLocaleDateString("fr-FR", {
-      day: "numeric",
+      day: "2-digit",
       month: "short",
       hour: "2-digit",
       minute: "2-digit",
@@ -136,9 +242,7 @@ function formatDate(iso: string): string {
   }
 }
 
-/**
- * Custom Audio Player component with play/pause, time scrub, animated sound wave and volume.
- */
+// Mini-lecteur audio réactif avec onde visuelle
 function SoundPlayer({
   url,
   filename,
@@ -146,108 +250,153 @@ function SoundPlayer({
   autoPlay = false,
 }: {
   url: string;
-  filename?: string;
+  filename: string;
   loop?: boolean;
   autoPlay?: boolean;
 }) {
-  const audioRef = useRef<HTMLAudioElement>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [volume, setVolume] = useState(0.85);
   const [isMuted, setIsMuted] = useState(false);
 
   useEffect(() => {
-    const el = audioRef.current;
-    if (!el) return;
+    const audio = audioRef.current;
+    if (!audio) return;
 
-    const onTimeUpdate = () => setCurrentTime(el.currentTime);
-    const onLoadedMetadata = () => setDuration(el.duration || 0);
     const onPlay = () => setIsPlaying(true);
     const onPause = () => setIsPlaying(false);
+    const onTimeUpdate = () => setCurrentTime(audio.currentTime);
+    const onLoadedMetadata = () => {
+      setDuration(audio.duration || 0);
+      if (autoPlay) {
+        audio.play().catch(() => {});
+      }
+    };
     const onEnded = () => {
-      setIsPlaying(false);
-      setCurrentTime(0);
+      if (!loop) {
+        setIsPlaying(false);
+        setCurrentTime(0);
+      }
     };
 
-    el.addEventListener("timeupdate", onTimeUpdate);
-    el.addEventListener("loadedmetadata", onLoadedMetadata);
-    el.addEventListener("play", onPlay);
-    el.addEventListener("pause", onPause);
-    el.addEventListener("ended", onEnded);
+    audio.addEventListener("play", onPlay);
+    audio.addEventListener("pause", onPause);
+    audio.addEventListener("timeupdate", onTimeUpdate);
+    audio.addEventListener("loadedmetadata", onLoadedMetadata);
+    audio.addEventListener("ended", onEnded);
 
     return () => {
-      el.removeEventListener("timeupdate", onTimeUpdate);
-      el.removeEventListener("loadedmetadata", onLoadedMetadata);
-      el.removeEventListener("play", onPlay);
-      el.removeEventListener("pause", onPause);
-      el.removeEventListener("ended", onEnded);
+      audio.removeEventListener("play", onPlay);
+      audio.removeEventListener("pause", onPause);
+      audio.removeEventListener("timeupdate", onTimeUpdate);
+      audio.removeEventListener("loadedmetadata", onLoadedMetadata);
+      audio.removeEventListener("ended", onEnded);
     };
-  }, [url]);
+  }, [autoPlay, loop]);
 
   function togglePlay() {
-    const el = audioRef.current;
-    if (!el) return;
+    const audio = audioRef.current;
+    if (!audio) return;
     if (isPlaying) {
-      el.pause();
+      audio.pause();
     } else {
-      void el.play();
+      audio.play().catch(() => {});
     }
   }
 
   function handleSeek(e: React.ChangeEvent<HTMLInputElement>) {
-    const el = audioRef.current;
-    if (!el) return;
-    const target = parseFloat(e.target.value);
-    el.currentTime = target;
-    setCurrentTime(target);
+    const audio = audioRef.current;
+    if (!audio) return;
+    const time = parseFloat(e.target.value);
+    audio.currentTime = time;
+    setCurrentTime(time);
+  }
+
+  function handleVolume(e: React.ChangeEvent<HTMLInputElement>) {
+    const audio = audioRef.current;
+    if (!audio) return;
+    const vol = parseFloat(e.target.value);
+    audio.volume = vol;
+    setVolume(vol);
+    setIsMuted(vol === 0);
   }
 
   function toggleMute() {
-    const el = audioRef.current;
-    if (!el) return;
-    el.muted = !el.muted;
-    setIsMuted(el.muted);
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (isMuted) {
+      audio.volume = volume > 0 ? volume : 0.85;
+      setIsMuted(false);
+    } else {
+      audio.volume = 0;
+      setIsMuted(true);
+    }
   }
 
+  const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
+
   return (
-    <div className="sound-player-widget">
-      <audio ref={audioRef} src={url} loop={loop} autoPlay={autoPlay} preload="metadata" />
+    <div className="sound-player-wrap">
+      <audio ref={audioRef} src={url} loop={loop} preload="metadata" />
+
       <button
         type="button"
-        className={`sound-player-play-btn ${isPlaying ? "is-playing" : ""}`}
+        className={`sound-player-toggle ${isPlaying ? "is-playing" : ""}`}
         onClick={togglePlay}
-        aria-label={isPlaying ? "Mettre en pause" : "Écouter l'effet sonore"}
+        aria-label={isPlaying ? "Mettre en pause" : "Écouter l'extrait audio"}
         title={isPlaying ? "Pause" : "Lecture"}
       >
-        {isPlaying ? <Pause size={17} /> : <Play size={17} style={{ marginLeft: "2px" }} />}
+        {isPlaying ? <Pause size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" className="ml-0.5" />}
       </button>
 
-      {/* Animated Sound Wave Bars */}
-      <div className={`sound-player-wave ${isPlaying ? "is-active" : ""}`} aria-hidden="true">
-        <span className="wave-bar bar-1" />
-        <span className="wave-bar bar-2" />
-        <span className="wave-bar bar-3" />
-        <span className="wave-bar bar-4" />
-        <span className="wave-bar bar-5" />
-        <span className="wave-bar bar-6" />
+      {/* Visualiseur ondes animées */}
+      <div className="sound-wave-bars" aria-hidden="true">
+        {[40, 75, 55, 95, 60, 85, 30, 90, 65, 45, 80, 50, 70, 90, 35, 60].map((h, i) => (
+          <span
+            key={i}
+            className={`sound-wave-bar ${isPlaying ? "is-animating" : ""}`}
+            style={{
+              height: isPlaying ? `${Math.max(15, h)}%` : "20%",
+              animationDelay: `${(i * 0.08).toFixed(2)}s`,
+            }}
+          />
+        ))}
       </div>
 
-      {/* Scrub bar & Time */}
-      <div className="sound-player-scrub-wrap">
+      {/* Curseur temporel */}
+      <div className="sound-player-progress-area">
         <input
           type="range"
           min={0}
           max={duration || 100}
-          step={0.05}
+          step={0.1}
           value={currentTime}
           onChange={handleSeek}
           className="sound-player-slider"
-          aria-label="Position audio"
+          aria-label="Position de lecture"
         />
-        <div className="sound-player-times">
+        <div className="sound-player-time">
           <span>{formatTime(currentTime)}</span>
+          <span>/</span>
           <span>{formatTime(duration)}</span>
         </div>
+      </div>
+
+      {/* Volume */}
+      <div className="sound-player-volume-wrap">
+        <input
+          type="range"
+          min={0}
+          max={1}
+          step={0.05}
+          value={isMuted ? 0 : volume}
+          onChange={handleVolume}
+          className="sound-volume-slider"
+          aria-label="Volume audio"
+          title={`Volume : ${Math.round((isMuted ? 0 : volume) * 100)}%`}
+        />
       </div>
 
       <button
@@ -265,32 +414,44 @@ function SoundPlayer({
 export function SoundStudioModal({
   config,
   initialPrompt = "",
+  initialTab = "effects",
   onClose,
   onSendToChat,
 }: SoundStudioModalProps) {
-  const [tab, setTab] = useState<"studio" | "library">("studio");
+  const [tab, setTab] = useState<"effects" | "music" | "library">(initialTab);
   const [sounds, setSounds] = useState<GeneratedSound[]>([]);
   const [loadingSounds, setLoadingSounds] = useState(false);
-  const [prompt, setPrompt] = useState(initialPrompt);
-  const [previousPrompt, setPreviousPrompt] = useState<string | null>(null);
-  const [styleCategory, setStyleCategory] = useState<SoundCategory>("all");
-  const [styleKeywords, setStyleKeywords] = useState("");
 
-  // Audio parameters
-  const [durationMode, setDurationMode] = useState<"auto" | "manual">("auto");
-  const [durationSeconds, setDurationSeconds] = useState(3.0);
-  const [promptInfluence, setPromptInfluence] = useState(0.3);
-  const [outputFormat, setOutputFormat] = useState("mp3_44100_128");
-  const [loop, setLoop] = useState(false);
+  // Sound Effects state
+  const [sfxPrompt, setSfxPrompt] = useState(initialPrompt);
+  const [sfxPreviousPrompt, setSfxPreviousPrompt] = useState<string | null>(null);
+  const [sfxCategory, setSfxCategory] = useState<SoundCategory>("all");
+  const [sfxDurationMode, setSfxDurationMode] = useState<"auto" | "manual">("auto");
+  const [sfxDurationSeconds, setSfxDurationSeconds] = useState(3.0);
+  const [sfxPromptInfluence, setSfxPromptInfluence] = useState(0.3);
+  const [sfxOutputFormat, setSfxOutputFormat] = useState("mp3_44100_128");
+  const [sfxLoop, setSfxLoop] = useState(false);
 
-  // States
+  // Music state
+  const [musicPrompt, setMusicPrompt] = useState(initialPrompt);
+  const [musicPreviousPrompt, setMusicPreviousPrompt] = useState<string | null>(null);
+  const [musicCategory, setMusicCategory] = useState<MusicCategory>("all");
+  const [musicInstrumental, setMusicInstrumental] = useState(true);
+  const [musicModelId, setMusicModelId] = useState("music_v1");
+  const [musicDurationMode, setMusicDurationMode] = useState<"auto" | "manual">("manual");
+  const [musicDurationSeconds, setMusicDurationSeconds] = useState(45);
+  const [musicOutputFormat, setMusicOutputFormat] = useState("mp3_44100_128");
+
+  // Global states
   const [busy, setBusy] = useState<"improve" | "translate" | "generate" | "delete" | null>(null);
   const [error, setError] = useState("");
   const [currentSound, setCurrentSound] = useState<GeneratedSound | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [libraryFilter, setLibraryFilter] = useState<"all" | "effects" | "music">("all");
   const [searchFilter, setSearchFilter] = useState("");
 
-  const promptRef = useRef<HTMLTextAreaElement>(null);
+  const sfxPromptRef = useRef<HTMLTextAreaElement>(null);
+  const musicPromptRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     void loadSounds();
@@ -311,20 +472,21 @@ export function SoundStudioModal({
     }
   }
 
-  async function handleImprovePrompt() {
-    if (!prompt.trim() || busy) return;
+  // --- Sound Effects Actions ---
+  async function handleImproveSfxPrompt() {
+    if (!sfxPrompt.trim() || busy) return;
     setError("");
     setBusy("improve");
     try {
       const res = await improveSoundPrompt({
-        prompt: prompt.trim(),
-        style_keywords: styleKeywords.trim() || undefined,
-        duration_hint: durationMode === "manual" ? durationSeconds : undefined,
-        loop,
+        prompt: sfxPrompt.trim(),
+        sound_type: "sound_effect",
+        duration_hint: sfxDurationMode === "manual" ? sfxDurationSeconds : undefined,
+        loop: sfxLoop,
       });
       if (res.prompt && res.prompt.trim()) {
-        setPreviousPrompt(prompt);
-        setPrompt(res.prompt.trim());
+        setSfxPreviousPrompt(sfxPrompt);
+        setSfxPrompt(res.prompt.trim());
       }
     } catch (err) {
       setError(errorMessage(err));
@@ -333,17 +495,18 @@ export function SoundStudioModal({
     }
   }
 
-  async function handleTranslatePrompt() {
-    if (!prompt.trim() || busy) return;
+  async function handleTranslateSfxPrompt() {
+    if (!sfxPrompt.trim() || busy) return;
     setError("");
     setBusy("translate");
     try {
       const res = await translateSoundPrompt({
-        prompt: prompt.trim(),
+        prompt: sfxPrompt.trim(),
+        sound_type: "sound_effect",
       });
       if (res.prompt && res.prompt.trim()) {
-        setPreviousPrompt(prompt);
-        setPrompt(res.prompt.trim());
+        setSfxPreviousPrompt(sfxPrompt);
+        setSfxPrompt(res.prompt.trim());
       }
     } catch (err) {
       setError(errorMessage(err));
@@ -352,26 +515,27 @@ export function SoundStudioModal({
     }
   }
 
-  function handleRevertPrompt() {
-    if (previousPrompt) {
-      setPrompt(previousPrompt);
-      setPreviousPrompt(null);
+  function handleRevertSfxPrompt() {
+    if (sfxPreviousPrompt) {
+      setSfxPrompt(sfxPreviousPrompt);
+      setSfxPreviousPrompt(null);
     }
   }
 
-  async function handleGenerate(e?: FormEvent) {
+  async function handleGenerateSfx(e?: FormEvent) {
     if (e) e.preventDefault();
-    if (!prompt.trim() || busy) return;
+    if (!sfxPrompt.trim() || busy) return;
 
     setError("");
     setBusy("generate");
     try {
       const created = await createGeneratedSound({
-        prompt: prompt.trim(),
-        duration_seconds: durationMode === "manual" ? durationSeconds : null,
-        prompt_influence: promptInfluence,
-        output_format: outputFormat,
-        loop,
+        prompt: sfxPrompt.trim(),
+        sound_type: "sound_effect",
+        duration_seconds: sfxDurationMode === "manual" ? sfxDurationSeconds : null,
+        prompt_influence: sfxPromptInfluence,
+        output_format: sfxOutputFormat,
+        loop: sfxLoop,
       });
       setSounds(prev => [created, ...prev]);
       setCurrentSound(created);
@@ -382,6 +546,96 @@ export function SoundStudioModal({
     }
   }
 
+  function applySfxPreset(item: typeof SUGGESTED_SOUNDS[number]) {
+    setSfxPrompt(item.prompt);
+    setSfxDurationMode("manual");
+    setSfxDurationSeconds(item.duration);
+    sfxPromptRef.current?.focus();
+  }
+
+  // --- Music Actions ---
+  async function handleImproveMusicPrompt() {
+    if (!musicPrompt.trim() || busy) return;
+    setError("");
+    setBusy("improve");
+    try {
+      const res = await improveSoundPrompt({
+        prompt: musicPrompt.trim(),
+        sound_type: "music",
+        instrumental: musicInstrumental,
+        duration_hint: musicDurationMode === "manual" ? musicDurationSeconds : undefined,
+      });
+      if (res.prompt && res.prompt.trim()) {
+        setMusicPreviousPrompt(musicPrompt);
+        setMusicPrompt(res.prompt.trim());
+      }
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleTranslateMusicPrompt() {
+    if (!musicPrompt.trim() || busy) return;
+    setError("");
+    setBusy("translate");
+    try {
+      const res = await translateSoundPrompt({
+        prompt: musicPrompt.trim(),
+        sound_type: "music",
+      });
+      if (res.prompt && res.prompt.trim()) {
+        setMusicPreviousPrompt(musicPrompt);
+        setMusicPrompt(res.prompt.trim());
+      }
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function handleRevertMusicPrompt() {
+    if (musicPreviousPrompt) {
+      setMusicPrompt(musicPreviousPrompt);
+      setMusicPreviousPrompt(null);
+    }
+  }
+
+  async function handleGenerateMusic(e?: FormEvent) {
+    if (e) e.preventDefault();
+    if (!musicPrompt.trim() || busy) return;
+
+    setError("");
+    setBusy("generate");
+    try {
+      const created = await createGeneratedSound({
+        prompt: musicPrompt.trim(),
+        sound_type: "music",
+        duration_seconds: musicDurationMode === "manual" ? musicDurationSeconds : null,
+        instrumental: musicInstrumental,
+        model_id: musicModelId,
+        output_format: musicOutputFormat,
+      });
+      setSounds(prev => [created, ...prev]);
+      setCurrentSound(created);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function applyMusicPreset(item: typeof SUGGESTED_MUSIC[number]) {
+    setMusicPrompt(item.prompt);
+    setMusicDurationMode("manual");
+    setMusicDurationSeconds(item.duration);
+    setMusicInstrumental(item.instrumental);
+    musicPromptRef.current?.focus();
+  }
+
+  // --- Common Actions ---
   async function handleDelete(soundId: string) {
     if (busy) return;
     setError("");
@@ -405,21 +659,24 @@ export function SoundStudioModal({
     setTimeout(() => setCopiedId(null), 2000);
   }
 
-  function applyPreset(item: typeof SUGGESTED_SOUNDS[number]) {
-    setPrompt(item.prompt);
-    setDurationMode("manual");
-    setDurationSeconds(item.duration);
-    promptRef.current?.focus();
-  }
-
-  const filteredPresets = styleCategory === "all"
+  const filteredSfxPresets = sfxCategory === "all"
     ? SUGGESTED_SOUNDS
-    : SUGGESTED_SOUNDS.filter(s => s.category === styleCategory);
+    : SUGGESTED_SOUNDS.filter(s => s.category === sfxCategory);
 
-  const filteredLibrary = sounds.filter(s =>
-    s.prompt.toLowerCase().includes(searchFilter.toLowerCase()) ||
-    s.filename.toLowerCase().includes(searchFilter.toLowerCase())
-  );
+  const filteredMusicPresets = musicCategory === "all"
+    ? SUGGESTED_MUSIC
+    : SUGGESTED_MUSIC.filter(s => s.category === musicCategory);
+
+  const filteredLibrary = sounds.filter(s => {
+    if (libraryFilter === "effects" && s.sound_type === "music") return false;
+    if (libraryFilter === "music" && s.sound_type !== "music") return false;
+    if (!searchFilter.trim()) return true;
+    const q = searchFilter.toLowerCase();
+    return s.prompt.toLowerCase().includes(q) || s.filename.toLowerCase().includes(q);
+  });
+
+  const effectsCount = sounds.filter(s => s.sound_type !== "music").length;
+  const musicCount = sounds.filter(s => s.sound_type === "music").length;
 
   return (
     <div className="sound-studio-backdrop" onClick={onClose}>
@@ -427,7 +684,7 @@ export function SoundStudioModal({
         className="sound-studio-dialog"
         role="dialog"
         aria-modal="true"
-        aria-label="Studio Effets Sonores ElevenLabs"
+        aria-label="Studio Audio & Musique ElevenLabs"
         onClick={e => e.stopPropagation()}
       >
         {/* En-tête */}
@@ -438,11 +695,22 @@ export function SoundStudioModal({
             </div>
             <div>
               <div className="sound-studio-title-row">
-                <h2>Effets Sonores & Bruitages</h2>
+                <h2>Studio Audio & Musique IA</h2>
                 <span className="sound-studio-provider-badge">ElevenLabs API</span>
+                <a
+                  href="https://elevenlabs.io/app/music"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="sound-studio-official-link"
+                  title="Consulter l'application officielle ElevenLabs Music (ouvre dans un nouvel onglet)"
+                >
+                  <Music size={12} />
+                  <span>ElevenLabs Music</span>
+                  <ExternalLink size={11} />
+                </a>
               </div>
               <p className="sound-studio-subtitle">
-                Génération de bruitages sur-mesure de haute précision par intelligence artificielle
+                Génération de bruitages réalistes et composition de musique originale assistée par IA
               </p>
             </div>
           </div>
@@ -462,19 +730,28 @@ export function SoundStudioModal({
         <div className="sound-studio-tabs">
           <button
             type="button"
-            className={`sound-studio-tab ${tab === "studio" ? "is-active" : ""}`}
-            onClick={() => setTab("studio")}
+            className={`sound-studio-tab ${tab === "effects" ? "is-active" : ""}`}
+            onClick={() => setTab("effects")}
           >
-            <Sparkles size={16} />
-            <span>Studio Bruitages</span>
+            <Volume2 size={16} />
+            <span>Effets Sonores & Bruitages</span>
+          </button>
+          <button
+            type="button"
+            className={`sound-studio-tab sound-studio-tab-music ${tab === "music" ? "is-active" : ""}`}
+            onClick={() => setTab("music")}
+          >
+            <Music size={16} />
+            <span>Génération de Musique</span>
+            <span className="sound-studio-badge-new">Eleven Music</span>
           </button>
           <button
             type="button"
             className={`sound-studio-tab ${tab === "library" ? "is-active" : ""}`}
             onClick={() => setTab("library")}
           >
-            <Volume2 size={16} />
-            <span>Mes Bruitages</span>
+            <Sparkles size={16} />
+            <span>Audiothèque</span>
             <span className="sound-studio-tab-count">{sounds.length}</span>
           </button>
         </div>
@@ -486,34 +763,34 @@ export function SoundStudioModal({
           </div>
         )}
 
-        {/* Corps modal : Onglet Studio */}
-        {tab === "studio" && (
+        {/* -------------------- ONGLET 1 : BRUITAGES & EFFETS SONORES -------------------- */}
+        {tab === "effects" && (
           <div className="sound-studio-body">
-            <form onSubmit={handleGenerate} className="sound-studio-form">
+            <form onSubmit={handleGenerateSfx} className="sound-studio-form">
               {/* Zone Prompt */}
               <div className="sound-studio-prompt-box">
                 <div className="sound-studio-prompt-header">
-                  <label htmlFor="sound-prompt-input" className="sound-studio-label">
-                    Description du son ou bruitage
+                  <label htmlFor="sfx-prompt-input" className="sound-studio-label">
+                    Description du bruitage ou effet sonore
                   </label>
                   <div className="sound-studio-prompt-actions">
-                    {previousPrompt && (
+                    {sfxPreviousPrompt && (
                       <button
                         type="button"
                         className="sound-studio-btn-revert"
-                        onClick={handleRevertPrompt}
+                        onClick={handleRevertSfxPrompt}
                         disabled={busy !== null}
                         title="Revenir à la formulation avant amélioration"
                       >
                         <RotateCcw size={12} />
-                        <span>Revenir à l’original</span>
+                        <span>Original</span>
                       </button>
                     )}
                     <button
                       type="button"
                       className="sound-studio-btn-translate"
-                      onClick={handleTranslatePrompt}
-                      disabled={busy !== null || !prompt.trim()}
+                      onClick={handleTranslateSfxPrompt}
+                      disabled={busy !== null || !sfxPrompt.trim()}
                       title="Traduire directement la description en anglais audio pour ElevenLabs"
                     >
                       {busy === "translate" ? (
@@ -526,9 +803,9 @@ export function SoundStudioModal({
                     <button
                       type="button"
                       className="sound-studio-btn-improve"
-                      onClick={handleImprovePrompt}
-                      disabled={busy !== null || !prompt.trim()}
-                      title="Enrichir, sublimer et traduire le prompt sonore en anglais par IA pour ElevenLabs"
+                      onClick={handleImproveSfxPrompt}
+                      disabled={busy !== null || !sfxPrompt.trim()}
+                      title="Enrichir et traduire le prompt sonore en anglais acoustique par IA"
                     >
                       {busy === "improve" ? (
                         <LoaderCircle size={13} className="spin" />
@@ -537,28 +814,28 @@ export function SoundStudioModal({
                       )}
                       <span>Améliorer le prompt</span>
                     </button>
-                    <span className={`sound-prompt-counter ${prompt.length > 400 ? "is-warning" : ""}`}>
-                      {prompt.length} / 450
+                    <span className={`sound-prompt-counter ${sfxPrompt.length > 400 ? "is-warning" : ""}`}>
+                      {sfxPrompt.length} / 450
                     </span>
                   </div>
                 </div>
 
                 <textarea
-                  id="sound-prompt-input"
-                  ref={promptRef}
+                  id="sfx-prompt-input"
+                  ref={sfxPromptRef}
                   className="sound-studio-textarea"
                   rows={3}
                   maxLength={450}
                   placeholder="Ex : Épée laser s'allumant avec bourdonnement d'énergie pure, ou orage nocturne grondant au loin avec pluie battante..."
-                  value={prompt}
-                  onChange={e => setPrompt(e.target.value)}
+                  value={sfxPrompt}
+                  onChange={e => setSfxPrompt(e.target.value)}
                   disabled={busy === "generate"}
                 />
 
                 <div className="sound-studio-lang-hint">
                   <Languages size={13} />
                   <span>
-                    <strong>Optimisation anglaise :</strong> ElevenLabs exige l&apos;anglais pour une fidélité acoustique optimale. Vos prompts en français sont automatiquement traduits en anglais audio avant la génération.
+                    <strong>Optimisation anglaise :</strong> Le modèle Sound Effects a été entraîné en anglais. Vos demandes en français sont traduites avec précision avant l&apos;envoi.
                   </span>
                 </div>
 
@@ -566,12 +843,12 @@ export function SoundStudioModal({
                 <div className="sound-studio-suggestions-row">
                   <span className="sound-suggestions-title">Inspirations :</span>
                   <div className="sound-suggestions-scroll">
-                    {filteredPresets.map(preset => (
+                    {filteredSfxPresets.map(preset => (
                       <button
                         key={preset.label}
                         type="button"
                         className="sound-preset-chip"
-                        onClick={() => applyPreset(preset)}
+                        onClick={() => applySfxPreset(preset)}
                         title={preset.prompt}
                       >
                         {preset.label}
@@ -590,22 +867,22 @@ export function SoundStudioModal({
                     <div className="sound-duration-toggle">
                       <button
                         type="button"
-                        className={`sound-pill-btn ${durationMode === "auto" ? "is-active" : ""}`}
-                        onClick={() => setDurationMode("auto")}
+                        className={`sound-pill-btn ${sfxDurationMode === "auto" ? "is-active" : ""}`}
+                        onClick={() => setSfxDurationMode("auto")}
                       >
                         Auto (IA)
                       </button>
                       <button
                         type="button"
-                        className={`sound-pill-btn ${durationMode === "manual" ? "is-active" : ""}`}
-                        onClick={() => setDurationMode("manual")}
+                        className={`sound-pill-btn ${sfxDurationMode === "manual" ? "is-active" : ""}`}
+                        onClick={() => setSfxDurationMode("manual")}
                       >
                         Manuelle
                       </button>
                     </div>
                   </div>
 
-                  {durationMode === "manual" ? (
+                  {sfxDurationMode === "manual" ? (
                     <div className="sound-duration-slider-wrap">
                       <div className="sound-slider-row">
                         <input
@@ -613,19 +890,19 @@ export function SoundStudioModal({
                           min={0.5}
                           max={30.0}
                           step={0.5}
-                          value={durationSeconds}
-                          onChange={e => setDurationSeconds(parseFloat(e.target.value))}
+                          value={sfxDurationSeconds}
+                          onChange={e => setSfxDurationSeconds(parseFloat(e.target.value))}
                           className="sound-studio-slider"
                         />
-                        <span className="sound-slider-value">{durationSeconds.toFixed(1)} s</span>
+                        <span className="sound-slider-value">{sfxDurationSeconds.toFixed(1)} s</span>
                       </div>
                       <div className="sound-preset-durations">
-                        {DURATION_PRESETS.slice(1).map(p => (
+                        {SFX_DURATION_PRESETS.slice(1).map(p => (
                           <button
                             key={p.value}
                             type="button"
-                            className={`sound-duration-chip ${durationSeconds === p.value ? "is-selected" : ""}`}
-                            onClick={() => setDurationSeconds(p.value)}
+                            className={`sound-duration-chip ${sfxDurationSeconds === p.value ? "is-selected" : ""}`}
+                            onClick={() => setSfxDurationSeconds(p.value)}
                           >
                             {p.label}
                           </button>
@@ -634,18 +911,18 @@ export function SoundStudioModal({
                     </div>
                   ) : (
                     <p className="sound-setting-desc">
-                      L&apos;IA ElevenLabs détermine automatiquement la durée idéale selon la nature de l&apos;action sonore décrite.
+                      L&apos;IA ElevenLabs détermine automatiquement la durée idéale selon l&apos;action sonore décrite.
                     </p>
                   )}
                 </div>
 
                 {/* 2. Format & Qualité */}
                 <div className="sound-setting-card">
-                  <span className="sound-setting-title">🎵 Format & Qualité audio</span>
+                  <span className="sound-setting-title">🎧 Format & Qualité audio</span>
                   <select
                     className="sound-studio-select"
-                    value={outputFormat}
-                    onChange={e => setOutputFormat(e.target.value)}
+                    value={sfxOutputFormat}
+                    onChange={e => setSfxOutputFormat(e.target.value)}
                   >
                     {SOUND_FORMATS.map(f => (
                       <option key={f.id} value={f.id}>
@@ -654,7 +931,7 @@ export function SoundStudioModal({
                     ))}
                   </select>
                   <p className="sound-setting-desc">
-                    MP3 128 kbps offre un compromis optimal entre clarté audio et légèreté de chargement.
+                    MP3 128 kbps offre un compromis optimal entre clarté audio et rapidité.
                   </p>
                 </div>
 
@@ -662,15 +939,15 @@ export function SoundStudioModal({
                 <div className="sound-setting-card">
                   <div className="sound-setting-header">
                     <span className="sound-setting-title">🎯 Fidélité au prompt</span>
-                    <span className="sound-slider-value">{promptInfluence.toFixed(2)}</span>
+                    <span className="sound-slider-value">{sfxPromptInfluence.toFixed(2)}</span>
                   </div>
                   <input
                     type="range"
                     min={0.0}
                     max={1.0}
                     step={0.05}
-                    value={promptInfluence}
-                    onChange={e => setPromptInfluence(parseFloat(e.target.value))}
+                    value={sfxPromptInfluence}
+                    onChange={e => setSfxPromptInfluence(parseFloat(e.target.value))}
                     className="sound-studio-slider"
                   />
                   <div className="sound-slider-hints">
@@ -680,40 +957,40 @@ export function SoundStudioModal({
                   </div>
                 </div>
 
-                {/* 4. Boucle fluide (Loop) */}
+                {/* 4. Boucle fluide */}
                 <div className="sound-setting-card sound-loop-card">
                   <label className="sound-loop-label">
                     <input
                       type="checkbox"
-                      checked={loop}
-                      onChange={e => setLoop(e.target.checked)}
+                      checked={sfxLoop}
+                      onChange={e => setSfxLoop(e.target.checked)}
                       className="sound-checkbox"
                     />
                     <div>
                       <span className="sound-loop-title">🔁 Boucle audio continue (Loop)</span>
                       <p className="sound-setting-desc">
-                        Idéal pour ambiances immersives (pluie, vent, drones, rivières) qui tournent sans coupure.
+                        Idéal pour ambiances immersives (pluie, vent, drones, cascades) sans coupure.
                       </p>
                     </div>
                   </label>
                 </div>
               </div>
 
-              {/* Bouton Générer */}
+              {/* Bouton Générer Bruitage */}
               <div className="sound-studio-submit-bar">
                 <button
                   type="submit"
                   className="sound-studio-generate-btn"
-                  disabled={busy !== null || !prompt.trim()}
+                  disabled={busy !== null || !sfxPrompt.trim()}
                 >
                   {busy === "generate" ? (
                     <>
                       <LoaderCircle size={18} className="spin" />
-                      <span>Synthèse audio ElevenLabs en cours…</span>
+                      <span>Synthèse sonore ElevenLabs en cours…</span>
                     </>
                   ) : (
                     <>
-                      <AudioWaveform size={18} />
+                      <Volume2 size={18} />
                       <span>Générer l’effet sonore</span>
                     </>
                   )}
@@ -722,11 +999,11 @@ export function SoundStudioModal({
             </form>
 
             {/* Lecteur du dernier son généré */}
-            {currentSound && (
+            {currentSound && currentSound.sound_type !== "music" && (
               <div className="sound-result-card">
                 <div className="sound-result-header">
                   <div className="sound-result-title-box">
-                    <span className="sound-result-badge">Dernier son généré</span>
+                    <span className="sound-result-badge">Dernier bruitage généré</span>
                     <h3 className="sound-result-prompt">{currentSound.prompt}</h3>
                     {currentSound.english_prompt && currentSound.english_prompt !== currentSound.prompt && (
                       <div className="sound-result-english-box">
@@ -787,15 +1064,386 @@ export function SoundStudioModal({
           </div>
         )}
 
-        {/* Corps modal : Onglet Bibliothèque */}
+        {/* -------------------- ONGLET 2 : GÉNÉRATION DE MUSIQUE (ELEVEN MUSIC) -------------------- */}
+        {tab === "music" && (
+          <div className="sound-studio-body sound-music-body">
+            {/* Bannière didactique ElevenLabs Music */}
+            <div className="sound-music-banner">
+              <div className="sound-music-banner-icon">
+                <Music size={22} />
+              </div>
+              <div className="sound-music-banner-content">
+                <div className="sound-music-banner-heading">
+                  <h3>Composition Musicale ElevenLabs Music</h3>
+                  <a
+                    href="https://elevenlabs.io/app/music"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="sound-music-banner-link"
+                    title="Ouvrir le studio officiel ElevenLabs Music"
+                  >
+                    <span>https://elevenlabs.io/app/music</span>
+                    <ExternalLink size={13} />
+                  </a>
+                </div>
+                <p>
+                  Générez des morceaux de musique studio complets, avec voix mélodiques ou en pur instrumental, à partir d&apos;une description de style, instruments, rythme et ambiance.
+                </p>
+              </div>
+            </div>
+
+            <form onSubmit={handleGenerateMusic} className="sound-studio-form">
+              {/* Zone Prompt Musique */}
+              <div className="sound-studio-prompt-box sound-music-prompt-box">
+                <div className="sound-studio-prompt-header">
+                  <label htmlFor="music-prompt-input" className="sound-studio-label">
+                    Idée musicale, genre, instruments & ambiance
+                  </label>
+                  <div className="sound-studio-prompt-actions">
+                    {musicPreviousPrompt && (
+                      <button
+                        type="button"
+                        className="sound-studio-btn-revert"
+                        onClick={handleRevertMusicPrompt}
+                        disabled={busy !== null}
+                        title="Revenir à la formulation avant amélioration"
+                      >
+                        <RotateCcw size={12} />
+                        <span>Original</span>
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="sound-studio-btn-translate"
+                      onClick={handleTranslateMusicPrompt}
+                      disabled={busy !== null || !musicPrompt.trim()}
+                      title="Traduire votre idée en anglais musical pour le modèle ElevenLabs"
+                    >
+                      {busy === "translate" ? (
+                        <LoaderCircle size={13} className="spin" />
+                      ) : (
+                        <Languages size={13} />
+                      )}
+                      <span>Traduire en anglais</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="sound-studio-btn-improve is-music-improve"
+                      onClick={handleImproveMusicPrompt}
+                      disabled={busy !== null || !musicPrompt.trim()}
+                      title="Enrichir le prompt par IA avec tempo BPM, instrumentation, ambiance et structure"
+                    >
+                      {busy === "improve" ? (
+                        <LoaderCircle size={13} className="spin" />
+                      ) : (
+                        <WandSparkles size={13} />
+                      )}
+                      <span>Améliorer le prompt musique</span>
+                    </button>
+                    <span className={`sound-prompt-counter ${musicPrompt.length > 3500 ? "is-warning" : ""}`}>
+                      {musicPrompt.length} / 4000
+                    </span>
+                  </div>
+                </div>
+
+                <textarea
+                  id="music-prompt-input"
+                  ref={musicPromptRef}
+                  className="sound-studio-textarea sound-music-textarea"
+                  rows={4}
+                  maxLength={4000}
+                  placeholder="Ex : Bande originale épique pour bande-annonce spatiale avec cordes montantes, cors puissants, percussions lourdes et progression héroïque, 110 BPM..."
+                  value={musicPrompt}
+                  onChange={e => setMusicPrompt(e.target.value)}
+                  disabled={busy === "generate"}
+                />
+
+                <div className="sound-studio-lang-hint">
+                  <Sparkles size={13} />
+                  <span>
+                    <strong>Astuce composition :</strong> Précisez le genre, les instruments clés, le tempo (BPM) et l&apos;émotion. Évitez les noms d&apos;artistes protégés qu&apos;ElevenLabs bloque par sécurité.
+                  </span>
+                </div>
+
+                {/* Suggestions musicales */}
+                <div className="sound-studio-suggestions-row">
+                  <span className="sound-suggestions-title">Styles & Inspirations :</span>
+                  <div className="sound-suggestions-scroll">
+                    {filteredMusicPresets.map(preset => (
+                      <button
+                        key={preset.label}
+                        type="button"
+                        className="sound-preset-chip sound-preset-chip-music"
+                        onClick={() => applyMusicPreset(preset)}
+                        title={preset.prompt}
+                      >
+                        {preset.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Paramètres Musicaux */}
+              <div className="sound-studio-settings-grid">
+                {/* 1. Instrumental vs Vocal */}
+                <div className="sound-setting-card sound-music-card-highlight">
+                  <span className="sound-setting-title">🎤 Orientation vocale</span>
+                  <div className="sound-instrumental-toggle">
+                    <button
+                      type="button"
+                      className={`sound-instrumental-btn ${musicInstrumental ? "is-active" : ""}`}
+                      onClick={() => setMusicInstrumental(true)}
+                    >
+                      <Radio size={15} />
+                      <div className="text-left">
+                        <strong>Instrumental pur</strong>
+                        <small>Strictement sans voix ni paroles</small>
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      className={`sound-instrumental-btn ${!musicInstrumental ? "is-active" : ""}`}
+                      onClick={() => setMusicInstrumental(false)}
+                    >
+                      <Mic size={15} />
+                      <div className="text-left">
+                        <strong>Avec voix / chant</strong>
+                        <small>Chanson avec lignes vocales expressives</small>
+                      </div>
+                    </button>
+                  </div>
+                </div>
+
+                {/* 2. Modèle ElevenLabs Music */}
+                <div className="sound-setting-card">
+                  <span className="sound-setting-title">🧠 Modèle Eleven Music</span>
+                  <select
+                    className="sound-studio-select"
+                    value={musicModelId}
+                    onChange={e => setMusicModelId(e.target.value)}
+                  >
+                    {MUSIC_MODELS.map(m => (
+                      <option key={m.id} value={m.id}>
+                        {m.name}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="sound-setting-desc">
+                    {MUSIC_MODELS.find(m => m.id === musicModelId)?.desc || "Modèle IA d'orchestration ElevenLabs"}
+                  </p>
+                </div>
+
+                {/* 3. Durée du morceau */}
+                <div className="sound-setting-card">
+                  <div className="sound-setting-header">
+                    <span className="sound-setting-title">⏱️ Durée du morceau</span>
+                    <div className="sound-duration-toggle">
+                      <button
+                        type="button"
+                        className={`sound-pill-btn ${musicDurationMode === "auto" ? "is-active" : ""}`}
+                        onClick={() => setMusicDurationMode("auto")}
+                      >
+                        Auto
+                      </button>
+                      <button
+                        type="button"
+                        className={`sound-pill-btn ${musicDurationMode === "manual" ? "is-active" : ""}`}
+                        onClick={() => setMusicDurationMode("manual")}
+                      >
+                        {musicDurationSeconds} s
+                      </button>
+                    </div>
+                  </div>
+
+                  {musicDurationMode === "manual" ? (
+                    <div className="sound-duration-slider-wrap">
+                      <div className="sound-slider-row">
+                        <input
+                          type="range"
+                          min={10}
+                          max={300}
+                          step={5}
+                          value={musicDurationSeconds}
+                          onChange={e => setMusicDurationSeconds(parseInt(e.target.value, 10))}
+                          className="sound-studio-slider sound-music-slider"
+                        />
+                        <span className="sound-slider-value">
+                          {musicDurationSeconds >= 60
+                            ? `${Math.floor(musicDurationSeconds / 60)}m ${musicDurationSeconds % 60 ? (musicDurationSeconds % 60) + "s" : ""}`
+                            : `${musicDurationSeconds} s`}
+                        </span>
+                      </div>
+                      <div className="sound-preset-durations">
+                        {MUSIC_DURATION_PRESETS.slice(1).map(p => (
+                          <button
+                            key={p.value}
+                            type="button"
+                            className={`sound-duration-chip sound-duration-chip-music ${musicDurationSeconds === p.value ? "is-selected" : ""}`}
+                            onClick={() => setMusicDurationSeconds(p.value)}
+                          >
+                            {p.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="sound-setting-desc">
+                      ElevenLabs compose automatiquement un extrait d&apos;une durée adaptée à la structure du morceau.
+                    </p>
+                  )}
+                </div>
+
+                {/* 4. Format & Qualité */}
+                <div className="sound-setting-card">
+                  <span className="sound-setting-title">🎵 Format & Résolution audio</span>
+                  <select
+                    className="sound-studio-select"
+                    value={musicOutputFormat}
+                    onChange={e => setMusicOutputFormat(e.target.value)}
+                  >
+                    {SOUND_FORMATS.map(f => (
+                      <option key={f.id} value={f.id}>
+                        {f.name}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="sound-setting-desc">
+                    MP3 128 kbps ou 192 kbps garantissent une restitution acoustique haute fidélité.
+                  </p>
+                </div>
+              </div>
+
+              {/* Bouton Composer Musique */}
+              <div className="sound-studio-submit-bar">
+                <button
+                  type="submit"
+                  className="sound-studio-generate-btn sound-music-generate-btn"
+                  disabled={busy !== null || !musicPrompt.trim()}
+                >
+                  {busy === "generate" ? (
+                    <>
+                      <LoaderCircle size={18} className="spin" />
+                      <span>Composition musicale ElevenLabs en cours (~15-30s)…</span>
+                    </>
+                  ) : (
+                    <>
+                      <Music size={18} />
+                      <span>Composer le morceau (Eleven Music)</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+
+            {/* Lecteur de la dernière musique générée */}
+            {currentSound && currentSound.sound_type === "music" && (
+              <div className="sound-result-card sound-music-result-card">
+                <div className="sound-result-header">
+                  <div className="sound-result-title-box">
+                    <span className="sound-result-badge sound-result-badge-music">
+                      🎵 Morceau composé avec ElevenLabs Music
+                    </span>
+                    <h3 className="sound-result-prompt">{currentSound.prompt}</h3>
+                    {currentSound.english_prompt && currentSound.english_prompt !== currentSound.prompt && (
+                      <div className="sound-result-english-box">
+                        <span className="sound-result-english-tag">Prompt musical envoyé à ElevenLabs :</span>
+                        <span className="sound-result-english-text">{currentSound.english_prompt}</span>
+                      </div>
+                    )}
+                  </div>
+                  <div className="sound-result-meta-chips">
+                    {currentSound.duration_seconds && (
+                      <span className="sound-meta-chip">⏱️ {formatTime(currentSound.duration_seconds)}</span>
+                    )}
+                    <span className="sound-meta-chip">
+                      {currentSound.instrumental ? "🎷 Instrumental" : "🎤 Vocal / Chant"}
+                    </span>
+                    {currentSound.model_id && (
+                      <span className="sound-meta-chip">🧠 {currentSound.model_id}</span>
+                    )}
+                    <span className="sound-meta-chip">📦 {formatFileSize(currentSound.size)}</span>
+                  </div>
+                </div>
+
+                <SoundPlayer
+                  url={currentSound.url}
+                  filename={currentSound.filename}
+                  loop={false}
+                  autoPlay={false}
+                />
+
+                <div className="sound-result-actions">
+                  <a
+                    href={currentSound.download_url}
+                    download={currentSound.filename}
+                    className="sound-action-btn sound-music-action-btn"
+                    title="Télécharger le fichier musical"
+                  >
+                    <Download size={14} />
+                    <span>Télécharger le morceau ({currentSound.filename.endsWith(".wav") ? ".wav" : ".mp3"})</span>
+                  </a>
+                  <button
+                    type="button"
+                    className="sound-action-btn"
+                    onClick={() => handleCopyPrompt(currentSound.prompt, currentSound.id)}
+                    title="Copier le prompt musical"
+                  >
+                    {copiedId === currentSound.id ? <Check size={14} /> : <Copy size={14} />}
+                    <span>{copiedId === currentSound.id ? "Copié !" : "Copier le prompt"}</span>
+                  </button>
+                  {onSendToChat && (
+                    <button
+                      type="button"
+                      className="sound-action-btn is-highlight sound-music-highlight-btn"
+                      onClick={() => onSendToChat(currentSound)}
+                      title="Partager ce morceau dans la discussion en cours"
+                    >
+                      <Music size={14} />
+                      <span>Insérer dans le tchat</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* -------------------- ONGLET 3 : AUDIOTHÈQUE (BIBLIOTHÈQUE) -------------------- */}
         {tab === "library" && (
           <div className="sound-library-body">
             <div className="sound-library-toolbar">
+              <div className="sound-library-filter-pills">
+                <button
+                  type="button"
+                  className={`sound-lib-pill ${libraryFilter === "all" ? "is-active" : ""}`}
+                  onClick={() => setLibraryFilter("all")}
+                >
+                  Tous ({sounds.length})
+                </button>
+                <button
+                  type="button"
+                  className={`sound-lib-pill ${libraryFilter === "effects" ? "is-active" : ""}`}
+                  onClick={() => setLibraryFilter("effects")}
+                >
+                  <Volume2 size={13} />
+                  <span>Bruitages ({effectsCount})</span>
+                </button>
+                <button
+                  type="button"
+                  className={`sound-lib-pill sound-lib-pill-music ${libraryFilter === "music" ? "is-active" : ""}`}
+                  onClick={() => setLibraryFilter("music")}
+                >
+                  <Music size={13} />
+                  <span>Musiques ({musicCount})</span>
+                </button>
+              </div>
+
               <div className="sound-search-wrap">
                 <Search size={15} className="sound-search-icon" />
                 <input
                   type="text"
-                  placeholder="Rechercher parmi vos effets sonores générés…"
+                  placeholder="Rechercher parmi vos créations audio…"
                   value={searchFilter}
                   onChange={e => setSearchFilter(e.target.value)}
                   className="sound-search-input"
@@ -810,102 +1458,128 @@ export function SoundStudioModal({
                   </button>
                 )}
               </div>
-              <span className="sound-library-count">
-                {filteredLibrary.length} bruitage{filteredLibrary.length > 1 ? "s" : ""}
-              </span>
             </div>
 
             {loadingSounds ? (
               <div className="sound-library-loading">
                 <LoaderCircle size={24} className="spin" />
-                <span>Chargement de votre audiothèque…</span>
+                <span>Chargement de votre audiothèque ElevenLabs…</span>
               </div>
             ) : filteredLibrary.length === 0 ? (
               <div className="sound-library-empty">
                 <div className="sound-empty-icon">
-                  <Volume2 size={36} />
+                  {libraryFilter === "music" ? <Music size={36} /> : <Volume2 size={36} />}
                 </div>
-                <h3>Aucun effet sonore {searchFilter ? "correspondant" : "pour le moment"}</h3>
+                <h3>
+                  {searchFilter
+                    ? "Aucun résultat pour cette recherche"
+                    : libraryFilter === "music"
+                    ? "Aucun morceau de musique pour l'instant"
+                    : "Aucun son généré pour l'instant"}
+                </h3>
                 <p>
                   {searchFilter
-                    ? "Essayez une autre recherche ou réinitialisez le filtre."
-                    : "Créez votre premier bruitage personnalisé grâce au Studio ci-dessus !"}
+                    ? "Essayez une autre recherche ou réinitialisez le filtre ci-dessus."
+                    : libraryFilter === "music"
+                    ? "Composez votre premier morceau musical grâce à ElevenLabs Music !"
+                    : "Créez votre premier bruitage ou composition grâce aux onglets ci-dessus !"}
                 </p>
                 {!searchFilter && (
-                  <button
-                    type="button"
-                    className="sound-studio-btn-primary"
-                    onClick={() => setTab("studio")}
-                  >
-                    <Sparkles size={15} />
-                    <span>Créer un effet sonore</span>
-                  </button>
+                  <div className="flex gap-2 justify-center mt-3">
+                    <button
+                      type="button"
+                      className="sound-studio-btn-primary"
+                      onClick={() => setTab("music")}
+                    >
+                      <Music size={15} />
+                      <span>Composer une musique</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="sound-studio-btn-primary"
+                      onClick={() => setTab("effects")}
+                    >
+                      <Volume2 size={15} />
+                      <span>Créer un effet sonore</span>
+                    </button>
+                  </div>
                 )}
               </div>
             ) : (
               <div className="sound-library-grid">
-                {filteredLibrary.map(sound => (
-                  <div key={sound.id} className="sound-card">
-                    <div className="sound-card-header">
-                      <div className="sound-card-title-row">
-                        <span className="sound-card-date">{formatDate(sound.created_at)}</span>
-                        {sound.loop && <span className="sound-card-badge-loop">🔁 Boucle</span>}
+                {filteredLibrary.map(sound => {
+                  const isMusic = sound.sound_type === "music";
+                  return (
+                    <div key={sound.id} className={`sound-card ${isMusic ? "sound-card-music" : ""}`}>
+                      <div className="sound-card-header">
+                        <div className="sound-card-title-row">
+                          <span className={`sound-card-type-badge ${isMusic ? "is-music" : "is-sfx"}`}>
+                            {isMusic ? "🎵 Musique" : "🔊 Bruitage"}
+                          </span>
+                          <span className="sound-card-date">{formatDate(sound.created_at)}</span>
+                          {sound.loop && <span className="sound-card-badge-loop">🔁 Boucle</span>}
+                          {isMusic && sound.instrumental && (
+                            <span className="sound-card-badge-inst">🎷 Instrumental</span>
+                          )}
+                        </div>
+                        <p className="sound-card-prompt" title={sound.prompt}>
+                          {sound.prompt}
+                        </p>
                       </div>
-                      <p className="sound-card-prompt" title={sound.prompt}>
-                        {sound.prompt}
-                      </p>
-                    </div>
 
-                    <SoundPlayer
-                      url={sound.url}
-                      filename={sound.filename}
-                      loop={sound.loop}
-                    />
+                      <SoundPlayer
+                        url={sound.url}
+                        filename={sound.filename}
+                        loop={sound.loop}
+                      />
 
-                    <div className="sound-card-footer">
-                      <div className="sound-card-meta">
-                        {sound.duration_seconds && <span>⏱️ {sound.duration_seconds.toFixed(1)}s</span>}
-                        <span>📦 {formatFileSize(sound.size)}</span>
-                      </div>
-                      <div className="sound-card-actions">
-                        <a
-                          href={sound.download_url}
-                          download={sound.filename}
-                          className="sound-card-btn"
-                          title="Télécharger l'effet sonore"
-                        >
-                          <Download size={14} />
-                        </a>
-                        <button
-                          type="button"
-                          className="sound-card-btn"
-                          onClick={() => handleCopyPrompt(sound.prompt, sound.id)}
-                          title="Copier la description"
-                        >
-                          {copiedId === sound.id ? <Check size={14} /> : <Copy size={14} />}
-                        </button>
-                        {onSendToChat && (
+                      <div className="sound-card-footer">
+                        <div className="sound-card-meta">
+                          {sound.duration_seconds && (
+                            <span>⏱️ {isMusic ? formatTime(sound.duration_seconds) : `${sound.duration_seconds.toFixed(1)}s`}</span>
+                          )}
+                          <span>📦 {formatFileSize(sound.size)}</span>
+                        </div>
+                        <div className="sound-card-actions">
+                          <a
+                            href={sound.download_url}
+                            download={sound.filename}
+                            className="sound-card-btn"
+                            title="Télécharger le fichier audio"
+                          >
+                            <Download size={14} />
+                          </a>
                           <button
                             type="button"
-                            className="sound-card-btn is-highlight"
-                            onClick={() => onSendToChat(sound)}
-                            title="Insérer dans le tchat"
+                            className="sound-card-btn"
+                            onClick={() => handleCopyPrompt(sound.prompt, sound.id)}
+                            title="Copier la description"
                           >
-                            <Volume2 size={14} />
+                            {copiedId === sound.id ? <Check size={14} /> : <Copy size={14} />}
                           </button>
-                        )}
-                        <button
-                          type="button"
-                          className="sound-card-btn is-danger"
-                          onClick={() => handleDelete(sound.id)}
-                          title="Supprimer définitivement ce son"
-                        >
-                          <Trash2 size={14} />
-                        </button>
+                          {onSendToChat && (
+                            <button
+                              type="button"
+                              className="sound-card-btn is-highlight"
+                              onClick={() => onSendToChat(sound)}
+                              title="Insérer dans le tchat"
+                            >
+                              {isMusic ? <Music size={14} /> : <Volume2 size={14} />}
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            className="sound-card-btn is-danger"
+                            onClick={() => handleDelete(sound.id)}
+                            title="Supprimer définitivement ce fichier"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -914,4 +1588,3 @@ export function SoundStudioModal({
     </div>
   );
 }
-

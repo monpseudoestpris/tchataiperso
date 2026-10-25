@@ -48,6 +48,7 @@ def prepare_schema(settings: Settings) -> None:
         "0010_add_family_groups",
         "0011_add_learn_reports",
         "0012_add_generated_sounds",
+        "0013_add_music_columns",
     }:
         raise SystemExit(f"Révision de base non reconnue : {current}")
 
