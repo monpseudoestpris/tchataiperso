@@ -21,6 +21,7 @@ SCHEMA_REVISION = "0001_auth_owner_nullable"
 
 def upgrade(settings: Settings, revision: str) -> None:
     config = Config(str(ROOT / "alembic.ini"))
+    config.set_main_option("script_location", str(ROOT / "migrations"))
     config.set_main_option("sqlalchemy.url", settings.db_url.replace("%", "%%"))
     command.upgrade(config, revision)
 
@@ -46,6 +47,7 @@ def prepare_schema(settings: Settings) -> None:
         "0009_add_deep_search_reports",
         "0010_add_family_groups",
         "0011_add_learn_reports",
+        "0012_add_generated_sounds",
     }:
         raise SystemExit(f"Révision de base non reconnue : {current}")
 

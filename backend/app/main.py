@@ -21,6 +21,7 @@ from .routers import (
     memories,
     messages,
     skills,
+    sounds,
     system,
 )
 from .serializers import (
@@ -126,6 +127,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(memories.router)
     app.include_router(attachments.router)
     app.include_router(images.router)
+    app.include_router(sounds.router)
     app.include_router(blogs.router)
 
     return app

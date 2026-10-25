@@ -1,3 +1,64 @@
+# Relais — 25 octobre 2026 (Effets Sonores & Bruitages : Intégration ElevenLabs Text-to-Sound-Effects, Traduction et Optimisation Anglaise Automatique)
+
+- Réalisé :
+  - **Traduction et optimisation anglaise automatique pour ElevenLabs** (`backend/app/providers.py`, `backend/app/routers/sounds.py`, `frontend/components/sound-studio-modal.tsx`) :
+    - *Pourquoi l'anglais ?* Le modèle ElevenLabs Text-to-Sound-Effects a été entraîné quasi-exclusivement sur des banques de bruitages et métadonnées en langue anglaise (Freesound, AudioCaps, BBC Sound Effects, etc.) ; les termes audio spécifiques ("braam", "whoosh", "creak", "crackle", "rumble", "chime", "scabbard") produisent une fidélité acoustique incomparablement supérieure.
+    - *Amélioration de prompt systématiquement en anglais* : la directive de `improve_sound_prompt` impose à l'IA d'enrichir et de rédiger systématiquement le prompt final en anglais avec le vocabulaire audio adapté, même si la demande initiale est formulée en français.
+    - *Traduction automatique à la volée avant envoi* (`translate_sound_prompt_to_english`) : si l'utilisateur saisit un prompt en français et clique directement sur « Générer l'effet sonore » sans passer par l'amélioration, le backend détecte automatiquement la langue et traduit/optimise la description en anglais concis avant l'appel à l'API ElevenLabs.
+    - *Nouvel endpoint API* `POST /api/sounds/translate` : permet de traduire un prompt directement en un clic depuis l'interface.
+    - *Interface utilisateur enrichie* :
+      - Ajout d'un bouton dédié « Traduire en anglais » aux côtés du bouton « Améliorer le prompt ».
+      - Bandeau d'information didactique rappelant l'optimisation anglaise.
+      - Affichage du prompt anglais envoyé à ElevenLabs dans le lecteur de résultat (`Envoyé en anglais à ElevenLabs : ...`).
+
+- Réalisé :
+  - **Prise en charge de la clé API ElevenLabs** (`.env`, `backend/app/config.py`, `compose.yaml`, `.env.example`) :
+    - Détection automatique de `ELEVEN_LABS_KEY` (avec repli sur `ELEVENLABS_API_KEY`) dans `Settings` et `refresh_from_env_file`.
+    - Transmission de la variable d'environnement dans `compose.yaml` vers le conteneur API.
+    - Exposition de l'état de la fonctionnalité dans `GET /api/config` (`features.sound_effects: true`).
+  - **Moteurs de génération audio & d'amélioration de prompt ElevenLabs** (`backend/app/providers.py`) :
+    - `generate_sound_effect` : appel sécurisé à l'API officielle ElevenLabs `POST https://api.elevenlabs.io/v1/sound-generation` avec paramètre `output_format` (MP3 128k, MP3 192k HD, MP3 96k, WAV/PCM 44.1k studio), durée paramétrable `duration_seconds` (0.5s à 30.0s ou auto), fidélité `prompt_influence` (0.0 à 1.0) et mode boucle `loop`.
+    - `improve_sound_prompt` : enrichissement acoustique par LLM spécialisé pour ElevenLabs (décrivant précisément les sources, matières physiques, actions mécaniques, résonances, environnement spatial et dynamique, tout en respectant scrupuleusement la limite stricte de 450 caractères de l'API ElevenLabs).
+  - **Modèle de données & Persistance** (`backend/app/models.py`, `backend/app/schemas.py`, `backend/app/serializers.py`, `backend/migrations/versions/0012_add_generated_sounds.py`, `backend/app/cli.py`) :
+    - Modèle `GeneratedSound` (`id`, `user_id`, `prompt`, `duration_seconds`, `prompt_influence`, `output_format`, `loop`, `filename`, `mime_type`, `size`, `storage_name`, `created_at`).
+    - Migration Alembic `0012_add_generated_sounds.py` créée et exécutée avec succès.
+    - Correction de la localisation des scripts Alembic dans `backend/app/cli.py` pour fonctionner quel que soit le répertoire d'exécution.
+  - **Endpoints API dédiés** (`backend/app/routers/sounds.py`, `backend/app/main.py`) :
+    - `GET /api/sounds` : liste des effets sonores générés par l'utilisateur.
+    - `GET /api/sounds/formats` : formats audio supportés.
+    - `POST /api/sounds/improve` : amélioration de prompt sonore par IA.
+    - `POST /api/sounds` : génération du bruitage via ElevenLabs et stockage sur disque.
+    - `GET /api/sounds/{id}/file` : flux audio haute performance pour lecture HTML5 inline ou téléchargement (`?download=1`).
+    - `DELETE /api/sounds/{id}` : suppression du fichier et de l'entrée en base.
+  - **Composant UI « Studio Effets Sonores » & Intégration** (`frontend/components/sound-studio-modal.tsx`, `frontend/components/chat-app.tsx`, `frontend/lib/api.ts`, `frontend/app/globals.css`) :
+    - Modale dédiée `SoundStudioModal` avec deux onglets :
+      - *Studio Bruitages* : saisie du prompt avec compteur (`X / 450 car.`), bouton « Améliorer le prompt » avec animation magique et bouton de restauration d'origine, badges d'inspirations sonores rapides (cinéma, sci-fi, nature, jeux vidéo, quotidien, horreur), réglage de durée (Auto ou curseur 0.5s - 30s), choix de qualité (MP3 standard / HD ou WAV studio), slider de fidélité et interrupteur de boucle continue.
+      - *Lecteur audio haute fidélité* : lecture/pause, visualiseur d'ondes sonores animé (wave bars pulsantes), curseur de défilement temporel, réglage du volume, boutons de téléchargement, copie de description et insertion directe dans le tchat.
+      - *Mes Bruitages (Bibliothèque)* : historique complet des sons générés avec recherche instantanée, lecture, téléchargement et suppression.
+    - Bouton « Effets Sonores » dans la barre supérieure (`topbar-right`) avec thème vert d'eau / menthe et responsive design adapté.
+    - Bouton « Effets Sonores » dans la barre d'outils du compositeur de chat.
+  - **Validation & Tests** :
+    - Tests unitaires et d'intégration validés : 17/17 tests réussis (`pytest backend/tests/test_deep_search.py backend/tests/test_learn_mode.py backend/tests/test_sounds.py backend/tests/test_migrations.py`).
+    - Typecheck Next.js validé : 0 erreur (`npm --prefix frontend run typecheck`).
+    - Build Next.js de production validé : 0 erreur (`npm --prefix frontend run build`).
+    - Conteneurs Docker reconstruits et redémarrés en mode dev : `clair-api` et `clair-web` opérationnels et `healthy`.
+    - Endpoints API testés : `GET /api/config` (`sound_effects: true`), `GET /api/sounds/formats` et `HTTP 200 OK` sur port 3001.
+- Fichiers modifiés / créés :
+  - Créés : `backend/app/routers/sounds.py`, `backend/migrations/versions/0012_add_generated_sounds.py`, `backend/tests/test_sounds.py`, `frontend/components/sound-studio-modal.tsx`.
+  - Modifiés : `backend/app/config.py`, `backend/app/models.py`, `backend/app/providers.py`, `backend/app/schemas.py`, `backend/app/serializers.py`, `backend/app/cli.py`, `backend/app/main.py`, `backend/app/routers/system.py`, `compose.yaml`, `.env.example`, `frontend/lib/api.ts`, `frontend/components/chat-app.tsx`, `frontend/app/globals.css`, `HANDOFF.md`.
+- Vérifications exécutées :
+  - `python3 -m py_compile backend/app/*.py backend/app/routers/*.py backend/migrations/versions/*.py` : 0 erreur.
+  - `PYTHONPATH=backend backend/.venv/bin/pytest backend/tests/test_deep_search.py backend/tests/test_learn_mode.py backend/tests/test_sounds.py backend/tests/test_migrations.py` : 17/17 passés.
+  - `npm --prefix frontend run typecheck` : 0 erreur.
+  - `npm --prefix frontend run build` : 0 erreur.
+  - `docker compose -f compose.yaml -f compose.dev.yaml up -d --build clair-api clair-web` : conteneurs démarrés et `healthy`.
+  - `curl -I http://127.0.0.1:3001` : réponse `HTTP/1.1 200 OK`.
+  - `curl -s http://127.0.0.1:8001/api/config` : `"sound_effects": true`.
+- Problèmes connus : aucun.
+- Prochaine action : ouvrir `http://localhost:3001` (ou `http://192.168.1.28:3001`), cliquer sur « Effets Sonores » dans la barre supérieure ou dans la barre du compositeur, et tester la génération de bruitages personnalisés avec ElevenLabs.
+
+---
+
 # Relais — 25 octobre 2026 (Optimisation de la barre latérale et intégration complète des outils dans la barre du haut)
 
 - Réalisé :

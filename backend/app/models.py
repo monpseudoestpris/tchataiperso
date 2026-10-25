@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -148,6 +148,22 @@ class GeneratedImage(Base):
     aspect_ratio: Mapped[str] = mapped_column(String(16), default="1:1")
     filename: Mapped[str] = mapped_column(String(255))
     mime_type: Mapped[str] = mapped_column(String(120))
+    size: Mapped[int] = mapped_column(Integer)
+    storage_name: Mapped[str] = mapped_column(String(100), unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class GeneratedSound(Base):
+    __tablename__ = "generated_sounds"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    prompt: Mapped[str] = mapped_column(Text)
+    duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    prompt_influence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    output_format: Mapped[str] = mapped_column(String(50), default="mp3_44100_128")
+    loop: Mapped[bool] = mapped_column(Boolean, default=False)
+    filename: Mapped[str] = mapped_column(String(255))
+    mime_type: Mapped[str] = mapped_column(String(120), default="audio/mpeg")
     size: Mapped[int] = mapped_column(Integer)
     storage_name: Mapped[str] = mapped_column(String(100), unique=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)

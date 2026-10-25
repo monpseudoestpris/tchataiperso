@@ -344,6 +344,63 @@ class ImproveImagePrompt(BaseModel):
         return cleaned or None
 
 
+SOUND_OUTPUT_FORMATS_ALLOWED = {
+    "mp3_44100_128",
+    "mp3_44100_192",
+    "mp3_44100_96",
+    "mp3_44100_64",
+    "pcm_44100",
+}
+
+
+class CreateSound(BaseModel):
+    prompt: str = Field(min_length=1, max_length=1000)
+    duration_seconds: float | None = Field(default=None, ge=0.5, le=30.0)
+    prompt_influence: float | None = Field(default=0.3, ge=0.0, le=1.0)
+    output_format: str = Field(default="mp3_44100_128", max_length=50)
+    loop: bool = False
+
+    @field_validator("prompt")
+    @classmethod
+    def trim_sound_prompt(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("La description du son ne peut pas être vide")
+        return value
+
+    @field_validator("output_format")
+    @classmethod
+    def validate_output_format(cls, value: str) -> str:
+        cleaned = value.strip()
+        if cleaned not in SOUND_OUTPUT_FORMATS_ALLOWED:
+            raise ValueError(f"Format audio non pris en charge : {cleaned}")
+        return cleaned
+
+
+class ImproveSoundPrompt(BaseModel):
+    prompt: str = Field(min_length=1, max_length=2000)
+    model: str | None = Field(default=None, max_length=150)
+    style_keywords: str | None = Field(default=None, max_length=500)
+    duration_hint: float | None = Field(default=None, ge=0.5, le=30.0)
+    loop: bool = False
+
+    @field_validator("prompt")
+    @classmethod
+    def trim_sound_prompt(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Le prompt ne peut pas être vide")
+        return value
+
+    @field_validator("model", "style_keywords")
+    @classmethod
+    def sanitize_optional_str(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+
 class CreateBlog(BaseModel):
     prompt: str = Field(min_length=1, max_length=2000)
     title: str | None = Field(default=None, max_length=200)

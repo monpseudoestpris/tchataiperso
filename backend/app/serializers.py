@@ -4,13 +4,21 @@ import unicodedata
 from datetime import timezone
 
 from .blog import parse_cards_from_content
-from .models import Attachment, Blog, BlogPost, Conversation, DeepSearchReport, GeneratedImage, LearnReport, Message, Skill, User
+from .models import Attachment, Blog, BlogPost, Conversation, DeepSearchReport, GeneratedImage, GeneratedSound, LearnReport, Message, Skill, User
 
 
 MAX_SKILL_COUNT = 100
 MAX_SKILL_CONTEXT_CHARS = 12000
 MAX_GENERATED_IMAGES = 200
 IMAGE_ASPECT_RATIOS = {"1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"}
+MAX_GENERATED_SOUNDS = 200
+SOUND_OUTPUT_FORMATS = [
+    {"id": "mp3_44100_128", "name": "MP3 44.1 kHz (128 kbps — Recommandé)", "mime": "audio/mpeg", "ext": "mp3"},
+    {"id": "mp3_44100_192", "name": "MP3 44.1 kHz (192 kbps — Haute fidélité)", "mime": "audio/mpeg", "ext": "mp3"},
+    {"id": "mp3_44100_96", "name": "MP3 44.1 kHz (96 kbps — Léger)", "mime": "audio/mpeg", "ext": "mp3"},
+    {"id": "mp3_44100_64", "name": "MP3 44.1 kHz (64 kbps — Ultra léger)", "mime": "audio/mpeg", "ext": "mp3"},
+    {"id": "pcm_44100", "name": "WAV / PCM 44.1 kHz (Non compressé)", "mime": "audio/wav", "ext": "wav"},
+]
 
 
 def stamp(value) -> str:
@@ -62,6 +70,23 @@ def generated_image_json(item: GeneratedImage) -> dict:
         "size": item.size,
         "url": f"/api/images/{item.id}/file",
         "download_url": f"/api/images/{item.id}/file?download=1",
+        "created_at": stamp(item.created_at),
+    }
+
+
+def generated_sound_json(item: GeneratedSound) -> dict:
+    return {
+        "id": item.id,
+        "prompt": item.prompt,
+        "duration_seconds": item.duration_seconds,
+        "prompt_influence": item.prompt_influence,
+        "output_format": item.output_format,
+        "loop": bool(item.loop),
+        "filename": item.filename,
+        "mime_type": item.mime_type,
+        "size": item.size,
+        "url": f"/api/sounds/{item.id}/file",
+        "download_url": f"/api/sounds/{item.id}/file?download=1",
         "created_at": stamp(item.created_at),
     }
 

@@ -74,6 +74,8 @@ class Settings(BaseSettings):
     ideogram_api_key: SecretStr = SecretStr("")
     ideogram_image_hosts: str = "ideogram.ai"
     eod_historical_data_key: SecretStr = SecretStr("")
+    eleven_labs_key: SecretStr = SecretStr("")
+    eleven_labs_model_id: str = "eleven_text_to_sound_v2"
     cors_origins: str = "http://localhost:3001,http://127.0.0.1:3001"
     session_cookie_name: str = "tchat_session"
     session_cookie_secure: bool = False
@@ -100,7 +102,7 @@ class Settings(BaseSettings):
     default_image_model: str = "ideogram"
     auto_web_search: bool = True
 
-    @field_validator("llm_api_key", "brave_api_key", "mistral_api_key", "ideogram_api_key", "eod_historical_data_key", mode="before")
+    @field_validator("llm_api_key", "brave_api_key", "mistral_api_key", "ideogram_api_key", "eod_historical_data_key", "eleven_labs_key", mode="before")
     @classmethod
     def sanitize_secret_keys(cls, value):
         if isinstance(value, SecretStr):
@@ -307,13 +309,16 @@ class Settings(BaseSettings):
             return
         self._env_mtime_ns = mtime_ns
         parsed = dotenv_values(env_path)
-        secret_fields = ("llm_api_key", "brave_api_key", "mistral_api_key", "ideogram_api_key", "eod_historical_data_key")
+        secret_fields = ("llm_api_key", "brave_api_key", "mistral_api_key", "ideogram_api_key", "eod_historical_data_key", "eleven_labs_key")
         for field_name in secret_fields:
             if field_name in self._explicit_fields:
                 continue
             env_name = field_name.upper()
-            if env_name in parsed and parsed[env_name] is not None:
-                cleaned = _clean_api_key(parsed[env_name])
+            raw_val = parsed.get(env_name)
+            if field_name == "eleven_labs_key" and raw_val is None:
+                raw_val = parsed.get("ELEVENLABS_API_KEY") or parsed.get("ELEVEN_LABS_API_KEY")
+            if raw_val is not None:
+                cleaned = _clean_api_key(raw_val)
                 if cleaned or force is False:
                     setattr(self, field_name, SecretStr(cleaned))
         str_fields = ("llm_base_url", "ocr_model", "vision_model", "default_model", "llm_models", "summary_model", "search_query_model", "web_search_decision_model", "deep_search_plan_model", "deep_search_synthesis_model", "blog_model", "image_prompt_model", "image_models", "default_image_model")
