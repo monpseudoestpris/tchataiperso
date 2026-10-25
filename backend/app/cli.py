@@ -44,6 +44,8 @@ def prepare_schema(settings: Settings) -> None:
         "0007_add_blogs_and_posts",
         "0008_add_blog_theme",
         "0009_add_deep_search_reports",
+        "0010_add_family_groups",
+        "0011_add_learn_reports",
     }:
         raise SystemExit(f"Révision de base non reconnue : {current}")
 

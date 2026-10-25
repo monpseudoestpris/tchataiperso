@@ -879,7 +879,26 @@ def generate_report_html(
       font-family: var(--font-mono);
       font-size: 0.88rem;
       line-height: 1.6;
-      color: #e2e8f0;
+      background: #090d16;
+      color: #f1f5f9;
+      border-radius: 10px;
+      border: 1px solid var(--border-color);
+      margin: 24px 0;
+      box-shadow: var(--shadow-sm);
+    }}
+    pre code {{
+      background: transparent !important;
+      color: inherit;
+      padding: 0;
+      font-family: inherit;
+    }}
+    .code-block-container pre {{
+      margin: 0;
+      border: none;
+      border-radius: 0;
+      background: transparent;
+      color: #f1f5f9;
+      box-shadow: none;
     }}
 
     .inline-code {{
@@ -1065,6 +1084,60 @@ def generate_report_html(
       text-decoration: underline;
     }}
 
+    /* PDF preview notice banner */
+    .pdf-preview-banner {{
+      display: none;
+      background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+      color: #ffffff;
+      padding: 10px 20px;
+      font-size: 13px;
+      font-weight: 500;
+      position: sticky;
+      top: 57px;
+      z-index: 99;
+      box-shadow: 0 4px 12px rgba(79, 70, 229, 0.25);
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }}
+    .pdf-preview-banner.is-active {{
+      display: flex;
+    }}
+    .pdf-preview-banner-text {{
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }}
+    .pdf-preview-actions {{
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }}
+    .pdf-preview-btn {{
+      background: rgba(255, 255, 255, 0.2);
+      border: 1px solid rgba(255, 255, 255, 0.4);
+      color: #ffffff;
+      padding: 4px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      text-decoration: none;
+      transition: background 0.15s;
+    }}
+    .pdf-preview-btn:hover {{
+      background: rgba(255, 255, 255, 0.35);
+    }}
+    .pdf-preview-btn.primary {{
+      background: #ffffff;
+      color: #4f46e5;
+      border-color: #ffffff;
+    }}
+    .pdf-preview-btn.primary:hover {{
+      background: #f1f5f9;
+    }}
+
     /* Footer */
     .report-footer {{
       margin-top: 80px;
@@ -1091,32 +1164,148 @@ def generate_report_html(
       }}
     }}
 
-    /* Print Styles */
+    /* Print & Beau PDF Styles */
+    @page {{
+      size: A4 portrait;
+      margin: 16mm 14mm 16mm 14mm;
+    }}
     @media print {{
-      .report-topbar, .code-copy-btn, .heading-anchor-link {{
+      *, *::before, *::after {{
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+      }}
+      .report-topbar, .pdf-preview-banner, .code-copy-btn, .heading-anchor-link, .source-direct-link {{
         display: none !important;
       }}
       body {{
         background: #ffffff !important;
-        color: #000000 !important;
-        padding-bottom: 0 !important;
+        color: #0f172a !important;
+        padding: 0 !important;
+        font-size: 10.5pt !important;
+        line-height: 1.6 !important;
       }}
-      .report-hero, .report-toc-card, .source-card, .code-block-container {{
-        background: #ffffff !important;
-        color: #000000 !important;
-        border: 1px solid #ccc !important;
+      .report-container {{
+        max-width: 100% !important;
+        padding: 0 !important;
+        margin: 0 !important;
+      }}
+      .report-hero {{
+        background: #f8fafc !important;
+        color: #0f172a !important;
+        border: 1.5px solid #e2e8f0 !important;
+        border-radius: 8px !important;
         box-shadow: none !important;
+        padding: 20px 24px !important;
+        margin-bottom: 24px !important;
+        break-inside: avoid;
+        page-break-inside: avoid;
       }}
-      .report-title, .report-heading {{
-        color: #000000 !important;
+      .hero-badge {{
+        background: #eff6ff !important;
+        color: #1e40af !important;
+        border: 1px solid #bfdbfe !important;
+        font-size: 8pt !important;
+        padding: 3px 8px !important;
       }}
-      .report-link, .report-cite-chip {{
-        color: #000000 !important;
-        border: 1px solid #000 !important;
+      .hero-badge.verified {{
+        background: #f0fdf4 !important;
+        color: #166534 !important;
+        border: 1px solid #bbf7d0 !important;
       }}
-      pre, code {{
-        color: #000000 !important;
-        background: #f5f5f5 !important;
+      .report-title {{
+        color: #0f172a !important;
+        font-size: 19pt !important;
+        line-height: 1.25 !important;
+        margin: 12px 0 !important;
+      }}
+      .hero-topic-box {{
+        background: #ffffff !important;
+        color: #334155 !important;
+        border: 1px solid #e2e8f0 !important;
+        border-left: 4px solid #6366f1 !important;
+        padding: 10px 14px !important;
+        font-size: 9.5pt !important;
+      }}
+      .hero-meta-bar {{
+        border-top: 1px solid #e2e8f0 !important;
+        padding-top: 10px !important;
+        font-size: 8.5pt !important;
+        color: #64748b !important;
+      }}
+      h1, h2, h3, h4 {{
+        color: #0f172a !important;
+        break-after: avoid;
+        page-break-after: avoid;
+      }}
+      h2 {{
+        border-bottom: 1.5px solid #e2e8f0 !important;
+        padding-bottom: 6px !important;
+        margin-top: 26px !important;
+      }}
+      .report-toc-card {{
+        background: #f8fafc !important;
+        color: #0f172a !important;
+        border: 1px solid #e2e8f0 !important;
+        box-shadow: none !important;
+        break-inside: avoid;
+        page-break-inside: avoid;
+      }}
+      .code-block-container {{
+        background: #0f172a !important;
+        border: 1px solid #1e293b !important;
+        border-radius: 6px !important;
+        box-shadow: none !important;
+        break-inside: avoid;
+        page-break-inside: avoid;
+      }}
+      .code-block-container pre, .code-block-container code {{
+        color: #f8fafc !important;
+        background: transparent !important;
+      }}
+      .source-card {{
+        background: #ffffff !important;
+        color: #0f172a !important;
+        border: 1px solid #e2e8f0 !important;
+        border-radius: 6px !important;
+        box-shadow: none !important;
+        break-inside: avoid;
+        page-break-inside: avoid;
+      }}
+      .source-index {{
+        background: #ede9fe !important;
+        color: #4338ca !important;
+      }}
+      .source-provider-badge {{
+        background: #f1f5f9 !important;
+        color: #475569 !important;
+        border: 1px solid #e2e8f0 !important;
+      }}
+      .report-cite-chip {{
+        background: #ede9fe !important;
+        color: #4338ca !important;
+        border: 1px solid #c7d2fe !important;
+        padding: 1px 6px !important;
+        font-size: 8pt !important;
+      }}
+      .report-table-wrapper table {{
+        border-collapse: collapse !important;
+        width: 100% !important;
+        break-inside: avoid;
+        page-break-inside: avoid;
+      }}
+      .report-table-wrapper th {{
+        background: #f1f5f9 !important;
+        color: #0f172a !important;
+        border: 1px solid #cbd5e1 !important;
+      }}
+      .report-table-wrapper td {{
+        border: 1px solid #e2e8f0 !important;
+      }}
+      .report-footer {{
+        border-top: 1px solid #e2e8f0 !important;
+        color: #64748b !important;
+        font-size: 8pt !important;
+        margin-top: 30px !important;
       }}
     }}
   </style>
@@ -1141,11 +1330,30 @@ def generate_report_html(
       <button type="button" class="nav-btn" onclick="copyReport()" title="Copier tout le contenu du rapport">
         📋 Copier
       </button>
-      <button type="button" class="nav-btn primary" onclick="window.print()" title="Imprimer ou enregistrer en PDF">
-        🖨️ Imprimer / PDF
+      <a href="?download=1" class="nav-btn" download title="Télécharger le fichier .html complet">
+        📥 Télécharger .html
+      </a>
+      <button type="button" class="nav-btn primary" onclick="printPdf()" title="Imprimer ou enregistrer en Beau PDF">
+        📕 Beau PDF
       </button>
     </div>
   </header>
+
+  <!-- Notice bandeau mode aperçu PDF -->
+  <aside id="pdf-banner" class="pdf-preview-banner" role="region" aria-label="Mode Aperçu & Impression PDF">
+    <div class="pdf-preview-banner-text">
+      <span>📕</span>
+      <span><strong>Mode Beau PDF (A4) :</strong> La boîte d'impression s'ouvre pour enregistrer le rapport en PDF avec typographie haute fidélité.</span>
+    </div>
+    <div class="pdf-preview-actions">
+      <button type="button" class="pdf-preview-btn primary" onclick="printPdf()">
+        🖨️ Réouvrir impression PDF
+      </button>
+      <a href="?" class="pdf-preview-btn">
+        🌐 Revenir au site HTML interactif
+      </a>
+    </div>
+  </aside>
 
   <main class="report-container">
     <!-- Hero Article Card -->
@@ -1193,6 +1401,10 @@ def generate_report_html(
   </main>
 
   <script>
+    function printPdf() {{
+      window.print();
+    }}
+
     function toggleTheme() {{
       const html = document.documentElement;
       const current = html.getAttribute('data-theme') || 'dark';
@@ -1219,6 +1431,18 @@ def generate_report_html(
         alert('Contenu du rapport copié dans le presse-papier !');
       }});
     }}
+
+    // Détection automatique du paramètre ?pdf=1 ou ?print=1
+    window.addEventListener('DOMContentLoaded', () => {{
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('pdf') === '1' || params.get('print') === '1') {{
+        const banner = document.getElementById('pdf-banner');
+        if (banner) banner.classList.add('is-active');
+        setTimeout(() => {{
+          window.print();
+        }}, 450);
+      }}
+    }});
   </script>
 </body>
 </html>"""

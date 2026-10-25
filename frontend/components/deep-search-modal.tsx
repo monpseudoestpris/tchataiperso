@@ -76,13 +76,14 @@ export function DeepSearchModal({
   onLaunch,
 }: DeepSearchModalProps) {
   const [activeTab, setActiveTab] = useState<"plan" | "reports">(initialTab);
+  const [outputFormat, setOutputFormat] = useState<"html" | "pdf">("html");
   
   // Plan state
   const [queries, setQueries] = useState<string[]>([]);
   const [loadingPlan, setLoadingPlan] = useState(false);
   const [isLaunching, setIsLaunching] = useState(false);
   const [planError, setPlanError] = useState<string | null>(null);
-  const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
+  const inputRefs = useRef<(HTMLTextAreaElement | HTMLInputElement | null)[]>([]);
   const overlayMouseDownRef = useRef<EventTarget | null>(null);
 
   // Reports state
@@ -415,6 +416,36 @@ export function DeepSearchModal({
               </div>
             </div>
 
+            {/* Sélecteur de format de sortie (Beau site HTML ou Beau PDF) */}
+            <div className="output-format-card" role="group" aria-label="Format de sortie">
+              <span className="output-format-label">
+                <FileText size={13} />
+                <span>Format de sortie privilégié :</span>
+              </span>
+              <div className="output-format-toggle">
+                <button
+                  type="button"
+                  className={`output-format-option ${outputFormat === "html" ? "is-selected" : ""}`}
+                  onClick={() => setOutputFormat("html")}
+                  title="Générer et consulter sous forme de beau site web HTML interactif (sommaire, navigation, thème sombre/clair)"
+                >
+                  <Globe2 size={13} />
+                  <span>Beau site HTML</span>
+                  <small>Interactif & responsive</small>
+                </button>
+                <button
+                  type="button"
+                  className={`output-format-option ${outputFormat === "pdf" ? "is-selected" : ""}`}
+                  onClick={() => setOutputFormat("pdf")}
+                  title="Mise en page éditoriale A4 haute fidélité prête pour impression, archivage ou partage PDF"
+                >
+                  <FileText size={13} />
+                  <span>Beau document PDF</span>
+                  <small>Édition & impression A4</small>
+                </button>
+              </div>
+            </div>
+
             {/* Plan Queries list */}
             <div className="deepsearch-modal-body">
               <div className="deepsearch-modal-body-top">
@@ -459,14 +490,14 @@ export function DeepSearchModal({
                       <span className="deepsearch-modal-query-num" aria-hidden="true">
                         {index + 1}
                       </span>
-                      <input
+                      <textarea
                         ref={(el) => {
                           inputRefs.current[index] = el;
                         }}
-                        type="text"
-                        className="deepsearch-modal-query-input"
+                        rows={2}
+                        className="deepsearch-modal-query-input deepsearch-module-textarea"
                         value={query}
-                        placeholder='Ex: "active recall" "spaced repetition" Dunlosky meta-analysis...'
+                        placeholder="Ex: 1. Définition et délimitation conceptuelle : analyser les principes clés et enjeux..."
                         onChange={(e) => handleQueryChange(index, e.target.value)}
                         onKeyDown={(e) => {
                           if (e.key === "Enter" && !e.shiftKey) {
@@ -629,9 +660,18 @@ export function DeepSearchModal({
                           target="_blank"
                           rel="noopener noreferrer"
                           className="deepsearch-report-action-icon-btn"
-                          title="Ouvrir la page HTML classe en plein écran (mode blog)"
+                          title="Ouvrir le beau site HTML interactif en plein écran"
                         >
-                          <Maximize2 size={13} />
+                          <Globe2 size={13} />
+                        </a>
+                        <a
+                          href={`/api/deep-search/reports/${report.id}/html?pdf=1`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="deepsearch-report-action-icon-btn pdf-btn"
+                          title="Ouvrir et imprimer / enregistrer en Beau PDF"
+                        >
+                          <FileText size={13} />
                         </a>
                         <a
                           href={`/api/deep-search/reports/${report.id}/html?download=1`}
@@ -691,10 +731,21 @@ export function DeepSearchModal({
                   target="_blank"
                   rel="noopener noreferrer"
                   className="deepsearch-reader-primary-tool-btn"
-                  title="Ouvrir la page HTML autonome façon blog dans un nouvel onglet"
+                  title="Ouvrir le beau site HTML interactif dans un nouvel onglet"
                 >
-                  <ExternalLink size={13} />
-                  <span>Page HTML plein écran</span>
+                  <Globe2 size={13} />
+                  <span>Beau site HTML</span>
+                </a>
+
+                <a
+                  href={`/api/deep-search/reports/${activeReport.id}/html?pdf=1`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="deepsearch-reader-tool-btn deepsearch-pdf-tool-btn"
+                  title="Ouvrir et imprimer / enregistrer en Beau PDF (mise en page éditoriale A4)"
+                >
+                  <FileText size={13} />
+                  <span>Beau PDF</span>
                 </a>
 
                 <a
@@ -759,10 +810,25 @@ export function DeepSearchModal({
                 </header>
 
                 {/* Article Content Rendered */}
-                <article className="deepsearch-reader-prose">
+                <article className="deepsearch-reader-prose markdown">
                   <ReactMarkdown
                     remarkPlugins={[remarkGfm]}
                     rehypePlugins={[rehypeKatex]}
+                    components={{
+                      pre: ({ children }) => (
+                        <div className="code-block">
+                          <div className="code-label">
+                            <span>Encart technique / Données / Code</span>
+                          </div>
+                          <pre>{children}</pre>
+                        </div>
+                      ),
+                      table: ({ children }) => (
+                        <div className="table-scroll">
+                          <table>{children}</table>
+                        </div>
+                      ),
+                    }}
                   >
                     {activeReport.markdown_content}
                   </ReactMarkdown>

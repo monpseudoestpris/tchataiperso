@@ -17,6 +17,15 @@ class Base(DeclarativeBase):
     pass
 
 
+class FamilyGroup(Base):
+    __tablename__ = "family_groups"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    name: Mapped[str] = mapped_column(String(100), default="Groupe familial")
+    created_by_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    members: Mapped[list["User"]] = relationship(back_populates="family_group", order_by="User.username", foreign_keys="User.family_group_id")
+
+
 class User(Base):
     __tablename__ = "users"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
@@ -25,6 +34,8 @@ class User(Base):
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    family_group_id: Mapped[str | None] = mapped_column(ForeignKey("family_groups.id", ondelete="SET NULL"), nullable=True, index=True)
+    family_group: Mapped[FamilyGroup | None] = relationship(back_populates="members", foreign_keys=[family_group_id], lazy="joined")
 
 
 class AuthSession(Base):
@@ -80,6 +91,7 @@ class Message(Base):
     conversation: Mapped[Conversation] = relationship(back_populates="messages")
     attachments: Mapped[list["Attachment"]] = relationship(back_populates="message")
     deep_search_reports: Mapped[list["DeepSearchReport"]] = relationship(back_populates="message", cascade="all, delete-orphan")
+    learn_reports: Mapped[list["LearnReport"]] = relationship(back_populates="message", cascade="all, delete-orphan")
 
 
 class Attachment(Base):
@@ -184,5 +196,22 @@ class DeepSearchReport(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
     message: Mapped[Message | None] = relationship(back_populates="deep_search_reports")
+
+
+class LearnReport(Base):
+    __tablename__ = "learn_reports"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    conversation_id: Mapped[str | None] = mapped_column(ForeignKey("conversations.id", ondelete="SET NULL"), nullable=True, index=True)
+    message_id: Mapped[str | None] = mapped_column(ForeignKey("messages.id", ondelete="SET NULL"), nullable=True, index=True)
+    title: Mapped[str] = mapped_column(String(255))
+    topic: Mapped[str] = mapped_column(Text)
+    markdown_content: Mapped[str] = mapped_column(Text)
+    html_content: Mapped[str] = mapped_column(Text)
+    sources: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+    message: Mapped[Message | None] = relationship(back_populates="learn_reports")
+
 
 

@@ -1091,6 +1091,19 @@ export function BlogModal({ onClose, initialPrompt = "" }: BlogModalProps) {
                                 <ExternalLink size={12} className="blog-ext-icon" />
                               </a>
                             ),
+                            pre: ({ children }) => (
+                              <div className="code-block">
+                                <div className="code-label">
+                                  <span>Encart / Code</span>
+                                </div>
+                                <pre>{children}</pre>
+                              </div>
+                            ),
+                            table: ({ children }) => (
+                              <div className="table-scroll">
+                                <table>{children}</table>
+                              </div>
+                            ),
                           }}
                         >
                           {formatMarkdownFromPost(activePost)}

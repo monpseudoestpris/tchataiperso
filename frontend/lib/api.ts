@@ -77,8 +77,8 @@ export type DocumentExtraction = {
   annotations: { title: string; summary: string }[];
   warnings: string[];
 };
-export type Source = { title: string; url: string; snippet?: string; query?: string; provider?: string; search_notice?: string };
-export type Message = { id: string; role: string; content: string; created_at: string; attachments: Attachment[]; sources: Source[]; deep_search_report_id?: string | null };
+export type Source = { title: string; url: string; snippet?: string; query?: string; provider?: string; search_notice?: string; auto_search_reason?: string };
+export type Message = { id: string; role: string; content: string; created_at: string; attachments: Attachment[]; sources: Source[]; deep_search_report_id?: string | null; learn_report_id?: string | null };
 export type DeepSearchReport = {
   id: string;
   user_id: string;
@@ -92,6 +92,41 @@ export type DeepSearchReport = {
   sources_count: number;
   created_at: string;
   html_url: string;
+  pdf_url?: string;
+  download_url?: string;
+};
+export type Flashcard = {
+  id: number;
+  category: string;
+  recto: string;
+  verso: string;
+};
+
+export type QuizQuestion = {
+  id: number;
+  question: string;
+  options: string[];
+  answer: number;
+  explanation: string;
+};
+
+export type LearnReport = {
+  id: string;
+  user_id: string;
+  conversation_id?: string | null;
+  message_id?: string | null;
+  title: string;
+  topic: string;
+  markdown_content: string;
+  html_content?: string;
+  sources: Source[];
+  sources_count: number;
+  created_at: string;
+  html_url: string;
+  pdf_url?: string;
+  download_url?: string;
+  flashcards?: Flashcard[];
+  quiz?: QuizQuestion[];
 };
 export type Skill = { id: string; name: string; prompt: string; created_at: string; updated_at: string };
 export type BlogCard = {
@@ -142,13 +177,31 @@ export type Conversation = {
   skills?: Skill[];
 };
 export type Memory = { id: string; content: string; created_at: string };
-export type AuthUser = { id: string; username: string; is_admin: boolean };
+export type AuthUser = {
+  id: string;
+  username: string;
+  is_admin: boolean;
+  family_group_id?: string | null;
+  family_group_name?: string | null;
+};
+export type FamilyMember = {
+  id: string;
+  username: string;
+  is_admin: boolean;
+  active: boolean;
+  is_current: boolean;
+};
+export type FamilyGroupInfo = {
+  id: string | null;
+  name: string | null;
+  members: FamilyMember[];
+};
 export type AdminUser = AuthUser & { active: boolean; created_at: string };
 export type StreamEvent =
   | { type: "meta"; data: { user_message: Message; assistant_message_id: string } }
   | { type: "status"; data: { message: string } }
   | { type: "delta"; data: { text: string } }
-  | { type: "done"; data: { message: Message; conversation: Conversation } }
+  | { type: "done"; data: { message: Message; conversation: Conversation; deep_search_report_id?: string | null; learn_report_id?: string | null } }
   | { type: "error"; data: { message: string } };
 
 export function errorMessage(error: unknown) {
@@ -198,8 +251,12 @@ export async function streamMessage(
     content: string;
     model: string;
     web_search: boolean;
+    auto_web_search?: boolean;
+    web_search_mode?: "auto" | "always" | "off";
     deep_search?: boolean;
     deep_search_queries?: string[];
+    learn_mode?: boolean;
+    learn_mode_queries?: string[];
     code_mode?: boolean;
     finance_mode?: boolean;
     attachment_ids: string[];
@@ -333,6 +390,38 @@ export async function deleteDeepSearchReport(id: string): Promise<void> {
 
 export async function createReportFromMessage(messageId: string): Promise<DeepSearchReport> {
   return api<DeepSearchReport>(`/deep-search/reports/from-message/${messageId}`, {
+    method: "POST",
+  });
+}
+
+export async function planLearnMode(
+  conversationId: string | null | undefined,
+  content: string,
+): Promise<string[]> {
+  const url = conversationId ? `/conversations/${conversationId}/learn/plan` : "/learn/plan";
+  const res = await api<{ queries: string[] }>(url, {
+    method: "POST",
+    body: JSON.stringify({ content }),
+  });
+  return res.queries || [];
+}
+
+export async function fetchLearnReports(): Promise<LearnReport[]> {
+  return api<LearnReport[]>("/learn/reports");
+}
+
+export async function fetchLearnReport(id: string): Promise<LearnReport> {
+  return api<LearnReport>(`/learn/reports/${id}`);
+}
+
+export async function deleteLearnReport(id: string): Promise<void> {
+  return api<void>(`/learn/reports/${id}`, {
+    method: "DELETE",
+  });
+}
+
+export async function createLearnReportFromMessage(messageId: string): Promise<LearnReport> {
+  return api<LearnReport>(`/learn/reports/from-message/${messageId}`, {
     method: "POST",
   });
 }

@@ -16,6 +16,7 @@ from .routers import (
     auth,
     blogs,
     conversations,
+    family,
     images,
     memories,
     messages,
@@ -73,6 +74,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     conn.execute(text("ALTER TABLE conversations ADD COLUMN theme VARCHAR(80) NOT NULL DEFAULT ''"))
                 if "keywords" not in conv_columns:
                     conn.execute(text("ALTER TABLE conversations ADD COLUMN keywords JSON NOT NULL DEFAULT '[]'"))
+        user_columns = {column["name"] for column in inspector.get_columns("users")}
+        if "family_group_id" not in user_columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE users ADD COLUMN family_group_id VARCHAR(36)"))
         for table in ("conversations", "attachments", "memories"):
             if "user_id" not in {column["name"] for column in inspector.get_columns(table)}:
                 raise RuntimeError("Base non migrée; exécutez les étapes `migrate-schema`, `create-admin` et `migrate-legacy` du README.")
@@ -113,6 +118,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Enregistrement modulaire des routeurs d'API
     app.include_router(system.router)
     app.include_router(auth.router)
+    app.include_router(family.router)
     app.include_router(admin.router)
     app.include_router(conversations.router)
     app.include_router(messages.router)

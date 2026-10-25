@@ -1,10 +1,10 @@
 "use client";
 
 import {
-  ArrowDown, ArrowUp, BookOpen, Brain, Check, ChevronDown, ChevronLeft, ChevronRight,
+  ArrowDown, ArrowRightLeft, ArrowUp, BookOpen, Brain, Check, ChevronDown, ChevronLeft, ChevronRight,
   CircleAlert, Code2, Compass, Copy, ExternalLink, Eye, FileCode2, FileText, FolderArchive,
-  Globe2, ImagePlus, Link2, LoaderCircle, LogOut, Menu, MessageCircle, Newspaper, PanelLeftClose, Paperclip,
-  Pencil, Plus, Search, RefreshCw, Shield, Sparkles, Square, SquarePlay, Trash2, TrendingUp, WandSparkles, X,
+  Globe2, GraduationCap, ImagePlus, Link2, LoaderCircle, LogOut, Menu, MessageCircle, Newspaper, PanelLeftClose, Paperclip,
+  Pencil, Plus, Search, RefreshCw, Share2, Shield, Sparkles, Square, SquarePlay, Trash2, TrendingUp, Users, UsersRound, WandSparkles, X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
@@ -16,11 +16,14 @@ import { AuthPanel } from "@/components/auth-panel";
 import { BlogModal } from "@/components/blog-modal";
 import { CodeCanvas } from "@/components/code-canvas";
 import { DeepSearchModal } from "@/components/deep-search-modal";
+import { FamilyModal } from "@/components/family-modal";
 import { ImageStudioModal } from "@/components/image-studio-modal";
+import { LearnModal } from "@/components/learn-modal";
 import { ModelModal } from "@/components/model-modal";
 import { SkillsPanel } from "@/components/skills-panel";
-import { ApiError, api, attachUrl, createReportFromMessage, errorMessage, skillToSlug, streamMessage, type Attachment, type AuthUser, type Config, type Conversation, type DocumentExtraction, type Memory, type Message, type Model, type Skill } from "@/lib/api";
+import { ApiError, api, attachUrl, createLearnReportFromMessage, createReportFromMessage, errorMessage, skillToSlug, streamMessage, type Attachment, type AuthUser, type Config, type Conversation, type DocumentExtraction, type FamilyGroupInfo, type Memory, type Message, type Model, type Skill } from "@/lib/api";
 import { collectConversationCanvasFiles, createZipBlob, extractCanvasFiles, hasExplicitCanvasFiles, triggerBlobDownload } from "@/lib/code-canvas";
+import { hasInteractiveLearnModules, stripInteractiveModulesForBody } from "@/lib/learn-parser";
 
 const DEFAULT_THEMES = [
   "Codage",
@@ -260,17 +263,33 @@ function MessageView({
   streaming,
   onOpenCanvas,
   onOpenDeepSearchReport,
+  onOpenLearnReport,
 }: {
   message: Message;
   streaming?: boolean;
   onOpenCanvas?: (messageId: string, filePath?: string, forceUnnamed?: boolean) => void;
   onOpenDeepSearchReport?: (message: Message) => void;
+  onOpenLearnReport?: (message: Message) => void;
 }) {
   const [copied, setCopied] = useState(false);
   const [zipDownloaded, setZipDownloaded] = useState(false);
   const [showAllSources, setShowAllSources] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+  const exportRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!exportOpen) return;
+    function handleClickOutside(event: MouseEvent) {
+      if (exportRef.current && !exportRef.current.contains(event.target as Node)) {
+        setExportOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [exportOpen]);
   const isUser = message.role === "user";
   const sources = message.sources ?? [];
+  const autoSearchReason = sources.find(source => source.auto_search_reason)?.auto_search_reason;
   const searchNotices = [...new Set(sources.flatMap(source => source.provider === "duckduckgo_instant_answers" && source.search_notice ? [source.search_notice] : []))];
   const exploredQueries = Array.from(new Set(sources.map(item => item.query?.trim()).filter((item): item is string => Boolean(item))));
   const hasFinance = sources.some(source => source.provider === "yahoo_finance" || source.provider === "eodhd") ||
@@ -278,21 +297,24 @@ function MessageView({
   const financeSources = sources.filter(source => source.provider === "yahoo_finance" || source.provider === "eodhd");
   const financeProviders = [...new Set(financeSources.map(source => source.provider === "eodhd" ? "EOD Historical Data" : "Yahoo Finance"))];
   const financeSymbols = [...new Set(financeSources.map(source => /\(([^()]+)\)\s*$/.exec(source.title ?? "")?.[1]).filter((item): item is string => Boolean(item)))];
-  const isDeepSearchResult = exploredQueries.length > 0 || sources.length > 5;
+  const isLearnResult = Boolean(message.learn_report_id);
+  const isDeepSearchResult = !isLearnResult && (exploredQueries.length > 0 || sources.length > 5);
+  const hasInteractiveModules = !isUser && (isLearnResult || hasInteractiveLearnModules(message.content));
+  const displayContent = hasInteractiveModules ? stripInteractiveModulesForBody(message.content) : message.content;
   const visibleSources = showAllSources ? sources : sources.slice(0, 8);
   const explicitCanvasFiles = useMemo(
-    () => (isUser ? [] : extractCanvasFiles(message.content, { isStreaming: streaming, includeUnnamed: false })),
-    [isUser, message.content, streaming],
+    () => (isUser ? [] : extractCanvasFiles(displayContent, { isStreaming: streaming, includeUnnamed: false })),
+    [isUser, displayContent, streaming],
   );
   const fallbackCanvasFiles = useMemo(
-    () => (isUser || explicitCanvasFiles.length > 0 ? [] : extractCanvasFiles(message.content, { isStreaming: streaming, includeUnnamed: true })),
-    [isUser, explicitCanvasFiles.length, message.content, streaming],
+    () => (isUser || explicitCanvasFiles.length > 0 ? [] : extractCanvasFiles(displayContent, { isStreaming: streaming, includeUnnamed: true })),
+    [isUser, explicitCanvasFiles.length, displayContent, streaming],
   );
   const canvasFiles = explicitCanvasFiles.length > 0 ? explicitCanvasFiles : fallbackCanvasFiles;
   const isExplicitCanvas = explicitCanvasFiles.length > 0;
   async function copy() {
     try {
-      await navigator.clipboard.writeText(message.content);
+      await navigator.clipboard.writeText(displayContent);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch { setCopied(false); }
@@ -333,12 +355,36 @@ function MessageView({
       </div>
       <div className="finance-live-providers">{financeProviders.map(name => <span key={name} className={`finance-live-pill ${name.startsWith("EOD") ? "is-eod" : "is-yahoo"}`}>{name}</span>)}</div>
     </div>}
-    {message.content ? <div className={`markdown ${streaming ? "is-streaming" : ""}`}><ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins} components={{
+    {displayContent ? <div className={`markdown ${streaming ? "is-streaming" : ""}`}><ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins} components={{
       p: ({ children }) => <p>{isUser ? renderNodeWithMentions(children) : children}</p>,
       a: ({ children, href }) => <a href={href} target="_blank" rel="noreferrer">{children}</a>,
       pre: ({ children }) => <div className="code-block"><div className="code-label"><span>Code</span>{onOpenCanvas && canvasFiles.length > 0 && <button type="button" className="code-open-canvas" onClick={() => onOpenCanvas(message.id, canvasFiles[0]?.path, !isExplicitCanvas)}><Code2 size={11} />Ouvrir dans le Canvas</button>}</div><pre>{children}</pre></div>,
       table: ({ children }) => <div className="table-scroll"><table>{children}</table></div>,
-    }}>{normalizeMathMarkdown(message.content)}</ReactMarkdown></div> : streaming && <div className="thinking-dots" aria-label="Réponse en cours"><i /><i /><i /></div>}
+    }}>{normalizeMathMarkdown(displayContent)}</ReactMarkdown></div> : streaming && <div className="thinking-dots" aria-label="Réponse en cours"><i /><i /><i /></div>}
+    {hasInteractiveModules && (
+      <div className="chat-learn-interactive-banner" role="region" aria-label="Auto-évaluation et révision active">
+        <div className="chat-learn-banner-icon">
+          <GraduationCap size={20} />
+        </div>
+        <div className="chat-learn-banner-body">
+          <strong>20 Flashcards 3D & Quizz (20 QCM) interactifs prêts</strong>
+          <p>
+            Les cartes de mémorisation active et les questions d&apos;auto-évaluation sont intégrées au cours interactif pour vous entraîner sans dévoiler les réponses dans le tchat.
+          </p>
+        </div>
+        {onOpenLearnReport && (
+          <button
+            type="button"
+            className="chat-learn-banner-btn"
+            onClick={() => onOpenLearnReport(message)}
+            title="Consulter le cours avec les Flashcards 3D et le Quizz interactif"
+          >
+            <Sparkles size={14} />
+            <span>Tester mes connaissances</span>
+          </button>
+        )}
+      </div>
+    )}
     {!isUser && canvasFiles.length > 0 && <div className="message-canvas-card" role="region" aria-label="Projet Canvas généré">
       <div className="message-canvas-card-header">
         <div className="message-canvas-card-title">
@@ -358,20 +404,65 @@ function MessageView({
       </div>
     </div>}
     {!!message.attachments?.length && <div className="message-attachments">{message.attachments.map(item => <AttachmentView key={item.id} attachment={item} />)}</div>}
-    {!!sources.length && <div className={`sources ${isDeepSearchResult ? "sources-deepsearch" : ""}`}>
+    {!!sources.length && <div className={`sources ${isLearnResult ? "sources-learn" : isDeepSearchResult ? "sources-deepsearch" : ""}`}>
       <div className="sources-header">
-        <p>{isDeepSearchResult ? <><Compass size={13} /> Rapport DeepSearch · {sources.length} sources croisées</> : <><Globe2 size={13} /> Résultats de recherche & données ({sources.length})</>}</p>
+        <p>
+          {isLearnResult ? (
+            <><GraduationCap size={13} /> Cours structuré · {sources.length} supports didactiques</>
+          ) : isDeepSearchResult ? (
+            <><Compass size={13} /> Rapport DeepSearch · {sources.length} sources croisées</>
+          ) : autoSearchReason ? (
+            <><Globe2 size={13} /><span className="auto-badge">Auto</span> Recherche activée automatiquement ({sources.length}) · <span className="auto-reason">{autoSearchReason}</span></>
+          ) : (
+            <><Globe2 size={13} /> Résultats de recherche & données ({sources.length})</>
+          )}
+        </p>
         <div className="sources-header-actions">
+          {isLearnResult && (
+            <div className="sources-report-buttons-group">
+              <button
+                type="button"
+                className="sources-report-btn learn-sources-report-btn"
+                onClick={() => onOpenLearnReport?.(message)}
+                title="Consulter le cours complet dans le lecteur interactif ou en beau site HTML"
+              >
+                <GraduationCap size={12} />
+                <span>Beau site HTML</span>
+              </button>
+              <a
+                href={message.learn_report_id ? `/api/learn/reports/${message.learn_report_id}/html?pdf=1` : `/api/messages/${message.id}/html?pdf=1`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="sources-report-btn sources-pdf-btn"
+                title="Exporter ce cours au format Beau polycopié PDF (A4)"
+              >
+                <FileText size={12} />
+                <span>Beau PDF</span>
+              </a>
+            </div>
+          )}
           {isDeepSearchResult && (
-            <button
-              type="button"
-              className="sources-report-btn"
-              onClick={() => onOpenDeepSearchReport?.(message)}
-              title="Consulter le grand rapport d'analyse dans le lecteur blog ou en pleine page HTML"
-            >
-              <BookOpen size={12} />
-              <span>Consulter le Grand Rapport HTML</span>
-            </button>
+            <div className="sources-report-buttons-group">
+              <button
+                type="button"
+                className="sources-report-btn"
+                onClick={() => onOpenDeepSearchReport?.(message)}
+                title="Consulter le grand rapport d'analyse dans le lecteur blog ou en beau site HTML"
+              >
+                <Globe2 size={12} />
+                <span>Beau site HTML</span>
+              </button>
+              <a
+                href={message.deep_search_report_id ? `/api/deep-search/reports/${message.deep_search_report_id}/html?pdf=1` : `/api/messages/${message.id}/html?pdf=1`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="sources-report-btn sources-pdf-btn"
+                title="Exporter ce grand rapport d'analyse au format Beau PDF (A4)"
+              >
+                <FileText size={12} />
+                <span>Beau PDF</span>
+              </a>
+            </div>
           )}
           {sources.length > 8 && <button type="button" className="sources-toggle" onClick={() => setShowAllSources(old => !old)}>{showAllSources ? "Réduire" : `Voir les ${sources.length} sources`}</button>}
         </div>
@@ -383,7 +474,116 @@ function MessageView({
       {sources.some(source => source.provider === "eodhd") && <p className="source-attribution source-attribution-finance"><TrendingUp size={12} />Cotations et historique téléchargés en direct via <a href="https://eodhd.com" target="_blank" rel="noreferrer">EOD Historical Data<ExternalLink size={10} /></a>.</p>}
       {sources.some(source => source.provider === "duckduckgo_instant_answers") && <p className="source-attribution">Réponses instantanées fournies par <a href="https://duckduckgo.com" target="_blank" rel="noreferrer">DuckDuckGo<ExternalLink size={10} /></a>.</p>}
     </div>}
-    {!isUser && message.content && !streaming && <div className="message-actions"><button type="button" onClick={copy} aria-label={copied ? "Réponse copiée" : "Copier la réponse"}>{copied ? <Check size={14} /> : <Copy size={14} />}{copied ? "Copié" : "Copier"}</button><span>{new Date(message.created_at).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}</span></div>}
+    {!isUser && message.content && !streaming && (
+      <div className="message-actions">
+        <button type="button" onClick={copy} aria-label={copied ? "Réponse copiée" : "Copier la réponse"}>
+          {copied ? <Check size={14} /> : <Copy size={14} />}
+          {copied ? "Copié" : "Copier"}
+        </button>
+        <span className="message-action-separator" />
+        <div className="message-export-wrapper" ref={exportRef}>
+          <button
+            type="button"
+            className={`message-export-btn ${exportOpen ? "is-open" : ""}`}
+            onClick={() => setExportOpen(prev => !prev)}
+            aria-expanded={exportOpen}
+            aria-label="Sortie du document : PDF ou HTML (Question & Réponse ou Synthèse des messages)"
+            title="Sortie et export en HTML ou PDF"
+          >
+            <Share2 size={13} />
+            <span>Sortie</span>
+            <ChevronDown size={11} className={`export-chevron-icon ${exportOpen ? "is-rotated" : ""}`} />
+          </button>
+
+          {exportOpen && (
+            <div className="message-export-popover" role="menu">
+              <div className="message-export-popover-header">
+                <span className="export-popover-title">
+                  <Share2 size={13} />
+                  <span>Sortie de document</span>
+                </span>
+                <span className="export-popover-tag">HTML · PDF</span>
+              </div>
+
+              {/* Option 1 : Question & Réponse */}
+              <div className="message-export-item">
+                <div className="export-item-desc">
+                  <div className="export-item-title-row">
+                    <span className="export-scope-tag scope-turn">Ce tour</span>
+                    <strong>Question & Réponse</strong>
+                  </div>
+                  <p>Exporte la question posée et cette réponse détaillée.</p>
+                </div>
+                <div className="export-item-actions">
+                  <a
+                    href={`/api/messages/${message.id}/html?scope=turn`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="export-link-btn btn-html"
+                    title="Consulter au format Beau site HTML interactif"
+                    onClick={() => setExportOpen(false)}
+                  >
+                    <Globe2 size={12} />
+                    <span>Site HTML</span>
+                  </a>
+                  <a
+                    href={`/api/messages/${message.id}/html?scope=turn&pdf=1`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="export-link-btn btn-pdf"
+                    title="Générer et imprimer le Beau document PDF d'édition (A4)"
+                    onClick={() => setExportOpen(false)}
+                  >
+                    <FileText size={12} />
+                    <span>Beau PDF</span>
+                  </a>
+                </div>
+              </div>
+
+              <div className="export-popover-divider" />
+
+              {/* Option 2 : Synthèse des messages */}
+              <div className="message-export-item">
+                <div className="export-item-desc">
+                  <div className="export-item-title-row">
+                    <span className="export-scope-tag scope-all">Discussion</span>
+                    <strong>Synthèse des messages</strong>
+                  </div>
+                  <p>Exporte l’historique structuré et la synthèse de tous les échanges.</p>
+                </div>
+                <div className="export-item-actions">
+                  <a
+                    href={`/api/messages/${message.id}/html?scope=conversation`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="export-link-btn btn-html"
+                    title="Consulter la synthèse complète en site HTML"
+                    onClick={() => setExportOpen(false)}
+                  >
+                    <Globe2 size={12} />
+                    <span>Site HTML</span>
+                  </a>
+                  <a
+                    href={`/api/messages/${message.id}/html?scope=conversation&pdf=1`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="export-link-btn btn-pdf"
+                    title="Générer et imprimer la synthèse au format PDF (A4)"
+                    onClick={() => setExportOpen(false)}
+                  >
+                    <FileText size={12} />
+                    <span>Beau PDF</span>
+                  </a>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+        <span className="message-timestamp">
+          {new Date(message.created_at).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}
+        </span>
+      </div>
+    )}
   </article>;
 }
 
@@ -405,12 +605,17 @@ export function ChatApp() {
   const [modelModalOpen, setModelModalOpen] = useState(false);
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
-  const [webSearch, setWebSearch] = useState(false);
+  const [webSearchMode, setWebSearchMode] = useState<"auto" | "always" | "off">("auto");
   const [deepSearch, setDeepSearch] = useState(false);
   const [deepSearchModalOpen, setDeepSearchModalOpen] = useState(false);
   const [deepSearchModalQuestion, setDeepSearchModalQuestion] = useState("");
   const [deepSearchModalTab, setDeepSearchModalTab] = useState<"plan" | "reports">("plan");
   const [deepSearchModalReportId, setDeepSearchModalReportId] = useState<string | null>(null);
+  const [learnMode, setLearnMode] = useState(false);
+  const [learnModalOpen, setLearnModalOpen] = useState(false);
+  const [learnModalQuestion, setLearnModalQuestion] = useState("");
+  const [learnModalTab, setLearnModalTab] = useState<"plan" | "reports">("plan");
+  const [learnModalReportId, setLearnModalReportId] = useState<string | null>(null);
   const [codeMode, setCodeMode] = useState(false);
   const [financeMode, setFinanceMode] = useState(false);
   const [canvasOpen, setCanvasOpen] = useState(false);
@@ -452,6 +657,58 @@ export function ChatApp() {
   const messagesRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const [atBottom, setAtBottom] = useState(true);
+  const [familyInfo, setFamilyInfo] = useState<FamilyGroupInfo | null>(null);
+  const [familyModalOpen, setFamilyModalOpen] = useState(false);
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const profileMenuRef = useRef<HTMLDivElement>(null);
+  const [topbarExportOpen, setTopbarExportOpen] = useState(false);
+  const topbarExportRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (profileMenuRef.current && !profileMenuRef.current.contains(event.target as Node)) {
+        setProfileMenuOpen(false);
+      }
+      if (topbarExportRef.current && !topbarExportRef.current.contains(event.target as Node)) {
+        setTopbarExportOpen(false);
+      }
+    }
+    if (profileMenuOpen || topbarExportOpen) {
+      document.addEventListener("mousedown", handleClickOutside);
+      return () => document.removeEventListener("mousedown", handleClickOutside);
+    }
+  }, [profileMenuOpen, topbarExportOpen]);
+
+  async function loadFamily(signal?: AbortSignal) {
+    try {
+      const family = await api<FamilyGroupInfo>("/family", { signal });
+      setFamilyInfo(family);
+    } catch {
+      // Ignorer si non disponible
+    }
+  }
+
+  async function switchAccount(targetUserId: string) {
+    setBusy("switch");
+    setProfileMenuOpen(false);
+    setError("");
+    try {
+      const newUser = await api<AuthUser>(`/family/switch/${targetUserId}`, { method: "POST" });
+      setUser(newUser);
+      setConversation(null);
+      setConversations([]);
+      setMemories([]);
+      setSkills([]);
+      setAttachments([]);
+      setDraft("");
+      await loadWorkspace();
+      await loadFamily();
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(null);
+    }
+  }
 
   async function loadWorkspace(signal?: AbortSignal) {
     const [settings, chats, savedMemories, userSkills] = await Promise.all([
@@ -461,6 +718,7 @@ export function ChatApp() {
       api<Skill[]>("/skills", { signal }).catch(() => [] as Skill[]),
     ]);
     setConfig(settings); setModel(settings.default_model); setConversations(chats); setMemories(savedMemories); setSkills(userSkills);
+    void loadFamily(signal);
   }
 
   async function bootstrap(signal?: AbortSignal) {
@@ -490,6 +748,7 @@ export function ChatApp() {
         ]);
         if (!active) return;
         setConfig(settings); setModel(settings.default_model); setConversations(chats); setMemories(savedMemories); setSkills(userSkills);
+        void loadFamily(controller.signal);
       }).catch(err => {
         if (!active || (err instanceof ApiError && err.status === 401)) return;
         setAuthError(`Connexion au serveur impossible. ${errorMessage(err)}`);
@@ -629,18 +888,20 @@ export function ChatApp() {
       controller?.abort();
     }
   }
+  const isWebSearchAvailable = Boolean(config?.features.web_search);
+  const effectiveWebMode = isWebSearchAvailable ? webSearchMode : "off";
   const searchProviders = config?.search_providers ?? (config?.features.web_search ? ["searxng", "brave"] : []);
   const hasPrimarySearch = searchProviders.includes("searxng") || searchProviders.includes("brave");
   const hasDuckDuckGo = searchProviders.includes("duckduckgo_instant_answers");
   const duckDuckGoOnly = hasDuckDuckGo && !hasPrimarySearch;
-  const showDuckDuckGoNotice = duckDuckGoOnly && (webSearch || deepSearch) && !!config?.features.web_search;
-  const webSearchTooltip = !config?.features.web_search
+  const showDuckDuckGoNotice = duckDuckGoOnly && (effectiveWebMode !== "off" || deepSearch) && isWebSearchAvailable;
+  const webSearchTooltip = !isWebSearchAvailable
     ? "Configurez SearXNG, une clé Brave ou activez DuckDuckGo côté serveur (DUCKDUCKGO_ENABLED=true) pour utiliser la recherche."
-    : hasPrimarySearch && hasDuckDuckGo
-      ? "Recherche web rapide (SearXNG / Brave) ; DuckDuckGo en secours pour des réponses instantanées à couverture limitée."
-      : duckDuckGoOnly
-        ? "Réponses instantanées DuckDuckGo : sans clé, couverture limitée, sans recherche web complète."
-        : "Recherche web rapide en une requête pour enrichir la réponse.";
+    : effectiveWebMode === "auto"
+      ? "Mode Web Auto : un agent ultra-rapide (Mistral Small / Gemini Flash Lite) décide automatiquement si votre message nécessite une recherche web (actualités, prix, offres, santé/droit, versions...). Cliquez pour forcer."
+      : effectiveWebMode === "always"
+        ? "Mode Web Forcé : recherche web systématique à chaque message. Cliquez pour désactiver."
+        : "Mode Web Désactivé : aucune recherche web. Cliquez pour réactiver le mode Auto.";
 
   const availableThemes = useMemo(() => {
     const base = config?.themes?.length ? config.themes : DEFAULT_THEMES;
@@ -897,16 +1158,47 @@ export function ChatApp() {
     }
   }
 
-  async function send(event?: FormEvent, customDeepSearchQueries?: string[]) {
+  async function handleOpenLearnReport(msg: Message) {
+    if (msg.learn_report_id) {
+      setLearnModalQuestion("");
+      setLearnModalTab("reports");
+      setLearnModalReportId(msg.learn_report_id);
+      setLearnModalOpen(true);
+      return;
+    }
+    try {
+      const rep = await createLearnReportFromMessage(msg.id);
+      msg.learn_report_id = rep.id;
+      setLearnModalQuestion("");
+      setLearnModalTab("reports");
+      setLearnModalReportId(rep.id);
+      setLearnModalOpen(true);
+    } catch (err) {
+      console.error("Erreur génération cours:", err);
+      setLearnModalQuestion("");
+      setLearnModalTab("reports");
+      setLearnModalReportId(null);
+      setLearnModalOpen(true);
+    }
+  }
+
+  async function send(event?: FormEvent, customDeepSearchQueries?: string[], customLearnQueries?: string[]) {
     event?.preventDefault();
     if (!config) return;
 
-    let text = (draft.trim() || (customDeepSearchQueries ? deepSearchModalQuestion : "")).trim();
+    let text = (
+      draft.trim()
+      || (customDeepSearchQueries ? deepSearchModalQuestion : "")
+      || (customLearnQueries ? learnModalQuestion : "")
+    ).trim();
     if (customDeepSearchQueries && !text && customDeepSearchQueries.length > 0) {
       text = customDeepSearchQueries[0].trim();
     }
+    if (customLearnQueries && !text && customLearnQueries.length > 0) {
+      text = customLearnQueries[0].trim();
+    }
     if (isCurrentStreaming) {
-      if (customDeepSearchQueries) {
+      if (customDeepSearchQueries || customLearnQueries) {
         stopCurrentStream();
         await new Promise((r) => setTimeout(r, 120));
       } else {
@@ -914,14 +1206,14 @@ export function ChatApp() {
       }
     }
     if (working) {
-      if (customDeepSearchQueries) {
-        throw new Error("Une opération est déjà en cours. Veuillez patienter un instant avant de lancer la recherche.");
+      if (customDeepSearchQueries || customLearnQueries) {
+        throw new Error("Une opération est déjà en cours. Veuillez patienter un instant avant de lancer.");
       }
       return;
     }
     if (!config.features.chat) return;
     if (needsVision) {
-      if (customDeepSearchQueries) {
+      if (customDeepSearchQueries || customLearnQueries) {
         throw new Error("Le modèle sélectionné ne prend pas en charge les images jointes.");
       }
       return;
@@ -934,6 +1226,15 @@ export function ChatApp() {
       setDeepSearchModalTab("plan");
       setDeepSearchModalReportId(null);
       setDeepSearchModalOpen(true);
+      return;
+    }
+
+    const useLearnMode = learnMode && config.features.web_search;
+    if (useLearnMode && !customLearnQueries) {
+      setLearnModalQuestion(text);
+      setLearnModalTab("plan");
+      setLearnModalReportId(null);
+      setLearnModalOpen(true);
       return;
     }
 
@@ -955,7 +1256,8 @@ export function ChatApp() {
       streamControllersRef.current.set(activeId, controller);
       setStreamingConversationIds(old => (old.includes(activeId!) ? old : [...old, activeId!]));
 
-      const useWebSearch = (webSearch || deepSearch) && config.features.web_search;
+      const isAutoWeb = !useDeepSearch && !useLearnMode && effectiveWebMode === "auto";
+      const isAlwaysWeb = !useDeepSearch && !useLearnMode && effectiveWebMode === "always";
       const useCodeMode = codeMode;
       if (useCodeMode) {
         setCanvasMessageId(null);
@@ -969,9 +1271,13 @@ export function ChatApp() {
         {
           content: text,
           model,
-          web_search: useWebSearch,
+          web_search: isAlwaysWeb,
+          auto_web_search: isAutoWeb,
+          web_search_mode: effectiveWebMode,
           deep_search: useDeepSearch,
           deep_search_queries: customDeepSearchQueries,
+          learn_mode: useLearnMode,
+          learn_mode_queries: customLearnQueries,
           code_mode: useCodeMode,
           finance_mode: financeMode,
           attachment_ids: files.map(item => item.id),
@@ -1086,14 +1392,17 @@ export function ChatApp() {
 
   async function authenticated(current: AuthUser) {
     setUser(current); setError(""); setBusy("init");
-    try { await loadWorkspace(); }
+    try {
+      await loadWorkspace();
+      await loadFamily();
+    }
     catch (err) { setError(`Connexion au serveur impossible. ${errorMessage(err)}`); }
     finally { setBusy(null); setAuthReady(true); }
   }
 
   function invitationAccepted() {
     setUser(null); setConfig(null); setConversations([]); setConversation(null); setMemories([]);
-    setDraft(""); setAttachments([]); setMemoryDraft(""); setAdminOpen(false);
+    setDraft(""); setAttachments([]); setMemoryDraft(""); setAdminOpen(false); setFamilyModalOpen(false); setProfileMenuOpen(false);
     window.history.replaceState({}, "", window.location.pathname + window.location.search);
     window.dispatchEvent(new PopStateEvent("popstate"));
   }
@@ -1102,9 +1411,13 @@ export function ChatApp() {
     setError("");
     try {
       await api<void>("/auth/logout", { method: "POST" });
+    } catch (err) {
+      console.error("Logout error", err);
+    } finally {
       setUser(null); setConfig(null); setConversations([]); setConversation(null); setMemories([]);
-      setAuthReady(true); setAdminOpen(false);
-    } catch (err) { setError(errorMessage(err)); }
+      setSkills([]); setFamilyInfo(null); setAdminOpen(false); setFamilyModalOpen(false); setProfileMenuOpen(false);
+      setAuthReady(true);
+    }
   }
 
   function openEditDialog(target: Conversation) {
@@ -1400,31 +1713,333 @@ export function ChatApp() {
         }) : <div className="history-empty"><MessageCircle size={20} /><p>{hasActiveFilter ? "Aucune discussion ne correspond à ce filtre." : "Une idée, une question…\nVotre historique commence ici."}</p></div>}
       </nav>
       <div className="sidebar-bottom">
-        <button type="button" className="blog-shortcut" onClick={() => openBlogModal("")}>
-          <span className="blog-icon"><Newspaper size={18} /></span>
-          <span><strong>Mes Blogs d’actualités</strong><small>Veille SearXNG & résumés auto</small></span>
-          <ChevronRight size={16} />
-        </button>
-        <button
-          type="button"
-          className="blog-shortcut deepsearch-sidebar-shortcut"
-          onClick={() => {
-            setDeepSearchModalQuestion(draft.trim());
-            setDeepSearchModalTab("reports");
-            setDeepSearchModalReportId(null);
-            setDeepSearchModalOpen(true);
-            setSidebarOpen(false);
-          }}
-        >
-          <span className="blog-icon deepsearch-sidebar-icon"><Compass size={18} /></span>
-          <span><strong>Rapports DeepSearch</strong><small>Analyses HTML & recherche continue sans limite</small></span>
-          <ChevronRight size={16} />
-        </button>
-        <button type="button" className="memory-shortcut" onClick={() => { setContextTab("memories"); setContextOpen(true); setSidebarOpen(false); }}><span className="memory-icon"><Brain size={18} /></span><span><strong>Votre mémoire</strong><small>{memories.length ? `${memories.length} information${memories.length > 1 ? "s" : ""} enregistrée${memories.length > 1 ? "s" : ""}` : "Les choses qui comptent"}</small></span><ChevronRight size={16} /></button><div className="profile"><span className="avatar">{user.username[0].toLocaleUpperCase("fr")}</span><span className="profile-user"><strong>{user.username}</strong><small><span className="connection-dot" /> Compte sécurisé</small></span>{user.is_admin && <IconButton label="Gérer les utilisateurs" onClick={() => setAdminOpen(true)}><Shield size={16} /></IconButton>}<IconButton label="Se déconnecter" onClick={() => void logout()}><LogOut size={16} /></IconButton></div></div>
+        <div className="sidebar-quick-tools" aria-label="Accès rapides aux espaces et outils">
+          <button
+            type="button"
+            className={`sidebar-quick-btn blog-quick ${blogModalOpen ? "is-active" : ""}`}
+            onClick={() => { openBlogModal(""); setSidebarOpen(false); }}
+            title="Mes Blogs d’actualités (Veille SearXNG & résumés auto)"
+            aria-label="Mes Blogs d’actualités"
+          >
+            <Newspaper size={16} />
+            <span className="sidebar-quick-label">Blogs</span>
+          </button>
+          <button
+            type="button"
+            className={`sidebar-quick-btn deepsearch-quick ${deepSearchModalOpen ? "is-active" : ""}`}
+            onClick={() => {
+              setDeepSearchModalQuestion(draft.trim());
+              setDeepSearchModalTab("reports");
+              setDeepSearchModalReportId(null);
+              setDeepSearchModalOpen(true);
+              setSidebarOpen(false);
+            }}
+            title="Rapports DeepSearch (Analyses HTML & recherche approfondie)"
+            aria-label="Rapports DeepSearch"
+          >
+            <Compass size={16} />
+            <span className="sidebar-quick-label">DeepSearch</span>
+          </button>
+          <button
+            type="button"
+            className={`sidebar-quick-btn learn-quick ${learnModalOpen ? "is-active" : ""}`}
+            onClick={() => {
+              setLearnModalQuestion(draft.trim());
+              setLearnModalTab("reports");
+              setLearnModalReportId(null);
+              setLearnModalOpen(true);
+              setSidebarOpen(false);
+            }}
+            title="Mes Cours & Formations (Cours magistraux, cas pratiques & HTML)"
+            aria-label="Mes Cours & Formations"
+          >
+            <GraduationCap size={16} />
+            <span className="sidebar-quick-label">Cours</span>
+          </button>
+          <button
+            type="button"
+            className={`sidebar-quick-btn memory-quick ${contextOpen && contextTab === "memories" ? "is-active" : ""}`}
+            onClick={() => { setContextTab("memories"); setContextOpen(true); setSidebarOpen(false); }}
+            title={`Votre mémoire (${memories.length ? `${memories.length} information${memories.length > 1 ? "s" : ""}` : "Les choses qui comptent"})`}
+            aria-label="Votre mémoire"
+          >
+            <Brain size={16} />
+            <span className="sidebar-quick-label">Mémoire</span>
+          </button>
+        </div>
+        <div className="profile">
+          <div className="profile-main" onClick={() => setFamilyModalOpen(true)} title="Gérer le groupe familial ou basculer" role="button" tabIndex={0}>
+            <span className="avatar">{user.username[0].toLocaleUpperCase("fr")}</span>
+            <span className="profile-user">
+              <strong>{user.username}</strong>
+              <small>
+                {familyInfo?.name ? (
+                  <span className="family-sub-link"><Users size={11} /> {familyInfo.name}</span>
+                ) : (
+                  <><span className="connection-dot" /> Compte sécurisé</>
+                )}
+              </small>
+            </span>
+          </div>
+          {familyInfo?.members && familyInfo.members.filter(m => m.id !== user.id).length > 0 && (
+            <div className="sidebar-family-avatars" title="Basculer vers un autre membre de la famille">
+              {familyInfo.members.filter(m => m.id !== user.id).slice(0, 3).map(m => (
+                <button
+                  key={m.id}
+                  type="button"
+                  className="sidebar-avatar-pill"
+                  onClick={() => void switchAccount(m.id)}
+                  title={`Basculer immédiatement sur ${m.username}`}
+                >
+                  {m.username[0].toLocaleUpperCase("fr")}
+                </button>
+              ))}
+              {familyInfo.members.filter(m => m.id !== user.id).length > 3 && (
+                <button
+                  type="button"
+                  className="sidebar-avatar-more"
+                  onClick={() => setFamilyModalOpen(true)}
+                  title="Voir tous les membres"
+                >
+                  +{familyInfo.members.filter(m => m.id !== user.id).length - 3}
+                </button>
+              )}
+            </div>
+          )}
+          <div className="profile-actions">
+            <IconButton label={familyInfo?.id ? "Groupe familial" : "Créer un groupe familial"} onClick={() => setFamilyModalOpen(true)}>
+              <Users size={16} />
+            </IconButton>
+            {user.is_admin && <IconButton label="Gérer les utilisateurs" onClick={() => setAdminOpen(true)}><Shield size={16} /></IconButton>}
+            <IconButton label="Se déconnecter (retour au login)" onClick={() => void logout()} className="profile-logout-btn"><LogOut size={16} /></IconButton>
+          </div>
+        </div>
+      </div>
     </aside>
 
     <main className="main-panel">
-      <header className="topbar"><div className="topbar-left"><IconButton label="Ouvrir le menu" className="mobile-only" onClick={() => setSidebarOpen(true)}><Menu size={21} /></IconButton><div className="model-select-wrap"><button type="button" className="model-selector-btn" onClick={() => setModelModalOpen(true)} disabled={!config || working} title="Changer de modèle IA (voir tous les modèles, prix, contexte, vision)" aria-label="Changer de modèle IA"><span className="model-indicator" /><span className="model-current-name">{currentModelInfo?.name || model || "Modèle IA"}</span>{currentModelInfo?.vision && <span className="model-topbar-pill vision" title="Modèle multimodal avec vision (images acceptées)"><Eye size={11} /><span>Vision</span></span>}{currentModelPriceTag && <span className={`model-topbar-pill price ${currentModelPriceTag === "Gratuit" ? "is-free" : ""}`}>{currentModelPriceTag}</span>}<ChevronDown size={14} className="model-chevron" /></button></div><span className="topbar-divider" /><span className="personal-label">Votre espace IA</span></div><div className="topbar-right"><button type="button" className={`blog-topbar-button ${blogModalOpen ? "is-selected" : ""}`} onClick={() => openBlogModal("")} aria-label="Ouvrir mes blogs"><Newspaper size={17} /><span>Blogs</span></button><button type="button" className={`canvas-topbar-button ${canvasOpen ? "is-selected" : ""}`} onClick={() => { setCanvasOpen(old => { const next = !old; if (next) { setContextOpen(false); setSkillsOpen(false); } return next; }); }} aria-expanded={canvasOpen} aria-label="Ouvrir le Canvas Code"><Code2 size={17} /><span>Canvas Code</span>{canvasFiles.length > 0 && <span className="canvas-topbar-count">{canvasFiles.length}</span>}</button><button type="button" className="studio-topbar-button" onClick={() => openImageStudio(draft.trim())} aria-label="Ouvrir le Studio Image"><ImagePlus size={17} /><span>Studio Image</span></button><button type="button" className={`context-toggle ${contextOpen ? "is-selected" : ""}`} onClick={() => { setContextOpen(old => { const next = !old; if (next) setCanvasOpen(false); return next; }); }} aria-expanded={contextOpen} aria-controls="context-panel" aria-label="Mémoire & contexte"><Brain size={17} /><span>Mémoire & contexte</span><span className="memory-count">{memories.length}</span></button></div></header>
+      <header className="topbar">
+        <div className="topbar-left">
+          <IconButton label="Ouvrir le menu" className="mobile-only" onClick={() => setSidebarOpen(true)}><Menu size={21} /></IconButton>
+          <div className="model-select-wrap"><button type="button" className="model-selector-btn" onClick={() => setModelModalOpen(true)} disabled={!config || working} title="Changer de modèle IA (voir tous les modèles, prix, contexte, vision)" aria-label="Changer de modèle IA"><span className="model-indicator" /><span className="model-current-name">{currentModelInfo?.name || model || "Modèle IA"}</span>{currentModelInfo?.vision && <span className="model-topbar-pill vision" title="Modèle multimodal avec vision (images acceptées)"><Eye size={11} /><span>Vision</span></span>}{currentModelPriceTag && <span className={`model-topbar-pill price ${currentModelPriceTag === "Gratuit" ? "is-free" : ""}`}>{currentModelPriceTag}</span>}<ChevronDown size={14} className="model-chevron" /></button></div>
+          <span className="topbar-divider" />
+          <span className="personal-label">Votre espace IA</span>
+        </div>
+        <div className="topbar-right">
+          <button
+            type="button"
+            className={`deepsearch-topbar-button ${deepSearchModalOpen ? "is-selected" : ""}`}
+            onClick={() => {
+              setDeepSearchModalQuestion(draft.trim());
+              setDeepSearchModalTab("reports");
+              setDeepSearchModalReportId(null);
+              setDeepSearchModalOpen(true);
+            }}
+            aria-label="Ouvrir mes rapports DeepSearch"
+            title="Consulter mes rapports d’analyse approfondie DeepSearch"
+          >
+            <Compass size={17} />
+            <span>DeepSearch</span>
+          </button>
+          <button
+            type="button"
+            className={`learn-topbar-button ${learnModalOpen ? "is-selected" : ""}`}
+            onClick={() => {
+              setLearnModalQuestion(draft.trim());
+              setLearnModalTab("reports");
+              setLearnModalReportId(null);
+              setLearnModalOpen(true);
+            }}
+            aria-label="Ouvrir mes cours et formations"
+            title="Consulter mes cours, parcours de formation et fiches de révision"
+          >
+            <GraduationCap size={17} />
+            <span>Cours</span>
+          </button>
+          <button type="button" className={`blog-topbar-button ${blogModalOpen ? "is-selected" : ""}`} onClick={() => openBlogModal("")} aria-label="Ouvrir mes blogs" title="Consulter mes blogs d’actualités SearXNG"><Newspaper size={17} /><span>Blogs</span></button>
+          <button type="button" className={`canvas-topbar-button ${canvasOpen ? "is-selected" : ""}`} onClick={() => { setCanvasOpen(old => { const next = !old; if (next) { setContextOpen(false); setSkillsOpen(false); } return next; }); }} aria-expanded={canvasOpen} aria-label="Ouvrir le Canvas Code" title="Ouvrir le Canvas Code interactif"><Code2 size={17} /><span>Canvas Code</span>{canvasFiles.length > 0 && <span className="canvas-topbar-count">{canvasFiles.length}</span>}</button>
+          <button type="button" className="studio-topbar-button" onClick={() => openImageStudio(draft.trim())} aria-label="Ouvrir le Studio Image" title="Ouvrir le Studio Image"><ImagePlus size={17} /><span>Studio Image</span></button>
+          <button type="button" className={`context-toggle ${contextOpen ? "is-selected" : ""}`} onClick={() => { setContextOpen(old => { const next = !old; if (next) setCanvasOpen(false); return next; }); }} aria-expanded={contextOpen} aria-controls="context-panel" aria-label="Mémoire & contexte" title="Consulter la mémoire et le contexte"><Brain size={17} /><span>Mémoire</span><span className="memory-count">{memories.length}</span></button>
+
+          {/* Sortie & Export de la discussion */}
+          {conversation && (
+            <div className="topbar-export-wrap" ref={topbarExportRef}>
+              <button
+                type="button"
+                className={`topbar-export-btn ${topbarExportOpen ? "is-active" : ""}`}
+                onClick={() => setTopbarExportOpen(prev => !prev)}
+                title="Sortie et export de la conversation (PDF ou HTML)"
+                aria-expanded={topbarExportOpen}
+                aria-label="Sortie de la discussion"
+              >
+                <Share2 size={16} />
+                <span>Sortie</span>
+                <ChevronDown size={13} className={`topbar-chevron ${topbarExportOpen ? "is-open" : ""}`} />
+              </button>
+              {topbarExportOpen && (
+                <div className="topbar-export-dropdown" role="menu">
+                  <div className="topbar-export-dropdown-header">
+                    <span className="dropdown-export-icon"><Share2 size={13} /></span>
+                    <div>
+                      <strong>Sortie de la discussion</strong>
+                      <small>{conversation.title || "Discussion cLAIr"}</small>
+                    </div>
+                  </div>
+                  <div className="topbar-export-options">
+                    <a
+                      href={`/api/conversations/${conversation.id}/html`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="topbar-export-link btn-html"
+                      onClick={() => setTopbarExportOpen(false)}
+                      title="Consulter la synthèse complète en site HTML"
+                    >
+                      <Globe2 size={14} />
+                      <span>Site HTML</span>
+                    </a>
+                    <a
+                      href={`/api/conversations/${conversation.id}/html?pdf=1`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="topbar-export-link btn-pdf"
+                      onClick={() => setTopbarExportOpen(false)}
+                      title="Imprimer ou enregistrer la discussion en Beau PDF (A4)"
+                    >
+                      <FileText size={14} />
+                      <span>Beau PDF</span>
+                    </a>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Profil utilisateur & Bascule rapide de compte */}
+          <div className="topbar-profile-wrap" ref={profileMenuRef}>
+            <button
+              type="button"
+              className={`topbar-profile-btn ${profileMenuOpen ? "is-active" : ""}`}
+              onClick={() => setProfileMenuOpen(prev => !prev)}
+              aria-expanded={profileMenuOpen}
+              aria-label="Mon compte et groupe familial"
+            >
+              <span className="topbar-profile-avatar">{user.username[0].toLocaleUpperCase("fr")}</span>
+              <span className="topbar-profile-name">{user.username}</span>
+              {familyInfo?.id && (
+                <span className="topbar-family-pill" title={`Groupe familial : ${familyInfo.name}`}>
+                  <Users size={12} />
+                </span>
+              )}
+              <ChevronDown size={14} className={`topbar-chevron ${profileMenuOpen ? "is-open" : ""}`} />
+            </button>
+
+            {profileMenuOpen && (
+              <div className="profile-dropdown-menu" role="menu">
+                <div className="profile-dropdown-header">
+                  <span className="dropdown-avatar">{user.username[0].toLocaleUpperCase("fr")}</span>
+                  <div className="dropdown-user-details">
+                    <strong>{user.username}</strong>
+                    <small>{user.is_admin ? "Administrateur" : "Compte membre"} · <span className="status-dot-active" /> Connecté</small>
+                  </div>
+                </div>
+
+                <div className="profile-dropdown-section">
+                  <div className="profile-dropdown-section-header">
+                    <span className="dropdown-section-title">
+                      <Users size={13} /> {familyInfo?.name || "Groupe familial"}
+                    </span>
+                    <button
+                      type="button"
+                      className="dropdown-section-link"
+                      onClick={() => {
+                        setProfileMenuOpen(false);
+                        setFamilyModalOpen(true);
+                      }}
+                    >
+                      {familyInfo?.id ? "Gérer" : "+ Créer"}
+                    </button>
+                  </div>
+
+                  {familyInfo?.members && familyInfo.members.filter(m => m.id !== user.id).length > 0 ? (
+                    <div className="family-switch-list">
+                      <span className="family-switch-hint">Basculer sur un compte sans mot de passe :</span>
+                      {familyInfo.members
+                        .filter(m => m.id !== user.id)
+                        .map(member => (
+                          <button
+                            key={member.id}
+                            type="button"
+                            className="family-quick-switch-item"
+                            onClick={() => void switchAccount(member.id)}
+                            title={`Basculer immédiatement sur ${member.username}`}
+                          >
+                            <span className="quick-avatar">{member.username[0].toLocaleUpperCase("fr")}</span>
+                            <span className="quick-name">{member.username}</span>
+                            <span className="quick-badge"><ArrowRightLeft size={11} /> Basculer</span>
+                          </button>
+                        ))}
+                    </div>
+                  ) : familyInfo?.id ? (
+                    <div className="dropdown-empty-family">
+                      <span>Aucun autre compte dans la famille.</span>
+                      <button
+                        type="button"
+                        className="dropdown-action-text"
+                        onClick={() => {
+                          setProfileMenuOpen(false);
+                          setFamilyModalOpen(true);
+                        }}
+                      >
+                        + Ajouter un membre
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="dropdown-empty-family">
+                      <span>Partagez l’app en famille avec bascule instantanée.</span>
+                      <button
+                        type="button"
+                        className="dropdown-action-text"
+                        onClick={() => {
+                          setProfileMenuOpen(false);
+                          setFamilyModalOpen(true);
+                        }}
+                      >
+                        Créer un groupe familial
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {user.is_admin && (
+                  <button
+                    type="button"
+                    className="profile-menu-item"
+                    onClick={() => {
+                      setProfileMenuOpen(false);
+                      setAdminOpen(true);
+                    }}
+                  >
+                    <Shield size={15} />
+                    <span>Gestion des utilisateurs</span>
+                  </button>
+                )}
+
+                <div className="profile-dropdown-divider" />
+
+                <button
+                  type="button"
+                  className="profile-menu-item is-logout"
+                  onClick={() => void logout()}
+                  title="Fermer la session et retourner à la page de connexion"
+                >
+                  <LogOut size={15} />
+                  <span>Se déconnecter (retour au login)</span>
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </header>
 
       {config?.demo_mode && <div className="demo-banner" role="status"><CircleAlert size={17} /><span><strong>Mode démonstration.</strong> Les réponses sont simulées, aucun modèle IA n’est appelé. Configurez une clé côté serveur et désactivez <code>DEMO_MODE</code> pour activer l’IA.</span></div>}
       {config && !config.features.chat && !config.demo_mode && <div className="demo-banner" role="status"><CircleAlert size={17} /><span><strong>Le tchat attend sa configuration.</strong> Ajoutez une clé du fournisseur IA dans le fichier <code>.env</code> du serveur, puis redémarrez le backend.</span></div>}
@@ -1434,7 +2049,7 @@ export function ChatApp() {
           <div className="chat-skills-toolbar"><span>{conversation?.skills?.length ? conversation.skills.map(skill => skill.name).join(" · ") : "Aucune compétence active"}</span><button type="button" onClick={() => { setContextOpen(false); setSkillsOpen(true); }}><Sparkles size={15} />Compétences<small>{conversation?.skills?.length ?? 0}</small></button></div>
           {skillsOpen && <SkillsPanel conversation={conversation} model={model} config={config} onClose={() => setSkillsOpen(false)} onConversationChange={setConversation} onRefreshConversations={refreshConversations} onSkillsChange={setSkills} />}
           <div className="chat-scroll" ref={messagesRef} onScroll={() => { const el = messagesRef.current; if (el) setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 120); }}>
-            {!messages.length && busy !== "switch" ? <div className="welcome"><div className="welcome-eyebrow"><span /> UN PEU DE CLARTÉ, BEAUCOUP DE POSSIBILITÉS</div><BrandMark /><h1>Qu’avez-vous en tête<span> aujourd’hui ?</span></h1><p>Un espace pour vos questions, vos idées et vos projets.<br />Commencez quelque part. On avance ensemble.</p><div className="suggestions">{suggestions.map((item, index) => <button type="button" className="suggestion" key={item.title} disabled={working} onClick={() => { if (index === 3) { openImageStudio(item.prompt); } else if (index === 1) { openBlogModal(item.prompt); } else { setDraft(item.prompt); textareaRef.current?.focus(); } }}><span className={`suggestion-icon suggestion-icon-${index}`}><item.icon size={19} strokeWidth={1.6} /></span><strong>{item.title}</strong><span>{item.description}</span><ChevronRight size={15} className="suggestion-arrow" /></button>)}</div><div className="welcome-note"><Brain size={14} /><span>Les souvenirs que vous choisissez gardent le fil d’une conversation à l’autre.</span></div></div> : busy === "switch" ? <div className="loading-conversation"><LoaderCircle size={23} className="spin" />Ouverture de votre conversation…</div> : <div className="messages"><div className="conversation-heading"><div className="conversation-heading-top"><span>CONVERSATION</span>{conversation?.theme && <button type="button" className={`conversation-theme-badge tone-${themeTone(conversation.theme)}`} onClick={() => { setGroupMode("theme"); setSelectedTheme(old => (old === conversation.theme ? "" : (conversation.theme ?? ""))); setSidebarOpen(true); }} title={`Voir toutes les discussions du thème « ${conversation.theme} »`}>{conversation.theme}</button>}<div className="conversation-heading-actions">{conversation && <button type="button" className="conversation-meta-btn" disabled={working} onClick={() => openEditDialog(conversation)} title="Modifier le titre, le thème et les mots-clés"><Pencil size={12} /><span>Éditer</span></button>}{conversation && <button type="button" className="conversation-meta-btn" disabled={working} onClick={() => void classifyConversation(conversation.id, true)} title="Régénérer le titre, le thème et les mots-clés automatiquement (Mistral Small)">{busy === "classify" ? <LoaderCircle size={12} className="spin" /> : <WandSparkles size={12} />}<span>Auto-tags IA</span></button>}</div></div><h1>{conversation?.title}</h1>{!!conversation?.keywords?.length && <div className="conversation-keywords-row" aria-label="Mots-clés de la discussion">{conversation.keywords.map(kw => <button key={kw} type="button" className={`conversation-keyword-chip ${selectedKeyword.toLocaleLowerCase("fr") === kw.toLocaleLowerCase("fr") ? "is-active" : ""}`} onClick={() => { toggleKeywordFilter(kw); setSidebarOpen(true); }} title={`Filtrer les discussions avec #${kw}`}>#{kw}</button>)}</div>}</div>{messages.map(message => <MessageView key={message.id} message={message} streaming={streamingId === message.id} onOpenCanvas={openCanvasForMessage} onOpenDeepSearchReport={handleOpenDeepSearchReport} />)}<div ref={bottomRef} /></div>}
+            {!messages.length && busy !== "switch" ? <div className="welcome"><div className="welcome-eyebrow"><span /> UN PEU DE CLARTÉ, BEAUCOUP DE POSSIBILITÉS</div><BrandMark /><h1>Qu’avez-vous en tête<span> aujourd’hui ?</span></h1><p>Un espace pour vos questions, vos idées et vos projets.<br />Commencez quelque part. On avance ensemble.</p><div className="suggestions">{suggestions.map((item, index) => <button type="button" className="suggestion" key={item.title} disabled={working} onClick={() => { if (index === 3) { openImageStudio(item.prompt); } else if (index === 1) { openBlogModal(item.prompt); } else { setDraft(item.prompt); textareaRef.current?.focus(); } }}><span className={`suggestion-icon suggestion-icon-${index}`}><item.icon size={19} strokeWidth={1.6} /></span><strong>{item.title}</strong><span>{item.description}</span><ChevronRight size={15} className="suggestion-arrow" /></button>)}</div><div className="welcome-note"><Brain size={14} /><span>Les souvenirs que vous choisissez gardent le fil d’une conversation à l’autre.</span></div></div> : busy === "switch" ? <div className="loading-conversation"><LoaderCircle size={23} className="spin" />Ouverture de votre conversation…</div> : <div className="messages"><div className="conversation-heading"><div className="conversation-heading-top"><span>CONVERSATION</span>{conversation?.theme && <button type="button" className={`conversation-theme-badge tone-${themeTone(conversation.theme)}`} onClick={() => { setGroupMode("theme"); setSelectedTheme(old => (old === conversation.theme ? "" : (conversation.theme ?? ""))); setSidebarOpen(true); }} title={`Voir toutes les discussions du thème « ${conversation.theme} »`}>{conversation.theme}</button>}<div className="conversation-heading-actions">{conversation && <button type="button" className="conversation-meta-btn" disabled={working} onClick={() => openEditDialog(conversation)} title="Modifier le titre, le thème et les mots-clés"><Pencil size={12} /><span>Éditer</span></button>}{conversation && <button type="button" className="conversation-meta-btn" disabled={working} onClick={() => void classifyConversation(conversation.id, true)} title="Régénérer le titre, le thème et les mots-clés automatiquement (Mistral Small)">{busy === "classify" ? <LoaderCircle size={12} className="spin" /> : <WandSparkles size={12} />}<span>Auto-tags IA</span></button>}</div></div><h1>{conversation?.title}</h1>{!!conversation?.keywords?.length && <div className="conversation-keywords-row" aria-label="Mots-clés de la discussion">{conversation.keywords.map(kw => <button key={kw} type="button" className={`conversation-keyword-chip ${selectedKeyword.toLocaleLowerCase("fr") === kw.toLocaleLowerCase("fr") ? "is-active" : ""}`} onClick={() => { toggleKeywordFilter(kw); setSidebarOpen(true); }} title={`Filtrer les discussions avec #${kw}`}>#{kw}</button>)}</div>}</div>{messages.map(message => <MessageView key={message.id} message={message} streaming={streamingId === message.id} onOpenCanvas={openCanvasForMessage} onOpenDeepSearchReport={handleOpenDeepSearchReport} onOpenLearnReport={handleOpenLearnReport} />)}<div ref={bottomRef} /></div>}
           </div>
           {!atBottom && !!messages.length && <IconButton className="scroll-bottom" label="Aller aux derniers messages" onClick={() => { setAtBottom(true); bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }}><ArrowDown size={18} /></IconButton>}
 
@@ -1496,7 +2111,7 @@ export function ChatApp() {
               </div>
             )}
 
-            <form className={`composer ${deepSearch ? "deepsearch-mode" : ""} ${codeMode ? "codecanvas-mode" : ""} ${financeMode ? "finance-mode" : ""}`} onSubmit={event => void send(event)}>
+            <form className={`composer ${deepSearch ? "deepsearch-mode" : ""} ${learnMode ? "learn-mode" : ""} ${codeMode ? "codecanvas-mode" : ""} ${financeMode ? "finance-mode" : ""}`} onSubmit={event => void send(event)}>
               {deepSearch && (
                 <div className="deepsearch-mode-label">
                   <Compass size={14} />
@@ -1539,6 +2154,48 @@ export function ChatApp() {
                   </button>
                 </div>
               )}
+              {learnMode && (
+                <div className="learn-mode-label">
+                  <GraduationCap size={14} />
+                  <span><strong>Mode Apprendre</strong> · Conception d’un cours complet et structuré multi-étapes avec plan pédagogique, cas pratiques et auto-évaluation</span>
+                  <button
+                    type="button"
+                    className="learn-plan-btn"
+                    onClick={() => {
+                      if (!draft.trim()) {
+                        setError("Saisissez d'abord votre sujet dans le champ pour préparer le plan du cours.");
+                        return;
+                      }
+                      setLearnModalQuestion(draft.trim());
+                      setLearnModalTab("plan");
+                      setLearnModalReportId(null);
+                      setLearnModalOpen(true);
+                    }}
+                    title="Prévisualiser et modifier le plan du cours avant de lancer"
+                  >
+                    <WandSparkles size={12} />
+                    <span>Ajuster le plan</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="learn-plan-btn"
+                    onClick={() => {
+                      setLearnModalQuestion(draft.trim());
+                      setLearnModalTab("reports");
+                      setLearnModalReportId(null);
+                      setLearnModalOpen(true);
+                    }}
+                    title="Consulter mes cours et formations sauvegardés"
+                  >
+                    <BookOpen size={12} />
+                    <span>Mes Cours</span>
+                  </button>
+                  <button type="button" onClick={() => setLearnMode(false)}>
+                    <X size={12} />
+                    Désactiver
+                  </button>
+                </div>
+              )}
               {codeMode && <div className="codecanvas-mode-label"><Code2 size={14} /><span><strong>Mode Code · Canvas</strong> · L’éditeur multi-fichiers s’ouvre en direct avec aperçu web et téléchargement <code>.zip</code></span><button type="button" onClick={() => setCodeMode(false)}><X size={12} />Désactiver</button></div>}
               {financeMode && <div className="finance-mode-label"><TrendingUp size={14} /><span><strong>Mode Finances & Bourse</strong> · Téléchargement automatique des cours et données financières (EOD Historical Data & Yahoo Finance) pour les entreprises ou tickers mentionnés</span><button type="button" onClick={() => setFinanceMode(false)}><X size={12} />Désactiver</button></div>}
               {!!attachments.length && <div className="pending-attachments">{attachments.map(item => {
@@ -1565,13 +2222,13 @@ export function ChatApp() {
                   }
                 }}
                 onKeyDown={composerKeyDown}
-                placeholder={financeMode ? "Posez une question sur une entreprise, un ticker ou un indice (ex. Stellantis, Apple, LVMH, CAC 40)…" : codeMode ? "Décrivez l’application, le script ou le projet multi-fichiers à coder dans le Canvas…" : deepSearch ? "Quel sujet voulez-vous explorer en profondeur avec SearXNG ?" : "Une question, une idée, ou tapez @ (ex. @prof, @feynman)…"}
+                placeholder={financeMode ? "Posez une question sur une entreprise, un ticker ou un indice (ex. Stellantis, Apple, LVMH, CAC 40)…" : codeMode ? "Décrivez l’application, le script ou le projet multi-fichiers à coder dans le Canvas…" : deepSearch ? "Quel sujet voulez-vous explorer en profondeur avec SearXNG ?" : learnMode ? "Sur quel sujet ou compétence souhaitez-vous concevoir un cours complet ?" : "Une question, une idée, ou tapez @ (ex. @prof, @feynman)…"}
                 rows={2}
                 maxLength={20000}
                 disabled={working || !config}
                 aria-describedby="composer-hint"
               />
-              <div className="composer-toolbar"><div className="composer-tools"><input className="sr-only" type="file" ref={fileRef} multiple accept=".txt,.md,.csv,.json,.pdf,.docx,image/png,image/jpeg,image/webp" onChange={event => void uploadFiles(event.target.files)} tabIndex={-1} /><IconButton label="Joindre jusqu’à 5 fichiers (20 Mo par document, 8 Mo par image)" disabled={working || !config} onClick={() => fileRef.current?.click()}><Paperclip size={19} /></IconButton><IconButton label="Analyser un lien web ou vidéo YouTube (URL)" disabled={working || !config} onClick={() => { setUrlError(""); setUrlInputValue(""); setShowUrlModal(true); }}><Link2 size={19} /></IconButton><span className="tool-divider" /><button type="button" className={`tool-button ${webSearch && !deepSearch ? "active" : ""}`} disabled={working || !config?.features.web_search} aria-pressed={webSearch && !deepSearch} title={webSearchTooltip} aria-describedby={showDuckDuckGoNotice ? "web-search-hint" : undefined} onClick={() => { setWebSearch(old => !old); setDeepSearch(false); }}><Globe2 size={16} /><span>Web</span>{webSearch && !deepSearch && <Check size={12} />}</button><button type="button" className={`tool-button deepsearch-trigger ${deepSearch ? "active" : ""}`} disabled={working || !config?.features.web_search} aria-pressed={deepSearch} title={config?.features.web_search ? "DeepSearch : recherche large multi-requêtes via SearXNG et grand rapport d’analyse approfondi" : webSearchTooltip} onClick={() => { setDeepSearch(old => !old); setWebSearch(false); }}><Compass size={16} /><span>DeepSearch</span>{deepSearch && <Check size={12} />}</button><button type="button" className={`tool-button codecanvas-trigger ${codeMode ? "active" : ""}`} disabled={working || !config} aria-pressed={codeMode} title="Mode Code Canvas : générer une application ou un projet multi-fichiers dans l’éditeur interactif avec téléchargement .zip" onClick={toggleCodeMode}><Code2 size={16} /><span>Code · Canvas</span>{codeMode && <Check size={12} />}</button><button type="button" className={`tool-button finance-trigger ${financeMode ? "active" : ""}`} disabled={working} aria-pressed={financeMode} title="Mode Finances & Bourse : télécharger automatiquement les cotations en temps réel et données financières sur Yahoo Finance" onClick={() => setFinanceMode(old => !old)}><TrendingUp size={16} /><span>Finances</span>{financeMode && <Check size={12} />}</button><button type="button" className="tool-button studio-trigger" disabled={working} title="Ouvrir le Studio Image dédié (Ideogram, amélioration de prompt, visualisation et galerie)" onClick={() => openImageStudio(draft.trim())}><ImagePlus size={16} /><span>Studio Image</span></button></div><div className="composer-submit"><span className="enter-hint">↵ pour envoyer</span>{isCurrentStreaming ? <button className="send-button stop-button" type="button" onClick={stopCurrentStream} aria-label="Interrompre la génération" title="Interrompre la génération"><Square size={14} fill="currentColor" /></button> : <button className="send-button" type="submit" disabled={!canSend} aria-label="Envoyer le message">{busy === "upload" ? <LoaderCircle size={19} className="spin" /> : <ArrowUp size={20} />}</button>}</div></div>
+              <div className="composer-toolbar"><div className="composer-tools"><input className="sr-only" type="file" ref={fileRef} multiple accept=".txt,.md,.csv,.json,.pdf,.docx,image/png,image/jpeg,image/webp" onChange={event => void uploadFiles(event.target.files)} tabIndex={-1} /><IconButton label="Joindre jusqu’à 5 fichiers (20 Mo par document, 8 Mo par image)" disabled={working || !config} onClick={() => fileRef.current?.click()}><Paperclip size={19} /></IconButton><IconButton label="Analyser un lien web ou vidéo YouTube (URL)" disabled={working || !config} onClick={() => { setUrlError(""); setUrlInputValue(""); setShowUrlModal(true); }}><Link2 size={19} /></IconButton><span className="tool-divider" /><button type="button" className={`tool-button web-trigger ${effectiveWebMode !== "off" && !deepSearch && !learnMode ? "active" : ""} ${effectiveWebMode === "auto" && !deepSearch && !learnMode ? "web-auto" : ""} ${effectiveWebMode === "always" && !deepSearch && !learnMode ? "web-always" : ""} ${effectiveWebMode === "off" && !deepSearch && !learnMode ? "web-off" : ""}`} disabled={working || !isWebSearchAvailable} aria-pressed={effectiveWebMode !== "off" && !deepSearch && !learnMode} title={webSearchTooltip} aria-describedby={showDuckDuckGoNotice ? "web-search-hint" : undefined} onClick={() => { if (deepSearch || learnMode) { setDeepSearch(false); setLearnMode(false); setWebSearchMode("auto"); return; } setWebSearchMode(current => { if (current === "auto") return "always"; if (current === "always") return "off"; return "auto"; }); }}><Globe2 size={16} /><span>Web</span>{effectiveWebMode === "auto" && !deepSearch && !learnMode && <span className="auto-badge" title="Décision automatique par agent rapide">Auto</span>}{effectiveWebMode === "always" && !deepSearch && !learnMode && <Check size={12} />}</button><button type="button" className={`tool-button deepsearch-trigger ${deepSearch ? "active" : ""}`} disabled={working || !isWebSearchAvailable} aria-pressed={deepSearch} title={isWebSearchAvailable ? "DeepSearch : recherche large multi-requêtes via SearXNG et grand rapport d’analyse approfondi" : webSearchTooltip} onClick={() => { setDeepSearch(old => { if (!old) setLearnMode(false); return !old; }); }}><Compass size={16} /><span>DeepSearch</span>{deepSearch && <Check size={12} />}</button><button type="button" className={`tool-button learn-trigger ${learnMode ? "active" : ""}`} disabled={working || !isWebSearchAvailable} aria-pressed={learnMode} title={isWebSearchAvailable ? "Mode Apprendre : conception d'un cours complet et adapté au sujet avec plan pédagogique et supports" : webSearchTooltip} onClick={() => { setLearnMode(old => { if (!old) setDeepSearch(false); return !old; }); }}><GraduationCap size={16} /><span>Apprendre</span>{learnMode && <Check size={12} />}</button><button type="button" className={`tool-button codecanvas-trigger ${codeMode ? "active" : ""}`} disabled={working || !config} aria-pressed={codeMode} title="Mode Code Canvas : générer une application ou un projet multi-fichiers dans l’éditeur interactif avec téléchargement .zip" onClick={toggleCodeMode}><Code2 size={16} /><span>Code · Canvas</span>{codeMode && <Check size={12} />}</button><button type="button" className={`tool-button finance-trigger ${financeMode ? "active" : ""}`} disabled={working} aria-pressed={financeMode} title="Mode Finances & Bourse : télécharger automatiquement les cotations en temps réel et données financières sur Yahoo Finance" onClick={() => setFinanceMode(old => !old)}><TrendingUp size={16} /><span>Finances</span>{financeMode && <Check size={12} />}</button><button type="button" className="tool-button studio-trigger" disabled={working} title="Ouvrir le Studio Image dédié (Ideogram, amélioration de prompt, visualisation et galerie)" onClick={() => openImageStudio(draft.trim())}><ImagePlus size={16} /><span>Studio Image</span></button></div><div className="composer-submit"><span className="enter-hint">↵ pour envoyer</span>{isCurrentStreaming ? <button className="send-button stop-button" type="button" onClick={stopCurrentStream} aria-label="Interrompre la génération" title="Interrompre la génération"><Square size={14} fill="currentColor" /></button> : <button className="send-button" type="submit" disabled={!canSend} aria-label="Envoyer le message">{busy === "upload" ? <LoaderCircle size={19} className="spin" /> : <ArrowUp size={20} />}</button>}</div></div>
             </form>
             <div className="composer-footnote" id="composer-hint"><span>cLAIr peut se tromper. Gardez un regard critique sur les réponses.</span><span>Maj + Entrée pour un saut de ligne</span></div>
           </div>
@@ -1633,8 +2290,33 @@ export function ChatApp() {
         }}
       />
     )}
+    {learnModalOpen && (
+      <LearnModal
+        isOpen={learnModalOpen}
+        question={learnModalQuestion}
+        conversationId={conversation?.id}
+        initialTab={learnModalTab}
+        initialReportId={learnModalReportId}
+        onClose={() => {
+          setLearnModalOpen(false);
+          setLearnModalReportId(null);
+        }}
+        onLaunch={async (finalQueries) => {
+          await send(undefined, undefined, finalQueries);
+        }}
+      />
+    )}
     {imageStudioOpen && <ImageStudioModal config={config} initialPrompt={imageStudioPrompt} onClose={() => setImageStudioOpen(false)} />}
     {adminOpen && user.is_admin && <AdminPanel currentUser={user} onClose={() => setAdminOpen(false)} />}
+    {familyModalOpen && (
+      <FamilyModal
+        currentUser={user}
+        familyInfo={familyInfo}
+        onClose={() => setFamilyModalOpen(false)}
+        onFamilyUpdated={setFamilyInfo}
+        onSwitchAccount={switchAccount}
+      />
+    )}
     {dialog && <div className="modal-backdrop" onClick={event => { if (event.target === event.currentTarget && !working) setDialog(null); }}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="dialog-title" onKeyDown={event => { if (event.key === "Escape" && !working) setDialog(null); if (event.key === "Tab") { const elements = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled)')); if (!elements.length) return; const first = elements[0]; const last = elements[elements.length - 1]; if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); } else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); } } }}><form onSubmit={event => void submitDialog(event)}><div className="modal-header"><span className="modal-icon">{dialog.type === "delete" ? <Trash2 size={20} /> : <Pencil size={20} />}</span><IconButton label="Fermer" disabled={working} onClick={() => setDialog(null)}><X size={18} /></IconButton></div><h2 id="dialog-title">{dialog.type === "delete" ? "Supprimer cette conversation ?" : "Organiser la discussion"}</h2>{dialog.type === "delete" ? <p>« {dialog.conversation.title} » et ses messages seront supprimés. Cette action est définitive.</p> : <div className="modal-fields"><div className="modal-field-header"><label htmlFor="rename-input">Titre de la conversation</label><button type="button" className="modal-ai-generate-btn" disabled={working} onClick={() => void classifyConversation(dialog.conversation.id, true)} title="Générer titre, thème et mots-clés avec Mistral Small">{busy === "classify" ? <LoaderCircle size={12} className="spin" /> : <WandSparkles size={12} />}<span>Générer en auto (IA)</span></button></div><input id="rename-input" value={renameValue} onChange={event => setRenameValue(event.target.value)} maxLength={200} autoFocus disabled={working} /><label htmlFor="theme-select">Thème</label><select id="theme-select" className="modal-select" value={renameTheme} onChange={event => setRenameTheme(event.target.value)} disabled={working}>{availableThemes.map(t => <option key={t} value={t}>{t}</option>)}</select><label htmlFor="keywords-input">Mots-clés (2 ou 3, séparés par des virgules)</label><input id="keywords-input" value={renameKeywords} onChange={event => setRenameKeywords(event.target.value)} placeholder="ex. santé, sommeil, récupération" maxLength={160} disabled={working} /></div>}<div className="modal-actions"><button type="button" className="secondary-button" disabled={working} onClick={() => setDialog(null)}>Annuler</button><button type="submit" className={dialog.type === "delete" ? "danger-button" : "primary-button"} disabled={working || (dialog.type === "rename" && !renameValue.trim())}>{working ? <LoaderCircle className="spin" size={15} /> : null}{dialog.type === "delete" ? "Supprimer" : "Enregistrer"}</button></div></form></section></div>}
     {showUrlModal && <div className="modal-backdrop" onClick={event => { if (event.target === event.currentTarget && !urlLoading) setShowUrlModal(false); }}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="url-dialog-title" onKeyDown={event => { if (event.key === "Escape" && !urlLoading) setShowUrlModal(false); }}><form onSubmit={event => void handleAttachUrl(event)}><div className="modal-header"><span className="modal-icon" style={{ background: "#fef2f2", color: "#dc2626" }}><SquarePlay size={20} /></span><IconButton label="Fermer" disabled={urlLoading} onClick={() => setShowUrlModal(false)}><X size={18} /></IconButton></div><h2 id="url-dialog-title">Analyser un lien web ou YouTube</h2><p>Entrez l’adresse d’un article, d’une page web ou d’une vidéo YouTube. Pour YouTube, les propos tenus dans la vidéo seront transcrits et analysés par l’assistant.</p><div className="modal-fields"><label htmlFor="url-input">Adresse URL</label><input id="url-input" type="url" value={urlInputValue} onChange={event => setUrlInputValue(event.target.value)} placeholder="https://exemple.fr/article ou https://youtu.be/..." autoFocus disabled={urlLoading} required /></div>{urlError && <div className="url-error-msg" role="alert"><CircleAlert size={14} /><span>{urlError}</span></div>}<div className="modal-actions"><button type="button" className="secondary-button" disabled={urlLoading} onClick={() => setShowUrlModal(false)}>Annuler</button><button type="submit" className="primary-button" disabled={urlLoading || !urlInputValue.trim()} style={{ background: "linear-gradient(135deg, #dc2626 0%, #b91c1c 100%)" }}>{urlLoading ? <LoaderCircle className="spin" size={15} /> : null}{urlLoading ? "Extraction en cours…" : "Extraire et joindre"}</button></div></form></section></div>}
 

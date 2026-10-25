@@ -40,8 +40,11 @@ services:
       BLOG_MODEL: ${BLOG_MODEL:-google/gemini-3.5-flash-lite}
       IMAGE_PROMPT_MODEL: ${IMAGE_PROMPT_MODEL:-openai/gpt-6-luna}
       DEEP_SEARCH_MAX_TOKENS: ${DEEP_SEARCH_MAX_TOKENS:-12288}
+      LEARN_MODE_MAX_TOKENS: ${LEARN_MODE_MAX_TOKENS:-16384}
       DEEP_SEARCH_PLAN_MODEL: ${DEEP_SEARCH_PLAN_MODEL:-anthropic/claude-fable-5.1}
       DEEP_SEARCH_SYNTHESIS_MODEL: ${DEEP_SEARCH_SYNTHESIS_MODEL:-google/gemini-3.8-flash}
+      WEB_SEARCH_DECISION_MODEL: ${WEB_SEARCH_DECISION_MODEL:-google/gemini-3.5-flash-lite}
+      AUTO_WEB_SEARCH: ${AUTO_WEB_SEARCH:-true}
       # scripts/compose.sh --lan y ajoute l'origine http://<IP-LAN>:3001.
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3001,http://127.0.0.1:3001}
     volumes:

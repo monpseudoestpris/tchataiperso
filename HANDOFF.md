@@ -1,3 +1,531 @@
+# Relais — 25 octobre 2026 (Optimisation de la barre latérale et intégration complète des outils dans la barre du haut)
+
+- Réalisé :
+  - **Intégration de tous les espaces et outils dans la barre du haut** (`frontend/components/chat-app.tsx`, `frontend/app/globals.css`) :
+    - Ajout des boutons dédiés **DeepSearch** (icône `Compass`, thème bleu ciel/océan) et **Cours** (icône `GraduationCap`, thème violet) dans la section droite de la barre supérieure (`topbar-right`), rejoignant **Blogs**, **Canvas Code**, **Studio Image**, **Mémoire**, **Sortie** et le menu Profil.
+    - Ajout de règles CSS adaptatives (`@media (max-width: 1320px)` et `@media (max-width: 1160px)`) : espacements et paddings réduits, masquage élégant des libellés textuels au profit des badges d'icônes stylisés sur écrans moyens/petits pour garantir qu'aucun débordement ne survienne.
+  - **Désengorgement massif de la barre latérale & libération de l'historique des discussions** :
+    - Remplacement des 4 volumineuses cartes empilées (qui occupaient ~250px à elles seules avec titres, sous-titres et chevrons) par une barre d'accès rapide ultra-compacte d'une seule ligne (`.sidebar-quick-tools`, grille 4 colonnes, hauteur 40px) : `[ Blogs ]`, `[ DeepSearch ]`, `[ Cours ]`, `[ Mémoire ]`.
+    - Resserrement des marges et du panneau de profil (`margin-top: 6px`, `padding: 8px 4px 2px`).
+    - Gain net de plus de **240 pixels** de hauteur verticale pour la liste des conversations (`.history-list`), permettant d'afficher immédiatement 8 à 10 discussions sans avoir à scroller.
+  - **Validation & Tests** :
+    - Typecheck Next.js validé : 0 erreur (`npm --prefix frontend run typecheck`).
+    - Build Next.js de production validé : 0 erreur (`npm --prefix frontend run build`).
+    - Tests unitaires et d'intégration validés : 12/12 passés (`pytest backend/tests/test_deep_search.py backend/tests/test_learn_mode.py`).
+    - Conteneurs relancés en mode dev avec `docker compose -f compose.yaml -f compose.dev.yaml up -d --build clair-web` : statuts `healthy`, port 3001 testé avec succès (`HTTP 200 OK`).
+- Fichiers modifiés :
+  - `frontend/components/chat-app.tsx`, `frontend/app/globals.css`, `HANDOFF.md`.
+- Vérifications exécutées :
+  - `npm --prefix frontend run typecheck` : 0 erreur.
+  - `npm --prefix frontend run build` : 0 erreur.
+  - `PYTHONPATH=backend backend/.venv/bin/pytest backend/tests/test_deep_search.py backend/tests/test_learn_mode.py` : 12/12 passés.
+  - `docker compose -f compose.yaml -f compose.dev.yaml up -d --build clair-web` : conteneur démarré et healthy.
+  - `curl -I http://127.0.0.1:3001` : réponse `HTTP/1.1 200 OK`.
+- Problèmes connus : aucun.
+- Prochaine action : recharger la page `http://localhost:3001` (ou `http://192.168.1.28:3001`) pour constater le dégagement immédiat des anciens chats dans la barre latérale et l'accès direct à tous les outils dans la barre du haut.
+
+---
+
+# Relais — 25 octobre 2026 (Bouton Sortie : Export PDF ou HTML pour Question & Réponse ou Synthèse des messages)
+
+- Réalisé :
+  - **Moteur d'export haute fidélité HTML & PDF pour le tchat** (`backend/app/chat_export_html.py`) :
+    - *Scope 1 — « Question & Réponse » (`scope="turn"`) :*
+      - Mise en valeur distincte de la question posée par l'utilisateur (encart stylisé avec liseré violet, rôle et date) et de la réponse complète de l'assistant cLAIr (formatage Markdown riche, blocs de code avec bouton copier et langage, tableaux, citations interactives et sources).
+      - Sommaire interne dynamique si la réponse comporte des titres.
+    - *Scope 2 — « Synthèse des messages » (`scope="conversation"`) :*
+      - Transcription chronologique de tous les échanges de la conversation avec alternance claire des cartes Question / Réponse, encart de synthèse de discussion, sommaire interactif des tours d'échanges avec ancres directes, et consolidation dédoublonnée de toutes les sources citées.
+    - *Support impression & PDF A4 natif :*
+      - Règles CSS `@page { size: A4 portrait; margin: 16mm 14mm; }` et `-webkit-print-color-adjust: exact !important;`.
+      - Styles anti-coupures gênantes (`break-inside: avoid;` sur chaque carte de question/réponse, bloc de code, tableau et encart de source, `break-after: avoid;` sur les titres).
+      - Déclenchement automatique de `window.print()` lorsque `?pdf=1` ou `?print=1` est présent, avec bandeau sticky d'aperçu d'impression PDF.
+      - Bascule de thème sombre / clair et bouton de copie rapide.
+  - **Endpoints API** (`backend/app/routers/messages.py`, `backend/app/routers/conversations.py`) :
+    - Mise à niveau de `GET /api/messages/{message_id}/html` avec support du paramètre `scope` (`turn` par défaut, ou `conversation` / `all`), `pdf=1` et `download=1`.
+    - Ajout de l'endpoint dédié `GET /api/conversations/{conversation_id}/html` avec support `download=1` et `pdf=1`.
+  - **Interface utilisateur du tchat & Topbar** (`frontend/components/chat-app.tsx`, `frontend/app/globals.css`) :
+    - *Bouton « Sortie » sous chaque réponse de l'assistant* :
+      - Bouton élégant avec icône `Share2`, libellé « Sortie » et chevron d'état.
+      - Menu popover interactif proposant en un clic :
+        - 🎯 **Question & Réponse** (Ce tour) : Bouton `Site HTML` et Bouton `Beau PDF` (A4).
+        - 📜 **Synthèse des messages** (Discussion) : Bouton `Site HTML` et Bouton `Beau PDF` (A4).
+      - Fermeture automatique au clic en dehors.
+    - *Bouton « Sortie » dans la Topbar* :
+      - Accessible directement en haut à droite lors de la consultation d'une conversation pour exporter toute la discussion en Beau site HTML ou Beau PDF.
+  - **Validation & Tests** :
+    - Tests unitaires et d'intégration validés : 12/12 tests réussis (`backend/tests/test_deep_search.py`, `backend/tests/test_learn_mode.py`), incluant la validation des scopes `turn` et `conversation`, ainsi que l'endpoint de conversation directe.
+    - Typecheck Next.js validé : 0 erreur (`npm --prefix frontend run typecheck`).
+    - Build Next.js de production validé : 0 erreur (`npm --prefix frontend run build`).
+    - Conteneurs relancés en mode dev via `docker compose -f compose.yaml -f compose.dev.yaml up -d --build clair-api clair-web` : statuts `healthy`, port `0.0.0.0:3001` vérifié avec succès (`HTTP 200 OK`).
+- Fichiers modifiés / créés :
+  - Créé : `backend/app/chat_export_html.py`.
+  - Modifiés : `backend/app/routers/messages.py`, `backend/app/routers/conversations.py`, `backend/tests/test_deep_search.py`, `backend/tests/test_api.py`, `frontend/components/chat-app.tsx`, `frontend/app/globals.css`, `HANDOFF.md`.
+- Vérifications exécutées :
+  - `PYTHONPATH=backend backend/.venv/bin/pytest backend/tests/test_deep_search.py backend/tests/test_learn_mode.py` : 12/12 passés.
+  - `npm --prefix frontend run typecheck` : 0 erreur.
+  - `npm --prefix frontend run build` : 0 erreur.
+  - `docker compose -f compose.yaml -f compose.dev.yaml up -d --build clair-api clair-web` : conteneurs démarrés et `healthy`.
+  - `curl -I http://127.0.0.1:3001` : réponse `HTTP/1.1 200 OK`.
+- Problèmes connus : aucun.
+- Prochaine action : ouvrir une conversation sur `http://localhost:3001` (ou `http://192.168.1.28:3001`), cliquer sur le bouton « Sortie » sous n'importe quelle réponse et tester les sorties HTML ou PDF pour « Question & Réponse » ou « Synthèse des messages ».
+
+---
+
+# Relais — 25 octobre 2026 (Résolution : Perte d'accès externe/LAN en mode dev après les mises à jour)
+
+- Réalisé :
+  - **Identification précise de la cause racine après chaque mise à jour** :
+    - *Problème identifié* : lors de chaque modification de code, l'agent ou les commandes de rebuild exécutaient `docker compose up -d --build clair-web clair-api`.
+    - *Effet 1 (écrasement du bind réseau)* : `compose.yaml` utilise `${WEB_BIND:-127.0.0.1}`. Comme `WEB_BIND` n'était pas persisté dans `.env`, tout appel direct à `docker compose` forçait silencieusement le port 3001 à écouter sur `127.0.0.1:3001` au lieu de `0.0.0.0:3001`.
+    - *Effet 2 (écrasement du mode dev et crash)* : l'image construite par `compose.dev.yaml` s'arrête à la cible `dependencies` dont la commande par défaut est `[node]`. Relancer sans `-f compose.dev.yaml` écrasait la commande `next dev` et faisait crasher le conteneur en boucle (ou supprimait le hot-reload et les origines dev autorisées).
+  - **Correctifs permanents appliqués** :
+    - *Persistance dans `.env`* : ajout de `WEB_BIND=0.0.0.0`, `ALLOWED_DEV_ORIGINS=192.168.1.28,192.168.*,*.local` et ajout de `http://192.168.1.28:3001` dans `CORS_ORIGINS`. Tout redémarrage ou rebuild Docker reste désormais lié à `0.0.0.0:3001`.
+    - *Autorisation native des sous-réseaux LAN dans Next.js* (`frontend/next.config.ts`) : inclusion par défaut des plages `192.168.*`, `10.*`, `172.16.*`, `*.local`, `localhost`, `127.0.0.1` dans `allowedDevOrigins` pour empêcher tout blocage d'origine par Next.js dev.
+    - *Configuration Compose dev* (`compose.dev.yaml`) : transmission explicite de `ALLOWED_DEV_ORIGINS`.
+    - *Documentation* : mise à jour de `.env.example`.
+  - **Validation & Déploiement** :
+    - Build Next.js validé : compilation réussie sans erreur.
+    - Conteneurs relancés en mode dev avec les configurations combinées : `clair-web` et `clair-api` opérationnels et `healthy`.
+    - Port vérifié ouvert sur `0.0.0.0:3001->3001/tcp`. Requête HTTP `192.168.1.28:3001` testée avec succès (`HTTP 200 OK`).
+- Fichiers modifiés :
+  - `.env`, `.env.example`, `frontend/next.config.ts`, `compose.dev.yaml`, `HANDOFF.md`.
+- Vérifications exécutées :
+  - `npm --prefix frontend run build` : succès.
+  - `docker compose -f compose.yaml -f compose.dev.yaml up -d` : conteneurs démarrés et `healthy`.
+  - `curl -I http://192.168.1.28:3001/` : réponse `HTTP/1.1 200 OK`.
+  - `docker ps` : `0.0.0.0:3001->3001/tcp`.
+- Problèmes connus : aucun.
+- Prochaine action : vérifier la persistance de l'accès depuis le smartphone ou appareil externe sur `http://192.168.1.28:3001` même après d'éventuelles futures modifications.
+
+---
+
+# Relais — 25 octobre 2026 (Sortie multi-formats : Beau site HTML interactif & Beau PDF d'édition sur DeepSearch, Mode Apprendre et Tchat)
+
+- Réalisé :
+  - **Prise en charge complète et unifiée des sorties « Beau site HTML » et « Beau PDF »** :
+    - *Générateurs HTML & Moteur PDF haute fidélité* (`backend/app/deep_search_html.py`, `backend/app/learn_html.py`) :
+      - Définition de règles `@page { size: A4 portrait; margin: 16mm 14mm 16mm 14mm; }`.
+      - Application de `-webkit-print-color-adjust: exact !important; print-color-adjust: exact !important;` préservant les badges de statut, bordures colorées, fonds sombres des blocs de code et citations dans l'export PDF (au lieu d'une conversion en filaire noir et blanc).
+      - Règle anti-rupture de page (`break-after: avoid; break-inside: avoid;`) sur les titres H1-H4, encarts didactiques, tableaux et grilles de révision.
+      - Ajout du bandeau sticky d'aperçu PDF (`.pdf-preview-banner`) avec boutons rapides « Réouvrir impression PDF » et « Revenir au site HTML interactif ».
+      - Détection automatique des paramètres d'URL `?pdf=1` ou `?print=1` déclenchant l'ouverture immédiate de la boîte d'impression native du navigateur pour enregistrement direct en PDF.
+    - *Endpoint d'export HTML & PDF pour tout message du tchat* (`backend/app/routers/messages.py`) :
+      - Création de `GET /api/messages/{message_id}/html` : permet d'exporter n'importe quelle réponse de l'assistant comme un site HTML autonome ou un document PDF d'édition avec sommaire, thèmes, métadonnées et sources associées.
+      - Prise en charge des paramètres `?pdf=1` (mode PDF direct) et `?download=1` (téléchargement `.html`).
+      - Ajout de `pdf_url` dans `backend/app/serializers.py` et `frontend/lib/api.ts` pour `DeepSearchReport` et `LearnReport`.
+    - *Interfaces utilisateurs (Modales & Compositeur)* (`frontend/components/deep-search-modal.tsx`, `frontend/components/learn-modal.tsx`, `frontend/components/chat-app.tsx`, `frontend/app/globals.css`) :
+      - Dans les modales DeepSearch et Mode Apprendre (onglet « Nouveau plan ») : ajout du composant de sélection du format de sortie (`.output-format-card`) permettant de choisir explicitement entre « 🌐 Beau site HTML interactif » et « 📕 Beau PDF d'édition ».
+      - Dans les listes de rapports/cours : ajout des boutons d'actions dédiés `Globe2` (Beau site HTML), `FileText` (Beau PDF) et `Download` (Fichier .html).
+      - Dans les lecteurs intégrés : boutons directs « Beau site HTML », « Beau PDF » et « Exporter .html ».
+      - Dans le fil de discussion du tchat :
+        - Dans la barre d'actions sous chaque message de l'assistant : ajout des liens discrets `Site HTML` et `Beau PDF` aux côtés du bouton `Copier`.
+        - Dans les bannières de résultats DeepSearch et Mode Apprendre : boutons combinés « Beau site HTML » et « Beau PDF ».
+  - **Validation & Tests** :
+    - Tests unitaires et d'intégration validés : 11/11 tests passés dans `test_deep_search.py` et `test_learn_mode.py` (dont le test du nouvel endpoint `test_get_message_html_endpoint`).
+    - Typecheck Next.js validé : 0 erreur (`npm --prefix frontend run typecheck`).
+    - Build Next.js de production validé : 0 erreur (`npm --prefix frontend run build`).
+    - Rebuild et redémarrage des conteneurs Docker `clair-web` et `clair-api` : statuts `healthy`.
+- Fichiers modifiés :
+  - `backend/app/deep_search_html.py`, `backend/app/learn_html.py`, `backend/app/routers/messages.py`, `backend/app/serializers.py`, `backend/tests/test_deep_search.py`, `backend/tests/test_api.py`, `frontend/lib/api.ts`, `frontend/components/deep-search-modal.tsx`, `frontend/components/learn-modal.tsx`, `frontend/components/chat-app.tsx`, `frontend/app/globals.css`, `HANDOFF.md`.
+- Vérifications exécutées :
+  - `PYTHONPATH=backend pytest backend/tests/test_deep_search.py backend/tests/test_learn_mode.py` : 11/11 passés.
+  - `npm --prefix frontend run typecheck` : 0 erreur.
+  - `npm --prefix frontend run build` : 0 erreur.
+  - Docker Compose : conteneurs `clair-api` et `clair-web` opérationnels et `healthy`.
+- Problèmes connus : aucun.
+- Prochaine action : ouvrir `http://localhost:3001` pour tester l'export en Beau site HTML ou Beau PDF depuis le plan, les rapports archivés ou sous n'importe quel message du tchat.
+
+---
+
+# Relais — 25 octobre 2026 (Mode Apprendre : Refonte esthétique et ergonomique intégrale de la modale « Mes Cours & Formations »)
+
+- Réalisé :
+  - **Refonte visuelle et structurelle complète de l'onglet « Mes Cours »** (`frontend/components/learn-modal.tsx`, `frontend/app/globals.css`) :
+    - *Diagnostic du rendu dégradé* : dans l'onglet des cours sauvegardés, plusieurs classes CSS n'étaient pas définies ou n'avaient pas de flexbox (icônes et textes se retrouvaient empilés verticalement, champ de recherche sans cadre ni padding, boutons d'action désordonnés, modale étroite en 780px).
+    - *Modale large et aérée* : application automatique de `deepsearch-modal-wide` (`width: min(1080px, 96vw)`) dès l'ouverture de l'onglet « Mes Cours » pour offrir un espace de lecture spacieux et un agencement multi-colonnes aéré.
+    - *Barre d'outils moderne et soignée* (`.learn-reports-toolbar`) :
+      - Champ de recherche stylisé avec icône loupe violette, bordure douce, focus violet avec ombre diffuse et bouton effacer `X` rapide.
+      - Pastille de comptage didactique (`X cours`).
+      - Bouton « Actualiser » blanc avec bordure lilas, icône tournante lors du chargement et effet d'élévation au survol.
+    - *Cartes de cours premium académiques* (`.learn-course-card`) :
+      - Liseré supérieur en dégradé violet / indigo (`.learn-course-card-accent`).
+      - En-tête : badge officiel « COURS MAGISTRAL » en pilule lilas et date formatée avec icône calendrier alignée horizontalement.
+      - Titre du cours en typographie grasse (`font-weight: 800`) avec effet de survol coloré violet.
+      - Encart de rappel du sujet enseigné avec bordure latérale violette et texte italique lisible.
+      - Puces d'indicateurs métriques horizontales : temps d'apprentissage (`⏱️ ~X min`), nombre de supports didactiques (`📚 Y supports`), et puce verte distinctive (`✨ 20 Flashcards & Quizz`).
+      - Pied de carte avec bouton d'action principal « Consulter » (dégradé violet avec ombre portée) et rangée d'icônes d'actions secondaires carrées et soignées (Plein écran HTML `↗`, Téléchargement HTML `📥`, Suppression avec confirmation `🗑️`).
+    - *État vide accueillant* (`.learn-reports-empty`) : illustration de chapeau de diplômé en boîte dégradée violette, texte explicatif invitant à concevoir son premier cours et bouton d'action directe.
+  - **Validation & Déploiement** :
+    - Typecheck Next.js validé : 0 erreur (`npm --prefix frontend run typecheck`).
+    - Build Next.js de production validé : 0 erreur (`npm --prefix frontend run build`).
+    - Rebuild et redémarrage du conteneur Docker `clair-web` : statut `healthy`.
+- Fichiers modifiés :
+  - `frontend/components/learn-modal.tsx`, `frontend/app/globals.css`, `HANDOFF.md`.
+- Vérifications exécutées :
+  - `npm --prefix frontend run typecheck` : 0 erreur.
+  - `npm --prefix frontend run build` : 0 erreur.
+  - Docker Compose : conteneurs opérationnels et statuts `healthy`.
+- Problèmes connus : aucun.
+- Prochaine action : ouvrir la modale « Mes Cours & Formations » sur `http://localhost:3001` pour constater le design moderne, l'alignement horizontal des icônes et badges, et la grille élégante de cartes de cours.
+
+---
+
+# Relais — 25 octobre 2026 (Mode Apprendre, DeepSearch & HTML : Résolution du contraste sur les encarts, schémas ASCII et blocs de code)
+
+- Réalisé :
+  - **Correction du contraste texte clair sur fond clair pour les encarts et schémas** (`frontend/app/globals.css`, `frontend/components/learn-modal.tsx`, `frontend/components/deep-search-modal.tsx`, `frontend/components/blog-modal.tsx`) :
+    - *Diagnostic du problème* : les blocs de code (schémas ASCII, code, structures de plan) générés en Markdown dans les modales de cours et de recherche étaient rendus sous forme de `<pre><code>`. La règle globale `.markdown pre code` imposait `color: #f1f5f9;` (blanc/gris très clair) sans attribuer de fond sombre à `<pre>`, rendant le texte quasiment invisible sur le fond blanc des modales.
+    - *Correction CSS globale* : attribution systématique d'un fond sombre haute lisibilité `#0f172a`, d'une bordure nette `#1e293b`, d'un arrondi et d'une ombre portée sur tout `<pre>` dans `.markdown`, `.deepsearch-reader-prose` et `.deepsearch-reader-markdown`.
+    - *Composants ReactMarkdown enrichis* : ajout d'un conteneur `.code-block` stylisé avec bandeau d'en-tête « Encart didactique / Schéma / Code » ou « Encart technique / Données / Code » pour encadrer proprement les schémas et listings de code dans `LearnModal`, `DeepSearchModal` et `BlogModal`.
+  - **Correction dans les pages HTML autonomes exportées** (`backend/app/learn_html.py`, `backend/app/deep_search_html.py`, `backend/app/routers/messages.py`) :
+    - Définition stricte des styles pour tout élément `<pre>` : fond `#0f121d` (Learn) et `#090d16` (DeepSearch) avec texte clair `#f1f5f9` et bordure subtile, empêchant tout encart blanc sur blanc même lorsque l'utilisateur bascule en thème clair (`[data-theme="light"]`).
+    - Régénération dynamique à la volée du document HTML sur `GET /api/learn/reports/{id}/html` et `GET /api/deep-search/reports/{id}/html` garantissant que tous les cours et rapports existants bénéficient immédiatement des corrections de style.
+  - **Validation & Déploiement** :
+    - Compilation syntaxique Python : 0 erreur (`python3 -m py_compile`).
+    - Tests unitaires `test_learn_mode.py` : 5/5 validés.
+    - Typecheck Next.js validé : 0 erreur (`npm --prefix frontend run typecheck`).
+    - Build Next.js de production validé : 0 erreur (`npm --prefix frontend run build`).
+    - Rebuild et redémarrage des conteneurs Docker `clair-web` et `clair-api` : statuts `healthy`.
+- Fichiers modifiés :
+  - `frontend/app/globals.css`, `frontend/components/learn-modal.tsx`, `frontend/components/deep-search-modal.tsx`, `frontend/components/blog-modal.tsx`, `backend/app/learn_html.py`, `backend/app/deep_search_html.py`, `backend/app/routers/messages.py`, `HANDOFF.md`.
+- Vérifications exécutées :
+  - `npm --prefix frontend run typecheck` : 0 erreur.
+  - `npm --prefix frontend run build` : 0 erreur.
+  - `PYTHONPATH=backend python3 -m pytest backend/tests/test_learn_mode.py` : 5/5 passés.
+  - Docker Compose : conteneurs opérationnels et statuts `healthy`.
+- Problèmes connus : aucun.
+- Prochaine action : vérifier dans la modale du cours et dans l'export HTML que les schémas ASCII et encarts de structure (ex: « Anatomie d'un commentaire composé ») s'affichent avec un contraste sombre optimal et une parfaite lisibilité.
+
+---
+
+# Relais — 25 octobre 2026 (Mode Apprendre : Masquage anti-spoil des Flashcards & Quizz dans le tchat, bannière d'auto-évaluation et isolation exclusive dans le cours interactif & HTML)
+
+- Réalisé :
+  - **Isolation stricte des Flashcards et du Quizz hors du fil de tchat** (`frontend/lib/learn-parser.ts`, `frontend/components/chat-app.tsx`, `backend/app/learn_html.py`) :
+    - Élimination formelle de toute divulgation des questions, options et réponses (« Verso : ... », « Bonne réponse : B », explications) dans les bulles de messages du tchat lors de la génération d'un cours en Mode Apprendre.
+    - `hasInteractiveLearnModules` : fonction de détection robuste identifiant la présence des modules d'évaluation (Module 8 Flashcards, Module 9 Quizz) dans le Markdown.
+    - `stripInteractiveModulesForBody` (côté TypeScript) et `strip_raw_modules_for_body` (côté Python) : troncature dynamique instantanée du flux supprimant scrupuleusement les modules 8 et 9 lors de l'affichage dans le tchat et lors de l'affichage du texte du cours dans les lecteurs, évitant tout spoiler aussi bien pendant le streaming qu'après génération.
+    - Adaptation de la fonction de copie (`copy`) dans `chat-app.tsx` pour copier le contenu épuré sans les réponses divulguées.
+  - **Bannière interactive d'auto-évaluation dans le tchat (`chat-learn-interactive-banner`)** (`frontend/components/chat-app.tsx`, `frontend/app/globals.css`) :
+    - Remplacement des blocs de texte bruts par une élégante bannière didactique sous le cours magistral dans le tchat :
+      - Icône `GraduationCap` sur fond violet avec ombre portée douce.
+      - Titre explicatif : `20 Flashcards 3D & Quizz (20 QCM) interactifs prêts`.
+      - Message pédagogique rassurant : `Les cartes de mémorisation active et les questions d'auto-évaluation sont intégrées au cours interactif pour vous entraîner sans dévoiler les réponses dans le tchat.`
+      - Bouton d'action directe 1-clic : `Tester mes connaissances` avec icône `Sparkles`, ouvrant directement le cours interactif (`LearnModal`) pour s'auto-évaluer dans des conditions réelles d'examen sans spoil.
+  - **Styles CSS complets (`frontend/app/globals.css`)** :
+    - Prise en charge responsive et compatible thème sombre/clair pour `.chat-learn-interactive-banner`, `.chat-learn-banner-icon`, `.chat-learn-banner-body`, `.chat-learn-banner-btn`.
+  - **Validation & Déploiement** :
+    - Compilation syntaxique Python validée : 0 erreur.
+    - Tests unitaires `test_learn_mode.py` : 5/5 réussis à 100%.
+    - Typecheck Next.js validé : 0 erreur (`npm --prefix frontend run typecheck`).
+    - Build Next.js de production validé : 0 erreur (`npm --prefix frontend run build`).
+    - Rebuild et redémarrage des conteneurs Docker `clair-web` et `clair-api`.
+- Fichiers modifiés :
+  - `frontend/lib/learn-parser.ts`, `frontend/components/chat-app.tsx`, `backend/app/learn_html.py`, `frontend/app/globals.css`, `HANDOFF.md`.
+- Vérifications exécutées :
+  - Typecheck Next.js : 0 erreur.
+  - Build de production Next.js : 0 erreur.
+  - Tests unitaires pytest : 5/5 validés.
+  - Docker Compose : images reconstruites et conteneurs opérationnels.
+- Problèmes connus : aucun.
+- Prochaine action : vérifier dans le chat qu'un cours en Mode Apprendre ne divulgue plus le texte brut des flashcards et du quizz dans le fil de discussion, et affiche la nouvelle bannière interactive permettant d'ouvrir le cours interactif.
+
+---
+
+# Relais — 24 octobre 2026 (Mode Apprendre & Deep Search : 8 thèmes en phrases complètes expliquées, composants dédiés Flashcards & Quizz)
+
+- Réalisé :
+  - **Planification en 8 thèmes rédigés en phrases complètes et expliquées** (`backend/app/providers.py`, `backend/app/routers/messages.py`, `backend/app/learn_mode.py`, `backend/app/deep_search.py`) :
+    - *Suppression des simples mots-clés de recherche bruts avec guillemets* au profit de phrases complètes, riches, didactiques et explicatives pour chacun des 8 axes/modules.
+    - Ajout des générateurs de thèmes explicatifs structurés par défaut (`default_learn_themes` et `default_deep_search_themes`), garantissant à 100% que l'utilisateur dispose toujours des 8 modules complets sans jamais retomber sur 1 seul module brut lors d'un aléa réseau ou de timeout du modèle de plan.
+    - Adaptation des champs de saisie dans les modales (`learn-modal.tsx` et `deep-search-modal.tsx`) sous forme de `<textarea>` multi-lignes spacieux pour un confort de lecture et d'édition optimal des thèmes complets.
+    - Conversion intelligente pour les moteurs de recherche (`theme_to_search_query`) : alors que l'utilisateur voit la phrase complète et détaillée, le moteur de recherche (SearXNG / Brave) ne reçoit que 3 à 5 mots-clés denses et pertinents (suppression des mots de liaison, extraction des termes porteurs du titre et du sujet global), garantissant d'excellents résultats de recherche sans dilution.
+  - **Composants dédiés pour les Flashcards et le Quizz** (`frontend/components/learn-flashcards.tsx`, `frontend/components/learn-quiz.tsx`, `frontend/lib/learn-parser.ts`) :
+    - `LearnFlashcards` : composant React interactif complet avec flip 3D animé (180° au clic et barre Espace, flèches gauche/droite), système d'auto-évaluation active (`✅ Maîtrisée`, `🔄 À revoir`), compteurs en direct, bouton mélanger (`🔀`) et bascule mode immersion (carte par carte) / grille d'ensemble (20 cartes).
+    - `LearnQuiz` : composant React interactif de 20 questions QCM avec sélection instantanée d'options (A, B, C, D), validation visuelle directe (vert / rouge), apparition de la boîte d'explication pédagogique détaillée, barre de progression dynamique, score en direct et écran final de félicitations avec trophée et appréciation.
+    - `learn-parser.ts` : parseur client garantissant l'extraction ou la synthèse des 20 flashcards et 20 questions pour tout cours Markdown, avec isolation du corps de texte pour éviter les doublons.
+    - Intégration directe dans `LearnModal` (`frontend/components/learn-modal.tsx`) avec barre de navigation rapide (`📖 Cours`, `📇 20 Flashcards 3D`, `🎯 Quizz (20 QCM)`, `📚 Supports`).
+  - **Styles CSS complets (`frontend/app/globals.css`)** :
+    - Prise en charge des styles pour `.learn-module-textarea`, `.deepsearch-module-textarea`, `.learn-reader-quick-nav`, `.learn-flashcards-widget`, `.learn-flashcard-3d-...`, `.learn-quiz-widget`, `.learn-quiz-card`, `.learn-quiz-option-btn`, et de l'écran trophée final.
+  - **Validation & Déploiement** :
+    - Typecheck Next.js validé : 0 erreur (`npm --prefix frontend run typecheck`).
+    - Build Next.js de production validé : 0 erreur (`npm --prefix frontend run build`).
+    - Rebuild Docker en cours (`clair-api` et `clair-web`).
+- Fichiers modifiés :
+  - `backend/app/providers.py`, `backend/app/routers/messages.py`, `backend/app/learn_mode.py`, `backend/app/deep_search.py`, `backend/app/serializers.py`, `backend/app/context.py`, `frontend/lib/api.ts`, `frontend/lib/learn-parser.ts`, `frontend/components/learn-flashcards.tsx`, `frontend/components/learn-quiz.tsx`, `frontend/components/learn-modal.tsx`, `frontend/components/deep-search-modal.tsx`, `frontend/app/globals.css`, `HANDOFF.md`.
+- Vérifications exécutées :
+  - Compilation Python : 0 erreur.
+  - Typecheck Next.js : 0 erreur.
+  - Build Next.js de production : 0 erreur.
+- Problèmes connus : aucun.
+- Prochaine action : vérifier dans l'interface `http://localhost:3001` l'affichage des 8 modules rédigés dans le plan, puis dans le lecteur la présence des composants interactifs de Flashcards 3D et du Quizz 20 questions.
+
+---
+
+# Relais — 24 octobre 2026 (Mode Apprendre : Refonte visuelle et interactive des sources didactiques en cartes élégantes)
+
+- Réalisé :
+  - **Refonte visuelle complète des sources dans le lecteur de cours (`frontend/components/learn-modal.tsx`)** :
+    - Remplacement de l'affichage brut par des cartes didactiques élégantes et aérées (`.learn-reader-source-card`).
+    - Extraction propre du domaine hôte (`extractDomain(url)`) affiché dans un badge violet clair pour éviter que l'index et l'URL ne se chevauchent (`#1https://...`).
+    - Ajout du badge provider (`WEB`, etc.), titre cliquable avec icône externe et citation extraite (`snippet`) mise en retrait typographique avec bordure latérale violette.
+    - Ajout d'un lien d'action direct en bas de chaque carte : `Consulter la ressource didactique →`.
+    - Système d'affichage progressif / accordéon : affichage initial des 12 premières sources, avec bouton dynamique `Afficher l'ensemble des N supports didactiques (+M)` / `Réduire l'affichage des supports didactiques` pour préserver le confort de lecture face à 70 sources.
+  - **Styles CSS dédiés Mode Apprendre (`frontend/app/globals.css`)** :
+    - Définition complète des classes `.learn-reader-sources-block`, `.learn-reader-sources-header`, `.learn-reader-sources-title`, `.learn-reader-sources-desc`, `.learn-reader-sources-grid`, `.learn-reader-source-card`, `.learn-source-card-top`, `.learn-source-index`, `.learn-source-domain`, `.learn-source-provider`, `.learn-source-card-title`, `.learn-source-card-snippet`, `.learn-source-card-link`, `.learn-sources-toggle-container`, `.learn-sources-toggle-btn`.
+    - Effets de survol fluides (ombre portée violette, élévation `-2px`, accentuation des liens).
+  - **Optimisation du générateur HTML autonome (`backend/app/learn_html.py`)** :
+    - Intégration du masquage progressif au-delà de 12 sources (`.source-card-extra.source-card-hidden`) avec bouton toggle `toggleAllSources()` en JavaScript natif.
+  - **Validation & Déploiement** :
+    - Typecheck Next.js validé : 0 erreur (`npm --prefix frontend run typecheck`).
+    - Build Next.js validé avec succès en mode production (`npm --prefix frontend run build`).
+    - Test unitaire d'extraction de domaine et de génération HTML validé avec succès.
+    - Rebuild Docker en cours (`docker compose up -d --build clair-web clair-api`).
+- Fichiers modifiés :
+  - `frontend/components/learn-modal.tsx`, `frontend/app/globals.css`, `backend/app/learn_html.py`, `HANDOFF.md`.
+- Vérifications exécutées :
+  - `npm --prefix frontend run typecheck` : 0 erreur.
+  - `npm --prefix frontend run build` : 0 erreur, compilation Next.js réussie.
+  - Test fonctionnel python : `generate_learn_course_html` avec 24 sources validé.
+- Problèmes connus : aucun.
+- Prochaine action : vérifier le rendu visuel des cartes de sources sur `http://localhost:3001` dans la modale d'un cours en Mode Apprendre.
+
+---
+
+# Relais — 24 octobre 2026 (Mode Apprendre : Intégration interactive des 20 Flashcards 3D et du Quizz 20 questions dans les cours HTML)
+
+- Réalisé :
+  - **Moteur interactif de 20 Flashcards 3D dans le générateur HTML** (`backend/app/learn_html.py`) :
+    - Vue 3D flip avec retournement animé 180° au clic ou touche `Espace`.
+    - Navigation fluide par touches fléchées (`Gauche` / `Droite`) ou boutons `Précédente` / `Suivante`.
+    - Système d'auto-évaluation active : boutons `✅ Maîtrisée` et `🔄 À revoir` avec compteurs dynamiques en temps réel et barre de progression.
+    - Outil `🔀 Mélanger` pour un apprentissage aléatoire espacé.
+    - Bascule d'affichage : mode carte par carte (immersion) ou mode grille intégrale (vue d'ensemble des 20 cartes).
+  - **Moteur interactif de Quizz 20 questions (QCM 4 options) dans le générateur HTML** (`backend/app/learn_html.py`) :
+    - 20 questions progressives avec 4 options (A, B, C, D) par question.
+    - Validation instantanée au clic : coloration verte (bonne réponse) ou rouge (erreur) avec révélation de la bonne réponse.
+    - Boîte d'explication pédagogique détaillée s'affichant pour chaque question avec la justification complète.
+    - Suivi du score en direct (`X / 20`, pourcentage et jauge animée).
+    - Écran de félicitations final avec trophée et appréciation personnalisée une fois les 20 questions complétées.
+    - Bouton `🔄 Réinitialiser le Quizz` pour retenter un entraînement.
+  - **Extraction et synthèse garantissant scrupuleusement 20 flashcards et 20 questions** (`backend/app/learn_html.py`) :
+    - `parse_flashcards` : extrait les flashcards formalisées du Markdown, puis enrichit automatiquement à partir des définitions, pièges et sous-parties du cours pour garantir exactement 20 flashcards.
+    - `parse_quiz` : extrait les QCM du Markdown, puis synthétise si nécessaire à partir des concepts et règles méthodologiques pour garantir exactement 20 questions.
+    - `strip_raw_modules_for_body` : isole la lecture du cours sans doublons textuels bruts avant les sections interactives.
+  - **Alignement du prompt de cours (`LEARN_MODE_PROMPT`)** (`backend/app/context.py`) :
+    - Ajout du Module 8 (20 Flashcards de révision active numérotées avec Recto / Verso) et du Module 9 (20 Questions de Quizz QCM numérotées avec options A/B/C/D, bonne réponse et explications).
+  - **Navigation et Sommaire** (`backend/app/learn_html.py`) :
+    - Boutons d'accès rapide dans la barre supérieure : `[📇 Flashcards (20)]` et `[🎯 Quizz (20)]`.
+    - Liens dédiés dans le sommaire (TOC) pour un saut direct.
+    - Styles d'impression adaptés (`@media print`) affichant la grille complète des 20 cartes et le questionnaire corrigé.
+  - **Validation & Déploiement** :
+    - Tests unitaires `test_learn_mode.py` actualisés et validés : 5/5 passés avec succès.
+    - Test réel sur le cours existant en base de données : génération HTML de 205 ko avec les 20 flashcards et 20 questions opérationnelles.
+    - Rebuild et redémarrage du conteneur API `tchataiperso-clair-api-1` : statut `healthy`.
+- Fichiers modifiés :
+  - `backend/app/learn_html.py`, `backend/app/context.py`, `backend/tests/test_learn_mode.py`, `HANDOFF.md`.
+- Vérifications exécutées :
+  - Compilation Python : 0 erreur (`python3 -m py_compile backend/app/*.py backend/app/routers/*.py backend/tests/*.py`).
+  - Tests unitaires : 5/5 sur `test_learn_mode.py` passés avec succès.
+  - Healthcheck API Docker : HTTP 200 `{"status":"ok"}` (`tchataiperso-clair-api-1` en statut `healthy`).
+  - Test d'intégration DB : génération validée sur un rapport existant (205 ko, sections et compteurs confirmés).
+- Problèmes connus : aucun.
+- Prochaine action : ouvrir un cours HTML existant ou en générer un nouveau pour tester les 20 flashcards 3D avec touches fléchées/Espace et le quizz 20 questions avec score en direct.
+
+---
+
+# Relais — 24 octobre 2026 (Mode Apprendre : Cours approfondi d'excellence, interdiction de résumé, démonstration magistrale intégrale et plafond 16k tokens)
+
+- Réalisé :
+  - **Refonte profonde du prompt d'exhaustivité pédagogique (`LEARN_MODE_PROMPT`)** (`backend/app/context.py`) :
+    - *Injonction formelle d'exhaustivité et de volume* : interdiction absolue de condenser, d'écourter ou de fournir un survol superficiel sous forme de simples listes à puces laconiques ; ciblage explicite d'un grand manuel universitaire de référence (4 000 à 8 000 mots ou plus).
+    - *Obligation d'une démonstration magistrale intégrale de bout en bout (Module 4)* :
+      - Pour le français et les matières littéraires/humaines (commentaire composé, analyse de texte, dissertation) : citation d'un texte réel de référence (15 à 25 lignes), tableau d'analyse linéaire avec procédés et effets, problématique formulée, plan détaillé en 2 ou 3 axes et surtout **rédaction intégrale exemplaire** (introduction rédigée mot à mot avec les 4 étapes sans raccourci, grand axe rédigé sous forme de vrais paragraphes académiques fluides avec phrases de transition, citations courtes insérées et analyses de procédés, conclusion rédigée mot à mot, et 2 questions sur texte avec réponses modèles intégrales rédigées de A à Z).
+      - Pour l'informatique : code intégral fonctionnel (zéro ellipse `...`, zéro `TODO`), commenté pas à pas avec flux, structures et gestion des cas limites.
+      - Pour les sciences/maths : calculs et démonstrations complets sans sauter d'étape intermédiaire.
+    - *Arsenal d'outils complet* : grands tableaux comparatifs structurés en Markdown.
+    - *Catalogue des 6 à 8 pièges classiques* avec contre-exemples concrets (« Ce qu'il ne faut PAS faire ») vs méthode experte corrigée.
+    - *Cahier de 3 à 4 exercices progressifs* avec énoncés et **corrigés intégraux rédigés pas à pas**.
+    - *Grille critériée d'auto-évaluation* et fiche de mémorisation active.
+  - **Augmentation du budget de tokens pour le Mode Apprendre** (`backend/app/config.py`, `backend/app/providers.py`, `compose.yaml`, `.env.example`) :
+    - Configuration de `LEARN_MODE_MAX_TOKENS=16384` (défaut : 16 384 tokens de sortie, soit jusqu'à ~12 000 mots de cours rédigé sans coupure ni troncation).
+    - Allocation automatique de ce plafond généreux dans `stream_chat` lors de la rédaction finale du cours.
+  - **Validation et déploiement** :
+    - Compilation Python validée : 0 erreur.
+    - Tests unitaires ciblés `backend/tests/test_learn_mode.py` (4/4) et `backend/tests/test_providers.py` (107/107) passés avec succès à 100%.
+    - Rebuild et redémarrage du conteneur API `tchataiperso-clair-api-1` : statut `healthy`.
+- Fichiers modifiés :
+  - `backend/app/context.py`, `backend/app/config.py`, `backend/app/providers.py`, `compose.yaml`, `.env.example`, `HANDOFF.md`.
+- Vérifications exécutées :
+  - Compilation Python : 0 erreur (`python3 -m py_compile backend/app/*.py backend/app/routers/*.py backend/tests/*.py`).
+  - Tests unitaires : 4/4 sur `test_learn_mode.py`, 107/107 sur `test_providers.py` passés avec succès.
+  - Healthcheck API Docker : HTTP 200 `{"status":"ok"}` (`tchataiperso-clair-api-1` en statut `healthy`).
+- Problèmes connus : aucun.
+- Prochaine action : lancer la génération d'un cours en Mode Apprendre (par exemple sur l'analyse de texte et le commentaire composé) pour constater l'ampleur, les paragraphes académiques rédigés, l'exemple de devoir rédigé de bout en bout et les corrigés intégraux.
+
+---
+
+# Relais — 24 octobre 2026 (Mode Apprendre : Générateur de cours pédagogique complet, architecture miroir DeepSearch, StateGraph, modale de plan et publication HTML interactive)
+
+- Réalisé :
+  - **Moteur d'apprentissage didactique autonome (StateGraph)** (`backend/app/learn_mode.py`) :
+    - Architecture miroir de DeepSearch adaptée à la pédagogie : boucle agentique StateGraph avec nœuds de planification, recherche SearXNG parallélisée (`asyncio.Semaphore(3)`), évaluation critique axée sur la complétude didactique et synthèse en cours magistral structuré.
+    - Émission d'événements SSE en temps réel (`status`, `findings`, `queries`, `sources`, `keepalive`) pour informer l'élève en direct de la construction de son programme.
+  - **Prompts pédagogiques spécialisés pour un vrai cours structuré** (`backend/app/context.py`, `backend/app/providers.py`) :
+    - `LEARN_MODE_PROMPT` dans `backend/app/context.py` : rôle de professeur émérite, structure rigoureuse en 6 sections didactiques (Objectifs & Prérequis, Intuition & Fondations sans jargon, Fonctionnement & Mécanismes approfondis avec analogies, Cas pratiques & Exemples de code pas-à-pas, Pièges fréquents & Bonnes pratiques, Auto-évaluation / Quiz avec solutions détaillées et Fiche de révision mémo).
+    - `plan_learn_queries` dans `backend/app/providers.py` : décomposition du sujet en 5 axes pédagogiques (Socle fondamental & définitions, Fondements théoriques & mécanismes, Cas pratiques & implémentation pas-à-pas, Erreurs courantes & pièges, Écosystème & applications réelles).
+    - `plan_learn_followup` dans `backend/app/providers.py` : réévaluation critique du matériel didactique collecté pour combler les manques didactiques et exemples de code avant la rédaction du cours.
+    - Prise en charge dans `stream_chat` (`backend/app/providers.py`) avec budget de tokens étendu jusqu'à `DEEP_SEARCH_MAX_TOKENS`.
+  - **Générateur de Cours HTML autonome et interactif** (`backend/app/learn_html.py`) :
+    - Mise en page académique et moderne (polices Inter, Georgia/Lora, Fira Code).
+    - Sommaire interactif dynamique (TOC) avec ancres de navigation directes.
+    - Citations et références bibliographiques cliquables (`#source-X`).
+    - Blocs de code avec coloration syntaxique et bouton de copie en un clic.
+    - Thème sombre / clair, bouton « Copier Markdown », badges de statut et bouton « Imprimer / Exporter PDF » avec styles d'impression dédiés.
+  - **Persistance en base de données & API** (`backend/app/models.py`, `backend/app/schemas.py`, `backend/app/serializers.py`, `backend/migrations/versions/0011_add_learn_reports.py`, `backend/app/cli.py`, `backend/app/routers/messages.py`) :
+    - Modèle `LearnReport` (`id`, `user_id`, `conversation_id`, `message_id`, `title`, `topic`, `markdown_content`, `html_content`, `sources`, `created_at`).
+    - Migration Alembic `0011_add_learn_reports.py` appliquée avec succès sur la base PostgreSQL.
+    - Intégration dans `send_message` (`learn_mode: bool`, `learn_mode_queries: list[str]`) avec persistance automatique du cours et émission de `learn_report_id` dans l'événement `done`.
+    - Endpoints API dédiés :
+      - `POST /api/conversations/{id}/learn/plan` et `POST /api/learn/plan` : planification préalable du cursus en 5 axes didactiques.
+      - `GET /api/learn/reports` : liste des cours générés pour l'utilisateur.
+      - `GET /api/learn/reports/{id}` : détail complet du cours.
+      - `GET /api/learn/reports/{id}/html` : consultation de la page de cours HTML autonome (avec support `?download=1`).
+      - `DELETE /api/learn/reports/{id}` : suppression d'un cours archivé.
+      - `POST /api/learn/reports/from-message/{message_id}` : génération ou récupération à la volée d'un cours pour les messages historiques.
+  - **Interface utilisateur & Frontend** (`frontend/lib/api.ts`, `frontend/components/learn-modal.tsx`, `frontend/components/chat-app.tsx`, `frontend/app/globals.css`) :
+    - Bouton « Apprendre » avec icône `GraduationCap` dans le compositeur de chat (mutuellement exclusif avec Deep Search).
+    - Modale interactive `LearnModal` :
+      - Onglet « Cursus & Plan de cours » : validation, édition, ajout ou suppression des modules de recherche didactiques.
+      - Onglet « Mes Cours » : liste des cours archivés avec recherche instantanée, badges, ouverture dans le lecteur intégré ou en page HTML autonome plein écran, et téléchargement HTML.
+      - Lecteur intégré de cours pédagogique avec support Markdown, KaTeX, citations et barre d'actions.
+    - Bouton « Consulter le Cours HTML » affiché dans l'en-tête des sources des réponses de cours.
+    - Raccourci « Mes Cours & Formations » dans la barre latérale.
+- Fichiers modifiés / créés :
+  - Créés : `backend/app/learn_mode.py`, `backend/app/learn_html.py`, `backend/migrations/versions/0011_add_learn_reports.py`, `backend/tests/test_learn_mode.py`, `frontend/components/learn-modal.tsx`.
+  - Modifiés : `backend/app/models.py`, `backend/app/schemas.py`, `backend/app/serializers.py`, `backend/app/context.py`, `backend/app/providers.py`, `backend/app/cli.py`, `backend/app/routers/messages.py`, `frontend/lib/api.ts`, `frontend/components/chat-app.tsx`, `frontend/app/globals.css`, `HANDOFF.md`.
+- Vérifications exécutées :
+  - Compilation Python : 0 erreur (`python3 -m py_compile backend/app/*.py backend/app/routers/*.py backend/migrations/versions/*.py`).
+  - Tests unitaires ciblés `backend/tests/test_learn_mode.py` (schémas, routage StateGraph, pipeline learn_mode avec mock SearXNG, générateur HTML interactif) : 4/4 réussis à 100%.
+  - Validation TypeScript frontend : 0 erreur (`npm --prefix frontend run typecheck`).
+  - Build de production Next.js : succès (`npm --prefix frontend run build`).
+  - Migration Alembic : migration `0011_add_learn_reports` appliquée avec succès sur PostgreSQL.
+  - Redémarrage et rebuild des conteneurs via Docker Compose : statuts `healthy` (API 8001 et Web 3001).
+- Problèmes connus : aucun.
+- Prochaine action : cliquer sur le bouton « Apprendre » dans le chat, saisir un sujet d'apprentissage pour valider le plan de cours et générer le cours magistral complet.
+
+---
+
+# Relais — 24 octobre 2026 (Streaming temps réel des réponses IA & élimination du buffer proxy)
+
+- Réalisé :
+  - **Diagnostic du blocage de streaming** :
+    - Les requêtes SSE (`text/event-stream`) passaient par la réécriture Next.js `rewrites` (`next.config.ts`), qui mettait en mémoire tampon (buffer) l'intégralité du flux HTTP entrant avant de libérer tous les événements d'un seul coup à la fermeture de la connexion.
+  - **Route Handler Proxy non bufférisé dédié dans Next.js** (`frontend/app/api/conversations/[id]/messages/route.ts`) :
+    - Mise en place d'un Route Handler App Router ciblé sur `POST /api/conversations/[id]/messages`.
+    - Transmission transparente des en-têtes (cookies d'authentification, IP, Content-Type, Accept: text/event-stream).
+    - Renvoi direct du corps de flux `ReadableStream` (`new Response(upstreamRes.body, ...)`) avec en-têtes anti-buffering stricts : `Cache-Control: no-cache, no-transform`, `X-Accel-Buffering: no`, `Connection: keep-alive`.
+    - Propagation immédiate du signal d'annulation (`request.signal`) pour interrompre la génération côté backend si l'utilisateur clique sur « Arrêter ».
+  - **Renforcement du streaming côté backend** (`backend/app/routers/messages.py`) :
+    - Ajout des en-têtes `Cache-Control: no-cache, no-transform` et `Connection: keep-alive` sur la `StreamingResponse`.
+    - Envoi d'un commentaire initial de flush `: keepalive\n\n` pour forcer l'ouverture immédiate des sockets HTTP et des proxys intermédiaires dès la réception du message.
+  - **Curseur de frappe visuel en direct** (`frontend/app/globals.css`) :
+    - Ajout d'un curseur clignotant élégant (`▋`, animation `stream-blink`) sur le dernier élément de texte pendant la réception du flux (`.markdown.is-streaming`).
+  - **Rebuild et validation** :
+    - Build de production Next.js validé (`npm --prefix frontend run build`) : création de la route dynamique `/api/conversations/[id]/messages`.
+    - Compilation Python validée (`python3 -m py_compile`).
+    - Rebuild et redémarrage des conteneurs `tchataiperso-clair-api-1` et `tchataiperso-clair-web-1` : statuts `healthy`.
+- Fichiers modifiés / créés :
+  - Créé : `frontend/app/api/conversations/[id]/messages/route.ts`.
+  - Modifiés : `backend/app/routers/messages.py`, `frontend/app/globals.css`, `HANDOFF.md`.
+- Vérifications exécutées :
+  - Compilation Python : 0 erreur.
+  - Validation TypeScript : 0 erreur (`npm --prefix frontend run typecheck`).
+  - Build de production Next.js : succès.
+  - Statut des conteneurs : `healthy` (API 8001 et Web 3001 opérationnels).
+- Problèmes connus : aucun.
+- Prochaine action : actualiser le navigateur (`Ctrl + F5`) sur http://localhost:3001 et envoyer un message pour observer l'affichage des réponses au fur et à mesure avec le curseur de frappe en direct.
+
+---
+
+# Relais — 24 octobre 2026 (Agent ultra-rapide d'arbitrage de recherche web & mode Web Auto 3 états)
+
+- Réalisé :
+  - **Activation par défaut de l'arbitrage automatique de recherche web côté backend** (`backend/app/config.py`, `backend/app/schemas.py`, `backend/app/routers/messages.py`, `compose.yaml`, `.env.example`) :
+    - Configuration de `AUTO_WEB_SEARCH=true` par défaut dans les paramètres : dès que la recherche web est disponible (SearXNG/Brave), chaque message envoyé bénéficie par défaut de l'arbitrage de l'agent rapide sans imposer de paramètre explicite ou de clic préalable.
+    - Seule la désactivation explicite (`web_search_mode == "off"` ou `auto_web_search is False`) désactive l'agent de recherche, et `web_search: true` force la recherche.
+  - **Signalement clair et visible de l'activation automatique** (`frontend/components/chat-app.tsx`, `frontend/lib/api.ts`, `frontend/app/globals.css`, `backend/app/routers/messages.py`) :
+    - Enregistrement de `auto_search_reason` dans les métadonnées des sources collectées lors d'un arbitrage positif.
+    - Signalement pendant le streaming via SSE : `Agent Web : analyse de l’intention et des critères de recherche…` puis `Agent Web : recherche requise (<raison>) · Collecte des données…`.
+    - Signalement permanent dans l'en-tête des sources du message assistant : pastille `Auto` distinctive et mention explicite `Recherche activée automatiquement (X sources) · <raison>`.
+  - **Agent ultra-rapide de décision de recherche web (`decide_web_search`)** (`backend/app/providers.py`) :
+    - Évaluation instantanée du message par `google/gemini-3.5-flash-lite` (via `WEB_SEARCH_DECISION_MODEL`, repli sur `mistralai/mistral-small-3.2-24b-instruct`).
+    - Application stricte des 7 critères : demande explicite, information qui évolue, recommandation d'offre actuelle, besoin de preuves, sujet spécialisé/bug, conséquences importantes (santé/droit/finance), et connaissance stable (recherche inutile).
+  - **Tests et validation** :
+    - Test direct SSE de bout en bout en conditions réelles avec la question exacte (« quelles sont les dernieres nouvelles des jeux vidéos ? ») : détection immédiate de l'intention (`Actualité récente des jeux vidéos`), reformulation de requête, collecte SearXNG de 5 sources (dont JeuxVideo.com, ActuGaming, Les Numériques) et génération d'une réponse sourcée [1], [2], [3], [4] en temps réel.
+    - Suite complète backend : **240/240 tests réussis à 100%**.
+    - Typecheck TypeScript frontend : **0 erreur**.
+    - Rebuild et redémarrage des conteneurs `clair-api` et `clair-web` : statuts `healthy`.
+- Fichiers modifiés :
+  - `backend/app/config.py`, `backend/app/schemas.py`, `backend/app/routers/messages.py`, `backend/app/providers.py`, `compose.yaml`, `.env.example`, `backend/tests/test_api.py`, `backend/tests/test_providers.py`, `frontend/components/chat-app.tsx`, `frontend/lib/api.ts`, `frontend/app/globals.css`, `HANDOFF.md`.
+- Vérifications exécutées :
+  - Compilation Python : 0 erreur (`python3 -m py_compile backend/app/*.py backend/app/routers/*.py backend/tests/*.py`).
+  - Suite de tests complète backend : 240/240 tests passés avec succès.
+  - Validation TypeScript frontend : 0 erreur (`npm --prefix frontend run typecheck`).
+  - Test d'exécution réelle de l'agent sur la question des jeux vidéo : succès (détection `Actualité récente des jeux vidéos`, appel SearXNG et réponse sourcée).
+  - Statut des conteneurs : `healthy` (API 8001 et Web 3001 opérationnels).
+- Problèmes connus : aucun.
+- Prochaine action : recharger la page web (`Ctrl + F5` ou actualiser le navigateur) pour charger le nouveau bundle frontend et constater l'arbitrage automatique et son signalement dans le chat.
+
+---
+
+# Relais — 24 octobre 2026 (Groupe familial, bascule rapide de compte sans mot de passe & déconnexion)
+
+- Réalisé :
+  - **Gestion complète des Groupes Familiaux en base de données & API** (`backend/app/models.py`, `backend/app/schemas.py`, `backend/app/serializers.py`, `backend/app/routers/family.py`, `backend/migrations/versions/0010_add_family_groups.py`, `backend/app/cli.py`, `backend/app/main.py`) :
+    - Modèle `FamilyGroup` (`id`, `name`, `created_by_user_id`, `created_at`, `members`) et colonne `family_group_id` sur `User` avec `lazy="joined"` pour éviter toute erreur de session détachée.
+    - Endpoints API dédiés sous `/api/family` :
+      - `GET /api/family` : récupération des informations du foyer et de la liste ordonnée des membres (avec flag `is_current`).
+      - `POST /api/family` : création ou mise à jour du nom du groupe familial.
+      - `PATCH /api/family` : renommage du groupe familial existant.
+      - `POST /api/family/members` : création directe et instantanée d'un compte pour un membre de la famille (identifiant + mot de passe) sans friction d'invitation manuelle.
+      - `POST /api/family/link` : rattachement d'un compte déjà existant à la famille après vérification de mot de passe.
+      - `DELETE /api/family/members/{id}` : détachement d'un compte du groupe familial.
+      - `POST /api/family/switch/{target_user_id}` : **Bascule rapide de compte sécurisée** : vérifie que l'utilisateur cible appartient au même groupe familial et est actif, génère un nouveau jeton de session, positionne le cookie de session et retourne le profil cible sans saisie de mot de passe.
+  - **Interface utilisateur & Expérience de bascule rapide** (`frontend/components/family-modal.tsx`, `frontend/components/chat-app.tsx`, `frontend/lib/api.ts`, `frontend/app/globals.css`) :
+    - Nouveau composant `FamilyModal` :
+      - Consultation des membres du foyer avec badges (Session active, Admin) et bouton d'action directe « Basculer ».
+      - Formulaire de création directe de compte membre (« Créer un compte pour la famille »).
+      - Section accordéon pour rattacher un compte existant.
+      - Renommage en direct du groupe familial.
+    - **Menu profil et bascule rapide dans la barre supérieure (Topbar)** :
+      - Bouton profil utilisateur avec avatar, nom d'utilisateur, pastille de foyer (`Users`) et chevron d'ouverture.
+      - Menu déroulant avec détails du compte, liste des membres de la famille avec bouton « Basculer » en un clic (recharge instantanément l'espace de travail du membre choisi sans recharger la page).
+      - Raccourci vers la gestion du groupe familial et la gestion des utilisateurs (si admin).
+      - **Bouton de déconnexion explicite et accessible** (« Se déconnecter (retour au login) ») avec icône `LogOut` et confirmation d'invalidation immédiate ramenant à l'écran d'authentification.
+    - **Pied de barre latérale (Sidebar footer)** :
+      - Profil enrichi avec nom du groupe familial cliquable, pastilles avatars des autres membres pour basculer en un clic et bouton de déconnexion direct.
+  - **Tests et validation** :
+    - Suite de tests complète dédiée `backend/tests/test_family.py` (cycle de vie du groupe, création de 3 comptes dans la même famille, switch croisé sans mot de passe, rejet de switch vers un tiers hors famille, renommage, détachement et déconnexion).
+    - Suite complète backend : **235/235 tests réussis à 100%** dans le conteneur API.
+    - Validation TypeScript frontend (`npm --prefix frontend run typecheck`) : 0 erreur.
+    - Build de production Next.js (`npm --prefix frontend run build`) : **succès**.
+    - Redémarrage et rebuild des conteneurs via Docker Compose : statuts `healthy` (API 8001 et Web 3001).
+- Fichiers modifiés / créés :
+  - Créés : `backend/app/routers/family.py`, `backend/migrations/versions/0010_add_family_groups.py`, `backend/tests/test_family.py`, `frontend/components/family-modal.tsx`.
+  - Modifiés : `backend/app/models.py`, `backend/app/schemas.py`, `backend/app/serializers.py`, `backend/app/cli.py`, `backend/app/main.py`, `frontend/components/chat-app.tsx`, `frontend/lib/api.ts`, `frontend/app/globals.css`, `HANDOFF.md`.
+- Vérifications exécutées :
+  - Compilation Python : 0 erreur (`python3 -m py_compile backend/app/*.py backend/app/routers/*.py backend/migrations/versions/*.py`).
+  - Suite de tests complète backend : 235/235 tests passés avec succès (`docker exec tchataiperso-clair-api-1 env -i PATH=/usr/local/bin:/usr/bin:/bin PYTHONPATH=/app pytest /tmp/tests`).
+  - Validation TypeScript frontend : 0 erreur (`npm --prefix frontend run typecheck`).
+  - Build de production Next.js : succès (`npm --prefix frontend run build`).
+  - Statut des conteneurs : `healthy` (API 8001 et Web 3001 opérationnels).
+  - Vérification Git : absence de fuite de secret.
+- Problèmes connus : aucun.
+- Prochaine action : créer un groupe familial, ajouter des comptes membres et tester la bascule rapide en 1 clic ainsi que le bouton de déconnexion.
+
+---
+
 # Relais — 24 octobre 2026 (Ajustements DeepSearch : qualité des requêtes 4-6 mots avec guillemets, garde-fous stricts backend et alignement UI modale)
 
 - Réalisé :

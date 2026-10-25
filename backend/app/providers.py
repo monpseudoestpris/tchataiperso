@@ -24,6 +24,7 @@ class ProviderError(Exception):
 
 _TIMEOUT = httpx.Timeout(60.0, connect=10.0, pool=10.0)
 _QUERY_REWRITE_TIMEOUT = httpx.Timeout(15.0, connect=5.0, pool=5.0)
+_DECISION_TIMEOUT = httpx.Timeout(10.0, connect=3.0, pool=3.0)
 _MAX_IMAGE_BYTES = 10 * 1024 * 1024
 _DUCKDUCKGO_TIMEOUT = httpx.Timeout(12.0, connect=5.0, pool=5.0)
 _DUCKDUCKGO_MAX_RESULTS = 5
@@ -102,12 +103,18 @@ async def stream_chat(settings: Any, messages: list[dict[str, Any]], model: str)
         msg.get("role") == "system" and isinstance(msg.get("content"), str) and "Mode DeepSearch" in msg["content"]
         for msg in messages
     )
+    is_learn_mode = any(
+        msg.get("role") == "system" and isinstance(msg.get("content"), str) and "Mode Apprendre" in msg["content"]
+        for msg in messages
+    )
     is_code_mode = any(
         msg.get("role") == "system" and isinstance(msg.get("content"), str) and "Mode Code Canvas" in msg["content"]
         for msg in messages
     )
     if is_code_mode:
         max_tokens = max(settings.llm_max_tokens, 8192)
+    elif is_learn_mode:
+        max_tokens = max(settings.llm_max_tokens, getattr(settings, "learn_mode_max_tokens", 16384))
     elif is_deep_search:
         max_tokens = max(settings.llm_max_tokens, getattr(settings, "deep_search_max_tokens", 12288))
     else:
@@ -186,6 +193,141 @@ async def summarize(settings: Any, model: str, previous_summary: str, transcript
         raise ProviderError("La création du résumé a dépassé le délai autorisé.") from None
     except httpx.HTTPError:
         raise ProviderError("Impossible de joindre le fournisseur IA pour le résumé.") from None
+
+
+def _parse_decision_json(raw: str) -> tuple[bool, str]:
+    if not isinstance(raw, str):
+        return False, "Analyse invalide"
+    clean = raw.strip()
+    if "```" in clean:
+        match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", clean)
+        if match:
+            clean = match.group(1).strip()
+    try:
+        data = json.loads(clean)
+        if isinstance(data, dict):
+            should_search = bool(data.get("search", False))
+            reason = str(data.get("reason") or ("Recherche requise" if should_search else "Connaissance stable"))
+            return should_search, reason[:80]
+    except Exception:
+        pass
+    low = clean.lower()
+    if '"search": true' in low or '"search":true' in low or "search: true" in low:
+        return True, "Recherche recommandée"
+    if '"search": false' in low or '"search":false' in low or "search: false" in low:
+        return False, "Connaissance stable"
+    return False, "Décision indéterminée"
+
+
+def _heuristic_decision(query: str) -> tuple[bool, str]:
+    low = query.lower()
+    web_patterns = (
+        r"\b(cherche|recherche|vérifie)\b",
+        r"\b(prix|cours|météo|actualités?|dernière version|sorties?)\b",
+        r"\b(quel (gpu|modèle|smartphone|ordinateur|processeur) acheter)\b",
+        r"\b(sources?|chiffres? précis|statistiques?)\b",
+        r"\b(posologie|contre-indications?|jurisprudence|loi)\b",
+    )
+    for pat in web_patterns:
+        if re.search(pat, low):
+            return True, "Indice contextuel détecté"
+    return False, "Connaissance stable"
+
+
+async def decide_web_search(
+    settings: Any,
+    query: str,
+    summary: str = "",
+    recent_turns: list[dict[str, str]] | None = None,
+) -> tuple[bool, str]:
+    """Arbitrate whether a web search is needed for the user's message using a fast model (Gemini Flash Lite or Mistral Small)."""
+    if getattr(settings, "demo_mode", False):
+        return _heuristic_decision(query)
+
+    low = query.lower()
+    if re.search(r"\b(cherche|recherche|vérifie)\s+(sur\s+internet|sur\s+le\s+web|en\s+ligne|google)\b", low):
+        return True, "Demande explicite de recherche web"
+
+    key = _key(settings, "llm_api_key", "du fournisseur IA")
+    decision_model = (
+        getattr(settings, "web_search_decision_model", None)
+        or "google/gemini-3.5-flash-lite"
+    )
+    fallback_model = (
+        getattr(settings, "search_query_model", None)
+        or getattr(settings, "default_model", None)
+        or "mistralai/mistral-small-3.2-24b-instruct"
+    )
+
+    context = {
+        "summary": (summary or "")[:1000],
+        "recent_turns": [
+            {"role": turn["role"], "content": turn["content"][:400]}
+            for turn in (recent_turns or [])[-3:]
+            if turn.get("role") in ("user", "assistant") and isinstance(turn.get("content"), str)
+        ],
+        "current_message": query[:1200],
+    }
+
+    system_prompt = (
+        "Tu es un agent d'arbitrage ultra-rapide chargé de décider si une recherche sur le Web est nécessaire pour répondre au message de l'utilisateur.\n\n"
+        "Évalue la demande selon STRICTEMENT la grille de critères suivante :\n\n"
+        "| Critère | Exemples | Décision |\n"
+        "|---|---|---|\n"
+        "| 1. Demande explicite | « Cherche sur Internet », « vérifie », « cherche sur le web » | Recherche obligatoire (search=true) |\n"
+        "| 2. Information qui évolue | Prix, actualité, versions logicielles, disponibilité, météo, sorties récentes | Recherche par défaut (search=true) |\n"
+        "| 3. Recommandation liée à l'offre actuelle | Quel GPU acheter, quelle formation choisir, comparatif d'offres du marché | Recherche (search=true) |\n"
+        "| 4. Besoin de preuves | Sources, citations, chiffres précis, statistiques vérifiables | Recherche (search=true) |\n"
+        "| 5. Sujet spécialisé ou incertitude | Bug d'un mod, comportement d'une bibliothèque peu connue, API obscure | Recherche (search=true) |\n"
+        "| 6. Conséquences importantes | Santé, posologie, droit, fiscalité, décisions financières | Recherche sur sources fiables (search=true) |\n"
+        "| 7. Connaissance stable ou travail sur le texte fourni | Expliquer une dérivée, concept théorique établi, reformuler, traduire, résumer un texte fourni, analyser ou corriger du code fourni, salutations ou discussion générale | Généralement inutile (search=false) |\n\n"
+        "Réponds STRICTEMENT par un objet JSON compact au format suivant, sans balises Markdown ni texte additionnel :\n"
+        '{"search": true, "reason": "courte justification en 3 à 6 mots", "criterion": "nom_du_critère"}\n'
+        "ou\n"
+        '{"search": false, "reason": "courte justification en 3 à 6 mots", "criterion": "connaissance_stable"}'
+    )
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
+    ]
+
+    try:
+        async with httpx.AsyncClient(timeout=_DECISION_TIMEOUT, follow_redirects=False) as client:
+            response = await client.post(
+                settings.llm_base_url.rstrip("/") + "/chat/completions",
+                headers={"Authorization": f"Bearer {key}"},
+                json={
+                    "model": decision_model,
+                    "messages": messages,
+                    "stream": False,
+                    "temperature": 0.0,
+                    "max_tokens": 100,
+                },
+            )
+            if response.status_code != 200 and fallback_model and decision_model != fallback_model:
+                _logger.info(
+                    "decide_web_search: %s renvoie %s; repli sur %s",
+                    decision_model, response.status_code, fallback_model,
+                )
+                response = await client.post(
+                    settings.llm_base_url.rstrip("/") + "/chat/completions",
+                    headers={"Authorization": f"Bearer {key}"},
+                    json={
+                        "model": fallback_model,
+                        "messages": messages,
+                        "stream": False,
+                        "temperature": 0.0,
+                        "max_tokens": 100,
+                    },
+                )
+        _check_response(response, "Fournisseur IA")
+        payload = _json(response, "Fournisseur IA")
+        raw_content = payload["choices"][0]["message"]["content"]
+        return _parse_decision_json(raw_content)
+    except Exception as exc:
+        _logger.warning("decide_web_search: échec de l'agent (%s); repli sur l'analyse heuristique", exc)
+        return _heuristic_decision(query)
 
 
 async def rewrite_search_query(
@@ -678,6 +820,95 @@ def _parse_query_list(raw: str, max_queries: int) -> list[str]:
     return result
 
 
+_THEME_STOPWORDS = {
+    "de", "du", "des", "le", "la", "les", "un", "une", "et", "en", "sur", "dans", "pour",
+    "par", "avec", "sans", "sous", "vers", "chez", "ce", "cet", "cette", "ces", "mon",
+    "son", "sa", "ses", "notre", "leur", "qui", "que", "quoi", "dont", "où", "ou", "mais",
+    "donc", "or", "ni", "car", "comme", "si", "tout", "tous", "toute", "toutes", "a", "au",
+    "aux", "est", "sont", "avoir", "etre", "faire", "quel", "quelle", "quels", "quelles",
+    "comment", "pourquoi", "afin", "the", "of", "and", "in", "on", "at", "to", "for", "with",
+    "a", "an", "is", "are", "by", "from", "fais", "moi", "cours", "sujet"
+}
+
+
+def theme_to_search_query(theme: str, topic: str = "") -> str:
+    """
+    Convertit une phrase de thème complète et expliquée (destinée à l'interface utilisateur)
+    en une requête de recherche web dense et ultra-ciblée (3 à 5 mots-clés essentiels)
+    adaptée aux moteurs SearXNG, Google ou Brave.
+    """
+    cleaned = re.sub(
+        r"^(?:Module\s*\d+\s*[:\-–]|Axe\s*\d+\s*[:\-–]|\d+[\.\)\-–]\s*)",
+        "",
+        theme.strip(),
+        flags=re.IGNORECASE,
+    ).strip()
+    parts = cleaned.split(":", 1)
+    title_part = parts[0].strip()
+    expl_part = parts[1].strip() if len(parts) > 1 else ""
+
+    words = re.findall(r"[a-zA-ZÀ-ÿ0-9_\-]+", title_part)
+    meaningful = [w for w in words if w.lower() not in _THEME_STOPWORDS and len(w) > 2]
+
+    topic_words = re.findall(r"[a-zA-ZÀ-ÿ0-9_\-]+", topic) if topic else []
+    clean_topic_words = [w for w in topic_words if w.lower() not in _THEME_STOPWORDS and len(w) > 2][:3]
+
+    query_tokens: list[str] = []
+    seen: set[str] = set()
+
+    for w in clean_topic_words + meaningful:
+        wl = w.lower()
+        if wl not in seen:
+            seen.add(wl)
+            query_tokens.append(w)
+            if len(query_tokens) >= 5:
+                break
+
+    if len(query_tokens) < 4 and expl_part:
+        expl_words = re.findall(r"[a-zA-ZÀ-ÿ0-9_\-]+", expl_part)
+        for w in expl_words:
+            wl = w.lower()
+            if wl not in _THEME_STOPWORDS and len(w) > 3 and wl not in seen:
+                seen.add(wl)
+                query_tokens.append(w)
+                if len(query_tokens) >= 5:
+                    break
+
+    return " ".join(query_tokens) or cleaned[:60]
+
+
+def default_deep_search_themes(subject: str, count: int = 8) -> list[str]:
+    """Génère 8 axes d'investigation complets et expliqués en phrases rédigées pour DeepSearch."""
+    clean = subject.strip() or "le sujet recherché"
+    themes = [
+        f"1. Définition et délimitation conceptuelle de {clean} : identifier les concepts fondamentaux, les acteurs clés, la terminologie et le cadre formel.",
+        f"2. État de l'art et évolutions récentes de {clean} : analyser les avancées technologiques récentes, versions majeures et feuilles de route.",
+        f"3. Mécanismes techniques et fonctionnement interne de {clean} : disséquer les architectures sous-jacentes, protocoles et métriques de performance mesurables.",
+        f"4. Analyse contradictoire et retours d'expérience critiques sur {clean} : confronter les limites techniques, failles, goulots d'étranglement et avis divergents.",
+        f"5. Spécifications d'environnement et contraintes de mise en œuvre de {clean} : inventorier les prérequis d'infrastructure, coûts réels et dépendances.",
+        f"6. Études de cas réels et benchmarks comparatifs sur {clean} : examiner les retours de déploiements en conditions réelles et audits indépendants.",
+        f"7. Risques, sécurité et anti-patterns documentés dans {clean} : recenser les pièges fréquents, vulnérabilités et arbitrages stratégiques.",
+        f"8. Standards de référence et publications normatives sur {clean} : regrouper la documentation primaire, dépôts officiels et standards industriels.",
+    ]
+    return themes[:count]
+
+
+def default_learn_themes(subject: str, count: int = 8) -> list[str]:
+    """Génère 8 modules pédagogiques complets et expliqués en phrases rédigées pour le Mode Apprendre."""
+    clean = subject.strip() or "le sujet d'apprentissage"
+    themes = [
+        f"1. Genèse, intuition et fondations conceptuelles de {clean} : comprendre la finalité du sujet, les problèmes concrets résolus et les prérequis indispensables.",
+        f"2. Anatomie théorique et mécanismes sous-jacents de {clean} : analyse méthodique des principes fondamentaux, structures, règles d'or et définitions clés.",
+        f"3. Méthodologie pas à pas et guide de l'expert sur {clean} : étapes chronologiques de conception, patron de raisonnement et logique d'analyse.",
+        f"4. Grand cas pratique d'application intégrale de {clean} : démonstration magistrale et exemplaire menée de bout en bout sans aucune ellipse.",
+        f"5. Répertoire des pièges fréquents et erreurs courantes dans {clean} : inventaire détaillé des anti-patterns et corrections méthodiques expertes.",
+        f"6. Cahier d'exercices d'application et d'entraînement progressif sur {clean} : exercices gradués avec énoncés et corrigés détaillés expliqués pas à pas.",
+        f"7. Fiche de mémorisation active et grille d'auto-évaluation de {clean} : checklist méthodique d'exigence et règles d'or capitales à maîtriser.",
+        f"8. Supports didactiques de référence et ressources officielles sur {clean} : bibliographie commentée, standards reconnus et pistes d'approfondissement.",
+    ]
+    return themes[:count]
+
+
 async def plan_deep_search_queries(
     settings: Any,
     query: str,
@@ -685,7 +916,7 @@ async def plan_deep_search_queries(
     recent_turns: list[dict[str, str]],
     max_queries: int = 8,
 ) -> list[str]:
-    """Decompose a complex topic into complementary multilingual search queries for DeepSearch using a powerful planning model."""
+    """Decompose a complex topic into structured explained investigation themes (complete sentences, not raw keywords)."""
     key = _key(settings, "llm_api_key", "du fournisseur IA")
     plan_model = getattr(settings, "deep_search_plan_model", None) or "anthropic/claude-fable-5.1"
     fallback_model = (
@@ -705,56 +936,24 @@ async def plan_deep_search_queries(
     messages = [
         {"role": "system", "content": (
             "# RÔLE & OBJECTIF\n"
-            "Tu es un agent expert en recherche approfondie (« Deep Search Agent »). Ton objectif est de répondre de manière exhaustive, neutre et rigoureusement documentée à une question complexe en exécutant un protocole strict en 5 phases séquentielles et itératives. Tu ne te contentes jamais d'assertions péremptoires : chaque fait doit être appuyé par une source vérifiable.\n\n"
+            "Tu es un agent expert en recherche approfondie et cartographie stratégique (« Deep Search Agent »). "
+            f"Ton objectif est de décomposer la question posée en un plan d'investigation structuré de {max_queries} axes d'analyse complets.\n\n"
             "---\n\n"
-            "## PROTOCOLE OPÉRATIONNEL PAR PHASE (PHASES 1 & 2 — DÉCOMPOSITION ET GÉNÉRATION DE REQUÊTES)\n\n"
-            "### PHASE 1 : DÉCOMPOSITION & PLANIFICATION INITIALE\n"
-            "**Objectif :** Éviter les angles morts en transformant une question brute en un plan d'investigation multidimensionnel.\n"
-            "### DÉCOMPOSITION EN SOUS-PROBLÈMES ET DÉMARCHE THÈSE / ANTITHÈSE :\n"
-            "La question posée doit impérativement être découpée en sous-problèmes indépendants et confronter la thèse (conditions de faisabilité, gains attendus, cas d'usage nominaux) et l'antithèse (limites intrinsèques, dégradations, goulots d'étranglement, failles, contre-exemples et retours d'expérience négatifs).\n"
-            "**Actions obligatoires :**\n"
-            "1. **Identifier les entités et contraintes :**\n"
-            "   - Extraire les concepts clés, acronymes, technologies, acteurs et le périmètre temporel/matériel.\n"
-            "2. **Découper la problématique selon 5 axes obligatoires (MÉTHODE DE DÉCOMPOSITION STRATÉGIQUE — ARBRE DE RECHERCHE EN 5 AXES) :**\n"
-            "   - *Axe Entités / Définitions — L'axe des entités et des concepts (Quoi / Qui) :* Quels sont les composants, versions et standards impliqués ? Définitions formelles, acronymes, bibliothèques logicielles, acteurs et variantes linguistiques.\n"
-            "   - *Axe Temporel — L'axe temporel et dynamique (Quand) :* Quel est l'état de l'art actuel ? Quels sont les changements récents, benchmarks récents, évolutions historiques et feuilles de route ?\n"
-            "   - *Axe Technique & Causal — L'axe technique et causal (Comment / Pourquoi) :* Quels sont les mécanismes internes, architectures et métriques objectives (latence, débit, consommation mémoire / VRAM, coût) ?\n"
-            "   - *Axe Contradictoire — L'axe contradictoire et comparatif (La confrontation / Thèse vs Antithèse) :* Quels sont les goulots d'étranglement, limitations, failles ou avis opposés ? Casser le biais de confirmation en cherchant les contre-exemples, post-mortems et audits indépendants.\n"
-            "   - *Axe Périmètre & Contraintes — L'axe du périmètre et des contraintes (Où / Dans quel cadre) :* Quelles sont les spécifications d'environnement (OS, GPU/CPU, local vs cloud), contraintes d'échelle ou conditions aux limites ?\n"
-            "3. **Produire une matrice de recherche initiale :** Formuler 3 à 5 sous-questions indépendantes à traiter prioritairement.\n\n"
-            "---\n\n"
-            "### PHASE 2 : GÉNÉRATION DE REQUÊTES & RETRIEVAL MULTI-SOURCES\n"
-            "**Objectif :** Collecter du contenu pertinent en contournant les biais des algorithmes de recherche standard.\n"
-            "**Actions obligatoires :**\n"
-            f"1. **Formuler {max_queries} requêtes différenciées couvrant les sous-questions :**\n"
-            "   - *Requête Factuelle / Directe :* Termes précis, métriques chiffrées (documentation technique, benchmarks, GitHub, arXiv).\n"
-            "   - *Requête Contradictoire / Critique :* Cibler spécifiquement les retours d'expérience négatifs ou limites (ex. « bottlenecks », « issues », « vs », « tradeoffs », « limites », « failles », « mythes »).\n"
-            f"   - *Requête en anglais :* Traduire les requêtes techniques ({max_queries - (max_queries // 2)} requêtes en anglais international et {max_queries // 2} dans la langue de l'utilisateur) pour accéder à la documentation primaire internationale, dépôts de code (GitHub), articles peer-reviewed (arXiv) et rapports d'audits indépendants.\n\n"
-            "### RÈGLES CRITIQUES D'ENCODAGE DES REQUÊTES (POUR MOTEURS WEB & SCRAPERS D'API) :\n"
-            "1. **CONCISION & DENSITÉ (4 À 6 MOTS-CLÉS PERCUTANTS) :**\n"
-            "   - Chaque requête DOIT impérativement comporter entre 4 et 6 mots-clés denses au maximum.\n"
-            "   - JAMAIS de requêtes à 10 ou 12 mots alignés : les scrapers et moteurs web font un OR implicite ou ignorent la fin de la chaîne au-delà de 6 mots.\n"
-            "   - Élimine tout mot de liaison ou verbiage conversationnel ('comment', 'pourquoi', 'est-ce que', 'dans le cadre de').\n"
-            "2. **GUILLEMETS SUR EXPRESSIONS EXACTES :**\n"
-            "   - Utilise impérativement des guillemets doubles droits (\"...\") pour verrouiller les concepts composés, locutions exactes et noms propres (ex. \"active recall\", \"spaced repetition\", \"Dunlosky\", \"répétition espacée\", \"charge cognitive\", \"learning styles\").\n"
-            "3. **ZÉRO COQUILLE & ORTHOGRAPHE IRRÉPROCHABLE :**\n"
-            "   - Contrôle qualité strict : AUCUNE faute de frappe, aucune syllabe manquante, aucun mot tronqué (ex. écris correctement 'élèves' et jamais 'éélves' ou 'ail élèves', 'apprentissage' et non 'appr').\n"
-            "   - Respecte scrupuleusement les accents et la syntaxe pour ne pas dégrader le reranking des scrapers.\n\n"
-            "### EXEMPLE APPLIQUÉ DE DÉCOMPOSITION (4 À 6 MOTS-CLÉS DENSES ET GUILLEMETS EXACTS) :\n"
-            "Pour la question : « Quelle est la faisabilité d'exécuter des modèles de raisonnement 32B en local sur une machine de bureau ? »\n"
-            "- Technique / Métriques : VRAM requise par niveau de quantification \"Q4_K_M\" \"FP16\" 32B\n"
-            "- Entités / Outils : \"llama.cpp\" \"vLLM\" offloading GPU performance\n"
-            "- Périmètre / Matériel : throughput tokens/s grand public \"24 Go\"\n"
-            "- Contradictoire (Thèse / Antithèse) : \"local LLM\" 32B reasoning degradation bottlenecks\n"
-            "- Temporel : benchmarks récents 2025 2026 GPU drivers\n\n"
-            "Pour la question : « Méthodes d'apprentissage efficaces pour élèves »\n"
-            "- Factuel FR : \"répétition espacée\" élèves révision mémoire\n"
-            "- Critique FR : mythes \"styles d'apprentissage\" surmenage échec\n"
-            "- Technique EN : \"active recall\" \"spaced repetition\" Dunlosky\n"
-            "- Contradictoire EN : \"learning styles\" myth debunked critique\n\n"
+            "## CONSIGNES FORMELLES DE FORMULATION DES THÈMES (PHRASES COMPLÈTES & EXPLIQUÉES) :\n"
+            "1. **AUCUN MOT-CLÉ BRUT NI SYNTAXE DE RECHERCHE :** Ne fournis JAMAIS de simples mots-clés laconiques, ni d'opérateurs booléens ou de guillemets de recherche web.\n"
+            "2. **PHRASE COMPLÈTE & EXPLICATIVE :** Chaque axe doit impérativement être rédigé sous forme d'une phrase complète, soignée et explicative formulant la problématique, les aspects techniques et les dimensions critiques examinées.\n"
+            f"3. **EXACTEMENT {max_queries} AXES MULTIDIMENSIONNELS :** Rédige scrupuleusement {max_queries} axes équilibrés couvrant :\n"
+            "   - Axe 1 : Définition, terminologie et délimitation conceptuelle.\n"
+            "   - Axe 2 : État de l'art actuel, évolutions récentes et feuille de route.\n"
+            "   - Axe 3 : Mécanismes techniques, architectures internes et métriques objectives.\n"
+            "   - Axe 4 : Analyse contradictoire, limitations, failles et retours d'expérience négatifs.\n"
+            "   - Axe 5 : Spécifications d'environnement, prérequis et contraintes matérielles ou logicielles.\n"
+            "   - Axe 6 : Études de cas concrets, déploiements réels et benchmarks comparatifs.\n"
+            "   - Axe 7 : Risques, sécurité, anti-patterns et arbitrages (trade-offs) documentés.\n"
+            "   - Axe 8 : Standards de référence, publications normatives et perspectives d'avenir.\n\n"
             "### CONSIGNES DE SORTIE :\n"
-            "- Le résumé et les tours récents servent uniquement à lever les ambiguïtés de contexte.\n"
-            "- Ne réponds pas à la question. Retourne UNIQUEMENT un tableau JSON de chaînes (ex. [\"\\\"active recall\\\" Dunlosky meta-analysis\", \"\\\"répétition espacée\\\" mémoire révision\"])."
+            "- Ne réponds pas à la question maintenant.\n"
+            f"- Retourne UNIQUEMENT un tableau JSON de {max_queries} chaînes contenant chacune une phrase complète et expliquée."
         )},
         {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
     ]
@@ -784,15 +983,14 @@ async def plan_deep_search_queries(
             if not isinstance(content, str):
                 raise ValueError
             queries = _parse_query_list(content, max_queries=max_queries)
-            if not queries:
-                raise ValueError
-            return queries
+            if len(queries) < max_queries:
+                defaults = default_deep_search_themes(query, max_queries)
+                queries.extend(defaults[len(queries):])
+            return queries[:max_queries]
         except (ValueError, TypeError, KeyError, IndexError):
-            raise ProviderError("Le fournisseur IA a renvoyé un plan de recherche invalide.") from None
-    except httpx.TimeoutException:
-        raise ProviderError("La planification de la recherche approfondie a dépassé le délai autorisé.") from None
-    except httpx.HTTPError:
-        raise ProviderError("Impossible de joindre le fournisseur IA pour planifier la recherche approfondie.") from None
+            return default_deep_search_themes(query, max_queries)
+    except (httpx.TimeoutException, httpx.HTTPError, ProviderError):
+        return default_deep_search_themes(query, max_queries)
 
 
 async def plan_deep_search_followup(
@@ -884,6 +1082,174 @@ async def plan_deep_search_followup(
         raise ProviderError("L'approfondissement de la recherche a dépassé le délai autorisé.") from None
     except httpx.HTTPError:
         raise ProviderError("Impossible de joindre le fournisseur IA pour approfondir la recherche.") from None
+
+
+async def plan_learn_queries(
+    settings: Any,
+    query: str,
+    summary: str,
+    recent_turns: list[dict[str, str]],
+    max_queries: int = 8,
+) -> list[str]:
+    """Decompose a learning subject into structured pedagogical modules (complete explained sentences, not raw keywords)."""
+    key = _key(settings, "llm_api_key", "du fournisseur IA")
+    plan_model = getattr(settings, "deep_search_plan_model", None) or "anthropic/claude-fable-5.1"
+    fallback_model = (
+        getattr(settings, "search_query_model", None)
+        or getattr(settings, "default_model", None)
+        or "mistralai/mistral-small-3.2-24b-instruct"
+    )
+    context = {
+        "summary": summary[:2000],
+        "recent_turns": [
+            {"role": turn["role"], "content": turn["content"][:1000]}
+            for turn in recent_turns[-4:]
+            if turn.get("role") in ("user", "assistant") and isinstance(turn.get("content"), str)
+        ],
+        "learning_subject": query[:1500],
+    }
+    messages = [
+        {"role": "system", "content": (
+            "# RÔLE & OBJECTIF PÉDAGOGIQUE\n"
+            "Tu es un architecte de formation et concepteur de cours d'élite (« Curriculum & Course Planning Agent »). "
+            f"Ton objectif est de décomposer le sujet d'apprentissage en un programme d'enseignement complet composé d'exactement {max_queries} modules d'apprentissage approfondis.\n\n"
+            "---\n\n"
+            "## CONSIGNES FORMELLES DE RÉDACTION DES THÈMES (PHRASES COMPLÈTES & EXPLIQUÉES) :\n"
+            "1. **AUCUN MOT-CLÉ BRUT NI SYNTAXE DE RECHERCHE :** Ne fournis JAMAIS de simples mots-clés laconiques, ni d'opérateurs booléens ou de guillemets de recherche web.\n"
+            "2. **PHRASE COMPLÈTE & PÉDAGOGIQUE :** Chaque module doit impérativement être formulé sous forme d'une phrase complète, soignée, claire et explicative qui détaille le contenu didactique et l'objectif d'apprentissage du module.\n"
+            f"3. **EXACTEMENT {max_queries} MODULES PROGRESSIFS :** Rédige scrupuleusement {max_queries} modules couvrant l'ensemble du cursus :\n"
+            "   - Module 1 : Genèse, intuition et fondations conceptuelles (pourquoi ce sujet existe, définitions fondamentales et prérequis).\n"
+            "   - Module 2 : Anatomie théorique et mécanismes sous-jacents (décorticage des principes, règles d'or et structures).\n"
+            "   - Module 3 : Méthodologie pas à pas et guide de l'expert (démarche méthodique et étapes de réalisation).\n"
+            "   - Module 4 : Grand cas pratique d'application intégrale (démonstration magistrale de bout en bout).\n"
+            "   - Module 5 : Répertoire des pièges fréquents et erreurs classiques (anti-patterns et corrections expertes).\n"
+            "   - Module 6 : Cahier d'exercices d'application progressifs (entraînement et corrigés détaillés).\n"
+            "   - Module 7 : Fiche de mémorisation active et grille critériée d'auto-évaluation (synthèse et règles d'or).\n"
+            "   - Module 8 : Supports didactiques de référence et ressources officielles (bibliographie commentée et approfondissements).\n\n"
+            "### CONSIGNES DE SORTIE :\n"
+            "- Ne réponds pas à la question et n'écris pas le cours maintenant.\n"
+            f"- Retourne UNIQUEMENT un tableau JSON de {max_queries} chaînes contenant chacune une phrase complète et expliquée."
+        )},
+        {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
+    ]
+    try:
+        async with httpx.AsyncClient(timeout=_QUERY_REWRITE_TIMEOUT, follow_redirects=False) as client:
+            response = await client.post(
+                settings.llm_base_url.rstrip("/") + "/chat/completions",
+                headers={"Authorization": f"Bearer {key}"},
+                json={"model": plan_model, "messages": messages, "stream": False,
+                      "temperature": 0.1, "max_tokens": 1024},
+            )
+            if response.status_code != 200 and fallback_model and plan_model != fallback_model:
+                _logger.warning(
+                    "Modèle de plan Mode Apprendre %s indisponible (code %s). Repli sur %s.",
+                    plan_model, response.status_code, fallback_model,
+                )
+                response = await client.post(
+                    settings.llm_base_url.rstrip("/") + "/chat/completions",
+                    headers={"Authorization": f"Bearer {key}"},
+                    json={"model": fallback_model, "messages": messages, "stream": False,
+                          "temperature": 0.1, "max_tokens": 1024},
+                )
+        _check_response(response, "Fournisseur IA")
+        payload = _json(response, "Fournisseur IA")
+        try:
+            content = payload["choices"][0]["message"]["content"]
+            if not isinstance(content, str):
+                raise ValueError
+            queries = _parse_query_list(content, max_queries=max_queries)
+            if len(queries) < max_queries:
+                defaults = default_learn_themes(query, max_queries)
+                queries.extend(defaults[len(queries):])
+            return queries[:max_queries]
+        except (ValueError, TypeError, KeyError, IndexError):
+            return default_learn_themes(query, max_queries)
+    except (httpx.TimeoutException, httpx.HTTPError, ProviderError):
+        return default_learn_themes(query, max_queries)
+
+
+async def plan_learn_followup(
+    settings: Any,
+    query: str,
+    initial_queries: list[str],
+    sources: list[dict[str, str]],
+    max_queries: int = 4,
+) -> list[str]:
+    """Identify follow-up pedagogical queries to fill curriculum gaps, or return [] if sufficient."""
+    key = _key(settings, "llm_api_key", "du fournisseur IA")
+    followup_model = (
+        getattr(settings, "deep_search_synthesis_model", None)
+        or "google/gemini-3.8-flash"
+    )
+    fallback_model = (
+        getattr(settings, "search_query_model", None)
+        or getattr(settings, "default_model", None)
+        or "mistralai/mistral-small-3.2-24b-instruct"
+    )
+    context = {
+        "learning_subject": query[:1500],
+        "executed_queries": initial_queries[:16],
+        "collected_sources": [
+            {
+                "title": source.get("title", "")[:180],
+                "url": source.get("url", "")[:180],
+                "snippet": source.get("snippet", "")[:300],
+            }
+            for source in sources[:60]
+        ],
+    }
+    messages = [
+        {"role": "system", "content": (
+            "# RÔLE & OBJECTIF PÉDAGOGIQUE\n"
+            "Tu es un inspecteur pédagogique et auditeur de formation (« Course Curriculum Evaluator »). "
+            "Ton rôle est d'analyser les supports de cours déjà collectés et de vérifier si l'ensemble documentaire suffit pour rédiger un cours magistral complet, progressif et adapté au sujet.\n\n"
+            "---\n\n"
+            "## AUDIT PÉDAGOGIQUE DU CONTENU RÉUNI :\n"
+            "Vérifie la couverture des 4 dimensions indispensables d'un bon cours :\n"
+            "1. Les concepts fondamentaux, intuitions et définitions sont-ils clairs ?\n"
+            "2. Le fonctionnement interne étape par étape est-il suffisamment documenté ?\n"
+            "3. Dispose-t-on d'études de cas concrètes, de code ou d'exercices pratiques résolus pour la section d'application ?\n"
+            "4. Dispose-t-on des pièges classiques, anti-patterns et bonnes pratiques ?\n\n"
+            f"- **Si une dimension essentielle manque ou est trop superficielle :** Formule de 1 à {max_queries} nouvelles requêtes spécifiques (4 à 6 mots-clés denses, guillemets sur concepts exacts, non-redondance absolue) pour combler le manque.\n"
+            "- **Si les supports réunis sont équilibrés, riches et suffisants pour rédiger un cours magistral complet :** Renvoie UNIQUEMENT un tableau vide `[]`.\n\n"
+            "Sortie : UNIQUEMENT un tableau JSON de chaînes (ex. [\"\\\"concept exact\\\" tutorial code example\"] ou [] si complet)."
+        )},
+        {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
+    ]
+    try:
+        async with httpx.AsyncClient(timeout=_QUERY_REWRITE_TIMEOUT, follow_redirects=False) as client:
+            response = await client.post(
+                settings.llm_base_url.rstrip("/") + "/chat/completions",
+                headers={"Authorization": f"Bearer {key}"},
+                json={"model": followup_model, "messages": messages, "stream": False,
+                      "temperature": 0.1, "max_tokens": 1024},
+            )
+            if response.status_code != 200 and fallback_model and followup_model != fallback_model:
+                _logger.warning(
+                    "Modèle de suivi Mode Apprendre %s indisponible (code %s). Repli sur %s.",
+                    followup_model, response.status_code, fallback_model,
+                )
+                response = await client.post(
+                    settings.llm_base_url.rstrip("/") + "/chat/completions",
+                    headers={"Authorization": f"Bearer {key}"},
+                    json={"model": fallback_model, "messages": messages, "stream": False,
+                          "temperature": 0.1, "max_tokens": 1024},
+                )
+        _check_response(response, "Fournisseur IA")
+        payload = _json(response, "Fournisseur IA")
+        try:
+            content = payload["choices"][0]["message"]["content"]
+            if not isinstance(content, str):
+                raise ValueError
+            existing = {" ".join(item.split()).casefold() for item in initial_queries}
+            candidates = _parse_query_list(content, max_queries=max_queries + len(initial_queries))
+            return [item for item in candidates if item.casefold() not in existing][:max_queries]
+        except (ValueError, TypeError, KeyError, IndexError):
+            raise ProviderError("Le fournisseur IA a renvoyé des requêtes complémentaires de cours invalides.") from None
+    except httpx.TimeoutException:
+        raise ProviderError("L'approfondissement du cours a dépassé le délai autorisé.") from None
+    except httpx.HTTPError:
+        raise ProviderError("Impossible de joindre le fournisseur IA pour approfondir le cours.") from None
 
 
 async def improve_skill_prompt(settings: Any, model: str, prompt: str) -> str:

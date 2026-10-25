@@ -4,7 +4,7 @@ import unicodedata
 from datetime import timezone
 
 from .blog import parse_cards_from_content
-from .models import Attachment, Blog, BlogPost, Conversation, DeepSearchReport, GeneratedImage, Message, Skill, User
+from .models import Attachment, Blog, BlogPost, Conversation, DeepSearchReport, GeneratedImage, LearnReport, Message, Skill, User
 
 
 MAX_SKILL_COUNT = 100
@@ -18,7 +18,13 @@ def stamp(value) -> str:
 
 
 def user_json(user: User) -> dict:
-    return {"id": user.id, "username": user.username, "is_admin": user.is_admin}
+    return {
+        "id": user.id,
+        "username": user.username,
+        "is_admin": user.is_admin,
+        "family_group_id": user.family_group_id,
+        "family_group_name": user.family_group.name if user.family_group else None,
+    }
 
 
 def attachment_json(item: Attachment) -> dict:
@@ -63,6 +69,8 @@ def generated_image_json(item: GeneratedImage) -> dict:
 def message_json(item: Message) -> dict:
     reports = getattr(item, "deep_search_reports", None)
     report_id = reports[0].id if reports else None
+    learn_reports = getattr(item, "learn_reports", None)
+    learn_report_id = learn_reports[0].id if learn_reports else None
     return {
         "id": item.id,
         "role": item.role,
@@ -71,6 +79,7 @@ def message_json(item: Message) -> dict:
         "attachments": [attachment_json(value) for value in item.attachments],
         "sources": item.sources,
         "deep_search_report_id": report_id,
+        "learn_report_id": learn_report_id,
     }
 
 
@@ -87,6 +96,32 @@ def deep_search_report_json(item: DeepSearchReport, include_html: bool = False) 
         "sources_count": len(item.sources or []),
         "created_at": stamp(item.created_at),
         "html_url": f"/api/deep-search/reports/{item.id}/html",
+        "pdf_url": f"/api/deep-search/reports/{item.id}/html?pdf=1",
+        "download_url": f"/api/deep-search/reports/{item.id}/html?download=1",
+    }
+    if include_html:
+        data["html_content"] = item.html_content
+    return data
+
+
+def learn_report_json(item: LearnReport, include_html: bool = False) -> dict:
+    from app.learn_html import parse_flashcards, parse_quiz
+    data = {
+        "id": item.id,
+        "user_id": item.user_id,
+        "conversation_id": item.conversation_id,
+        "message_id": item.message_id,
+        "title": item.title,
+        "topic": item.topic,
+        "markdown_content": item.markdown_content,
+        "sources": item.sources or [],
+        "sources_count": len(item.sources or []),
+        "created_at": stamp(item.created_at),
+        "html_url": f"/api/learn/reports/{item.id}/html",
+        "pdf_url": f"/api/learn/reports/{item.id}/html?pdf=1",
+        "download_url": f"/api/learn/reports/{item.id}/html?download=1",
+        "flashcards": parse_flashcards(item.markdown_content, item.topic),
+        "quiz": parse_quiz(item.markdown_content, item.topic),
     }
     if include_html:
         data["html_content"] = item.html_content

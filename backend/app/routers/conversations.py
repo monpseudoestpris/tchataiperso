@@ -1,8 +1,11 @@
+import re
+import unicodedata
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
 from .. import providers
+from ..chat_export_html import generate_chat_export_html
 from ..config import Settings
 from ..deps import check_model, current_user, get_conversation, get_sessions, get_settings, get_upload_dir
 from ..models import Conversation, User, now
@@ -238,4 +241,46 @@ def delete_conversation(
         (upload_dir / name).unlink(missing_ok=True)
     locks.pop(lock_key, None)
     return Response(status_code=204)
+
+
+@router.get("/api/conversations/{conversation_id}/html")
+def get_conversation_html(
+    conversation_id: str,
+    download: bool = False,
+    user: User = Depends(current_user),
+    sessions: sessionmaker = Depends(get_sessions),
+):
+    with sessions() as db:
+        conv = get_conversation(db, conversation_id, user.id)
+        messages_data = [
+            {
+                "role": m.role,
+                "content": m.content,
+                "created_at_str": m.created_at.strftime("%d/%m/%Y %H:%M") if m.created_at else "",
+                "sources": m.sources or [],
+            }
+            for m in conv.messages
+        ]
+        title = conv.title or "Synthèse de la discussion cLAIr"
+        html_doc = generate_chat_export_html(
+            title=title,
+            messages=messages_data,
+            scope="conversation",
+            topic=conv.title,
+            model=conv.model,
+            created_at_str=conv.created_at.strftime("%d/%m/%Y") if conv.created_at else None,
+            summary=conv.summary or "",
+        )
+        headers = {}
+        if download:
+            clean_ascii = unicodedata.normalize("NFKD", title).encode("ascii", "ignore").decode("ascii")
+            clean_filename = re.sub(r"[^a-zA-Z0-9_\-]", "_", clean_ascii).strip("_")[:40] or "discussion"
+            headers["Content-Disposition"] = f'attachment; filename="{clean_filename}.html"'
+
+        return Response(
+            content=html_doc,
+            media_type="text/html; charset=utf-8",
+            headers=headers,
+        )
+
 

@@ -39,6 +39,7 @@ def settings():
         demo_mode=False,
         duckduckgo_enabled=False,
         search_query_model="mistralai/mistral-small-3.2-24b-instruct",
+        web_search_decision_model="google/gemini-3.5-flash-lite",
         deep_search_plan_model="anthropic/claude-fable-5.1",
         deep_search_synthesis_model="google/gemini-3.8-flash",
         searxng_url="",
@@ -1135,5 +1136,79 @@ def test_fallback_conversation_metadata_detects_health_and_coding_themes():
     assert code["theme"] == "Codage"
     assert 2 <= len(code["keywords"]) <= 3
     assert "python" in code["keywords"]
+
+
+def test_decide_web_search_explicit_heuristic(settings):
+    # Explicit search request triggers immediate true without network call
+    should_search, reason = asyncio.run(providers.decide_web_search(settings, "Cherche sur Internet la météo à Lyon"))
+    assert should_search is True
+    assert "explicite" in reason.lower()
+
+    should_search, reason = asyncio.run(providers.decide_web_search(settings, "Vérifie sur le web les prix de l'essence"))
+    assert should_search is True
+
+
+def test_decide_web_search_calls_fast_model_and_parses_decision(settings, transport):
+    called_models = []
+
+    def handler(request):
+        payload = json.loads(request.content)
+        called_models.append(payload["model"])
+        assert payload["temperature"] == 0.0
+        assert payload["max_tokens"] == 100
+        # Check criteria table is in system prompt
+        assert "Demande explicite" in payload["messages"][0]["content"]
+        assert "Information qui évolue" in payload["messages"][0]["content"]
+        assert "Recommandation liée à l’offre actuelle" in payload["messages"][0]["content"] or "Recommandation liée à l'offre actuelle" in payload["messages"][0]["content"]
+        assert "Besoin de preuves" in payload["messages"][0]["content"]
+        assert "Sujet spécialisé ou incertitude" in payload["messages"][0]["content"]
+        assert "Conséquences importantes" in payload["messages"][0]["content"]
+        assert "Connaissance stable ou travail sur le texte fourni" in payload["messages"][0]["content"]
+
+        msg = json.loads(payload["messages"][1]["content"])["current_message"]
+        if "GPU" in msg:
+            return httpx.Response(200, json={"choices": [{"message": {"content": '{"search": true, "reason": "Recommandation d\'offre actuelle", "criterion": "offre_actuelle"}'}}]})
+        else:
+            return httpx.Response(200, json={"choices": [{"message": {"content": '{"search": false, "reason": "Connaissance mathématique stable", "criterion": "connaissance_stable"}'}}]})
+
+    transport(handler)
+
+    # 1. Hardware recommendation (should search)
+    search_needed, reason = asyncio.run(providers.decide_web_search(settings, "Quel GPU acheter pour du 1440p à 500€ ?"))
+    assert search_needed is True
+    assert "offre" in reason.lower()
+    assert called_models[-1] == "google/gemini-3.5-flash-lite"
+
+    # 2. Stable knowledge (should not search)
+    search_needed, reason = asyncio.run(providers.decide_web_search(settings, "Explique-moi ce qu'est une dérivée en mathématiques"))
+    assert search_needed is False
+    assert "stable" in reason.lower()
+
+
+def test_decide_web_search_falls_back_when_primary_model_fails(settings, transport):
+    called_models = []
+
+    def handler(request):
+        payload = json.loads(request.content)
+        called_models.append(payload["model"])
+        if payload["model"] == "google/gemini-3.5-flash-lite":
+            return httpx.Response(500, text="Internal Error")
+        return httpx.Response(200, json={"choices": [{"message": {"content": '{"search": true, "reason": "Bug logiciel récent", "criterion": "sujet_specialise"}'}}]})
+
+    transport(handler)
+    search_needed, reason = asyncio.run(providers.decide_web_search(settings, "J'ai un bug étrange sur la bibliothèque foo v1.2"))
+    assert search_needed is True
+    assert "bug" in reason.lower()
+    assert called_models == ["google/gemini-3.5-flash-lite", "mistralai/mistral-small-3.2-24b-instruct"]
+
+
+def test_decide_web_search_demo_mode_uses_heuristics():
+    demo_settings = SimpleNamespace(demo_mode=True)
+    search_needed, reason = asyncio.run(providers.decide_web_search(demo_settings, "Quel est le cours de l'or aujourd'hui ?"))
+    assert search_needed is True
+
+    search_needed, reason = asyncio.run(providers.decide_web_search(demo_settings, "Raconte-moi une histoire drôle"))
+    assert search_needed is False
+
 
 

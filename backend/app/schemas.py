@@ -71,6 +71,54 @@ class AdminUpdateUser(BaseModel):
     active: bool
 
 
+class CreateFamilyGroup(BaseModel):
+    name: str = Field(min_length=2, max_length=100)
+
+
+class UpdateFamilyGroup(BaseModel):
+    name: str = Field(min_length=2, max_length=100)
+
+
+class CreateFamilyMember(BaseModel):
+    username: str = Field(min_length=3, max_length=48)
+    password: str = Field(min_length=12, max_length=128)
+
+    @field_validator("username")
+    @classmethod
+    def normalize_username(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_.-]{2,47}", normalized):
+            raise ValueError("Identifiant invalide (3 à 48 caractères lettres minuscules, chiffres, tirets, points)")
+        return normalized
+
+
+class LinkFamilyMember(BaseModel):
+    username: str = Field(min_length=3, max_length=48)
+    password: str = Field(min_length=12, max_length=128)
+
+    @field_validator("username")
+    @classmethod
+    def normalize_username(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_.-]{2,47}", normalized):
+            raise ValueError("Identifiant invalide")
+        return normalized
+
+
+class FamilyMemberItem(BaseModel):
+    id: str
+    username: str
+    is_admin: bool
+    active: bool
+    is_current: bool
+
+
+class FamilyGroupResponse(BaseModel):
+    id: str | None = None
+    name: str | None = None
+    members: list[FamilyMemberItem] = Field(default_factory=list)
+
+
 CONVERSATION_THEMES = (
     "Codage",
     "Santé",
@@ -138,12 +186,16 @@ class SendMessage(BaseModel):
     content: str = Field(default="", max_length=20000)
     model: str | None = None
     web_search: bool = False
+    auto_web_search: bool | None = None
+    web_search_mode: str | None = None
     deep_search: bool = False
+    learn_mode: bool = False
     code_mode: bool = False
     finance_mode: bool = False
     attachment_ids: list[str] = Field(default_factory=list, max_length=5)
     skill_ids: list[str] = Field(default_factory=list, max_length=10)
     deep_search_queries: list[str] | None = Field(default=None, max_length=20)
+    learn_mode_queries: list[str] | None = Field(default=None, max_length=20)
 
     @field_validator("attachment_ids")
     @classmethod
@@ -159,9 +211,9 @@ class SendMessage(BaseModel):
             raise ValueError("Compétences dupliquées")
         return values
 
-    @field_validator("deep_search_queries")
+    @field_validator("deep_search_queries", "learn_mode_queries")
     @classmethod
-    def sanitize_deep_search_queries(cls, values: list[str] | None) -> list[str] | None:
+    def sanitize_search_and_learn_queries(cls, values: list[str] | None) -> list[str] | None:
         if values is None:
             return None
         cleaned = [" ".join(q.split())[:300] for q in values if isinstance(q, str) and q.strip()]
@@ -173,6 +225,14 @@ class PlanDeepSearch(BaseModel):
 
 
 class DeepSearchPlanResponse(BaseModel):
+    queries: list[str]
+
+
+class PlanLearnMode(BaseModel):
+    content: str = Field(min_length=1, max_length=20000)
+
+
+class LearnModePlanResponse(BaseModel):
     queries: list[str]
 
 

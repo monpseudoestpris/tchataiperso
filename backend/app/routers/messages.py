@@ -14,13 +14,16 @@ from .. import providers
 from ..config import Settings
 from ..context import build_context
 from ..deep_search import execute_deep_search
+from ..chat_export_html import generate_chat_export_html
 from ..deep_search_html import generate_report_html
+from ..learn_mode import execute_learn_mode
+from ..learn_html import generate_learn_course_html
 from ..deps import check_model, claim, current_user, get_conversation, get_sessions, get_settings, get_upload_dir
 from ..documents import extraction_text
 from ..finance import process_message_finance_inquiries
-from ..models import Attachment, Conversation, DeepSearchReport, Message, Memory, Skill, User, now
-from ..schemas import DeepSearchPlanResponse, PlanDeepSearch, SendMessage
-from ..serializers import conversation_json, deep_search_report_json, extract_mentioned_skills, message_json, sse
+from ..models import Attachment, Conversation, DeepSearchReport, LearnReport, Message, Memory, Skill, User, now
+from ..schemas import DeepSearchPlanResponse, LearnModePlanResponse, PlanDeepSearch, PlanLearnMode, SendMessage
+from ..serializers import conversation_json, deep_search_report_json, extract_mentioned_skills, learn_report_json, message_json, sse
 from ..web import fetch_and_parse_web_url
 
 
@@ -46,7 +49,7 @@ async def send_message(
         raise HTTPException(503, "Configurez LLM_API_KEY ou activez explicitement DEMO_MODE pour une simulation")
     if not body.content.strip() and not body.attachment_ids:
         raise HTTPException(422, "Écrivez un message ou joignez un document")
-    if (body.web_search or body.deep_search) and not settings.web_search_enabled:
+    if (body.web_search or body.deep_search or body.learn_mode) and not settings.web_search_enabled:
         raise HTTPException(503, "La recherche web nécessite SearXNG, BRAVE_API_KEY ou DUCKDUCKGO_ENABLED en mode IA réel")
     lock = claim(request, user.id, conversation_id)
     await lock.acquire()
@@ -55,8 +58,8 @@ async def send_message(
             conversation = get_conversation(db, conversation_id, user.id)
             model = body.model or conversation.model
             # Fable 5.1 est strictement dédié à la planification stratégique.
-            # Pour la suite (synthèse globale, rapport d'analyse), bascule automatique sur un modèle rapide et économique.
-            if body.deep_search and (not body.model or model == getattr(settings, "deep_search_plan_model", "anthropic/claude-fable-5.1")):
+            # Pour la suite (synthèse globale, rapport d'analyse, cours complet), bascule automatique sur un modèle rapide et économique.
+            if (body.deep_search or body.learn_mode) and (not body.model or model == getattr(settings, "deep_search_plan_model", "anthropic/claude-fable-5.1")):
                 synthesis_model = getattr(settings, "deep_search_synthesis_model", None) or "google/gemini-3.8-flash"
                 if any(m["id"] == synthesis_model for m in settings.models):
                     model = synthesis_model
@@ -128,7 +131,7 @@ async def send_message(
                 for s in (extract_mentioned_skills(body.content, u_skills_pre) + [s for s in u_skills_pre if s.id in body.skill_ids])
             ]
             has_finance_skill = any("financ" in p or "bours" in p for p in active_skill_prompts)
-            is_finance_active = body.finance_mode or (has_finance_skill and not body.deep_search)
+            is_finance_active = body.finance_mode or (has_finance_skill and not body.deep_search and not body.learn_mode)
             previous_finance_targets: list[str] = []
             recent_turns: list[dict[str, str]] = []
             for past in conversation.messages:
@@ -143,12 +146,12 @@ async def send_message(
                             previous_finance_targets.remove(sym)
                         previous_finance_targets.insert(0, sym)
             entity_resolver = None
-            if not settings.demo_mode and settings.enabled(settings.llm_api_key) and not body.deep_search:
+            if not settings.demo_mode and settings.enabled(settings.llm_api_key) and not body.deep_search and not body.learn_mode:
                 async def entity_resolver(text: str, previous: list[str]) -> list[str]:
                     return await providers.extract_finance_targets(settings, text, previous, recent_turns[-4:])
             finance_failures: list[str] = []
             try:
-                if not body.deep_search or body.finance_mode:
+                if (not body.deep_search and not body.learn_mode) or body.finance_mode:
                     finance_atts = await process_message_finance_inquiries(
                         settings,
                         body.content,
@@ -220,6 +223,7 @@ async def send_message(
         accumulated = ""
         sources = []
         try:
+            yield ": keepalive\n\n"
             yield sse("meta", {"user_message": user_message, "assistant_message_id": assistant_id})
             with sessions() as db:
                 u_skills = list(db.scalars(select(Skill).where(Skill.user_id == user.id)))
@@ -308,8 +312,8 @@ async def send_message(
                     elif event["type"] == "done":
                         sources = event["sources"]
                         findings = event.get("findings", [])
-            elif body.web_search:
-                query = body.content.strip()[:1000]
+            elif body.learn_mode:
+                raw_query = body.content.strip()[:1500]
                 with sessions() as db:
                     conversation = get_conversation(db, conversation_id, user.id)
                     search_summary = conversation.summary
@@ -317,27 +321,93 @@ async def send_message(
                         {"role": item.role, "content": item.content}
                         for item in conversation.messages[:-1][-4:]
                     ]
-                if (
-                    providers.stream_chat is _DEFAULT_STREAM_CHAT
-                    or providers.rewrite_search_query is not _DEFAULT_REWRITE_SEARCH_QUERY
+                async for event in execute_learn_mode(
+                    settings=settings,
+                    query=raw_query,
+                    summary=search_summary,
+                    recent_turns=search_context,
+                    search_fn=_search_with_limit,
+                    initial_queries=body.learn_mode_queries,
+                    max_iterations=5,
+                    max_sources=None,
                 ):
-                    yield sse("status", {"message": "Reformulation de la recherche…"})
+                    if event["type"] == "status":
+                        yield sse("status", {"message": event["message"]})
+                    elif event["type"] == "ping":
+                        yield ": keepalive\n\n"
+                    elif event["type"] == "done":
+                        sources = event["sources"]
+                        findings = event.get("findings", [])
+            else:
+                perform_search = body.web_search
+                auto_search_allowed = (
+                    settings.web_search_enabled
+                    and not perform_search
+                    and not body.deep_search
+                    and not body.learn_mode
+                    and body.web_search_mode != "off"
+                    and body.auto_web_search is not False
+                    and (body.auto_web_search is True or body.web_search_mode == "auto" or getattr(settings, "auto_web_search", True))
+                )
+                auto_search_reason = ""
+                if auto_search_allowed:
+                    with sessions() as db:
+                        conversation = get_conversation(db, conversation_id, user.id)
+                        search_summary = conversation.summary
+                        search_context = [
+                            {"role": item.role, "content": item.content}
+                            for item in conversation.messages[:-1][-4:]
+                        ]
+                    yield sse("status", {"message": "Agent Web : analyse de l’intention et des critères de recherche…"})
                     try:
-                        query = await providers.rewrite_search_query(
-                            settings, query, search_summary, search_context,
+                        should_search, reason = await providers.decide_web_search(
+                            settings,
+                            query=body.content.strip(),
+                            summary=search_summary,
+                            recent_turns=search_context,
                         )
-                    except providers.ProviderError as exc:
-                        _logger.warning("Reformulation de recherche indisponible; question originale conservée: %s", exc)
-                        yield sse("status", {"message": "Reformulation indisponible; recherche avec la question originale…"})
-                yield sse("status", {"message": "Recherche web en cours…"})
-                sources = await providers.search_web(settings, query)
-                if not sources:
-                    raise providers.ProviderError(
-                        "Aucune source web exploitable n’a été trouvée. "
-                        "Reformulez ou désactivez Web pour continuer sans recherche."
-                    )
-                if notice := sources[0].get("search_notice"):
-                    yield sse("status", {"message": notice})
+                        if should_search:
+                            perform_search = True
+                            auto_search_reason = reason
+                            yield sse("status", {"message": f"Agent Web : recherche requise ({reason}) · Collecte des données…"})
+                    except Exception as exc:
+                        _logger.warning("Arbitrage web automatique indisponible: %s", exc)
+
+                if perform_search:
+                    query = body.content.strip()[:1000]
+                    with sessions() as db:
+                        conversation = get_conversation(db, conversation_id, user.id)
+                        search_summary = conversation.summary
+                        search_context = [
+                            {"role": item.role, "content": item.content}
+                            for item in conversation.messages[:-1][-4:]
+                        ]
+                    if (
+                        providers.stream_chat is _DEFAULT_STREAM_CHAT
+                        or providers.rewrite_search_query is not _DEFAULT_REWRITE_SEARCH_QUERY
+                    ):
+                        yield sse("status", {"message": "Reformulation de la recherche…"})
+                        try:
+                            query = await providers.rewrite_search_query(
+                                settings, query, search_summary, search_context,
+                            )
+                        except providers.ProviderError as exc:
+                            _logger.warning("Reformulation de recherche indisponible; question originale conservée: %s", exc)
+                            yield sse("status", {"message": "Reformulation indisponible; recherche avec la question originale…"})
+                    yield sse("status", {"message": "Recherche web en cours…"})
+                    sources = await providers.search_web(settings, query)
+                    if auto_search_reason and sources:
+                        for s in sources:
+                            s["auto_search_reason"] = auto_search_reason
+                    if not sources and body.web_search:
+                        raise providers.ProviderError(
+                            "Aucune source web exploitable n’a été trouvée. "
+                            "Reformulez ou désactivez Web pour continuer sans recherche."
+                        )
+                    elif not sources:
+                        yield sse("status", {"message": "Aucune source externe trouvée ; réponse basée sur les connaissances internes…"})
+                    elif notice := sources[0].get("search_notice"):
+                        yield sse("status", {"message": notice})
             # Summarize old turns, retaining the complete persisted history.
             with sessions() as db:
                 conversation = get_conversation(db, conversation_id, user.id)
@@ -476,10 +546,13 @@ async def send_message(
                     skills,
                     deep_search=body.deep_search,
                     code_mode=body.code_mode,
-                    findings=findings if body.deep_search else None,
+                    findings=findings if (body.deep_search or body.learn_mode) else None,
+                    learn_mode=body.learn_mode,
                 )
                 if body.deep_search:
                     status_label = f"DeepSearch · Synthèse globale et rapport approfondi ({len(sources)} source{'s' if len(sources) != 1 else ''})…"
+                elif body.learn_mode:
+                    status_label = f"Mode Apprendre · Rédaction du cours complet et structuré ({len(sources)} support{'s' if len(sources) != 1 else ''})…"
                 elif body.code_mode:
                     status_label = "Canvas Code · Conception et génération des fichiers…"
                 else:
@@ -555,6 +628,7 @@ async def send_message(
                 conversation.updated_at = now()
 
                 deep_search_report_id: str | None = None
+                learn_report_id: str | None = None
                 if body.deep_search:
                     report_title = (
                         conversation.title
@@ -583,6 +657,34 @@ async def send_message(
                     db.add(report)
                     db.flush()
                     deep_search_report_id = report.id
+                elif body.learn_mode:
+                    course_title = (
+                        conversation.title
+                        if conversation.title != "Nouvelle conversation"
+                        else (body.content.strip()[:120] or "Cours complet")
+                    )
+                    created_at_dt = now()
+                    html_content = generate_learn_course_html(
+                        title=course_title,
+                        topic=body.content.strip(),
+                        markdown_content=accumulated,
+                        sources=sources,
+                        created_at_str=created_at_dt.strftime("%d/%m/%Y à %H:%M"),
+                    )
+                    learn_rep = LearnReport(
+                        user_id=user.id,
+                        conversation_id=conversation_id,
+                        message_id=assistant_id,
+                        title=course_title,
+                        topic=body.content.strip(),
+                        markdown_content=accumulated,
+                        html_content=html_content,
+                        sources=sources,
+                        created_at=created_at_dt,
+                    )
+                    db.add(learn_rep)
+                    db.flush()
+                    learn_report_id = learn_rep.id
 
                 db.commit()
                 db.refresh(conversation)
@@ -591,6 +693,7 @@ async def send_message(
                     "message": message_json(answer),
                     "conversation": conversation_json(conversation),
                     "deep_search_report_id": deep_search_report_id,
+                    "learn_report_id": learn_report_id,
                 })
         except asyncio.CancelledError:
             raise
@@ -604,8 +707,12 @@ async def send_message(
 
     return StreamingResponse(
         stream(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        media_type="text/event-stream; charset=utf-8",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
@@ -642,7 +749,7 @@ async def plan_conversation_deep_search(
             )
     except providers.ProviderError as exc:
         _logger.warning("Planification DeepSearch indisponible: %s", exc)
-        queries = [raw_query]
+        queries = providers.default_deep_search_themes(raw_query)
 
     return DeepSearchPlanResponse(queries=queries)
 
@@ -670,7 +777,7 @@ async def plan_direct_deep_search(
             )
     except providers.ProviderError as exc:
         _logger.warning("Planification DeepSearch indisponible: %s", exc)
-        queries = [raw_query]
+        queries = providers.default_deep_search_themes(raw_query)
 
     return DeepSearchPlanResponse(queries=queries)
 
@@ -730,8 +837,15 @@ def get_deep_search_report_html(
             clean_filename = re.sub(r"[^a-zA-Z0-9_\-]", "_", clean_ascii).strip("_")[:40] or "rapport-deepsearch"
             headers["Content-Disposition"] = f'attachment; filename="{clean_filename}.html"'
 
+        html_doc = generate_report_html(
+            title=report.title,
+            topic=report.topic,
+            markdown_content=report.markdown_content,
+            sources=report.sources or [],
+            created_at_str=report.created_at.strftime("%d/%m/%Y") if report.created_at else None,
+        )
         return Response(
-            content=report.html_content,
+            content=html_doc,
             media_type="text/html; charset=utf-8",
             headers=headers,
         )
@@ -814,6 +928,353 @@ def create_or_get_report_from_message(
         db.commit()
         db.refresh(new_report)
         return deep_search_report_json(new_report, include_html=True)
+
+
+@router.post("/api/conversations/{conversation_id}/learn/plan", response_model=LearnModePlanResponse)
+async def plan_conversation_learn_mode(
+    conversation_id: str,
+    body: PlanLearnMode,
+    user: User = Depends(current_user),
+    settings: Settings = Depends(get_settings),
+    sessions: sessionmaker = Depends(get_sessions),
+):
+    if not settings.demo_mode and not settings.enabled(settings.llm_api_key):
+        raise HTTPException(503, "Configurez LLM_API_KEY ou activez explicitement DEMO_MODE pour une simulation")
+    if not settings.web_search_enabled:
+        raise HTTPException(503, "La recherche web nécessite SearXNG, BRAVE_API_KEY ou DUCKDUCKGO_ENABLED en mode IA réel")
+
+    with sessions() as db:
+        conversation = get_conversation(db, conversation_id, user.id)
+        search_summary = conversation.summary
+        search_context = [
+            {"role": item.role, "content": item.content}
+            for item in conversation.messages[-4:]
+        ]
+
+    raw_query = body.content.strip()[:1500]
+    try:
+        try:
+            queries = await providers.plan_learn_queries(
+                settings, raw_query, search_summary, search_context, max_queries=8,
+            )
+        except TypeError:
+            queries = await providers.plan_learn_queries(
+                settings, raw_query, search_summary, search_context,
+            )
+    except providers.ProviderError as exc:
+        _logger.warning("Planification Mode Apprendre indisponible: %s", exc)
+        queries = providers.default_learn_themes(raw_query)
+
+    return LearnModePlanResponse(queries=queries)
+
+
+@router.post("/api/learn/plan", response_model=LearnModePlanResponse)
+async def plan_direct_learn_mode(
+    body: PlanLearnMode,
+    user: User = Depends(current_user),
+    settings: Settings = Depends(get_settings),
+):
+    if not settings.demo_mode and not settings.enabled(settings.llm_api_key):
+        raise HTTPException(503, "Configurez LLM_API_KEY ou activez explicitement DEMO_MODE pour une simulation")
+    if not settings.web_search_enabled:
+        raise HTTPException(503, "La recherche web nécessite SearXNG, BRAVE_API_KEY ou DUCKDUCKGO_ENABLED en mode IA réel")
+
+    raw_query = body.content.strip()[:1500]
+    try:
+        try:
+            queries = await providers.plan_learn_queries(
+                settings, raw_query, "", [], max_queries=8,
+            )
+        except TypeError:
+            queries = await providers.plan_learn_queries(
+                settings, raw_query, "", [],
+            )
+    except providers.ProviderError as exc:
+        _logger.warning("Planification Mode Apprendre indisponible: %s", exc)
+        queries = providers.default_learn_themes(raw_query)
+
+    return LearnModePlanResponse(queries=queries)
+
+
+@router.get("/api/learn/reports")
+def list_learn_reports(
+    user: User = Depends(current_user),
+    sessions: sessionmaker = Depends(get_sessions),
+):
+    with sessions() as db:
+        items = list(
+            db.scalars(
+                select(LearnReport)
+                .where(LearnReport.user_id == user.id)
+                .order_by(LearnReport.created_at.desc())
+            )
+        )
+        return [learn_report_json(item) for item in items]
+
+
+@router.get("/api/learn/reports/{report_id}")
+def get_learn_report(
+    report_id: str,
+    user: User = Depends(current_user),
+    sessions: sessionmaker = Depends(get_sessions),
+):
+    with sessions() as db:
+        report = db.scalar(
+            select(LearnReport).where(
+                LearnReport.id == report_id, LearnReport.user_id == user.id
+            )
+        )
+        if not report:
+            raise HTTPException(404, "Cours introuvable")
+        return learn_report_json(report, include_html=True)
+
+
+@router.get("/api/learn/reports/{report_id}/html")
+def get_learn_report_html(
+    report_id: str,
+    download: bool = False,
+    user: User = Depends(current_user),
+    sessions: sessionmaker = Depends(get_sessions),
+):
+    with sessions() as db:
+        report = db.scalar(
+            select(LearnReport).where(
+                LearnReport.id == report_id, LearnReport.user_id == user.id
+            )
+        )
+        if not report:
+            raise HTTPException(404, "Cours introuvable")
+
+        headers = {}
+        if download:
+            raw_title = report.title or "cours-complet"
+            ascii_title = unicodedata.normalize("NFKD", raw_title).encode("ascii", "ignore").decode("ascii")
+            safe_title = re.sub(r"[^\w\s-]", "", ascii_title).strip()
+            safe_title = re.sub(r"[\s_]+", "-", safe_title).lower() or "cours"
+            filename = f"{safe_title[:60]}.html"
+            headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+
+        html_doc = generate_learn_course_html(
+            title=report.title,
+            topic=report.topic,
+            markdown_content=report.markdown_content,
+            sources=report.sources or [],
+            created_at_str=report.created_at.strftime("%d/%m/%Y") if report.created_at else None,
+        )
+        return Response(
+            content=html_doc,
+            media_type="text/html; charset=utf-8",
+            headers=headers,
+        )
+
+
+@router.delete("/api/learn/reports/{report_id}")
+def delete_learn_report(
+    report_id: str,
+    user: User = Depends(current_user),
+    sessions: sessionmaker = Depends(get_sessions),
+):
+    with sessions() as db:
+        report = db.scalar(
+            select(LearnReport).where(
+                LearnReport.id == report_id, LearnReport.user_id == user.id
+            )
+        )
+        if not report:
+            raise HTTPException(404, "Cours introuvable")
+        db.delete(report)
+        db.commit()
+        return {"ok": True}
+
+
+@router.post("/api/learn/reports/from-message/{message_id}")
+def create_or_get_learn_report_from_message(
+    message_id: str,
+    user: User = Depends(current_user),
+    sessions: sessionmaker = Depends(get_sessions),
+):
+    with sessions() as db:
+        existing = db.scalar(
+            select(LearnReport).where(
+                LearnReport.message_id == message_id, LearnReport.user_id == user.id
+            )
+        )
+        if existing:
+            return learn_report_json(existing, include_html=True)
+
+        message = db.scalar(
+            select(Message)
+            .join(Conversation)
+            .where(
+                Message.id == message_id,
+                Message.role == "assistant",
+                Conversation.user_id == user.id,
+            )
+        )
+        if not message:
+            raise HTTPException(404, "Message introuvable")
+
+        conv = message.conversation
+        course_title = conv.title if conv and conv.title != "Nouvelle conversation" else "Cours complet"
+        topic = course_title
+        if conv and conv.messages:
+            prev_users = [m.content for m in conv.messages if m.role == "user" and m.created_at <= message.created_at]
+            if prev_users:
+                topic = prev_users[-1]
+
+        created_at_dt = message.created_at
+        html_doc = generate_learn_course_html(
+            title=course_title,
+            topic=topic,
+            markdown_content=message.content,
+            sources=message.sources or [],
+            created_at_str=created_at_dt.strftime("%d/%m/%Y à %H:%M"),
+        )
+        new_report = LearnReport(
+            user_id=user.id,
+            conversation_id=conv.id if conv else None,
+            message_id=message.id,
+            title=course_title,
+            topic=topic,
+            markdown_content=message.content,
+            html_content=html_doc,
+            sources=message.sources or [],
+            created_at=created_at_dt,
+        )
+        db.add(new_report)
+        db.commit()
+        db.refresh(new_report)
+        return learn_report_json(new_report, include_html=True)
+
+
+@router.get("/api/messages/{message_id}/html")
+def get_message_html(
+    message_id: str,
+    scope: str = "turn",
+    download: bool = False,
+    user: User = Depends(current_user),
+    sessions: sessionmaker = Depends(get_sessions),
+):
+    with sessions() as db:
+        message = db.scalar(
+            select(Message)
+            .join(Conversation, Message.conversation_id == Conversation.id)
+            .where(
+                Message.id == message_id,
+                Conversation.user_id == user.id,
+            )
+        )
+        if not message:
+            raise HTTPException(404, "Message introuvable")
+
+        conv = message.conversation
+
+        # Si l'utilisateur demande la synthèse complète de la conversation
+        if scope in ("conversation", "all"):
+            title = conv.title or "Synthèse de la discussion cLAIr"
+            messages_data = [
+                {
+                    "role": m.role,
+                    "content": m.content,
+                    "created_at_str": m.created_at.strftime("%d/%m/%Y %H:%M") if m.created_at else "",
+                    "sources": m.sources or [],
+                }
+                for m in conv.messages
+            ]
+            html_doc = generate_chat_export_html(
+                title=title,
+                messages=messages_data,
+                scope="conversation",
+                topic=conv.title,
+                model=conv.model,
+                created_at_str=conv.created_at.strftime("%d/%m/%Y") if conv.created_at else None,
+                summary=conv.summary or "",
+            )
+        else:
+            # 1. Vérifier si ce message possède un rapport Learn
+            learn_rep = db.scalar(
+                select(LearnReport).where(
+                    LearnReport.message_id == message.id,
+                    LearnReport.user_id == user.id,
+                )
+            )
+            if learn_rep:
+                title = learn_rep.title or "Cours cLAIr"
+                html_doc = generate_learn_course_html(
+                    title=learn_rep.title,
+                    topic=learn_rep.topic,
+                    markdown_content=learn_rep.markdown_content,
+                    sources=learn_rep.sources or [],
+                    created_at_str=learn_rep.created_at.strftime("%d/%m/%Y") if learn_rep.created_at else None,
+                )
+            else:
+                # 2. Vérifier si ce message possède un rapport DeepSearch
+                ds_rep = db.scalar(
+                    select(DeepSearchReport).where(
+                        DeepSearchReport.message_id == message.id,
+                        DeepSearchReport.user_id == user.id,
+                    )
+                )
+                if ds_rep:
+                    title = ds_rep.title or "Rapport DeepSearch"
+                    html_doc = generate_report_html(
+                        title=ds_rep.title,
+                        topic=ds_rep.topic,
+                        markdown_content=ds_rep.markdown_content,
+                        sources=ds_rep.sources or [],
+                        created_at_str=ds_rep.created_at.strftime("%d/%m/%Y") if ds_rep.created_at else None,
+                    )
+                else:
+                    # 3. Message classique : Question & Réponse
+                    prev_user_msg = db.scalar(
+                        select(Message)
+                        .where(
+                            Message.conversation_id == message.conversation_id,
+                            Message.role == "user",
+                            Message.created_at <= message.created_at,
+                        )
+                        .order_by(Message.created_at.desc())
+                    )
+                    topic = prev_user_msg.content.strip() if prev_user_msg else (conv.title or "Échange cLAIr")
+                    title = conv.title or topic[:60] or "Échange cLAIr"
+
+                    turn_messages = []
+                    if prev_user_msg:
+                        turn_messages.append({
+                            "role": "user",
+                            "content": prev_user_msg.content,
+                            "created_at_str": prev_user_msg.created_at.strftime("%d/%m/%Y %H:%M") if prev_user_msg.created_at else "",
+                            "sources": [],
+                        })
+                    turn_messages.append({
+                        "role": "assistant",
+                        "content": message.content,
+                        "created_at_str": message.created_at.strftime("%d/%m/%Y %H:%M") if message.created_at else "",
+                        "sources": message.sources or [],
+                    })
+
+                    html_doc = generate_chat_export_html(
+                        title=title,
+                        messages=turn_messages,
+                        scope="turn",
+                        topic=topic,
+                        model=conv.model,
+                        created_at_str=message.created_at.strftime("%d/%m/%Y %H:%M") if message.created_at else None,
+                    )
+
+        headers = {}
+        if download:
+            clean_ascii = unicodedata.normalize("NFKD", title).encode("ascii", "ignore").decode("ascii")
+            clean_filename = re.sub(r"[^a-zA-Z0-9_\-]", "_", clean_ascii).strip("_")[:40] or "document"
+            headers["Content-Disposition"] = f'attachment; filename="{clean_filename}.html"'
+
+        return Response(
+            content=html_doc,
+            media_type="text/html; charset=utf-8",
+            headers=headers,
+        )
+
+
 
 
 

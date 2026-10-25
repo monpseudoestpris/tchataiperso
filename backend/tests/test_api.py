@@ -9,6 +9,7 @@ from PIL import Image
 from pydantic import SecretStr
 from pypdf import PdfWriter
 from pypdf.generic import DictionaryObject, NameObject, DecodedStreamObject
+from sqlalchemy import select
 
 from app import providers
 from app.auth import hash_password
@@ -30,8 +31,10 @@ def authenticated_client(settings, app=None):
     from app.models import Base
     Base.metadata.create_all(app.state.engine)
     with app.state.sessions() as db:
-        db.add(User(username="tester", password_hash=hash_password("correct horse battery"), is_admin=True))
-        db.commit()
+        existing = db.scalar(select(User).where(User.username == "tester"))
+        if not existing:
+            db.add(User(username="tester", password_hash=hash_password("correct horse battery"), is_admin=True))
+            db.commit()
     with TestClient(app, base_url=origin, headers={"Origin": origin}) as value:
         response = value.post("/api/auth/login", json={"username": "tester", "password": "correct horse battery"})
         assert response.status_code == 200
@@ -400,7 +403,7 @@ def test_no_key_never_silently_uses_demo(tmp_path):
 
 def test_mock_real_chat_injects_memory_docs_and_sources(tmp_path, monkeypatch):
     settings = Settings(_env_file=None, app_data_dir=tmp_path, demo_mode=False, llm_api_key="secret",
-                        searxng_url="http://clair-searxng:8080")
+                        searxng_url="http://clair-searxng:8080", auto_web_search=False)
     captured = {}
 
     async def rewrite(_settings, query, summary, recent_turns):
@@ -522,6 +525,60 @@ def test_search_rewrite_failure_uses_original_question(client, monkeypatch):
     })
     assert events(response)[-1][0] == "done"
     assert captured["query"] == "Et son prix ?"
+
+
+def test_auto_web_search_decision_agent_triggers_search_or_direct_answer(client, monkeypatch):
+    client.app.state.settings.demo_mode = False
+    client.app.state.settings.llm_api_key = SecretStr("secret")
+    client.app.state.settings.searxng_url = "http://clair-searxng:8080"
+    search_calls = []
+
+    async def mock_decide(_settings, query, summary, recent_turns):
+        if "GPU" in query:
+            return True, "Recommandation d'offre actuelle"
+        return False, "Connaissance stable"
+
+    async def mock_search(_settings, query):
+        search_calls.append(query)
+        return [{"title": "Meilleurs GPU 2026", "url": "https://example.org/gpu", "snippet": "RTX 5070 vs RX 8800"}]
+
+    async def mock_stream(_settings, messages, model):
+        yield "Voici les informations demandées."
+
+    monkeypatch.setattr(providers, "decide_web_search", mock_decide)
+    monkeypatch.setattr(providers, "search_web", mock_search)
+    monkeypatch.setattr(providers, "stream_chat", mock_stream)
+
+    item = conversation(client)
+
+    # 1. Message requiring search via default auto mode (no flags needed!)
+    res1 = client.post(f"/api/conversations/{item}/messages", json={
+        "content": "Quel GPU acheter en 2026 ?",
+    })
+    ev1 = events(res1)
+    assert ev1[-1][0] == "done"
+    assert ("status", {"message": "Agent Web : recherche requise (Recommandation d'offre actuelle) · Collecte des données…"}) in ev1
+    assert len(search_calls) == 1
+    assert ev1[-1][1]["message"]["sources"][0]["title"] == "Meilleurs GPU 2026"
+
+    # 2. Message on stable knowledge via default auto mode
+    res2 = client.post(f"/api/conversations/{item}/messages", json={
+        "content": "Explique-moi ce qu'est une dérivée en mathématiques",
+    })
+    ev2 = events(res2)
+    assert ev2[-1][0] == "done"
+    # Search should NOT be called again
+    assert len(search_calls) == 1
+    assert ev2[-1][1]["message"]["sources"] == []
+
+    # 3. Message requiring search, but user explicitly turned OFF web search
+    res3 = client.post(f"/api/conversations/{item}/messages", json={
+        "content": "Quel GPU acheter en 2026 ?",
+        "web_search_mode": "off",
+    })
+    ev3 = events(res3)
+    assert ev3[-1][0] == "done"
+    assert len(search_calls) == 1
 
 
 def test_stream_failure_is_explicit_unlocks_and_preserves_user(client, settings, monkeypatch):
@@ -858,8 +915,8 @@ def test_five_images_rejected_explicitly(client):
 
 
 def test_deep_search_executes_multi_wave_searxng_and_global_synthesis(tmp_path, monkeypatch):
-    settings = Settings(_env_file=None, app_data_dir=tmp_path, demo_mode=False, llm_api_key="secret",
-                        searxng_url="http://clair-searxng:8080")
+    settings = Settings(_env_file=None, app_data_dir=tmp_path, database_url=f"sqlite:///{tmp_path}/data.db", demo_mode=False, llm_api_key="secret",
+                        searxng_url="http://clair-searxng:8080", auto_web_search=False)
     searched_queries = []
     captured_context = {}
 
@@ -881,7 +938,7 @@ def test_deep_search_executes_multi_wave_searxng_and_global_synthesis(tmp_path, 
     async def search(_settings, query, limit=5):
         assert limit == 10
         searched_queries.append(query)
-        slug = query.split()[2]
+        slug = f"source-{len(searched_queries)}"
         return [
             {"title": f"Étude {slug}", "url": f"https://example.org/{slug}", "snippet": f"Données clés sur {query}"},
             {"title": "Doublon", "url": "https://example.org/commun/", "snippet": f"Contenu partagé ({query})"},
@@ -957,11 +1014,16 @@ def test_deep_search_executes_multi_wave_searxng_and_global_synthesis(tmp_path, 
         assert list_resp.status_code == 200
         assert any(r["id"] == report_id for r in list_resp.json())
 
-        # 5. From-message endpoint
+        # 5. From-message endpoint & message HTML view
         msg_id = done_payload["message"]["id"]
         from_msg = client.post(f"/api/deep-search/reports/from-message/{msg_id}")
         assert from_msg.status_code == 200
         assert from_msg.json()["id"] == report_id
+
+        msg_html_resp = client.get(f"/api/messages/{msg_id}/html")
+        assert msg_html_resp.status_code == 200
+        assert "text/html" in msg_html_resp.headers["content-type"]
+        assert "<!DOCTYPE html>" in msg_html_resp.text
 
         # 6. Delete report
         del_resp = client.delete(f"/api/deep-search/reports/{report_id}")
@@ -970,8 +1032,8 @@ def test_deep_search_executes_multi_wave_searxng_and_global_synthesis(tmp_path, 
 
 
 def test_deep_search_plan_endpoints_and_custom_queries(tmp_path, monkeypatch):
-    settings = Settings(_env_file=None, app_data_dir=tmp_path, demo_mode=False, llm_api_key="secret",
-                        searxng_url="http://clair-searxng:8080")
+    settings = Settings(_env_file=None, app_data_dir=tmp_path, database_url=f"sqlite:///{tmp_path}/data.db", demo_mode=False, llm_api_key="secret",
+                        searxng_url="http://clair-searxng:8080", auto_web_search=False)
 
     async def fake_plan(_settings, query, summary, recent_turns, max_queries=8):
         return ["piste plan 1", "piste plan 2", "piste plan 3"]

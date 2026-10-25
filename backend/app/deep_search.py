@@ -294,8 +294,8 @@ def create_deep_search_graph(
                     settings, raw_query, summary, recent_turns,
                 )
         except providers.ProviderError as exc:
-            _logger.warning("Planification DeepSearch indisponible; repli sur question directe: %s", exc)
-            queries = [raw_query]
+            _logger.warning("Planification DeepSearch indisponible; repli sur les axes par défaut: %s", exc)
+            queries = providers.default_deep_search_themes(raw_query)
 
         return {
             "iteration": iteration,
@@ -320,11 +320,14 @@ def create_deep_search_graph(
         completed_count = 0
         total_queries = len(queries)
 
+        topic = state.get("question", "")
+
         async def fetch_one(sub_query: str) -> tuple[str, list[dict[str, str]], providers.ProviderError | None]:
             nonlocal completed_count
+            engine_query = providers.theme_to_search_query(sub_query, topic=topic)
             async with sem:
                 try:
-                    res = await search_fn(sub_query, 10)
+                    res = await search_fn(engine_query, 10)
                     completed_count += 1
                     if on_status:
                         label = "Approfondissement" if is_followup else "Exploration"

@@ -88,14 +88,17 @@ class Settings(BaseSettings):
     summary_temperature: float = 0.2
     summary_max_tokens: int = 900
     deep_search_max_tokens: int = 12288
+    learn_mode_max_tokens: int = 16384
     summary_model: str = "openai/gpt-4o-mini"
     search_query_model: str = "mistralai/mistral-small-3.2-24b-instruct"
+    web_search_decision_model: str = "google/gemini-3.5-flash-lite"
     deep_search_plan_model: str = "anthropic/claude-fable-5.1"
     deep_search_synthesis_model: str = "google/gemini-3.8-flash"
     blog_model: str = "google/gemini-3.5-flash-lite"
     image_prompt_model: str = "openai/gpt-6-luna"
     image_models: str = ""
     default_image_model: str = "ideogram"
+    auto_web_search: bool = True
 
     @field_validator("llm_api_key", "brave_api_key", "mistral_api_key", "ideogram_api_key", "eod_historical_data_key", mode="before")
     @classmethod
@@ -161,14 +164,14 @@ class Settings(BaseSettings):
             raise ValueError("Les températures doivent être comprises entre 0 et 2")
         return value
 
-    @field_validator("llm_max_tokens", "summary_max_tokens", "deep_search_max_tokens")
+    @field_validator("llm_max_tokens", "summary_max_tokens", "deep_search_max_tokens", "learn_mode_max_tokens")
     @classmethod
     def valid_max_tokens(cls, value: int) -> int:
         if not 1 <= value <= 100000:
             raise ValueError("Le nombre maximal de tokens doit être compris entre 1 et 100000")
         return value
 
-    @field_validator("summary_model", "search_query_model", "deep_search_plan_model")
+    @field_validator("summary_model", "search_query_model", "web_search_decision_model", "deep_search_plan_model")
     @classmethod
     def valid_auxiliary_model(cls, value: str) -> str:
         value = value.strip()
@@ -313,7 +316,7 @@ class Settings(BaseSettings):
                 cleaned = _clean_api_key(parsed[env_name])
                 if cleaned or force is False:
                     setattr(self, field_name, SecretStr(cleaned))
-        str_fields = ("llm_base_url", "ocr_model", "vision_model", "default_model", "llm_models", "summary_model", "search_query_model", "deep_search_plan_model", "deep_search_synthesis_model", "blog_model", "image_prompt_model", "image_models", "default_image_model")
+        str_fields = ("llm_base_url", "ocr_model", "vision_model", "default_model", "llm_models", "summary_model", "search_query_model", "web_search_decision_model", "deep_search_plan_model", "deep_search_synthesis_model", "blog_model", "image_prompt_model", "image_models", "default_image_model")
         for field_name in str_fields:
             if field_name in self._explicit_fields:
                 continue
@@ -329,6 +332,10 @@ class Settings(BaseSettings):
             val = parsed["DUCKDUCKGO_ENABLED"].strip().lower()
             if val in ("true", "1", "yes", "false", "0", "no"):
                 self.duckduckgo_enabled = val in ("true", "1", "yes")
+        if "auto_web_search" not in self._explicit_fields and isinstance(parsed.get("AUTO_WEB_SEARCH"), str):
+            val = parsed["AUTO_WEB_SEARCH"].strip().lower()
+            if val in ("true", "1", "yes", "false", "0", "no"):
+                self.auto_web_search = val in ("true", "1", "yes")
 
     def enabled(self, key: SecretStr) -> bool:
         self.refresh_from_env_file()
