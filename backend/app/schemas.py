@@ -501,3 +501,61 @@ class StudyMaterialResponse(BaseModel):
     questions: list[QuizQuestionItem] = Field(default_factory=list)
 
 
+from .base_prompt import BASE_USER_PROMPT
+
+
+DEFAULT_PROMPT_PRESETS: list[dict[str, str]] = [
+    {
+        "id": "base_clair",
+        "title": "🌟 Naturel, Cultivé & Stimulant (Base cLAIr)",
+        "description": "Chaleureux, rigoureux, conversation vivante, écoute active et honnêteté intellectuelle.",
+        "prompt": BASE_USER_PROMPT,
+    },
+    {
+        "id": "concise_direct",
+        "title": "⚡ Équilibré & Concis",
+        "description": "Réponses directes et précises sans politesses superflues, bien structurées.",
+        "prompt": "Sois direct, précis et concis. Réponds immédiatement sans formules de politesse superflues. Structure tes réponses avec des puces ou des titres clairs et du code propre quand c'est pertinent.",
+    },
+    {
+        "id": "developer_expert",
+        "title": "💻 Expert Développeur & Architecte",
+        "description": "Code propre, moderne, typé, complet sans ellipses, focus robustesse.",
+        "prompt": "Agis en architecte logiciel senior et développeur expert (Python, TypeScript, React, Docker). Privilégie un code modulaire, typé, robuste et sans ellipses. Analyse les cas limites et propose des solutions éprouvées.",
+    },
+    {
+        "id": "teacher_pedagogue",
+        "title": "🎓 Pédagogue & Formateur",
+        "description": "Explications pas à pas, analogies concrètes et progression didactique.",
+        "prompt": "Explique chaque concept avec des analogies concrètes, de la méthode et des exemples progressifs. Sois encourageant, rigoureux et vérifie que chaque notion est claire avant d'aller plus loin.",
+    },
+    {
+        "id": "critical_analyst",
+        "title": "🔍 Analyste & Rigueur Critique",
+        "description": "Confrontation de points de vue, tableaux comparatifs et esprit de synthèse.",
+        "prompt": "Adopte une posture d'analyste rigoureux. Pèse systématiquement le pour et le contre, identifie les hypothèses implicites, confronte les points de vue et structure les synthèses sous forme de tableaux clairs.",
+    },
+    {
+        "id": "creative_writer",
+        "title": "✍️ Plume & Style Soigné",
+        "description": "Richesse lexicale, élégance rédactionnelle et fluidité captivante.",
+        "prompt": "Privilégie une écriture soignée, élégante et percutante. Varie le rythme des phrases, soigne le choix des mots et évite le jargon robotique.",
+    },
+]
+
+
+class UserSettingsResponse(BaseModel):
+    system_prompt: str
+    prompt_cache_enabled: bool
+    auto_memory_enabled: bool = True
+    default_system_prompt: str
+    prompt_presets: list[dict[str, str]]
+
+
+class UpdateUserSettingsRequest(BaseModel):
+    system_prompt: str | None = Field(default=None, max_length=12000)
+    prompt_cache_enabled: bool | None = None
+    auto_memory_enabled: bool | None = None
+
+
+

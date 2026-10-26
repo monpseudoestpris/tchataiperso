@@ -4,7 +4,7 @@ import {
   ArrowDown, ArrowRightLeft, ArrowUp, BookOpen, Brain, Check, ChevronDown, ChevronLeft, ChevronRight,
   CircleAlert, Code2, Compass, Copy, ExternalLink, Eye, FileCode2, FileText, FolderArchive,
   Globe2, GraduationCap, ImagePlus, Link2, LoaderCircle, LogOut, Menu, MessageCircle, Newspaper, PanelLeftClose, Paperclip,
-  Pencil, Plus, Search, RefreshCw, Share2, Shield, Sparkles, Square, SquarePlay, Trash2, TrendingUp, Users, UsersRound, Volume2, WandSparkles, X,
+  Pencil, Plus, Search, RefreshCw, Settings, Share2, Shield, Sparkles, Square, SquarePlay, Trash2, TrendingUp, Users, UsersRound, Volume2, WandSparkles, X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
@@ -21,6 +21,7 @@ import { ImageStudioModal } from "@/components/image-studio-modal";
 import { SoundStudioModal } from "@/components/sound-studio-modal";
 import { LearnModal } from "@/components/learn-modal";
 import { ModelModal } from "@/components/model-modal";
+import { SettingsModal } from "@/components/settings-modal";
 import { SkillsPanel } from "@/components/skills-panel";
 import { StudyModal } from "@/components/study-modal";
 import { ApiError, api, attachUrl, createLearnReportFromMessage, createReportFromMessage, errorMessage, skillToSlug, streamMessage, type Attachment, type AuthUser, type Config, type Conversation, type DocumentExtraction, type FamilyGroupInfo, type GeneratedSound, type Memory, type Message, type Model, type Skill } from "@/lib/api";
@@ -666,10 +667,12 @@ export function ChatApp() {
   const [atBottom, setAtBottom] = useState(true);
   const [familyInfo, setFamilyInfo] = useState<FamilyGroupInfo | null>(null);
   const [familyModalOpen, setFamilyModalOpen] = useState(false);
+  const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const profileMenuRef = useRef<HTMLDivElement>(null);
   const [topbarExportOpen, setTopbarExportOpen] = useState(false);
   const topbarExportRef = useRef<HTMLDivElement>(null);
+  const [memoryNotice, setMemoryNotice] = useState<string | null>(null);
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -1353,6 +1356,17 @@ export function ChatApp() {
                 messages: event.data.conversation.messages ?? (old.messages ?? []).map(item => item.id === assistantId ? event.data.message : item)
               } : old));
             }
+            if (event.data.memories) {
+              setMemories(event.data.memories);
+            }
+            if (event.data.new_memories && event.data.new_memories.length > 0) {
+              const count = event.data.new_memories.length;
+              const notice = count === 1
+                ? `Souvenir retenu : « ${event.data.new_memories[0]} »`
+                : `${count} souvenirs retenus en mémoire`;
+              setMemoryNotice(notice);
+              setTimeout(() => setMemoryNotice(null), 7000);
+            }
           }
         }
       );
@@ -1422,7 +1436,7 @@ export function ChatApp() {
 
   function invitationAccepted() {
     setUser(null); setConfig(null); setConversations([]); setConversation(null); setMemories([]);
-    setDraft(""); setAttachments([]); setMemoryDraft(""); setAdminOpen(false); setFamilyModalOpen(false); setProfileMenuOpen(false);
+    setDraft(""); setAttachments([]); setMemoryDraft(""); setAdminOpen(false); setFamilyModalOpen(false); setSettingsModalOpen(false); setProfileMenuOpen(false);
     window.history.replaceState({}, "", window.location.pathname + window.location.search);
     window.dispatchEvent(new PopStateEvent("popstate"));
   }
@@ -1435,7 +1449,7 @@ export function ChatApp() {
       console.error("Logout error", err);
     } finally {
       setUser(null); setConfig(null); setConversations([]); setConversation(null); setMemories([]);
-      setSkills([]); setFamilyInfo(null); setAdminOpen(false); setFamilyModalOpen(false); setProfileMenuOpen(false);
+      setSkills([]); setFamilyInfo(null); setAdminOpen(false); setFamilyModalOpen(false); setSettingsModalOpen(false); setProfileMenuOpen(false);
       setAuthReady(true);
     }
   }
@@ -1827,6 +1841,9 @@ export function ChatApp() {
             </div>
           )}
           <div className="profile-actions">
+            <IconButton label="Paramètres & Prompt général" onClick={() => setSettingsModalOpen(true)}>
+              <Settings size={16} />
+            </IconButton>
             <IconButton label={familyInfo?.id ? "Groupe familial" : "Créer un groupe familial"} onClick={() => setFamilyModalOpen(true)}>
               <Users size={16} />
             </IconButton>
@@ -1947,6 +1964,18 @@ export function ChatApp() {
             </div>
           )}
 
+          {/* Paramètres & Prompt Général */}
+          <button
+            type="button"
+            className={`topbar-settings-btn ${settingsModalOpen ? "is-active" : ""}`}
+            onClick={() => setSettingsModalOpen(true)}
+            aria-label="Ouvrir les paramètres et le prompt général"
+            title="Paramètres de l'assistant, prompt général permanent et cache de prompt"
+          >
+            <Settings size={16} />
+            <span>Paramètres</span>
+          </button>
+
           {/* Profil utilisateur & Bascule rapide de compte */}
           <div className="topbar-profile-wrap" ref={profileMenuRef}>
             <button
@@ -2043,6 +2072,18 @@ export function ChatApp() {
                   )}
                 </div>
 
+                <button
+                  type="button"
+                  className="profile-menu-item"
+                  onClick={() => {
+                    setProfileMenuOpen(false);
+                    setSettingsModalOpen(true);
+                  }}
+                >
+                  <Settings size={15} />
+                  <span>Paramètres & Prompt général</span>
+                </button>
+
                 {user.is_admin && (
                   <button
                     type="button"
@@ -2087,6 +2128,26 @@ export function ChatApp() {
           {!atBottom && !!messages.length && <IconButton className="scroll-bottom" label="Aller aux derniers messages" onClick={() => { setAtBottom(true); bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }}><ArrowDown size={18} /></IconButton>}
 
           <div className="composer-area">
+            {memoryNotice && (
+              <div className="memory-toast" role="status">
+                <Brain size={14} className="memory-toast-icon" />
+                <span className="memory-toast-text">{memoryNotice}</span>
+                <button
+                  type="button"
+                  className="memory-toast-action"
+                  onClick={() => {
+                    setContextTab("memories");
+                    setContextOpen(true);
+                    setMemoryNotice(null);
+                  }}
+                >
+                  Voir mes souvenirs
+                </button>
+                <IconButton label="Fermer la notification mémoire" onClick={() => setMemoryNotice(null)}>
+                  <X size={13} />
+                </IconButton>
+              </div>
+            )}
             {error && <div className="error-banner" role="alert"><CircleAlert size={17} /><p>{error}</p>{!config && <button type="button" disabled={working} onClick={() => void bootstrap()}>Réessayer</button>}<IconButton label="Fermer le message d’erreur" onClick={() => setError("")}><X size={15} /></IconButton></div>}
             {showDuckDuckGoNotice && <div className="search-notice" id="web-search-hint" role="status"><Globe2 size={13} />DuckDuckGo fournit des réponses instantanées et des sujets associés ; couverture limitée.</div>}
             {needsVision && <div className="vision-notice" role="status"><CircleAlert size={13} />Pour analyser vos images, choisissez un modèle compatible avec la vision.</div>}
@@ -2284,7 +2345,7 @@ export function ChatApp() {
         )}
 
         {contextOpen && <aside className="context-panel" id="context-panel" aria-label="Mémoire et contexte"><div className="context-heading"><div><span className="eyebrow">GARDER LE FIL</span><h2>Mémoire & contexte</h2></div><IconButton label="Fermer le panneau mémoire" onClick={() => setContextOpen(false)}><X size={18} /></IconButton></div><div className="context-tabs" role="tablist" aria-label="Contexte"><button id="summary-tab" type="button" role="tab" aria-selected={contextTab === "summary"} aria-controls="summary-panel" className={contextTab === "summary" ? "active" : ""} onClick={() => setContextTab("summary")}>Cette conversation</button><button id="memories-tab" type="button" role="tab" aria-selected={contextTab === "memories"} aria-controls="memories-panel" className={contextTab === "memories" ? "active" : ""} onClick={() => setContextTab("memories")}>Mes souvenirs <span>{memories.length}</span></button></div>
-          {contextTab === "summary" ? <div className="context-content" role="tabpanel" id="summary-panel" aria-labelledby="summary-tab"><div className="context-info"><BookOpen size={19} /><h3>L’essentiel, au même endroit.</h3><p>Un résumé progressif aide l’IA à garder le contexte quand la conversation s’allonge.</p></div>{conversation?.summary ? <div className="summary-card markdown"><ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins}>{normalizeMathMarkdown(conversation.summary)}</ReactMarkdown></div> : <div className="context-empty"><span className="empty-orbit"><BookOpen size={24} strokeWidth={1.2} /></span><strong>Chaque échange a son fil.</strong><p>{conversation ? "Le résumé apparaîtra ici lorsque cette conversation sera assez longue." : "Commencez une conversation pour retrouver son résumé ici."}</p></div>}<p className="context-explainer"><CircleAlert size={14} />Ce résumé est lié à cette conversation. Vos souvenirs, eux, peuvent enrichir tous vos échanges.</p></div> : <div className="context-content" role="tabpanel" id="memories-panel" aria-labelledby="memories-tab"><div className="context-info"><Brain size={20} /><h3>Les petites choses à retenir.</h3><p>Ajoutez vos préférences, vos projets ou des informations utiles. Vous gardez le contrôle.</p></div><form className="memory-form" onSubmit={event => void saveMemory(event)}><label className="sr-only" htmlFor="memory-input">Nouvelle information à mémoriser</label><textarea id="memory-input" placeholder="Par exemple : je préfère des réponses courtes et concrètes." value={memoryDraft} onChange={event => setMemoryDraft(event.target.value)} disabled={working} maxLength={2000} rows={3} /><button type="submit" disabled={!memoryDraft.trim() || working}><Plus size={15} />Mémoriser</button></form>{memories.length ? <ul className="memory-list">{memories.map(memory => <li key={memory.id}><div><span className="memory-bullet" /><p>{memory.content}</p><IconButton label={`Oublier : ${memory.content.slice(0, 45)}`} disabled={working} onClick={() => void deleteMemory(memory.id)}><Trash2 size={14} /></IconButton></div><small>Ajouté le {shortDate(memory.created_at)}</small></li>)}</ul> : <div className="memory-empty"><Brain size={23} strokeWidth={1.3} /><p>Votre mémoire est encore une page blanche.</p></div>}<p className="context-explainer"><CircleAlert size={14} />Ces informations sont envoyées au modèle dans vos conversations. Vous pouvez les supprimer à tout moment.</p></div>}
+          {contextTab === "summary" ? <div className="context-content" role="tabpanel" id="summary-panel" aria-labelledby="summary-tab"><div className="context-info"><BookOpen size={19} /><h3>L’essentiel, au même endroit.</h3><p>Un résumé progressif aide l’IA à garder le contexte quand la conversation s’allonge.</p></div>{conversation?.summary ? <div className="summary-card markdown"><ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins}>{normalizeMathMarkdown(conversation.summary)}</ReactMarkdown></div> : <div className="context-empty"><span className="empty-orbit"><BookOpen size={24} strokeWidth={1.2} /></span><strong>Chaque échange a son fil.</strong><p>{conversation ? "Le résumé apparaîtra ici lorsque cette conversation sera assez longue." : "Commencez une conversation pour retrouver son résumé ici."}</p></div>}<p className="context-explainer"><CircleAlert size={14} />Ce résumé est lié à cette conversation. Vos souvenirs, eux, peuvent enrichir tous vos échanges.</p></div> : <div className="context-content" role="tabpanel" id="memories-panel" aria-labelledby="memories-tab"><div className="context-info"><Brain size={20} /><h3>Les petites choses à retenir.</h3><p>Vos souvenirs s&apos;enrichissent soit automatiquement par l&apos;agent IA au fil des échanges, soit dès que vous lui dites <em>« note en mémoire que... »</em>. Vous gardez le contrôle total.</p></div><form className="memory-form" onSubmit={event => void saveMemory(event)}><label className="sr-only" htmlFor="memory-input">Nouvelle information à mémoriser</label><textarea id="memory-input" placeholder="Par exemple : je préfère des réponses courtes et concrètes." value={memoryDraft} onChange={event => setMemoryDraft(event.target.value)} disabled={working} maxLength={2000} rows={3} /><button type="submit" disabled={!memoryDraft.trim() || working}><Plus size={15} />Mémoriser</button></form>{memories.length ? <ul className="memory-list">{memories.map(memory => <li key={memory.id}><div><span className="memory-bullet" /><p>{memory.content}</p><IconButton label={`Oublier : ${memory.content.slice(0, 45)}`} disabled={working} onClick={() => void deleteMemory(memory.id)}><Trash2 size={14} /></IconButton></div><small>Ajouté le {shortDate(memory.created_at)}</small></li>)}</ul> : <div className="memory-empty"><Brain size={23} strokeWidth={1.3} /><p>Votre mémoire est encore une page blanche.</p></div>}<p className="context-explainer"><CircleAlert size={14} />Ces informations sont envoyées au modèle dans vos conversations. Vous pouvez les supprimer à tout moment.</p></div>}
         </aside>}
       </div>
     </main>
@@ -2375,6 +2436,16 @@ export function ChatApp() {
         onClose={() => setFamilyModalOpen(false)}
         onFamilyUpdated={setFamilyInfo}
         onSwitchAccount={switchAccount}
+      />
+    )}
+    {settingsModalOpen && (
+      <SettingsModal
+        currentUser={user}
+        isOpen={settingsModalOpen}
+        onClose={() => setSettingsModalOpen(false)}
+        onSettingsUpdated={(updated) => {
+          setUser(prev => prev ? { ...prev, ...updated } : prev);
+        }}
       />
     )}
     {dialog && <div className="modal-backdrop" onClick={event => { if (event.target === event.currentTarget && !working) setDialog(null); }}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="dialog-title" onKeyDown={event => { if (event.key === "Escape" && !working) setDialog(null); if (event.key === "Tab") { const elements = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled)')); if (!elements.length) return; const first = elements[0]; const last = elements[elements.length - 1]; if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); } else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); } } }}><form onSubmit={event => void submitDialog(event)}><div className="modal-header"><span className="modal-icon">{dialog.type === "delete" ? <Trash2 size={20} /> : <Pencil size={20} />}</span><IconButton label="Fermer" disabled={working} onClick={() => setDialog(null)}><X size={18} /></IconButton></div><h2 id="dialog-title">{dialog.type === "delete" ? "Supprimer cette conversation ?" : "Organiser la discussion"}</h2>{dialog.type === "delete" ? <p>« {dialog.conversation.title} » et ses messages seront supprimés. Cette action est définitive.</p> : <div className="modal-fields"><div className="modal-field-header"><label htmlFor="rename-input">Titre de la conversation</label><button type="button" className="modal-ai-generate-btn" disabled={working} onClick={() => void classifyConversation(dialog.conversation.id, true)} title="Générer titre, thème et mots-clés avec Mistral Small">{busy === "classify" ? <LoaderCircle size={12} className="spin" /> : <WandSparkles size={12} />}<span>Générer en auto (IA)</span></button></div><input id="rename-input" value={renameValue} onChange={event => setRenameValue(event.target.value)} maxLength={200} autoFocus disabled={working} /><label htmlFor="theme-select">Thème</label><select id="theme-select" className="modal-select" value={renameTheme} onChange={event => setRenameTheme(event.target.value)} disabled={working}>{availableThemes.map(t => <option key={t} value={t}>{t}</option>)}</select><label htmlFor="keywords-input">Mots-clés (2 ou 3, séparés par des virgules)</label><input id="keywords-input" value={renameKeywords} onChange={event => setRenameKeywords(event.target.value)} placeholder="ex. santé, sommeil, récupération" maxLength={160} disabled={working} /></div>}<div className="modal-actions"><button type="button" className="secondary-button" disabled={working} onClick={() => setDialog(null)}>Annuler</button><button type="submit" className={dialog.type === "delete" ? "danger-button" : "primary-button"} disabled={working || (dialog.type === "rename" && !renameValue.trim())}>{working ? <LoaderCircle className="spin" size={15} /> : null}{dialog.type === "delete" ? "Supprimer" : "Enregistrer"}</button></div></form></section></div>}

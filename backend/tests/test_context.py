@@ -63,7 +63,7 @@ def test_ideogram_image_host_configuration_normalizes_exact_names():
 
 
 def test_paged_extraction_includes_late_figures_within_context_budget():
-    settings = Settings(_env_file=None)
+    settings = Settings(_env_file=None, max_context_chars=20000)
     extraction = {"model": "mistral-ocr-4-1", "pages": [
         {"index": index, "markdown": "OCR " * 2000, "vision_description": f"VISUAL_PAGE_{index}"}
         for index in range(10)

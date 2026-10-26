@@ -1,8 +1,10 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, true
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+from .base_prompt import BASE_USER_PROMPT
 
 
 def uid() -> str:
@@ -36,6 +38,9 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     family_group_id: Mapped[str | None] = mapped_column(ForeignKey("family_groups.id", ondelete="SET NULL"), nullable=True, index=True)
     family_group: Mapped[FamilyGroup | None] = relationship(back_populates="members", foreign_keys=[family_group_id], lazy="joined")
+    system_prompt: Mapped[str] = mapped_column(Text, default=BASE_USER_PROMPT, server_default=BASE_USER_PROMPT)
+    prompt_cache_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
+    auto_memory_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
 
 
 class AuthSession(Base):

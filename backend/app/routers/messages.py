@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
 from .. import providers
+from ..base_prompt import BASE_USER_PROMPT
 from ..config import Settings
 from ..context import build_context
 from ..deep_search import execute_deep_search
@@ -21,6 +22,7 @@ from ..learn_html import generate_learn_course_html
 from ..deps import check_model, claim, current_user, get_conversation, get_sessions, get_settings, get_upload_dir
 from ..documents import extraction_text
 from ..finance import process_message_finance_inquiries
+from ..memory_agent import process_memory_turn
 from ..models import Attachment, Conversation, DeepSearchReport, LearnReport, Message, Memory, Skill, User, now
 from ..schemas import DeepSearchPlanResponse, LearnModePlanResponse, PlanDeepSearch, PlanLearnMode, SendMessage
 from ..serializers import conversation_json, deep_search_report_json, extract_mentioned_skills, learn_report_json, message_json, sse
@@ -197,12 +199,16 @@ async def send_message(
         except TypeError:
             return await providers.search_web(settings, query_text)
 
+    user_prompt_cache = getattr(user, "prompt_cache_enabled", True)
+    user_general_prompt = (getattr(user, "system_prompt", "") or "").strip() or BASE_USER_PROMPT
+
     async def _stream_chat_with_keepalive(
         chat_context: list[dict],
         target_model: str,
         ping_interval: float = 2.0,
+        enable_cache: bool = True,
     ) -> AsyncIterator[tuple[str, bool]]:
-        aiterator = providers.stream_chat(settings, chat_context, target_model).__aiter__()
+        aiterator = providers.stream_chat(settings, chat_context, target_model, enable_cache=enable_cache).__aiter__()
         pending: asyncio.Task | None = None
         while True:
             if pending is None:
@@ -548,6 +554,8 @@ async def send_message(
                     code_mode=body.code_mode,
                     findings=findings if (body.deep_search or body.learn_mode) else None,
                     learn_mode=body.learn_mode,
+                    user_system_prompt=user_general_prompt,
+                    prompt_cache_enabled=user_prompt_cache,
                 )
                 if body.deep_search:
                     status_label = f"DeepSearch · Synthèse globale et rapport approfondi ({len(sources)} source{'s' if len(sources) != 1 else ''})…"
@@ -558,7 +566,7 @@ async def send_message(
                 else:
                     status_label = "Rédaction de la réponse…"
                 yield sse("status", {"message": status_label})
-                async for chunk, is_ping in _stream_chat_with_keepalive(context, model):
+                async for chunk, is_ping in _stream_chat_with_keepalive(context, model, enable_cache=user_prompt_cache):
                     if is_ping:
                         yield chunk
                     else:
@@ -577,7 +585,7 @@ async def send_message(
                             "explicitement plutôt que de ne rien répondre."
                         ),
                     }]
-                    async for chunk, is_ping in _stream_chat_with_keepalive(retry_context, model):
+                    async for chunk, is_ping in _stream_chat_with_keepalive(retry_context, model, enable_cache=user_prompt_cache):
                         if is_ping:
                             yield chunk
                         else:
@@ -689,12 +697,31 @@ async def send_message(
                 db.commit()
                 db.refresh(conversation)
                 db.refresh(answer)
-                yield sse("done", {
-                    "message": message_json(answer),
-                    "conversation": conversation_json(conversation),
-                    "deep_search_report_id": deep_search_report_id,
-                    "learn_report_id": learn_report_id,
-                })
+                final_msg_json = message_json(answer)
+                final_conv_json = conversation_json(conversation)
+
+            memory_result: dict = {}
+            try:
+                memory_result = await process_memory_turn(
+                    settings=settings,
+                    sessions=sessions,
+                    user_id=user.id,
+                    user_text=body.content.strip(),
+                    assistant_text=accumulated,
+                    auto_memory_enabled=getattr(user, "auto_memory_enabled", True),
+                )
+            except Exception as m_exc:
+                _logger.warning("Échec traitement mémoire agent: %s", m_exc)
+
+            yield sse("done", {
+                "message": final_msg_json,
+                "conversation": final_conv_json,
+                "deep_search_report_id": deep_search_report_id,
+                "learn_report_id": learn_report_id,
+                "memories": memory_result.get("all_memories"),
+                "new_memories": memory_result.get("new_memories", []),
+                "deleted_memories": memory_result.get("deleted_memories", []),
+            })
         except asyncio.CancelledError:
             raise
         except providers.ProviderError as exc:

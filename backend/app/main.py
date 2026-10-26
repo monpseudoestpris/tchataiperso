@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import create_engine, event, inspect, select, text
 from sqlalchemy.orm import sessionmaker
 
+from .base_prompt import BASE_USER_PROMPT
 from .config import Settings
 from .deps import check_model, claim, current_user, get_conversation, require_admin
 from .models import Base, User
@@ -20,6 +21,7 @@ from .routers import (
     images,
     memories,
     messages,
+    settings as settings_router,
     skills,
     sounds,
     system,
@@ -76,9 +78,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 if "keywords" not in conv_columns:
                     conn.execute(text("ALTER TABLE conversations ADD COLUMN keywords JSON NOT NULL DEFAULT '[]'"))
         user_columns = {column["name"] for column in inspector.get_columns("users")}
-        if "family_group_id" not in user_columns:
-            with engine.begin() as conn:
+        with engine.begin() as conn:
+            if "family_group_id" not in user_columns:
                 conn.execute(text("ALTER TABLE users ADD COLUMN family_group_id VARCHAR(36)"))
+            if "system_prompt" not in user_columns:
+                conn.execute(text("ALTER TABLE users ADD COLUMN system_prompt TEXT NOT NULL DEFAULT ''"))
+            if "prompt_cache_enabled" not in user_columns:
+                conn.execute(text("ALTER TABLE users ADD COLUMN prompt_cache_enabled BOOLEAN NOT NULL DEFAULT TRUE"))
+            if "auto_memory_enabled" not in user_columns:
+                conn.execute(text("ALTER TABLE users ADD COLUMN auto_memory_enabled BOOLEAN NOT NULL DEFAULT TRUE"))
+            conn.execute(
+                text("UPDATE users SET system_prompt = :prompt WHERE system_prompt = '' OR system_prompt IS NULL"),
+                {"prompt": BASE_USER_PROMPT},
+            )
         if "generated_sounds" in inspector.get_table_names():
             sound_columns = {column["name"] for column in inspector.get_columns("generated_sounds")}
             with engine.begin() as conn:
@@ -138,6 +150,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(images.router)
     app.include_router(sounds.router)
     app.include_router(blogs.router)
+    app.include_router(settings_router.router)
 
     return app
 

@@ -1,3 +1,117 @@
+# Relais — 26 octobre 2026 (Mémoire Intelligente à Long Terme : Capture Autonome par Agent IA & Commandes Explicites « Note en mémoire »)
+
+- Réalisé :
+  - **Moteur d'Agent de Mémoire à Long Terme** (`backend/app/memory_agent.py`) :
+    - *Mode Autonome (« un agent décide quoi retenir »)* :
+      - L'agent de mémoire analyse chaque échange en tâche de fond pour identifier les faits durables et utiles (identité, lieu de résidence, stack technique, préférences pérennes, contraintes alimentaires/santé, projets de long terme).
+      - Filtrage strict anti-bruit : les tâches ponctuelles (« traduis ce texte »), états passagers (« il fait beau », « j'ai faim »), questions encyclopédiques générales et politesses ne sont jamais retenues.
+      - Déduplication stricte et mise à jour dynamique : comparaison sémantique et textuelle contre les souvenirs déjà présents en base pour éviter les doublons ou redondances, avec capacité de remplacer un souvenir obsolète par un nouveau (ex. déménagement ou changement de métier).
+      - Formulation sous forme de faits atomiques à la 3e personne en français (ex. « Vit à Bordeaux », « Développe principalement en Rust et Python », « Régime végétarien strict »).
+    - *Mode Explicite (« genre note en mémoire etc »)* :
+      - Détection prioritaire immédiate des demandes explicites de mémorisation : « note en mémoire que... », « retiens dans ma mémoire... », « souviens-toi que... », « garde en mémoire : ... », « ajoute à ma mémoire », etc.
+      - Prise en charge des demandes d'oubli : « oublie que... », « supprime de ma mémoire... », « efface ce souvenir ».
+      - Repli local robuste (`fallback_memory_analysis`) par expressions régulières et conversion grammaticale (1re -> 3e personne), garantissant que toute demande explicite est enregistrée même en mode démonstration, hors-ligne ou lors d'un timeout réseau.
+    - *Orchestration & Persistance en base* (`process_memory_turn`) :
+      - Gestion de la limite des 100 souvenirs par utilisateur, suppression des souvenirs demandés et insertion des nouveaux faits.
+      - Retourne un dictionnaire complet (`new_memories`, `deleted_memories`, `all_memories`).
+  - **Mise à jour du Prompt Système & Contexte** (`backend/app/context.py`) :
+    - Remplacement de l'ancienne instruction statique restrictive (« Les souvenirs sont enregistrés explicitement par l'utilisateur. N'invente pas de souvenirs et ne prétends pas en enregistrer »).
+    - Nouvelle directive invitant le modèle à confirmer naturellement et chaleureusement l'enregistrement lorsqu'une demande est formulée (« C'est bien noté dans votre mémoire ! 🧠 »), tout en précisant que l'agent synchronise automatiquement ces souvenirs.
+  - **Flux de Tchat en Streaming SSE & Notification UI Réactive** (`backend/app/routers/messages.py`, `frontend/lib/api.ts`, `frontend/components/chat-app.tsx`, `frontend/app/globals.css`) :
+    - Émission des souvenirs dans l'événement SSE `done` (`memories`, `new_memories`, `deleted_memories`).
+    - Mise à jour instantanée du state `memories` côté frontend sans aucun rechargement de page.
+    - Affichage d'un toast réactif et élégant au-dessus du champ de message (`.memory-toast`) :
+      - « 🧠 Souvenir retenu : « ... » » avec bouton 1-clic « Voir mes souvenirs » ouvrant le tiroir de mémoire et bouton de fermeture.
+  - **Modèle de données, Paramètres & Préférences Utilisateur** (`backend/app/models.py`, `backend/app/schemas.py`, `backend/app/serializers.py`, `backend/app/routers/settings.py`, `backend/migrations/versions/0015_add_auto_memory.py`, `backend/app/main.py`, `backend/app/cli.py`, `frontend/components/settings-modal.tsx`) :
+    - Ajout de la colonne `auto_memory_enabled` (Boolean, default `true`) sur la table `users`.
+    - Migration Alembic `0015_add_auto_memory.py` avec auto-migration progressive au démarrage.
+    - Intégration dans `GET /api/settings` et `PATCH /api/settings`.
+    - Nouvelle Section 3 dans la modale `SettingsModal` : « Mémoire Long Terme & Agent de Souvenirs » avec toggle On/Off, badges dynamiques et grille didactique d'explication.
+  - **Validation & Tests** :
+    - Nouveaux tests unitaires et d'intégration validés (`backend/tests/test_memory_agent.py`) : 7/7 passés (captures explicites, oublis, déduplication, toggle autonome, persistance en base, API settings et flux streaming SSE avec sauvegarde réelle).
+    - Suite complète de 58 tests ciblés validée : 58/58 passés (`pytest test_memory_agent.py test_settings.py test_sounds.py test_study_material.py test_deep_search.py test_learn_mode.py test_context.py test_migrations.py`).
+    - Typecheck Next.js validé : 0 erreur (`npm --prefix frontend run typecheck`).
+    - Build Next.js de production validé : 0 erreur (`npm --prefix frontend run build`).
+    - Conteneurs Docker relancés en dev (`compose.yaml` + `compose.dev.yaml`) : `clair-api` et `clair-web` opérationnels et `healthy`.
+    - Base de données PostgreSQL vérifiée : colonne `auto_memory_enabled` présente et active.
+- Fichiers modifiés / créés :
+  - Créés : `backend/app/memory_agent.py`, `backend/migrations/versions/0015_add_auto_memory.py`, `backend/tests/test_memory_agent.py`.
+  - Modifiés : `backend/app/models.py`, `backend/app/schemas.py`, `backend/app/serializers.py`, `backend/app/routers/settings.py`, `backend/app/context.py`, `backend/app/routers/messages.py`, `backend/app/main.py`, `backend/app/cli.py`, `frontend/lib/api.ts`, `frontend/components/settings-modal.tsx`, `frontend/components/chat-app.tsx`, `frontend/app/globals.css`, `HANDOFF.md`.
+- Vérifications exécutées :
+  - `python3 -m py_compile backend/app/*.py backend/app/routers/*.py backend/migrations/versions/*.py backend/tests/*.py` : 0 erreur.
+  - `PYTHONPATH=backend backend/.venv/bin/pytest backend/tests/test_memory_agent.py backend/tests/test_settings.py backend/tests/test_sounds.py backend/tests/test_study_material.py backend/tests/test_deep_search.py backend/tests/test_learn_mode.py backend/tests/test_context.py backend/tests/test_migrations.py` : 58/58 passés.
+  - `npm --prefix frontend run typecheck` : 0 erreur.
+  - `npm --prefix frontend run build` : 0 erreur.
+  - `docker compose -f compose.yaml -f compose.dev.yaml up -d --build clair-api clair-web` : conteneurs démarrés et `healthy`.
+  - `curl -I http://127.0.0.1:3001/` : `HTTP/1.1 200 OK`.
+  - `curl -s http://127.0.0.1:8001/api/health` : `{"status":"ok"}`.
+  - `docker exec tchataiperso-clair-db-1 psql -U tchat -d tchat -c "\d users"` : colonne `auto_memory_enabled` validée en PostgreSQL.
+- Problèmes connus : aucun.
+- Prochaine action : ouvrir `http://localhost:3001` (ou `http://192.168.1.28:3001`), tester dans une discussion une demande explicite (ex. « Note en mémoire que j'adore le café noir ») ou discuter naturellement en partageant une information personnelle : le toast de notification s'affiche, le badge du bouton Mémoire s'incrémente et le souvenir apparaît dans le panneau Mémoire.
+
+---
+
+# Relais — 26 octobre 2026 (Section Paramètres, Prompt Général Personnalisé & Optimisation du Cache de Prompt / Prompt Caching)
+
+- Réalisé :
+  - **Gestion du Prompt Général et de l'Optimisation du Cache de Prompt (Prompt Caching)** :
+    - *Compréhension du mécanisme de Prompt Caching* :
+      - Pour les modèles comme Anthropic Claude (via OpenRouter ou direct), le cache exige des balises explicites `cache_control: {"type": "ephemeral"}` sur les blocs de contenu du message système et (en multi-tours) sur l'avant-dernier tour de conversation.
+      - Pour les modèles comme OpenAI (GPT-4o, o-series), DeepSeek (V3, R1) et Google Gemini, le cache fonctionne par correspondance stricte de préfixe (Prefix Caching). Si le début des messages (règles de base + prompt général de l'utilisateur) reste strictement identique au caractère près, le préfixe est réutilisé en mémoire cache sans être recalculé ni refacturé au tarif plein.
+      - Sur OpenRouter, les balises `cache_control` activent le "sticky provider routing" (routage vers le même nœud fournisseur conservant le cache chaud) et réduisent la facture des tokens d'entrée de 50% à 90% tout en divisant la latence par deux.
+    - *Moteur d'optimisation du cache* (`backend/app/providers.py` : `prepare_messages_for_caching`) :
+      - Injecte automatiquement `cache_control: {"type": "ephemeral"}` sur le bloc de texte du message système lorsque le modèle cible ou l'URL de base le supporte (OpenRouter, Anthropic Claude).
+      - En conversation multi-tours (`len >= 3`), injecte un second point d'arrêt de cache sur l'avant-dernier message afin que tout l'historique antérieur de la discussion soit également lu depuis le cache au fil des échanges.
+      - Respecte scrupuleusement le choix utilisateur : si le cache est désactivé, les messages restent en texte brut standard sans balises.
+    - *Injection du prompt général dans le contexte* (`backend/app/context.py` : `build_context`) :
+      - Ajout du paramètre `user_system_prompt: str = ""` et `prompt_cache_enabled: bool = True`.
+      - Le prompt général personnalisé est fusionné de manière stable au sommet du bloc d'instructions système juste après les règles de base, garantissant que la séquence de préfixe reste 100% stable pour tous les modèles (DeepSearch, Learn Mode, Canvas Code et tchat standard).
+  - **Modèle de données & Persistance** (`backend/app/models.py`, `backend/app/main.py`, `backend/app/cli.py`, `backend/migrations/versions/0014_add_user_settings.py`) :
+    - Ajout des colonnes `system_prompt` (Text, valeur par défaut `""`) et `prompt_cache_enabled` (Boolean, valeur par défaut `true`) sur la table `users`.
+    - Création de la migration Alembic `0014_add_user_settings.py`.
+    - Ajout de l'auto-migration progressive dans `lifespan` FastAPI (`ALTER TABLE users ADD COLUMN ... DEFAULT TRUE` compatible PostgreSQL et SQLite).
+  - **Endpoints API dédiés & Sérialisation** (`backend/app/routers/settings.py`, `backend/app/schemas.py`, `backend/app/serializers.py`, `backend/app/main.py`) :
+    - `GET /api/settings` : renvoie le prompt général actuel, l'état d'activation du cache, le prompt système par défaut et 5 presets de prompts spécialisés.
+    - `PATCH /api/settings` : met à jour `system_prompt` (jusqu'à 12 000 caractères) et `prompt_cache_enabled`.
+    - Intégration de `system_prompt` et `prompt_cache_enabled` dans `user_json` et dans le type `AuthUser` côté frontend pour une disponibilité immédiate dès l'authentification.
+  - **Interface utilisateur « Paramètres & Personnalisation »** (`frontend/components/settings-modal.tsx`, `frontend/components/chat-app.tsx`, `frontend/lib/api.ts`, `frontend/app/globals.css`) :
+    - Modale `SettingsModal` complète avec :
+      - *Section 1 : Prompt Général Personnalisé* :
+        - Compteur dynamique de caractères (`X / 12 000 car.`) et estimation de tokens (`~Y tokens`).
+        - 5 cartes de presets 1-clic : ⚡ *Équilibré & Concis*, 💻 *Expert Développeur & Architecte*, 🎓 *Pédagogue & Formateur*, 🔍 *Analyste & Rigueur Critique*, ✍️ *Plume & Style Soigné*.
+        - Boutons rapides « Effacer » et « Prompt par défaut ».
+      - *Section 2 : Optimisation du Cache de Prompt (Prompt Caching)* :
+        - Toggle switch interactif On/Off avec badge dynamique (`✨ Actif · Économies 50% à 90%` ou `⏸️ Désactivé`).
+        - Encart explicatif didactique détaillant le fonctionnement sur Anthropic Claude, OpenAI GPT-4o, DeepSeek et Gemini, les économies réelles de tokens et l'accélération des réponses.
+      - *Sauvegarde & Feedback* :
+        - Bouton d'enregistrement avec icône, loader et confirmation visuelle.
+    - *Points d'accès dans l'application* :
+      - Barre supérieure (`topbar-right`) : nouveau bouton « Paramètres » avec icône `Settings`.
+      - Menu du profil utilisateur : nouvel élément « Paramètres & Prompt général ».
+      - Barre latérale (bas du profil) : bouton d'icône d'accès rapide dans `.profile-actions`.
+  - **Validation & Tests** :
+    - Nouveaux tests unitaires et d'intégration validés (`backend/tests/test_settings.py`) : 5/5 passés (incluant endpoints API GET/PATCH, injection dans `build_context`, injection de balises `cache_control` sur OpenRouter/Claude, gestion multi-tours et désactivation).
+    - Suite de tests ciblés validée : 51/51 tests passés (`pytest test_settings.py test_sounds.py test_study_material.py test_deep_search.py test_learn_mode.py test_context.py test_migrations.py`).
+    - Typecheck Next.js validé : 0 erreur (`npm --prefix frontend run typecheck`).
+    - Build Next.js de production validé : 0 erreur (`npm --prefix frontend run build`).
+    - Conteneurs Docker relancés en mode dev (`compose.yaml` + `compose.dev.yaml`) : `clair-api` et `clair-web` sains et opérationnels (`HTTP 200 OK`).
+- Fichiers modifiés / créés :
+  - Créés : `backend/app/routers/settings.py`, `backend/migrations/versions/0014_add_user_settings.py`, `backend/tests/test_settings.py`, `frontend/components/settings-modal.tsx`.
+  - Modifiés : `backend/app/models.py`, `backend/app/providers.py`, `backend/app/context.py`, `backend/app/routers/messages.py`, `backend/app/schemas.py`, `backend/app/serializers.py`, `backend/app/main.py`, `backend/app/cli.py`, `backend/tests/test_context.py`, `frontend/lib/api.ts`, `frontend/components/chat-app.tsx`, `frontend/app/globals.css`, `HANDOFF.md`.
+- Vérifications exécutées :
+  - `python3 -m py_compile backend/app/*.py backend/app/routers/*.py backend/migrations/versions/*.py backend/tests/*.py` : 0 erreur.
+  - `PYTHONPATH=backend backend/.venv/bin/pytest backend/tests/test_settings.py backend/tests/test_sounds.py backend/tests/test_study_material.py backend/tests/test_deep_search.py backend/tests/test_learn_mode.py backend/tests/test_context.py backend/tests/test_migrations.py` : 51/51 passés.
+  - `npm --prefix frontend run typecheck` : 0 erreur.
+  - `npm --prefix frontend run build` : 0 erreur.
+  - `docker compose -f compose.yaml -f compose.dev.yaml up -d --build clair-api clair-web` : conteneurs démarrés et `healthy`.
+  - `curl -I http://127.0.0.1:3001/` : `HTTP/1.1 200 OK`.
+  - `curl -s http://127.0.0.1:8001/api/health` : `{"status":"ok"}`.
+  - `docker exec tchataiperso-clair-db-1 psql -U tchat -d tchat -c "SELECT ..."` : colonnes `system_prompt` et `prompt_cache_enabled` vérifiées en base PostgreSQL.
+- Problèmes connus : aucun.
+- Prochaine action : ouvrir `http://localhost:3001` (ou `http://192.168.1.28:3001`), cliquer sur « Paramètres » dans la barre supérieure, le menu Profil ou la barre latérale, personnaliser votre prompt général et vérifier l'optimisation du cache de prompt.
+
+---
+
 # Relais — 25 octobre 2026 (Intégration de la Génération de Musique ElevenLabs Music — https://elevenlabs.io/app/music)
 
 - Réalisé :

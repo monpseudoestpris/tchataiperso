@@ -95,7 +95,97 @@ def _stream_delta(data: str) -> tuple[str, bool]:
         raise ProviderError("Le fournisseur IA a renvoyé un flux invalide.") from None
 
 
-async def stream_chat(settings: Any, messages: list[dict[str, Any]], model: str) -> AsyncIterator[str]:
+def prepare_messages_for_caching(
+    messages: list[dict[str, Any]],
+    model: str,
+    base_url: str = "",
+    enable_cache: bool = True,
+) -> list[dict[str, Any]]:
+    """
+    Optimize message list for provider prompt caching (Anthropic, OpenRouter, OpenAI, DeepSeek, Gemini).
+    
+    - For OpenRouter and Anthropic Claude endpoints:
+      Injects `cache_control: {"type": "ephemeral"}` onto the first system message content block,
+      and if multi-turn, on the last turn of prior history (up to Anthropic's 4 breakpoint limit).
+      This triggers OpenRouter sticky routing and Anthropic 5-minute ephemeral prompt cache,
+      saving up to 90% on input token costs and reducing latency.
+    - For OpenAI / DeepSeek / Gemini:
+      Prefix caching relies on an identical static sequence starting at message 0.
+      OpenRouter maps or strips breakpoints safely; keeping the system prompt static at the head
+      guarantees high cache hit rates.
+    """
+    if not enable_cache or not messages:
+        return messages
+
+    is_openrouter = "openrouter.ai" in (base_url or "").lower()
+    is_anthropic = (
+        "anthropic" in (base_url or "").lower()
+        or "claude" in model.lower()
+        or model.startswith("anthropic/")
+    )
+
+    if not (is_openrouter or is_anthropic):
+        # Native prefix caching without explicit breakpoint tags for direct non-OpenRouter endpoints
+        return messages
+
+    result: list[dict[str, Any]] = []
+    system_cached = False
+
+    # Breakpoint 1: Static System Prompt
+    for msg in messages:
+        copied = dict(msg)
+        if not system_cached and msg.get("role") == "system":
+            system_cached = True
+            content = msg.get("content")
+            if isinstance(content, str):
+                copied["content"] = [
+                    {
+                        "type": "text",
+                        "text": content,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ]
+            elif isinstance(content, list):
+                new_parts = [dict(p) if isinstance(p, dict) else p for p in content]
+                for p in reversed(new_parts):
+                    if isinstance(p, dict) and p.get("type") == "text":
+                        p["cache_control"] = {"type": "ephemeral"}
+                        break
+                copied["content"] = new_parts
+        result.append(copied)
+
+    # Breakpoint 2: In multi-turn conversation, cache previous history up to penultimate message
+    if len(result) >= 3:
+        target_idx = len(result) - 2
+        target_msg = dict(result[target_idx])
+        t_content = target_msg.get("content")
+        if isinstance(t_content, str):
+            target_msg["content"] = [
+                {
+                    "type": "text",
+                    "text": t_content,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
+            result[target_idx] = target_msg
+        elif isinstance(t_content, list):
+            new_parts = [dict(p) if isinstance(p, dict) else p for p in t_content]
+            for p in reversed(new_parts):
+                if isinstance(p, dict) and p.get("type") == "text":
+                    p["cache_control"] = {"type": "ephemeral"}
+                    break
+            target_msg["content"] = new_parts
+            result[target_idx] = target_msg
+
+    return result
+
+
+async def stream_chat(
+    settings: Any,
+    messages: list[dict[str, Any]],
+    model: str,
+    enable_cache: bool = True,
+) -> AsyncIterator[str]:
     """Yield OpenAI-compatible SSE text deltas without buffering the full response."""
     key = _key(settings, "llm_api_key", "du fournisseur IA")
     completed = False
@@ -119,13 +209,21 @@ async def stream_chat(settings: Any, messages: list[dict[str, Any]], model: str)
         max_tokens = max(settings.llm_max_tokens, getattr(settings, "deep_search_max_tokens", 12288))
     else:
         max_tokens = settings.llm_max_tokens
+
+    payload_messages = prepare_messages_for_caching(
+        messages,
+        model=model,
+        base_url=getattr(settings, "llm_base_url", ""),
+        enable_cache=enable_cache,
+    )
+
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=False) as client:
             async with client.stream(
                 "POST",
                 settings.llm_base_url.rstrip("/") + "/chat/completions",
                 headers={"Authorization": f"Bearer {key}", "Accept": "text/event-stream"},
-                json={"model": model, "messages": messages, "stream": True,
+                json={"model": model, "messages": payload_messages, "stream": True,
                         "temperature": settings.llm_temperature, "max_tokens": max_tokens},
             ) as response:
                 _check_response(response, "Fournisseur IA")

@@ -21,17 +21,24 @@ SOUND_OUTPUT_FORMATS = [
 ]
 
 
+from .base_prompt import BASE_USER_PROMPT
+
+
 def stamp(value) -> str:
     return value.replace(tzinfo=value.tzinfo or timezone.utc).isoformat()
 
 
 def user_json(user: User) -> dict:
+    effective_prompt = (getattr(user, "system_prompt", "") or "").strip() or BASE_USER_PROMPT
     return {
         "id": user.id,
         "username": user.username,
         "is_admin": user.is_admin,
         "family_group_id": user.family_group_id,
         "family_group_name": user.family_group.name if user.family_group else None,
+        "system_prompt": effective_prompt,
+        "prompt_cache_enabled": getattr(user, "prompt_cache_enabled", True),
+        "auto_memory_enabled": getattr(user, "auto_memory_enabled", True),
     }
 
 

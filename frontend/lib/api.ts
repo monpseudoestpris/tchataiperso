@@ -202,12 +202,36 @@ export type Conversation = {
   skills?: Skill[];
 };
 export type Memory = { id: string; content: string; created_at: string };
+export type PromptPreset = {
+  id: string;
+  title: string;
+  description: string;
+  prompt: string;
+};
+
+export type UserSettings = {
+  system_prompt: string;
+  prompt_cache_enabled: boolean;
+  auto_memory_enabled: boolean;
+  default_system_prompt: string;
+  prompt_presets: PromptPreset[];
+};
+
+export type UpdateUserSettings = {
+  system_prompt?: string;
+  prompt_cache_enabled?: boolean;
+  auto_memory_enabled?: boolean;
+};
+
 export type AuthUser = {
   id: string;
   username: string;
   is_admin: boolean;
   family_group_id?: string | null;
   family_group_name?: string | null;
+  system_prompt?: string;
+  prompt_cache_enabled?: boolean;
+  auto_memory_enabled?: boolean;
 };
 export type FamilyMember = {
   id: string;
@@ -226,7 +250,18 @@ export type StreamEvent =
   | { type: "meta"; data: { user_message: Message; assistant_message_id: string } }
   | { type: "status"; data: { message: string } }
   | { type: "delta"; data: { text: string } }
-  | { type: "done"; data: { message: Message; conversation: Conversation; deep_search_report_id?: string | null; learn_report_id?: string | null } }
+  | {
+      type: "done";
+      data: {
+        message: Message;
+        conversation: Conversation;
+        deep_search_report_id?: string | null;
+        learn_report_id?: string | null;
+        memories?: Memory[];
+        new_memories?: string[];
+        deleted_memories?: string[];
+      };
+    }
   | { type: "error"; data: { message: string } };
 
 export function errorMessage(error: unknown) {
