@@ -1052,6 +1052,107 @@ def build_eodhd_markdown(
     return title, full_markdown, metadata
 
 
+def extract_structured_financial_stats(
+    summary_data: dict[str, Any] | None,
+    chart_data: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """
+    Extracts structured, tabular financial statistics from Yahoo Finance quoteSummary
+    and chart response, categorized into Valuation, Profitability, Balance Sheet,
+    Analysts, and Company Profile.
+    """
+    summary = summary_data or {}
+    price_mod = summary.get("price", {})
+    fin_mod = summary.get("financialData", {})
+    stats_mod = summary.get("defaultKeyStatistics", {})
+    profile_mod = summary.get("assetProfile", {})
+    detail_mod = summary.get("summaryDetail", {})
+
+    curr_p = _safe_float(
+        price_mod.get("regularMarketPrice", {}).get("raw")
+        if isinstance(price_mod.get("regularMarketPrice"), dict)
+        else price_mod.get("regularMarketPrice")
+    )
+    target_mean = _safe_float(
+        fin_mod.get("targetMeanPrice", {}).get("raw")
+        if isinstance(fin_mod.get("targetMeanPrice"), dict)
+        else fin_mod.get("targetMeanPrice")
+    )
+    target_high = _safe_float(
+        fin_mod.get("targetHighPrice", {}).get("raw")
+        if isinstance(fin_mod.get("targetHighPrice"), dict)
+        else fin_mod.get("targetHighPrice")
+    )
+    target_low = _safe_float(
+        fin_mod.get("targetLowPrice", {}).get("raw")
+        if isinstance(fin_mod.get("targetLowPrice"), dict)
+        else fin_mod.get("targetLowPrice")
+    )
+    upside_pct = None
+    if curr_p and target_mean and curr_p > 0:
+        upside_pct = round(((target_mean - curr_p) / curr_p) * 100, 2)
+
+    return {
+        "valuation": {
+            "market_cap": _fmt_num(price_mod.get("marketCap") or detail_mod.get("marketCap")),
+            "market_cap_raw": _safe_float(price_mod.get("marketCap") or detail_mod.get("marketCap")),
+            "pe_trailing": _fmt_num(stats_mod.get("trailingPE") or detail_mod.get("trailingPE")),
+            "pe_forward": _fmt_num(stats_mod.get("forwardPE") or detail_mod.get("forwardPE")),
+            "peg_ratio": _fmt_num(stats_mod.get("pegRatio")),
+            "price_to_book": _fmt_num(stats_mod.get("priceToBook")),
+            "enterprise_value": _fmt_num(stats_mod.get("enterpriseValue")),
+            "ev_to_ebitda": _fmt_num(stats_mod.get("enterpriseToEbitda")),
+            "beta": _fmt_num(stats_mod.get("beta") or detail_mod.get("beta")),
+            "trailing_eps": _fmt_num(stats_mod.get("trailingEps")),
+            "forward_eps": _fmt_num(stats_mod.get("forwardEps")),
+            "dividend_rate": _fmt_num(detail_mod.get("dividendRate")),
+            "dividend_yield": _fmt_pct(detail_mod.get("dividendYield")),
+            "payout_ratio": _fmt_pct(detail_mod.get("payoutRatio")),
+            "w52_high": _fmt_num(detail_mod.get("fiftyTwoWeekHigh")),
+            "w52_low": _fmt_num(detail_mod.get("fiftyTwoWeekLow")),
+        },
+        "profitability": {
+            "total_revenue": _fmt_num(fin_mod.get("totalRevenue")),
+            "total_revenue_raw": _safe_float(fin_mod.get("totalRevenue")),
+            "revenue_growth": _fmt_pct(fin_mod.get("revenueGrowth")),
+            "gross_margin": _fmt_pct(fin_mod.get("grossMargins")),
+            "operating_margin": _fmt_pct(fin_mod.get("operatingMargins")),
+            "profit_margin": _fmt_pct(fin_mod.get("profitMargins") or stats_mod.get("profitMargins")),
+            "ebitda": _fmt_num(fin_mod.get("ebitda")),
+            "ebitda_raw": _safe_float(fin_mod.get("ebitda")),
+            "net_income": _fmt_num(stats_mod.get("netIncomeToCommon")),
+            "free_cashflow": _fmt_num(fin_mod.get("freeCashflow")),
+            "operating_cashflow": _fmt_num(fin_mod.get("operatingCashflow")),
+            "roe": _fmt_pct(fin_mod.get("returnOnEquity")),
+            "roa": _fmt_pct(fin_mod.get("returnOnAssets")),
+        },
+        "balance_sheet": {
+            "total_cash": _fmt_num(fin_mod.get("totalCash")),
+            "total_debt": _fmt_num(fin_mod.get("totalDebt")),
+            "debt_to_equity": _fmt_num(fin_mod.get("debtToEquity"), suffix="%"),
+            "current_ratio": _fmt_num(fin_mod.get("currentRatio")),
+            "quick_ratio": _fmt_num(fin_mod.get("quickRatio")),
+            "book_value": _fmt_num(stats_mod.get("bookValue")),
+        },
+        "analysts": {
+            "recommendation": str(fin_mod.get("recommendationKey") or "N/A").upper(),
+            "opinions_count": _safe_float(fin_mod.get("numberOfAnalystOpinions")),
+            "target_mean": _fmt_num(target_mean),
+            "target_high": _fmt_num(target_high),
+            "target_low": _fmt_num(target_low),
+            "upside_potential_pct": upside_pct,
+        },
+        "profile": {
+            "sector": profile_mod.get("sector") or profile_mod.get("sectorDisp") or "N/A",
+            "industry": profile_mod.get("industry") or profile_mod.get("industryDisp") or "N/A",
+            "country": profile_mod.get("country") or "N/A",
+            "employees": _fmt_num(profile_mod.get("fullTimeEmployees"), default="Non communiqué"),
+            "website": profile_mod.get("website") or "",
+            "summary": (profile_mod.get("longBusinessSummary") or "")[:1200],
+        },
+    }
+
+
 async def fetch_eodhd_quote_data(
     settings: Settings,
     target: str,
@@ -1105,7 +1206,7 @@ async def fetch_eodhd_quote_data(
             return None
 
         eod_bars = await fetch_eodhd_historical_eod(
-            eod_client, ticker_candidate, eod_key, limit=10
+            eod_client, ticker_candidate, eod_key, limit=30
         )
         fundamentals = await fetch_eodhd_fundamentals(
             eod_client, ticker_candidate, eod_key
@@ -1119,6 +1220,21 @@ async def fetch_eodhd_quote_data(
             fundamentals=fundamentals,
             yahoo_summary=yahoo_summary,
         )
+
+        # Store chronological bars for frontend charting
+        chronological_bars = [
+            {
+                "date": b.get("date"),
+                "open": _safe_float(b.get("open")),
+                "high": _safe_float(b.get("high")),
+                "low": _safe_float(b.get("low")),
+                "close": _safe_float(b.get("close") or b.get("adjusted_close")),
+                "volume": _safe_float(b.get("volume")),
+            }
+            for b in reversed(eod_bars)
+            if b.get("date")
+        ] if eod_bars else []
+        meta["eod_bars"] = chronological_bars
 
         filename = f"📈 {meta['short_name']} ({ticker_candidate}) · EOD Historical Data"[:255]
         mime_type = "text/html; type=finance; source=eod-historical-data"
@@ -1201,6 +1317,9 @@ async def fetch_yahoo_financials_data(
             return None
 
         title, full_markdown, meta = build_finance_markdown(ticker, top_quote, chart_data, summary_data)
+
+        financial_stats = extract_structured_financial_stats(summary_data, chart_data)
+        meta["financial_stats"] = financial_stats
 
         filename = f"📈 {meta['short_name']} ({ticker}) · Yahoo Finance"[:255]
         mime_type = "text/html; type=finance; source=yahoo-finance"
@@ -1296,6 +1415,223 @@ async def fetch_dual_financial_attachments(
         raise HTTPException(404, f"Impossible de récupérer les cotations et données financières pour « {target} ».")
 
     return results
+
+
+async def get_financial_dashboard_data(
+    settings: Settings,
+    query: str,
+    limit_bars: int = 30,
+) -> dict[str, Any]:
+    """
+    Builds a complete financial dashboard data payload for the Finance Modal,
+    combining live quote & historical bars from EODHD with structured valuation,
+    financial statements, analyst consensus, and company profile from Yahoo Finance.
+    """
+    clean_target = query.strip()
+    eod_key = (
+        settings.eod_historical_data_key.get_secret_value()
+        if settings.enabled(settings.eod_historical_data_key)
+        else ""
+    )
+
+    async def _get_eod():
+        if not eod_key or is_yahoo_finance_url(clean_target):
+            return None, None, []
+        try:
+            async with httpx.AsyncClient(
+                headers={"User-Agent": DEFAULT_USER_AGENT},
+                follow_redirects=True,
+                timeout=12.0,
+            ) as client:
+                eod_item = None
+                ticker_candidate = None
+                if is_eodhd_url(clean_target):
+                    ticker_candidate = extract_ticker_from_url(clean_target)
+                elif "." in clean_target and len(clean_target.split(".")) == 2:
+                    code_p, exch_p = clean_target.split(".")
+                    if 1 <= len(code_p) <= 8 and 2 <= len(exch_p) <= 6:
+                        ticker_candidate = clean_target.upper().strip("$")
+
+                if not ticker_candidate:
+                    for variant in query_variants(clean_target):
+                        eod_item = await search_eodhd_ticker(client, variant, eod_key)
+                        if eod_item:
+                            ticker_candidate = eod_item.get("ticker")
+                            break
+
+                if not ticker_candidate:
+                    return None, None, []
+
+                rt_data = await fetch_eodhd_realtime(client, ticker_candidate, eod_key)
+                bars = await fetch_eodhd_historical_eod(client, ticker_candidate, eod_key, limit=limit_bars)
+                return eod_item, rt_data, bars
+        except Exception as e_exc:
+            _logger.warning("Échec EODHD dashboard pour « %s »: %s", clean_target, e_exc)
+            return None, None, []
+
+    async def _get_yahoo(eod_symbol: str | None = None):
+        try:
+            client, crumb = await get_yahoo_crumb_and_client()
+            try:
+                lookup = eod_symbol or clean_target
+                if lookup.endswith(".US"):
+                    lookup = lookup[:-3]
+
+                top_q = None
+                if is_yahoo_finance_url(lookup):
+                    t = extract_ticker_from_url(lookup)
+                elif "." in lookup or len(lookup) <= 5:
+                    t = lookup.upper().strip("$")
+                else:
+                    t = None
+
+                if not t:
+                    for v in query_variants(lookup):
+                        top_q = await search_yahoo_ticker(client, v)
+                        if top_q:
+                            t = top_q.get("symbol")
+                            break
+
+                if not t:
+                    t = lookup.upper().strip("$")
+
+                summary = await fetch_yahoo_quote_summary(client, t, crumb=crumb)
+                chart = await fetch_yahoo_chart(client, t, range_period="1mo", interval="1d")
+                return top_q, summary, chart, t
+            finally:
+                await client.aclose()
+        except Exception as y_exc:
+            _logger.warning("Échec Yahoo dashboard pour « %s »: %s", clean_target, y_exc)
+            return None, None, None, None
+
+    (eod_item, eod_rt, eod_bars), (yahoo_top, yahoo_sum, yahoo_chart, yahoo_sym) = await asyncio.gather(
+        _get_eod(), _get_yahoo(), return_exceptions=False
+    )
+
+    if eod_item and not yahoo_sum:
+        eod_code = eod_item.get("ticker")
+        if eod_code:
+            yahoo_top, yahoo_sum, yahoo_chart, yahoo_sym = await _get_yahoo(eod_code)
+
+    if not eod_rt and not yahoo_sum and not yahoo_chart:
+        raise HTTPException(404, f"Impossible d'identifier l'actif financier pour « {query} ».")
+
+    eod_ticker = (eod_item.get("ticker") if eod_item else None) or (eod_rt.get("code") if eod_rt else None) or ""
+    display_symbol = eod_ticker or yahoo_sym or clean_target.upper().strip("$")
+
+    financial_stats = extract_structured_financial_stats(yahoo_sum, yahoo_chart)
+
+    curr_price = _safe_float(eod_rt.get("close") if eod_rt else None)
+    prev_close = _safe_float(eod_rt.get("previousClose") if eod_rt else None)
+    change = _safe_float(eod_rt.get("change") if eod_rt else None)
+    change_pct = _safe_float(eod_rt.get("change_p") if eod_rt else None)
+    open_price = _safe_float(eod_rt.get("open") if eod_rt else None)
+    high_price = _safe_float(eod_rt.get("high") if eod_rt else None)
+    low_price = _safe_float(eod_rt.get("low") if eod_rt else None)
+    volume = _safe_float(eod_rt.get("volume") if eod_rt else None)
+
+    if curr_price is None and yahoo_sum:
+        price_mod = yahoo_sum.get("price", {})
+        det_mod = yahoo_sum.get("summaryDetail", {})
+        curr_price = _safe_float(price_mod.get("regularMarketPrice", {}).get("raw") if isinstance(price_mod.get("regularMarketPrice"), dict) else price_mod.get("regularMarketPrice"))
+        prev_close = _safe_float(price_mod.get("regularMarketPreviousClose", {}).get("raw") if isinstance(price_mod.get("regularMarketPreviousClose"), dict) else price_mod.get("regularMarketPreviousClose"))
+        if prev_close is None:
+            prev_close = _safe_float(det_mod.get("previousClose", {}).get("raw") if isinstance(det_mod.get("previousClose"), dict) else det_mod.get("previousClose"))
+        open_price = _safe_float(price_mod.get("regularMarketOpen", {}).get("raw") if isinstance(price_mod.get("regularMarketOpen"), dict) else price_mod.get("regularMarketOpen"))
+        high_price = _safe_float(price_mod.get("regularMarketDayHigh", {}).get("raw") if isinstance(price_mod.get("regularMarketDayHigh"), dict) else price_mod.get("regularMarketDayHigh"))
+        low_price = _safe_float(price_mod.get("regularMarketDayLow", {}).get("raw") if isinstance(price_mod.get("regularMarketDayLow"), dict) else price_mod.get("regularMarketDayLow"))
+        volume = _safe_float(price_mod.get("regularMarketVolume", {}).get("raw") if isinstance(price_mod.get("regularMarketVolume"), dict) else price_mod.get("regularMarketVolume"))
+        if curr_price is not None and prev_close is not None and prev_close > 0:
+            change = round(curr_price - prev_close, 2)
+            change_pct = round((change / prev_close) * 100, 2)
+
+    short_name = (
+        (eod_item.get("Name") if eod_item else None)
+        or (yahoo_top.get("shortname") if yahoo_top else None)
+        or (yahoo_sum.get("price", {}).get("shortName") if yahoo_sum else None)
+        or display_symbol
+    ).split(" - ")[0].split(" (")[0].strip()
+
+    long_name = (
+        (yahoo_sum.get("price", {}).get("longName") if yahoo_sum else None)
+        or (yahoo_top.get("longname") if yahoo_top else None)
+        or (eod_item.get("Name") if eod_item else None)
+        or short_name
+    )
+
+    exchange = (
+        (eod_item.get("Exchange") if eod_item else None)
+        or (yahoo_sum.get("price", {}).get("exchangeName") if yahoo_sum else None)
+        or (display_symbol.split(".")[1] if "." in display_symbol else "Marché")
+    )
+
+    currency = (
+        (eod_item.get("Currency") if eod_item else None)
+        or (yahoo_sum.get("price", {}).get("currency") if yahoo_sum else None)
+        or ("USD" if str(exchange).upper() == "US" else "EUR")
+    )
+
+    isin = eod_item.get("ISIN") if eod_item else None
+
+    chronological_bars = []
+    if eod_bars:
+        for b in reversed(eod_bars):
+            if b.get("date"):
+                chronological_bars.append({
+                    "date": b.get("date"),
+                    "open": _safe_float(b.get("open")),
+                    "high": _safe_float(b.get("high")),
+                    "low": _safe_float(b.get("low")),
+                    "close": _safe_float(b.get("close") or b.get("adjusted_close")),
+                    "volume": _safe_float(b.get("volume")),
+                })
+
+    if not chronological_bars and yahoo_chart and "timestamp" in yahoo_chart:
+        ts = yahoo_chart.get("timestamp", [])
+        q_ind = yahoo_chart.get("indicators", {}).get("quote", [{}])[0]
+        c_opens = q_ind.get("open", [])
+        c_highs = q_ind.get("high", [])
+        c_lows = q_ind.get("low", [])
+        c_closes = q_ind.get("close", [])
+        c_vols = q_ind.get("volume", [])
+        for i in range(len(ts)):
+            c_val = c_closes[i] if i < len(c_closes) else None
+            if c_val is not None:
+                d_str = datetime.datetime.fromtimestamp(ts[i], datetime.timezone.utc).strftime("%Y-%m-%d")
+                chronological_bars.append({
+                    "date": d_str,
+                    "open": _safe_float(c_opens[i] if i < len(c_opens) else None),
+                    "high": _safe_float(c_highs[i] if i < len(c_highs) else None),
+                    "low": _safe_float(c_lows[i] if i < len(c_lows) else None),
+                    "close": _safe_float(c_val),
+                    "volume": _safe_float(c_vols[i] if i < len(c_vols) else None),
+                })
+
+    return {
+        "symbol": display_symbol,
+        "eod_ticker": eod_ticker or display_symbol,
+        "yahoo_symbol": yahoo_sym or display_symbol,
+        "short_name": short_name,
+        "long_name": long_name,
+        "price": curr_price,
+        "currency": currency,
+        "change": change,
+        "change_percent": change_pct,
+        "open": open_price,
+        "high": high_price,
+        "low": low_price,
+        "previous_close": prev_close,
+        "volume": volume,
+        "exchange": exchange,
+        "country": (eod_item.get("Country") if eod_item else None) or financial_stats.get("profile", {}).get("country"),
+        "isin": isin,
+        "has_eod": bool(eod_rt or eod_bars),
+        "has_yahoo": bool(yahoo_sum),
+        "eod_bars": chronological_bars,
+        "financial_stats": financial_stats,
+        "url_eod": f"https://eodhd.com/financial-summary/{eod_ticker or display_symbol}",
+        "url_yahoo": f"https://finance.yahoo.com/quote/{yahoo_sym or display_symbol}",
+    }
 
 
 async def fetch_and_parse_yahoo_finance(

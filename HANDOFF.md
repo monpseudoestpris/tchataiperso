@@ -1,3 +1,43 @@
+# Relais — 28 octobre 2026 (Modale Boursière Dédiée : Courbe du Cours EOD & Tableaux Complets des Statistiques Financières Yahoo)
+
+- Réalisé :
+  - **Modale Dédiée Finance & Bourse** (`frontend/components/finance-modal.tsx`, `frontend/components/chat-app.tsx`, `frontend/lib/api.ts`, `frontend/app/globals.css`) :
+    - *Courbe interactive du cours (EOD Historical Data)* : tracé vectoriel SVG haute performance avec dégradé d'aire adaptatif (vert émeraude en hausse, rouge rosé en baisse), sélecteur de granularité (`1S` = 5 séances, `2S` = 10 séances, `1M` = 20 séances, `ALL` = historique complet jusqu'à 30 séances), mire de survol (crosshair interactif) affichant la date, le cours de clôture, les extrêmes (OHLC) et le volume de la séance, repères de prix min / max et clôture précédente.
+    - *En-tête Hero Quote en direct* : cours live, devise, variation absolue et en %, séance (ouverture, plus haut, plus bas, volume échangé, clôture veille).
+    - *6 Onglets de tableaux financiers complets (Yahoo Finance API)* :
+      1. **Valorisation & Multiples** : Capitalisation boursière, P/E ratio (Trailing & Forward), PEG ratio, Price-to-Book, EV/EBITDA, Bêta, Bénéfice par action (BPA / EPS), Dividende par action & rendement annuel, Payout ratio, Fourchette 52 semaines.
+      2. **Rentabilité & Chiffre d'Affaires** : CA total (Trailing 12 mois), Croissance du CA, Marge brute, Marge opérationnelle, Marge nette de profit, EBITDA, Résultat net part du groupe, Rentabilité des capitaux propres (ROE).
+      3. **Bilan & Trésorerie** : Free Cash Flow, Cash flow opérationnel, Trésorerie totale déclarée, Dette financière totale, Ratio dette / capitaux propres, Ratio de liquidité générale (Current ratio).
+      4. **Consensus & Recommandations d'Analystes** : Badge de recommandation globale (Acheter, Conserver, Surperformer...), Nombre total d'opinions d'analystes, Objectifs de cours (Cible moyenne, Cible haute, Cible basse) avec calcul automatique du potentiel de hausse / baisse en % par rapport au cours actuel.
+      5. **Historique des Séances EOD** : Tableau chronologique complet de chaque séance journalière avec Date, Clôture, Variation journalière (avec code couleur), Plus haut, Plus bas, Ouverture et Volume.
+      6. **Profil & Informations Entreprise** : Description détaillée de l'activité, Secteur d'activité, Industrie, Pays du siège, Effectif de salariés, Lien vers le site web officiel de la société.
+    - *Moteur de recherche & Switcher intégré dans la modale* : champ de recherche avec validation instantanée et puces de suggestion rapide (Air Liquide, LVMH, TotalEnergies, Apple, Tesla, Nvidia, Stellantis, Microsoft) permettant de comparer et d'inspecter n'importe quel titre boursier directement sans quitter la modale.
+    - *Actions & Intégration IA* :
+      - Bouton « Copier le rapport » (Markdown structuré prêt pour presse-papier).
+      - Bouton « Poser une question à l'IA » : insère automatiquement une requête détaillée pré-remplie dans le compositeur de tchat et positionne le focus.
+      - Liens externes directs vers les pages EODHD et Yahoo Finance de l'actif.
+  - **Points d'Accès & Déclencheurs dans l'Interface** (`frontend/components/chat-app.tsx`) :
+    - Bouton `[ 📊 Courbe & Stats ]` sur chaque carte de pièce jointe financière (`.finance-attachment-card`).
+    - Bouton `[ 📈 Courbe & Tableaux ]` dans la bannière supérieure en direct des messages contenant des données financières (`.finance-live-banner`).
+    - Bouton `[ 📈 Courbe & Stats ]` dans la barre d'outils du compositeur à côté du bouton `Finances`.
+    - Bouton direct `Tableau de bord` dans le bandeau vert du mode Finances lorsqu'il est actif.
+  - **Moteur Backend & API Dédiée** (`backend/app/finance.py`, `backend/app/routers/finance.py`, `backend/app/serializers.py`, `backend/app/main.py`) :
+    - `extract_structured_financial_stats` : organise les métriques financières Yahoo Finance en dictionnaires structurés et typés (`valuation`, `profitability`, `balance_sheet`, `analysts`, `profile`).
+    - `get_financial_dashboard_data` : orchestration asynchrone conjointe EODHD (bougies journalières chronologiques) + Yahoo Finance (fondamentaux et multiples).
+    - Endpoint sécurisé : `GET /api/finance/details?query={query}` authentifié avec injection de dépendances.
+  - **Validation & Tests** :
+    - 32/32 tests validés dans `backend/tests/test_finance.py` (incluant le test d'intégration de l'assemblage complet du tableau de bord).
+    - 93/93 tests validés sur l'ensemble de la suite de tests backend (`pytest test_finance.py test_multi_agent.py test_memory_agent.py test_settings.py test_sounds.py test_study_material.py test_deep_search.py test_learn_mode.py test_context.py test_migrations.py`).
+    - TypeScript / Next.js validé : 0 erreur (`npm --prefix frontend run typecheck`).
+    - Production build Next.js validé : 0 erreur (`npm --prefix frontend run build`).
+    - Conteneurs Docker reconstruits et actifs : `clair-api` healthy, `clair-web` 200 OK.
+- Fichiers modifiés / créés :
+  - `backend/app/finance.py`, `backend/app/routers/finance.py`, `backend/app/serializers.py`, `backend/app/main.py`, `backend/tests/test_finance.py`.
+  - `frontend/lib/api.ts`, `frontend/components/finance-modal.tsx`, `frontend/components/chat-app.tsx`, `frontend/app/globals.css`, `HANDOFF.md`.
+- Prochaine action : cliquer sur le bouton `[ 📈 Courbe & Stats ]` dans le compositeur ou sur une carte d'action financière pour visualiser la courbe EOD et les tableaux financiers.
+
+---
+
 # Relais — 28 octobre 2026 (Mode Finance : Récupération Conjointe Systématique du Cours via EOD et des Données Financières via Yahoo Finance)
 
 - Réalisé :

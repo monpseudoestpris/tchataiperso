@@ -55,6 +55,8 @@ export type Attachment = {
     url?: string;
     provider?: string;
     source_label?: string;
+    eod_bars?: EodBar[];
+    financial_stats?: FinancialStats;
   } | null;
 };
 export type GeneratedImage = {
@@ -631,6 +633,106 @@ export async function generateAiPersona(payload: {
     body: JSON.stringify(payload),
   });
 }
+
+export type EodBar = {
+  date: string;
+  open: number | null;
+  high: number | null;
+  low: number | null;
+  close: number | null;
+  volume: number | null;
+};
+
+export type FinancialStats = {
+  valuation: {
+    market_cap?: string;
+    market_cap_raw?: number | null;
+    pe_trailing?: string;
+    pe_forward?: string;
+    peg_ratio?: string;
+    price_to_book?: string;
+    enterprise_value?: string;
+    ev_to_ebitda?: string;
+    beta?: string;
+    trailing_eps?: string;
+    forward_eps?: string;
+    dividend_rate?: string;
+    dividend_yield?: string;
+    payout_ratio?: string;
+    w52_high?: string;
+    w52_low?: string;
+  };
+  profitability: {
+    total_revenue?: string;
+    total_revenue_raw?: number | null;
+    revenue_growth?: string;
+    gross_margin?: string;
+    operating_margin?: string;
+    profit_margin?: string;
+    ebitda?: string;
+    ebitda_raw?: number | null;
+    net_income?: string;
+    free_cashflow?: string;
+    operating_cashflow?: string;
+    roe?: string;
+    roa?: string;
+  };
+  balance_sheet: {
+    total_cash?: string;
+    total_debt?: string;
+    debt_to_equity?: string;
+    current_ratio?: string;
+    quick_ratio?: string;
+    book_value?: string;
+  };
+  analysts: {
+    recommendation?: string;
+    opinions_count?: number | null;
+    target_mean?: string;
+    target_high?: string;
+    target_low?: string;
+    upside_potential_pct?: number | null;
+  };
+  profile: {
+    sector?: string;
+    industry?: string;
+    country?: string;
+    employees?: string;
+    website?: string;
+    summary?: string;
+  };
+};
+
+export type FinancialDashboardData = {
+  symbol: string;
+  eod_ticker: string;
+  yahoo_symbol: string;
+  short_name: string;
+  long_name: string;
+  price: number | null;
+  currency: string;
+  change: number | null;
+  change_percent: number | null;
+  open: number | null;
+  high: number | null;
+  low: number | null;
+  previous_close: number | null;
+  volume: number | null;
+  exchange: string;
+  country?: string | null;
+  isin?: string | null;
+  has_eod: boolean;
+  has_yahoo: boolean;
+  eod_bars: EodBar[];
+  financial_stats: FinancialStats;
+  url_eod: string;
+  url_yahoo: string;
+};
+
+export async function fetchFinanceDetails(query: string): Promise<FinancialDashboardData> {
+  return api<FinancialDashboardData>(`/finance/details?query=${encodeURIComponent(query)}`);
+}
+
 
 
 

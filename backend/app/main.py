@@ -19,6 +19,7 @@ from .routers import (
     blogs,
     conversations,
     family,
+    finance as finance_router,
     images,
     memories,
     messages,
@@ -153,6 +154,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(blogs.router)
     app.include_router(settings_router.router)
     app.include_router(agent_teams.router)
+    app.include_router(finance_router.router, prefix="/api/finance", tags=["finance"])
 
     return app
 

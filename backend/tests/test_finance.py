@@ -23,6 +23,7 @@ from app.finance import (
     fetch_yahoo_chart,
     fetch_yahoo_financials_data,
     fetch_yahoo_quote_summary,
+    get_financial_dashboard_data,
     is_eodhd_url,
     is_financial_url,
     is_yahoo_finance_url,
@@ -656,6 +657,86 @@ class TestFinanceApiMocked(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(attachments[1].user_id, "user-123")
             self.assertTrue((Path(tmp_dir) / attachments[0].storage_name).is_file())
             self.assertTrue((Path(tmp_dir) / attachments[1].storage_name).is_file())
+
+    async def test_get_financial_dashboard_data(self):
+        settings = Settings(_env_file=None, eod_historical_data_key="valid-key", demo_mode=False)
+
+        mock_eod_item = {
+            "Code": "AI",
+            "Exchange": "PA",
+            "Name": "Air Liquide SA",
+            "ticker": "AI.PA",
+            "Currency": "EUR",
+            "Country": "France",
+        }
+        mock_eod_rt = {
+            "code": "AI.PA",
+            "close": 174.24,
+            "previousClose": 174.0,
+            "open": 173.5,
+            "high": 175.0,
+            "low": 173.0,
+            "volume": 800000,
+            "change": 0.24,
+            "change_p": 0.138,
+        }
+        mock_bars = [
+            {"date": "2026-10-28", "close": 174.24, "open": 173.5, "high": 175.0, "low": 173.0, "volume": 800000},
+            {"date": "2026-10-27", "close": 174.0, "open": 173.0, "high": 174.5, "low": 172.5, "volume": 750000},
+        ]
+        mock_yahoo_sum = {
+            "price": {"shortName": "Air Liquide", "longName": "L'Air Liquide S.A.", "currency": "EUR"},
+            "financialData": {
+                "totalRevenue": {"raw": 27045900288},
+                "revenueGrowth": {"raw": 0.052},
+                "ebitda": {"raw": 7624500224},
+                "freeCashflow": {"raw": 2850000000},
+                "recommendationKey": "buy",
+                "targetMeanPrice": {"raw": 195.5},
+            },
+            "defaultKeyStatistics": {
+                "trailingPE": {"raw": 31.4},
+                "forwardPE": {"raw": 24.2},
+                "netIncomeToCommon": {"raw": 3540000000},
+            },
+            "assetProfile": {
+                "sector": "Basic Materials",
+                "industry": "Specialty Chemicals",
+                "longBusinessSummary": "Fournisseur mondial de gaz industriels.",
+            },
+            "summaryDetail": {
+                "dividendYield": {"raw": 0.019},
+            },
+        }
+
+        with patch("app.finance.search_eodhd_ticker", return_value=mock_eod_item), \
+             patch("app.finance.fetch_eodhd_realtime", return_value=mock_eod_rt), \
+             patch("app.finance.fetch_eodhd_historical_eod", return_value=mock_bars), \
+             patch("app.finance.get_yahoo_crumb_and_client") as mock_y_client, \
+             patch("app.finance.search_yahoo_ticker", return_value={"symbol": "AI.PA"}), \
+             patch("app.finance.fetch_yahoo_quote_summary", return_value=mock_yahoo_sum), \
+             patch("app.finance.fetch_yahoo_chart", return_value=None):
+
+            y_c = AsyncMock(spec=httpx.AsyncClient)
+            y_c.aclose = AsyncMock()
+            mock_y_client.return_value = (y_c, "crumb")
+
+            data = await get_financial_dashboard_data(settings, "Air Liquide")
+            self.assertEqual(data["symbol"], "AI.PA")
+            self.assertEqual(data["price"], 174.24)
+            self.assertEqual(data["currency"], "EUR")
+            self.assertTrue(data["has_eod"])
+            self.assertTrue(data["has_yahoo"])
+            self.assertEqual(len(data["eod_bars"]), 2)
+            # Oldest first in eod_bars for graphing
+            self.assertEqual(data["eod_bars"][0]["date"], "2026-10-27")
+            self.assertEqual(data["eod_bars"][1]["date"], "2026-10-28")
+            self.assertIn("valuation", data["financial_stats"])
+            self.assertIn("profitability", data["financial_stats"])
+            self.assertIn("balance_sheet", data["financial_stats"])
+            self.assertIn("analysts", data["financial_stats"])
+            self.assertIn("profile", data["financial_stats"])
+            self.assertEqual(data["financial_stats"]["analysts"]["recommendation"], "BUY")
 
 
 if __name__ == "__main__":

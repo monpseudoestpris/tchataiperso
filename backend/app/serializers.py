@@ -49,7 +49,7 @@ def attachment_json(item: Attachment) -> dict:
         finance_meta = {
             k: item.extraction.get(k)
             for k in ("symbol", "short_name", "long_name", "price", "currency", "change_percent", "exchange", "url",
-                      "provider", "source_label")
+                      "provider", "source_label", "eod_bars", "financial_stats")
             if item.extraction.get(k) is not None
         }
     return {
