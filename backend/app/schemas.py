@@ -182,6 +182,58 @@ class FetchUrlRequest(BaseModel):
     url: str = Field(min_length=1, max_length=2048)
 
 
+class AgentPersonaConfig(BaseModel):
+    id: str | None = None
+    name: str = Field(min_length=1, max_length=100)
+    role: str = Field(default="", max_length=100)
+    model: str = Field(min_length=1, max_length=100)
+    prompt: str = Field(default="", max_length=12000)
+    avatar: str = Field(default="🤖", max_length=20)
+    color: str = Field(default="#6366f1", max_length=30)
+
+
+class GeneratePersonaRequest(BaseModel):
+    name_or_concept: str = Field(min_length=1, max_length=200)
+    model: str | None = Field(default=None, max_length=150)
+
+    @field_validator("name_or_concept")
+    @classmethod
+    def trim_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Le nom ou concept ne peut pas être vide")
+        return value
+
+
+class GeneratedPersonaResponse(BaseModel):
+    name: str
+    role: str
+    avatar: str
+    color: str
+    prompt: str
+    suggested_model: str | None = None
+
+
+class MultiAgentConfig(BaseModel):
+    mode: Literal["synthesis", "debate", "dialectic", "contradictory"] = "synthesis"
+    agents: list[AgentPersonaConfig] = Field(min_length=2, max_length=6)
+    rounds: int = Field(default=1, ge=1, le=3)
+
+
+class CreateAgentTeam(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    description: str = Field(default="", max_length=500)
+    mode: Literal["synthesis", "debate", "dialectic", "contradictory"] = "synthesis"
+    agents: list[AgentPersonaConfig] = Field(min_length=2, max_length=6)
+
+
+class UpdateAgentTeam(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    description: str | None = Field(default=None, max_length=500)
+    mode: Literal["synthesis", "debate", "dialectic", "contradictory"] | None = None
+    agents: list[AgentPersonaConfig] | None = None
+
+
 class SendMessage(BaseModel):
     content: str = Field(default="", max_length=20000)
     model: str | None = None
@@ -192,6 +244,8 @@ class SendMessage(BaseModel):
     learn_mode: bool = False
     code_mode: bool = False
     finance_mode: bool = False
+    multi_agent: bool = False
+    multi_agent_config: MultiAgentConfig | None = None
     attachment_ids: list[str] = Field(default_factory=list, max_length=5)
     skill_ids: list[str] = Field(default_factory=list, max_length=10)
     deep_search_queries: list[str] | None = Field(default=None, max_length=20)

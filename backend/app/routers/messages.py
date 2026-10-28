@@ -19,6 +19,7 @@ from ..chat_export_html import generate_chat_export_html
 from ..deep_search_html import generate_report_html
 from ..learn_mode import execute_learn_mode
 from ..learn_html import generate_learn_course_html
+from ..multi_agent import execute_multi_agent_contradictory_debate, execute_multi_agent_debate, execute_multi_agent_synthesis
 from ..deps import check_model, claim, current_user, get_conversation, get_sessions, get_settings, get_upload_dir
 from ..documents import extraction_text
 from ..finance import process_message_finance_inquiries
@@ -497,7 +498,61 @@ async def send_message(
                     for item in conversation.messages[conversation.summary_through:]
                 ]
                 summary = conversation.summary
-            if settings.demo_mode:
+            if body.multi_agent and body.multi_agent_config and body.multi_agent_config.agents:
+                agents_list = [a.model_dump() for a in body.multi_agent_config.agents]
+                mode_choice = body.multi_agent_config.mode
+                raw_query = body.content.strip() or "Question soumise au conseil d'experts"
+                with sessions() as db:
+                    conversation = get_conversation(db, conversation_id, user.id)
+                    recent_turns = [
+                        {"role": item.role, "content": item.content}
+                        for item in conversation.messages[:-1][-4:]
+                    ]
+                if mode_choice in ("dialectic", "contradictory"):
+                    async for event in execute_multi_agent_contradictory_debate(
+                        settings=settings,
+                        query=raw_query,
+                        agents=agents_list,
+                        recent_history=recent_turns,
+                    ):
+                        if event["type"] == "status":
+                            yield sse("status", {"message": event["message"]})
+                        elif event["type"] == "delta":
+                            accumulated += event["text"]
+                            yield sse("delta", {"text": event["text"]})
+                        elif event["type"] == "ping":
+                            yield ": keepalive\n\n"
+                elif mode_choice == "debate":
+                    async for event in execute_multi_agent_debate(
+                        settings=settings,
+                        query=raw_query,
+                        agents=agents_list,
+                        rounds=body.multi_agent_config.rounds,
+                        recent_history=recent_turns,
+                    ):
+                        if event["type"] == "status":
+                            yield sse("status", {"message": event["message"]})
+                        elif event["type"] == "delta":
+                            accumulated += event["text"]
+                            yield sse("delta", {"text": event["text"]})
+                        elif event["type"] == "ping":
+                            yield ": keepalive\n\n"
+                else:
+                    async for event in execute_multi_agent_synthesis(
+                        settings=settings,
+                        query=raw_query,
+                        agents=agents_list,
+                        synthesizer_model=model,
+                        recent_history=recent_turns,
+                    ):
+                        if event["type"] == "status":
+                            yield sse("status", {"message": event["message"]})
+                        elif event["type"] == "delta":
+                            accumulated += event["text"]
+                            yield sse("delta", {"text": event["text"]})
+                        elif event["type"] == "ping":
+                            yield ": keepalive\n\n"
+            elif settings.demo_mode:
                 if body.code_mode:
                     prompt_summary = (body.content.strip() or "Application de démonstration")[:80]
                     response = (

@@ -13,6 +13,7 @@ from .deps import check_model, claim, current_user, get_conversation, require_ad
 from .models import Base, User
 from .routers import (
     admin,
+    agent_teams,
     attachments,
     auth,
     blogs,
@@ -151,6 +152,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(sounds.router)
     app.include_router(blogs.router)
     app.include_router(settings_router.router)
+    app.include_router(agent_teams.router)
 
     return app
 

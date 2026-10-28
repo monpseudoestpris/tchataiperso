@@ -103,6 +103,51 @@ export type DocumentExtraction = {
   warnings: string[];
 };
 export type Source = { title: string; url: string; snippet?: string; query?: string; provider?: string; search_notice?: string; auto_search_reason?: string };
+export type AgentPersonaConfig = {
+  id?: string;
+  name: string;
+  role: string;
+  model: string;
+  prompt: string;
+  avatar: string;
+  color: string;
+};
+
+export type MultiAgentConfig = {
+  mode: "synthesis" | "debate" | "dialectic" | "contradictory";
+  agents: AgentPersonaConfig[];
+  rounds: number;
+};
+
+export type AgentTeam = {
+  id: string;
+  name: string;
+  description: string;
+  mode: "synthesis" | "debate" | "dialectic" | "contradictory";
+  agents: AgentPersonaConfig[];
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type AgentTeamsResponse = {
+  teams: AgentTeam[];
+  templates: Array<{
+    id: string;
+    name: string;
+    role: string;
+    avatar: string;
+    color: string;
+    prompt: string;
+  }>;
+  preset_teams: Array<{
+    id: string;
+    name: string;
+    description: string;
+    mode: "synthesis" | "debate" | "dialectic" | "contradictory";
+    agents: AgentPersonaConfig[];
+  }>;
+};
+
 export type Message = { id: string; role: string; content: string; created_at: string; attachments: Attachment[]; sources: Source[]; deep_search_report_id?: string | null; learn_report_id?: string | null };
 export type DeepSearchReport = {
   id: string;
@@ -319,6 +364,8 @@ export async function streamMessage(
     learn_mode_queries?: string[];
     code_mode?: boolean;
     finance_mode?: boolean;
+    multi_agent?: boolean;
+    multi_agent_config?: MultiAgentConfig;
     attachment_ids: string[];
     skill_ids?: string[];
   },
@@ -563,6 +610,25 @@ export async function generateStudyMaterial(
     method: "POST",
     body: JSON.stringify(payload),
     ...init,
+  });
+}
+
+export type GeneratedPersona = {
+  name: string;
+  role: string;
+  avatar: string;
+  color: string;
+  prompt: string;
+  suggested_model?: string;
+};
+
+export async function generateAiPersona(payload: {
+  name_or_concept: string;
+  model?: string;
+}): Promise<GeneratedPersona> {
+  return api<GeneratedPersona>("/agent-teams/generate-persona", {
+    method: "POST",
+    body: JSON.stringify(payload),
   });
 }
 

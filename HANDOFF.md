@@ -1,3 +1,127 @@
+# Relais — 28 octobre 2026 (Mode Finance : Récupération Conjointe Systématique du Cours via EOD et des Données Financières via Yahoo Finance)
+
+- Réalisé :
+  - **Récupération Conjointe & Parallèle EOD Historical Data + Yahoo Finance** (`backend/app/finance.py`, `backend/app/context.py`, `frontend/components/chat-app.tsx`) :
+    - *Principe fondamental (« les 2 »)* : en mode Finances (ou lors de requêtes boursières sur une action), interrogation conjointe et simultanée (`asyncio.gather`) de :
+      1. **EOD Historical Data API** : pour le cours de bourse en direct, la variation du jour (absolue et en %), la séance (ouverture, plus haut, plus bas, précédente clôture, volume) et l'historique complet des dernières séances journalières (bougies EOD).
+      2. **Yahoo Finance API** : pour l'ensemble des données financières, états financiers, bilans, comptes de résultat (chiffre d'affaires, croissance, marge brute, marge opérationnelle, marge nette, EBITDA, résultat net, Free Cash Flow, trésorerie totale, dette déclarée, ratios de solvabilité), les multiples boursiers (P/E trailing & forward, PEG ratio, Price-to-Book, EV/EBITDA, Bêta, BPA / EPS, dividendes et payout ratio) ainsi que le consensus et objectifs de cours des analystes (recommandation, objectifs moyen/haut/bas, nombre d'opinions).
+    - *Génération de 2 pièces jointes structurées par actif* :
+      - Pièce jointe 1 : `📈 {Entreprise} ({ticker}) · Cours EOD` (`provider: "eodhd"`, `model: "eod-historical-data"`).
+      - Pièce jointe 2 : `📈 {Entreprise} ({symbol}) · Données Financières Yahoo Finance` (`provider: "yahoo_finance"`, `model: "yahoo-finance"`).
+    - *Résolution croisée des tickers* : mapping automatique et recherche croisée (ex: `AI.PA` pour Air Liquide sur EOD et Yahoo, `AAPL.US` sur EODHD -> `AAPL` sur Yahoo Finance, `STLA.US` sur EODHD -> `STLA` sur Yahoo Finance).
+    - *Repli transparent & résilience* : si l'une des API est indisponible ou non configurée, repli automatique gracieux sur les données fournies par l'autre source.
+  - **Mise à jour du Prompt Système** (`backend/app/context.py`) :
+    - Directive explicite incitant l'assistant à mentionner et distinguer clairement dans sa réponse les cotations issues d'EOD et les fondamentaux/données financières issus de Yahoo Finance.
+  - **Affichage Interface Utilisateur & Compositeur** (`frontend/components/chat-app.tsx`) :
+    - La bannière live en tête de message active simultanément les 2 badges (`EOD Historical Data` en vert + `Yahoo Finance` en violet) avec la mention `téléchargées via l’API EOD Historical Data + Yahoo Finance`.
+    - Sous-titre dynamique adapté sur chaque carte : « Cotations en direct et historique des séances EOD » vs « Données financières, valorisation et consensus d'analystes ».
+    - Info-bulle du bouton `Finances` dans le compositeur mise à jour : *« Mode Finances & Bourse : télécharger automatiquement les cotations en direct (EOD) et les données financières (Yahoo Finance) »*.
+  - **Validation & Tests** :
+    - 31/31 tests unitaires validés dans `backend/tests/test_finance.py` (incluant 4 nouveaux tests pour la récupération conjointe, la gestion des replis et la création des doubles pièces jointes).
+    - 92/92 tests validés sur l'ensemble de la suite de tests backend (`pytest test_finance.py test_multi_agent.py test_memory_agent.py test_settings.py test_sounds.py test_study_material.py test_deep_search.py test_learn_mode.py test_context.py test_migrations.py`).
+    - Typecheck Next.js validé : 0 erreur (`npm --prefix frontend run typecheck`).
+    - Build Next.js de production validé : 0 erreur (`npm --prefix frontend run build`).
+    - Conteneurs Docker relancés : `clair-api` redémarré et `healthy`.
+- Fichiers modifiés :
+  - `backend/app/finance.py`, `backend/app/context.py`, `backend/tests/test_finance.py`, `frontend/components/chat-app.tsx`, `HANDOFF.md`.
+- Prochaine action : poser une question sur une action (ex. « Air Liquide », « AAPL » ou « Stellantis ») avec le mode Finances activé pour vérifier la présence conjointe des 2 sources (cours EOD + données financières Yahoo Finance).
+
+---
+
+# Relais — 28 octobre 2026 (Conseil Multi-Agents & Intégration des Personnalités dans le Prompt Général des Paramètres)
+
+- Réalisé :
+  - **Intégration et Combinaison des Personnalités dans les Paramètres Généraux** (`frontend/components/settings-modal.tsx`, `frontend/app/globals.css`) :
+    - Clarification de l'architecture :
+      - En mode standard (mono-agent), le modèle répond selon le **Prompt Général Personnalisé** configuré dans *Paramètres*.
+      - En mode multi-agents (Conseil IA), chaque expert intervient avec son propre persona et son modèle dédié.
+    - Ajout dans la modale **Paramètres & Personnalisation** d'une section dédiée :
+      *« 🏛️ Personnalités célèbres & Experts (combiner ou appliquer) »*.
+    - Chaque personnalité (Einstein, De Gaulle, Tony Stark, Léonard de Vinci, Camus, Spielberg, Jordan, Avocat, etc.) dispose désormais de deux actions directes :
+      1. **`+ Ajouter`** : insère et concatène proprement la posture de la personnalité à la suite de votre prompt existant (ex : vos consignes de style + la personnalité d'Einstein).
+      2. **`Remplacer`** : substitue directement l'intégralité du prompt système par la consigne de la personnalité choisie.
+  - **Générateur IA de Personnalités à la Volée** (`backend/app/multi_agent.py`, `backend/app/routers/agent_teams.py`, `frontend/components/multi-agent-modal.tsx`, `frontend/lib/api.ts`, `frontend/app/globals.css`) :
+    - Endpoint dédié : `POST /api/agent-teams/generate-persona` (`GeneratePersonaRequest` -> `GeneratedPersonaResponse`).
+    - L'utilisateur saisit simplement un nom (ex: *Poutine*, *Churchill*, *Ada Lovelace*, *Napoléon*...) ou un concept de profil : l'IA génère en temps réel un profil complet et immersif (Nom canonique, Rôle, Avatar emoji pertinent, Code couleur, Consigne de persona détaillée d'environ 100 mots avec sa doctrine, son tempérament et son style verbal, et modèle recommandé).
+    - Double intégration dans l'interface :
+      1. **Bannière d'inspiration en haut de l'onglet Composition** : champ avec bouton `[ ✨ Générer le profil ]` qui ajoute directement la personnalité à l'équipe.
+      2. **Bouton individuel par agent** : bouton `[ ✨ Inspirer par l'IA ]` dans l'en-tête de prompt de chaque carte pour ajuster ou régénérer la posture d'un agent spécifique d'après son nom.
+    - Mode de repli heuristique local soigné pour le mode démo ou hors connexion (*Poutine 🐻, Napoléon 🦅, Churchill 🦁...*).
+  - **Moteur d'Orchestration Multi-Agents & Délibération** (`backend/app/multi_agent.py`) :
+    - *Nouveau Mode Débat Contradictoire (Thèse vs Antithèse vs 3e Voie)* :
+      - Conçu pour des échanges courts, vifs, incisifs et sans concession.
+      - **Acte 1 · La Thèse** : l'agent 1 expose vigoureusement la position affirmative (2 à 3 paragraphes courts maximum, sans politesses introductives).
+      - **Acte 2 · L'Antithèse** : l'agent 2 attaque frontalement la thèse exposée, pointe les failles évidentes et les risques critiques.
+      - **Acte 3 · Contradiction & 3e Voie** : l'agent 3 renvoie les deux postures dos à dos, brise le faux dilemme et apporte une issue inattendue et pragmatique.
+      - Équipe prédéfinie clé en main ajoutée : `⚔️ L'Arène Contradictoire (Thèse vs Antithèse vs 3e Voie)`.
+      - Fonction `execute_multi_agent_contradictory_debate` avec support en streaming complet et simulation de repli local (mode démo / hors ligne).
+    - *Mode Synthèse d'Experts (Consensus & Arbitrage)* :
+      - Interroge en parallèle l'ensemble des personnalités configurées avec leur modèle et persona respectifs (`asyncio.gather` avec streaming périodique de keepalives).
+      - Consolidation croisée par un arbitre/synthétiseur impartial : dégage les points de consensus, les divergences et nuances d'analyse, et délivre un plan d'action opérationnel (étapes 1, 2, 3).
+      - Intégration des avis intégraux de chaque expert sous forme de volets dépliables Markdown (`<details><summary>...</summary>...</details>`).
+    - *Mode Table Ronde (Débat interactif scénarisé)* :
+      - Prises de parole successives et argumentées en 1 ou 2 tours de table.
+      - Chaque personnalité réagit directement aux arguments soulevés par ses confrères selon son angle d'analyse et son modèle.
+      - Streaming live des tours de parole avec séparateurs, avatars et mentions des modèles.
+    - *Galerie de 17 Personnalités & Agents Types Prédéfinis & 7 Équipes Clé en Main* :
+      - Nouveaux grands personnages ajoutés :
+        - 🎬 **Steven Spielberg** : Maître du cinéma et du storytelling universel, émerveillement (*sense of wonder*), cadrages émotionnels et empathie pour les personnages ordinaires plongés dans l'extraordinaire.
+        - 🐉 **Robert Jordan** : Maître du worldbuilding de fantasy (*La Roue du Temps*), géopolitique complexe, fresques épiques, dynamiques culturelles et poids des prophéties et destins.
+        - 🌊 **Albert Camus** : Lucidité solaire, philosophie de l'absurde, révolte lucide sans compromis, mesure méditerranéenne et solidarité fraternelle (*« Il faut imaginer Sisyphe heureux »*).
+        - 🦾 **Tony Stark (Iron Man)** : Génie technologique, automatisation totale, ingénierie disruptive, ton vif et confiant.
+        - 🎖️ **Le Général de Gaulle** : Souveraineté, vision historique de long terme, grandeur, refus des compromissions tièdes.
+        - 🚀 **John F. Kennedy (JFK)** : Nouvelle frontière, leadership inspirant, audace démocratique et mobilisation collective.
+        - 🌌 **Albert Einstein** : Premiers principes, expériences de pensée, relativité, simplicité fondamentale et remise en cause du dogme.
+        - 🎨 **Léonard de Vinci** : Polymathie Renaissance, biomimétisme, pont universel entre l'art, la mécanique et la nature.
+      - Personas précédents : ⚖️ Avocat & Conseil Juridique, 📐 Professeur de Mathématiques & Rigueur Logique, 💻 Architecte Logiciel Senior, 🛡️ Expert Cybersécurité & Pentest, 📊 Analyste Financier & Stratège ROI, 🩺 Consultante Santé & Physiologie, 🧠 Philosophe & Avocat du Diable, 🎨 Directrice Créative & Innovation, ⚡ Arbitre & Pragmatique d'Action.
+      - Équipes types : Comité Rigueur, Droit & Logique, Board Tech Lead, Architecture & Sécurité, Comité Stratégie, Finance & Innovation, Arène Débat d'Idées & Philosophie, L'Arène Contradictoire, Conseil des Géants (De Gaulle, Einstein, Tony Stark) et **Cénacle Fiction, Philosophie & Récit (Spielberg, Robert Jordan, Albert Camus)**.
+    - *Repli local & mode démonstration* (`fallback_agent_turn`, `fallback_multi_agent_synthesis`) garantissant un fonctionnement immédiat hors-ligne ou sans clé d'API.
+  - **Persistance en Base & Gestion des Équipes Sauvegardées** (`backend/app/models.py`, `backend/app/schemas.py`, `backend/app/serializers.py`, `backend/app/routers/agent_teams.py`, `backend/migrations/versions/0016_add_agent_teams.py`, `backend/app/main.py`, `backend/app/cli.py`) :
+    - Nouvelle table `agent_teams` (`id`, `user_id`, `name`, `description`, `mode`, `agents` en JSON, `created_at`, `updated_at`).
+    - Migration Alembic `0016_add_agent_teams.py`.
+    - Endpoints CRUD : `GET /api/agent-teams` (renvoie équipes sauvegardées + 9 templates + 5 équipes types), `POST /api/agent-teams` (sauvegarde), `PATCH /api/agent-teams/{id}` (mise à jour) et `DELETE /api/agent-teams/{id}` (suppression).
+    - Schéma `mode` supporte : `"synthesis"`, `"debate"`, `"dialectic"`, `"contradictory"`.
+  - **Streaming SSE & Exécution dans les Messages** (`backend/app/routers/messages.py`, `backend/app/schemas.py`) :
+    - Paramètres `multi_agent: bool` et `multi_agent_config: MultiAgentConfig` intégrés dans `SendMessage`.
+    - Aiguillage automatique vers `execute_multi_agent_contradictory_debate` lorsque le mode est `dialectic` ou `contradictory`.
+    - Émission des statuts d'experts (`Débat Contradictoire · Acte 1 : La Thèse...`, `Acte 2 : L'Antithèse...`, `Acte 3 : La Contradiction & 3e Voie...`) et streaming des deltas.
+  - **Interface Utilisateur & Modale « Conseil Multi-Agents »** (`frontend/components/multi-agent-modal.tsx`, `frontend/components/chat-app.tsx`, `frontend/lib/api.ts`, `frontend/app/globals.css`) :
+    - Double point d'accès ultra-visible :
+      - **Dans la barre supérieure** (`topbar-right`) : bouton violet dédié `[ 👥 Conseil IA ]` avec indicateur d'activation, visible immédiatement sur grand écran et mobile.
+      - **Dans la barre du bas** (`.composer-tools`) : bouton contrasté violet `[ 👥 Conseil IA ]` avec badge d'activation.
+    - Modale moderne et intuitive `MultiAgentModal` comprenant :
+      - *Sélecteur de mode à 3 cartes interactives* :
+        1. 🎯 **Synthèse d'Experts** (Consensus, divergences & plan d'action).
+        2. 🎙️ **Table Ronde** (Discussion interactive à bâtons rompus).
+        3. ⚔️ **Débat Contradictoire** (Joute en 3 actes : Thèse, Antithèse acérée & 3e Voie transcendante).
+      - En mode contradictoire, affichage dynamique de badges de rôle sur les cartes d'agents : `🥊 Acte 1 · La Thèse`, `⚔️ Acte 2 · L'Antithèse`, `⚖️ Acte 3 · La Contradiction & 3e Voie`.
+      - *Sélecteur de modèles avec tarifs et spécifications en direct* : affichage des prix $/1M en entrée (prompt) et sortie (réponse) ou mention Gratuit, fenêtre de contexte, badges Raisonnement 🧠 et Vision 👁️.
+      - *Gestion des agents (2 à 4)* : sélecteur d'avatar emoji, nom, rôle, textarea de prompt persona, sélecteur rapide de modèles types.
+      - *Sauvegarde d'équipes* : champ 1-clic pour mémoriser l'équipe dans son profil et onglet « Mes Équipes Enregistrées ».
+      - *Onglet « Équipes Clé en Main »* pour charger un comité optimisé en 1 clic.
+    - Bannière réactive d'activation au-dessus de la saisie (`.multiagent-mode-label`) avec mention `⚔️ Débat Contradictoire`, pastilles des experts, bouton « Modifier » et bouton de désactivation.
+  - **Validation & Tests** :
+    - 3/3 tests unitaires et d'intégration validés (`backend/tests/test_multi_agent.py`) : CRUD des équipes, cycle complet streaming Synthèse, cycle Débat Table Ronde et cycle complet Débat Contradictoire (Thèse / Antithèse / 3e Voie).
+    - Typecheck Next.js validé : 0 erreur (`npm --prefix frontend run typecheck`).
+    - Build Next.js de production validé : 0 erreur (`npm --prefix frontend run build`).
+    - Conteneurs Docker relancés en dev (`compose.yaml` + `compose.dev.yaml`) : `clair-api` et `clair-web` sains et opérationnels (`HTTP 200 OK`).
+    - Table `agent_teams` validée en base PostgreSQL réelle.
+- Fichiers modifiés / créés :
+  - Créés : `backend/app/multi_agent.py`, `backend/app/routers/agent_teams.py`, `backend/migrations/versions/0016_add_agent_teams.py`, `backend/tests/test_multi_agent.py`, `frontend/components/multi-agent-modal.tsx`.
+  - Modifiés : `backend/app/models.py`, `backend/app/schemas.py`, `backend/app/serializers.py`, `backend/app/routers/messages.py`, `backend/app/main.py`, `backend/app/cli.py`, `frontend/lib/api.ts`, `frontend/components/chat-app.tsx`, `frontend/app/globals.css`, `HANDOFF.md`.
+- Vérifications exécutées :
+  - `python3 -m py_compile backend/app/*.py backend/app/routers/*.py backend/migrations/versions/*.py backend/tests/*.py` : 0 erreur.
+  - `PYTHONPATH=backend backend/.venv/bin/pytest backend/tests/test_multi_agent.py` : 3/3 passés (CRUD équipes, streaming Synthèse, Débat Table Ronde, Débat Contradictoire).
+  - `npm --prefix frontend run typecheck` : 0 erreur.
+  - `npm --prefix frontend run build` : 0 erreur.
+  - `docker compose -f compose.yaml -f compose.dev.yaml up -d --build clair-api clair-web` : conteneurs démarrés et `healthy`.
+  - `curl -I http://127.0.0.1:3001/` : `HTTP/1.1 200 OK`.
+  - `curl -s http://127.0.0.1:8001/api/health` : `{"status":"ok"}`.
+- Problèmes connus : aucun.
+- Prochaine action : ouvrir `http://localhost:3001` (ou `http://192.168.1.28:3001`), cliquer sur le bouton violet « 👥 Conseil IA » (dans la barre supérieure ou au-dessus de la saisie), choisir la 3e option « ⚔️ Débat Contradictoire » ou l'équipe type « ⚔️ L'Arène Contradictoire », poser une question controversée et observer les échanges vifs en 3 actes.
+
+---
+
 # Relais — 26 octobre 2026 (Mémoire Intelligente à Long Terme : Capture Autonome par Agent IA & Commandes Explicites « Note en mémoire »)
 
 - Réalisé :

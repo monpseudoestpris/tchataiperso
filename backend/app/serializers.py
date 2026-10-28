@@ -4,7 +4,7 @@ import unicodedata
 from datetime import timezone
 
 from .blog import parse_cards_from_content
-from .models import Attachment, Blog, BlogPost, Conversation, DeepSearchReport, GeneratedImage, GeneratedSound, LearnReport, Message, Skill, User
+from .models import AgentTeam, Attachment, Blog, BlogPost, Conversation, DeepSearchReport, GeneratedImage, GeneratedSound, LearnReport, Message, Skill, User
 
 
 MAX_SKILL_COUNT = 100
@@ -267,4 +267,17 @@ def extract_mentioned_skills(content: str, user_skills: list[Skill]) -> list[Ski
             if matches:
                 resolved.append(skill)
     return resolved
+
+
+def agent_team_json(team: AgentTeam) -> dict:
+    return {
+        "id": team.id,
+        "name": team.name,
+        "description": team.description or "",
+        "mode": team.mode or "synthesis",
+        "agents": team.agents or [],
+        "created_at": team.created_at.isoformat() if team.created_at else None,
+        "updated_at": team.updated_at.isoformat() if team.updated_at else None,
+    }
+
 

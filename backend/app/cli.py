@@ -51,6 +51,7 @@ def prepare_schema(settings: Settings) -> None:
         "0013_add_music_columns",
         "0014_add_user_settings",
         "0015_add_auto_memory",
+        "0016_add_agent_teams",
     }:
         raise SystemExit(f"Révision de base non reconnue : {current}")
 

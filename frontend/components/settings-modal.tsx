@@ -19,7 +19,7 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import { api, errorMessage, type AuthUser, type PromptPreset, type UserSettings } from "@/lib/api";
+import { api, errorMessage, type AgentTeamsResponse, type AuthUser, type PromptPreset, type UserSettings } from "@/lib/api";
 
 type SettingsModalProps = {
   currentUser: AuthUser;
@@ -44,6 +44,7 @@ export function SettingsModal({
   const [autoMemoryEnabled, setAutoMemoryEnabled] = useState(true);
   const [defaultSystemPrompt, setDefaultSystemPrompt] = useState("");
   const [presets, setPresets] = useState<PromptPreset[]>([]);
+  const [personas, setPersonas] = useState<Array<{ id: string; name: string; role: string; avatar: string; prompt: string }>>([]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -53,14 +54,20 @@ export function SettingsModal({
     setError(null);
     setSuccessMessage(null);
 
-    api<UserSettings>("/settings")
-      .then((data) => {
+    Promise.all([
+      api<UserSettings>("/settings"),
+      api<AgentTeamsResponse>("/agent-teams").catch(() => null),
+    ])
+      .then(([data, teamsRes]) => {
         if (!active) return;
         setSystemPrompt(data.system_prompt || "");
         setPromptCacheEnabled(data.prompt_cache_enabled ?? true);
         setAutoMemoryEnabled(data.auto_memory_enabled ?? true);
         setDefaultSystemPrompt(data.default_system_prompt || "");
         setPresets(data.prompt_presets || []);
+        if (teamsRes?.templates) {
+          setPersonas(teamsRes.templates);
+        }
       })
       .catch((err) => {
         if (!active) return;
@@ -132,6 +139,19 @@ export function SettingsModal({
   function applyPreset(preset: PromptPreset) {
     setSystemPrompt(preset.prompt);
     setSuccessMessage(`Preset « ${preset.title} » appliqué.`);
+    setTimeout(() => setSuccessMessage(null), 2500);
+  }
+
+  function handleAppendPersona(persona: { name: string; avatar: string; prompt: string }) {
+    const block = `\n\n### Posture & Personnalité : ${persona.avatar} ${persona.name}\n${persona.prompt}`;
+    setSystemPrompt((prev) => (prev.trim() ? prev.trim() + block : persona.prompt));
+    setSuccessMessage(`Personnalité « ${persona.name} » ajoutée au prompt.`);
+    setTimeout(() => setSuccessMessage(null), 2500);
+  }
+
+  function handleReplaceWithPersona(persona: { name: string; avatar: string; prompt: string }) {
+    setSystemPrompt(persona.prompt);
+    setSuccessMessage(`Prompt remplacé par la personnalité « ${persona.name} ».`);
     setTimeout(() => setSuccessMessage(null), 2500);
   }
 
@@ -213,7 +233,7 @@ export function SettingsModal({
                   <div className="settings-presets-container">
                     <div className="settings-presets-label">
                       <Sparkles size={13} />
-                      <span>Modèles de prompts rapides :</span>
+                      <span>Modèles de styles rapides :</span>
                     </div>
                     <div className="settings-presets-grid">
                       {presets.map((preset) => (
@@ -227,6 +247,39 @@ export function SettingsModal({
                           <strong>{preset.title}</strong>
                           <span className="preset-snippet">{preset.prompt.slice(0, 48)}…</span>
                         </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Personnalités prédéfinies à insérer ou combiner */}
+                {personas.length > 0 && (
+                  <div className="settings-personas-picker-container">
+                    <div className="settings-presets-label">
+                      <span>🏛️ Personnalités célèbres & Experts (combiner ou appliquer) :</span>
+                    </div>
+                    <div className="settings-personas-chips-scroll">
+                      {personas.map((perso) => (
+                        <div key={perso.id} className="settings-persona-chip-wrap">
+                          <button
+                            type="button"
+                            className="settings-persona-chip-btn"
+                            onClick={() => handleAppendPersona(perso)}
+                            title={`Ajouter ${perso.name} à la fin de votre prompt actuel`}
+                          >
+                            <span className="chip-avatar">{perso.avatar}</span>
+                            <span className="chip-name">{perso.name.split(" · ")[0]}</span>
+                            <span className="chip-action-badge">+ Ajouter</span>
+                          </button>
+                          <button
+                            type="button"
+                            className="settings-persona-chip-replace"
+                            onClick={() => handleReplaceWithPersona(perso)}
+                            title={`Remplacer tout le prompt par ${perso.name}`}
+                          >
+                            Remplacer
+                          </button>
+                        </div>
                       ))}
                     </div>
                   </div>

@@ -238,4 +238,17 @@ class LearnReport(Base):
     message: Mapped[Message | None] = relationship(back_populates="learn_reports")
 
 
+class AgentTeam(Base):
+    __tablename__ = "agent_teams"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(100))
+    description: Mapped[str] = mapped_column(Text, default="")
+    mode: Mapped[str] = mapped_column(String(30), default="synthesis")
+    agents: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
+
 

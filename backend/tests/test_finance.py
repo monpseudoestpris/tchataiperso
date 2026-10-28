@@ -16,9 +16,12 @@ from app.finance import (
     detect_financial_entities,
     extract_ticker_from_url,
     fetch_and_parse_yahoo_finance,
+    fetch_dual_financial_attachments,
     fetch_eodhd_historical_eod,
+    fetch_eodhd_quote_data,
     fetch_eodhd_realtime,
     fetch_yahoo_chart,
+    fetch_yahoo_financials_data,
     fetch_yahoo_quote_summary,
     is_eodhd_url,
     is_financial_url,
@@ -565,6 +568,94 @@ class TestFinanceApiMocked(unittest.IsolatedAsyncioTestCase):
         mock_fetch.assert_called_once_with(mock_fetch.call_args[0][0], "AI.PA")
         self.assertEqual(attachments, [])
         self.assertEqual(failures, ["AI.PA"])
+
+    async def test_fetch_dual_financial_attachments_both_succeed(self):
+        settings = Settings(_env_file=None, eod_historical_data_key="valid-key", demo_mode=False)
+        eod_tuple = (
+            "📈 Air Liquide (AI.PA) · EOD Historical Data",
+            b"# EOD Quote",
+            "text/html; type=finance; source=eod-historical-data",
+            "# EOD Quote",
+            {"model": "eod-historical-data", "symbol": "AI.PA", "provider": "eodhd"},
+        )
+        yahoo_tuple = (
+            "📈 Air Liquide (AI.PA) · Yahoo Finance",
+            b"# Yahoo Financials",
+            "text/html; type=finance; source=yahoo-finance",
+            "# Yahoo Financials",
+            {"model": "yahoo-finance", "symbol": "AI.PA", "provider": "yahoo_finance"},
+        )
+
+        with patch("app.finance.fetch_eodhd_quote_data", return_value=eod_tuple), \
+             patch("app.finance.fetch_yahoo_financials_data", return_value=yahoo_tuple):
+            results = await fetch_dual_financial_attachments(settings, "Air Liquide")
+            self.assertEqual(len(results), 2)
+            self.assertEqual(results[0][4]["provider"], "eodhd")
+            self.assertEqual(results[1][4]["provider"], "yahoo_finance")
+
+    async def test_fetch_dual_financial_attachments_eod_only(self):
+        settings = Settings(_env_file=None, eod_historical_data_key="valid-key", demo_mode=False)
+        eod_tuple = (
+            "📈 Air Liquide (AI.PA) · EOD Historical Data",
+            b"# EOD Quote",
+            "text/html; type=finance; source=eod-historical-data",
+            "# EOD Quote",
+            {"model": "eod-historical-data", "symbol": "AI.PA", "provider": "eodhd"},
+        )
+        with patch("app.finance.fetch_eodhd_quote_data", return_value=eod_tuple), \
+             patch("app.finance.fetch_yahoo_financials_data", return_value=None):
+            results = await fetch_dual_financial_attachments(settings, "Air Liquide")
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0][4]["provider"], "eodhd")
+
+    async def test_fetch_dual_financial_attachments_yahoo_only_when_no_key(self):
+        settings = Settings(_env_file=None, eod_historical_data_key="", demo_mode=False)
+        yahoo_tuple = (
+            "📈 Air Liquide (AI.PA) · Yahoo Finance",
+            b"# Yahoo Financials",
+            "text/html; type=finance; source=yahoo-finance",
+            "# Yahoo Financials",
+            {"model": "yahoo-finance", "symbol": "AI.PA", "provider": "yahoo_finance"},
+        )
+        with patch("app.finance.fetch_yahoo_financials_data", return_value=yahoo_tuple):
+            results = await fetch_dual_financial_attachments(settings, "Air Liquide")
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0][4]["provider"], "yahoo_finance")
+
+    async def test_process_message_creates_dual_attachments(self):
+        settings = Settings(_env_file=None, eod_historical_data_key="valid-key", demo_mode=False)
+        eod_tuple = (
+            "📈 Air Liquide (AI.PA) · EOD Historical Data",
+            b"# EOD Quote Live",
+            "text/html; type=finance; source=eod-historical-data",
+            "# EOD Quote Live",
+            {"model": "eod-historical-data", "symbol": "AI.PA", "provider": "eodhd", "price": 174.24},
+        )
+        yahoo_tuple = (
+            "📈 Air Liquide (AI.PA) · Yahoo Finance",
+            b"# Yahoo Financial Statements",
+            "text/html; type=finance; source=yahoo-finance",
+            "# Yahoo Financial Statements",
+            {"model": "yahoo-finance", "symbol": "AI.PA", "provider": "yahoo_finance", "price": 174.24},
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir, \
+             patch("app.finance.fetch_dual_financial_attachments", return_value=[eod_tuple, yahoo_tuple]):
+            attachments = await process_message_finance_inquiries(
+                settings,
+                "Donne-moi le cours et les données financières d'Air Liquide",
+                [],
+                user_id="user-123",
+                message_id="msg-456",
+                upload_dir=Path(tmp_dir),
+            )
+            self.assertEqual(len(attachments), 2)
+            self.assertEqual(attachments[0].extraction["provider"], "eodhd")
+            self.assertEqual(attachments[1].extraction["provider"], "yahoo_finance")
+            self.assertEqual(attachments[0].user_id, "user-123")
+            self.assertEqual(attachments[1].user_id, "user-123")
+            self.assertTrue((Path(tmp_dir) / attachments[0].storage_name).is_file())
+            self.assertTrue((Path(tmp_dir) / attachments[1].storage_name).is_file())
 
 
 if __name__ == "__main__":
