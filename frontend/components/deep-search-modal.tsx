@@ -34,7 +34,10 @@ import {
   fetchDeepSearchReports,
   planDeepSearch,
   type DeepSearchReport,
+  type Model,
+  type StageModelsConfig,
 } from "@/lib/api";
+import { StageModelsModal, STAGES_DEFINITIONS } from "@/components/stage-models-modal";
 
 type DeepSearchModalProps = {
   isOpen: boolean;
@@ -42,8 +45,68 @@ type DeepSearchModalProps = {
   conversationId?: string | null;
   initialTab?: "plan" | "reports";
   initialReportId?: string | null;
+  models?: Model[];
+  stageModels?: StageModelsConfig;
+  onChangeStageModels?: (cfg: StageModelsConfig) => void;
+  onRefreshModels?: () => Promise<void>;
   onClose: () => void;
-  onLaunch?: (queries: string[]) => void | Promise<void>;
+  onLaunch?: (queries: string[], detailLevel?: number, stageModels?: StageModelsConfig) => void | Promise<void>;
+};
+
+const DEEPSEARCH_DETAIL_LEVELS: Record<
+  number,
+  { label: string; badge: string; desc: string }
+> = {
+  1: {
+    label: "Synthèse flash très courte",
+    badge: "Flash · 2 parties",
+    desc: "1 paragraphe court par expert · ~400 mots au total · 2 vagues de recherche",
+  },
+  2: {
+    label: "Synthèse exécutive concise",
+    badge: "Concis · 3 parties",
+    desc: "1 paragraphe synthétique par expert · ~800 mots au total · 2 vagues de recherche",
+  },
+  3: {
+    label: "Résumé structuré",
+    badge: "Résumé · 3 parties",
+    desc: "1 à 2 paragraphes par expert · ~1 200 mots au total · 3 vagues de recherche",
+  },
+  4: {
+    label: "Aperçu analytique",
+    badge: "Analytique · 4 parties",
+    desc: "2 paragraphes par expert · ~2 000 mots au total · 4 vagues de recherche",
+  },
+  5: {
+    label: "Dossier standard équilibré",
+    badge: "Standard · 4 parties",
+    desc: "2 à 3 paragraphes par expert · ~2 800 mots au total · 5 vagues de recherche",
+  },
+  6: {
+    label: "Analyse détaillée",
+    badge: "Détaillé · 5 parties",
+    desc: "3 paragraphes denses par expert · ~4 200 mots au total · 6 vagues de recherche",
+  },
+  7: {
+    label: "Étude approfondie",
+    badge: "Approfondi · 5 parties",
+    desc: "3 à 4 paragraphes denses par expert · ~5 200 mots au total · 7 vagues de recherche",
+  },
+  8: {
+    label: "Grand rapport complet (Recommandé)",
+    badge: "Complet · 5 parties",
+    desc: "4 à 5 paragraphes denses par expert · ~6 500 mots au total · 8 vagues de recherche",
+  },
+  9: {
+    label: "Traité exhaustif très détaillé",
+    badge: "Exhaustif · 6 parties",
+    desc: "5 à 6 paragraphes très développés par expert · ~9 500 mots · 9 vagues de recherche",
+  },
+  10: {
+    label: "Encyclopédique & Ultra-détaillé",
+    badge: "Maximum · 7 parties",
+    desc: "6 à 8 paragraphes exhaustifs par expert (x5+) · ~14 000+ mots · 10 vagues de recherche",
+  },
 };
 
 function formatReportDate(dateStr: string): string {
@@ -72,11 +135,39 @@ export function DeepSearchModal({
   conversationId,
   initialTab = "plan",
   initialReportId = null,
+  models = [],
+  stageModels: initialStageModels,
+  onChangeStageModels,
+  onRefreshModels,
   onClose,
   onLaunch,
 }: DeepSearchModalProps) {
   const [activeTab, setActiveTab] = useState<"plan" | "reports">(initialTab);
   const [outputFormat, setOutputFormat] = useState<"html" | "pdf">("html");
+  const [detailLevel, setDetailLevel] = useState<number>(8);
+  const [stageModels, setStageModels] = useState<StageModelsConfig>(() => {
+    if (initialStageModels) return initialStageModels;
+    try {
+      const stored = localStorage.getItem("clair_stage_models_deep_search");
+      if (stored) return JSON.parse(stored);
+    } catch {}
+    return {
+      plan_model: "google/gemini-4-argon",
+      search_model: "google/gemini-3.8-flash",
+      expert_model: "google/gemini-3.8-flash",
+      synthesis_model: "google/gemini-3.8-flash",
+      audit_model: "openai/gpt-6-astra",
+    };
+  });
+  const [stageModelsModalOpen, setStageModelsModalOpen] = useState(false);
+
+  const handleUpdateStageModels = (newCfg: StageModelsConfig) => {
+    setStageModels(newCfg);
+    try {
+      localStorage.setItem("clair_stage_models_deep_search", JSON.stringify(newCfg));
+    } catch {}
+    if (onChangeStageModels) onChangeStageModels(newCfg);
+  };
   
   // Plan state
   const [queries, setQueries] = useState<string[]>([]);
@@ -115,7 +206,7 @@ export function DeepSearchModal({
       setLoadingPlan(true);
       setPlanError(null);
       try {
-        const generated = await planDeepSearch(conversationId, question);
+        const generated = await planDeepSearch(conversationId, question, stageModels);
         if (!cancelled) {
           const list = generated.length ? generated : [question.trim()];
           setQueries(list);
@@ -222,6 +313,16 @@ export function DeepSearchModal({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [isOpen, activeTab, queries, activeReport, reportToDelete]);
 
+  // Auto-resize all theme textareas so the full text is always visible without internal scrollbar truncation
+  useEffect(() => {
+    inputRefs.current.forEach((el) => {
+      if (el instanceof HTMLTextAreaElement) {
+        el.style.height = "auto";
+        el.style.height = `${Math.max(44, el.scrollHeight)}px`;
+      }
+    });
+  }, [queries, loadingPlan, activeTab, isOpen]);
+
   if (!isOpen) return null;
 
   // Plan actions
@@ -268,7 +369,7 @@ export function DeepSearchModal({
     setIsLaunching(true);
     setPlanError(null);
     try {
-      await onLaunch(finalQueries);
+      await onLaunch(finalQueries, detailLevel, stageModels);
       onClose();
     } catch (err) {
       setPlanError(
@@ -341,7 +442,7 @@ export function DeepSearchModal({
                 <span className="deepsearch-modal-pill">
                   {activeReport
                     ? `Mode Lecture Blog · ${activeReport.sources_count} sources`
-                    : "Exploration continue bornée (max 5 vagues)"}
+                    : "3 Experts par partie · Rédaction en 2 étapes"}
                 </span>
               </div>
               <p>
@@ -349,12 +450,25 @@ export function DeepSearchModal({
                   ? `Question initiale : « ${activeReport.topic} »`
                   : activeTab === "reports"
                   ? "Consultez, lisez en mode blog et exportez vos grands rapports d'investigation sauvegardés."
-                  : "L'agent décompose votre sujet et approfondit par vagues successives tant que l'analyse n'est pas complète (max 5 vagues sécurisées)."}
+                  : "Découpage initial sans limite par Gemini Argon, validations multilingues, puis sortie en 2 temps : Planificateur + Écrivain développant chaque partie sous la perspective de 3 experts du domaine."}
               </p>
             </div>
           </div>
 
           <div className="deepsearch-modal-header-right">
+            {/* Configure Stage Models Button */}
+            {!activeReport && (
+              <button
+                type="button"
+                onClick={() => setStageModelsModalOpen(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-xl border border-primary/30 bg-primary/10 text-primary hover:bg-primary/20 transition-colors shadow-sm"
+                title="Configurer les modèles IA utilisés pour chacune des 5 étapes du pipeline DeepSearch"
+              >
+                <Sparkles size={13} />
+                <span>Modèles des étapes</span>
+              </button>
+            )}
+
             {/* Tab switchers if not reading a specific report */}
             {!activeReport && (
               <div className="deepsearch-tabs-pills" role="tablist">
@@ -398,65 +512,161 @@ export function DeepSearchModal({
         {/* ===================== TAB 1: PLAN VIEW ===================== */}
         {activeTab === "plan" && !activeReport && (
           <>
-            {/* Question prompt summary */}
-            <div className="deepsearch-modal-target-box">
-              <div className="deepsearch-modal-target-label">
-                <Sparkles size={13} />
-                <span>Protocole en 5 phases · Question cible de l'investigation</span>
-              </div>
-              <div className="deepsearch-modal-target-text">
-                « {question.trim() || "Aucune question définie"} »
-              </div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginTop: "8px", fontSize: "11px" }}>
-                <span className="deepsearch-modal-pill" title="Quels sont les composants, versions et standards impliqués ?">1. Axe Entités / Définitions</span>
-                <span className="deepsearch-modal-pill" title="Quel est l'état de l'art actuel et les changements récents ?">2. Axe Temporel</span>
-                <span className="deepsearch-modal-pill" title="Quels sont les mécanismes internes, architectures et métriques objectives ?">3. Axe Technique & Causal</span>
-                <span className="deepsearch-modal-pill" title="Quels sont les goulots d'étranglement, limitations, failles ou avis opposés ?">4. Axe Contradictoire</span>
-                <span className="deepsearch-modal-pill" title="Quelles sont les spécifications d'environnement ou conditions aux limites ?">5. Axe Périmètre & Contraintes</span>
-              </div>
-            </div>
-
-            {/* Sélecteur de format de sortie (Beau site HTML ou Beau PDF) */}
-            <div className="output-format-card" role="group" aria-label="Format de sortie">
-              <span className="output-format-label">
-                <FileText size={13} />
-                <span>Format de sortie privilégié :</span>
-              </span>
-              <div className="output-format-toggle">
-                <button
-                  type="button"
-                  className={`output-format-option ${outputFormat === "html" ? "is-selected" : ""}`}
-                  onClick={() => setOutputFormat("html")}
-                  title="Générer et consulter sous forme de beau site web HTML interactif (sommaire, navigation, thème sombre/clair)"
-                >
-                  <Globe2 size={13} />
-                  <span>Beau site HTML</span>
-                  <small>Interactif & responsive</small>
-                </button>
-                <button
-                  type="button"
-                  className={`output-format-option ${outputFormat === "pdf" ? "is-selected" : ""}`}
-                  onClick={() => setOutputFormat("pdf")}
-                  title="Mise en page éditoriale A4 haute fidélité prête pour impression, archivage ou partage PDF"
-                >
-                  <FileText size={13} />
-                  <span>Beau document PDF</span>
-                  <small>Édition & impression A4</small>
-                </button>
-              </div>
-            </div>
-
-            {/* Plan Queries list */}
+            {/* Plan Body (Scrollable area containing target summary, format selector and full themes list) */}
             <div className="deepsearch-modal-body">
+              {/* Question prompt summary */}
+              <div className="deepsearch-modal-target-box deepsearch-modal-target-box-inline">
+                <div className="deepsearch-modal-target-label">
+                  <Sparkles size={13} />
+                  <span>Découpage initial en points à aborder & Validations intermédiaires</span>
+                </div>
+                <div className="deepsearch-modal-target-text">
+                  « {question.trim() || "Aucune question définie"} »
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginTop: "8px", fontSize: "11px" }}>
+                  <span className="deepsearch-modal-pill" title="Quels sont les composants, versions et standards impliqués ?">1. Axe Entités / Définitions</span>
+                  <span className="deepsearch-modal-pill" title="Quel est l'état de l'art actuel et les changements récents ?">2. Axe Temporel</span>
+                  <span className="deepsearch-modal-pill" title="Quels sont les mécanismes internes, architectures et métriques objectives ?">3. Axe Technique & Causal</span>
+                  <span className="deepsearch-modal-pill" title="Quels sont les goulots d'étranglement, limitations, failles ou avis opposés ?">4. Axe Contradictoire</span>
+                  <span className="deepsearch-modal-pill" title="Quelles sont les spécifications d'environnement ou conditions aux limites ?">5. Axe Périmètre & Contraintes</span>
+                  <span className="deepsearch-modal-pill" title="Exploration à 360° (ex. filières bouchées vs en tension), toutes langues & questions de contrôle">6. Vision 360° & Toutes langues</span>
+                </div>
+              </div>
+
+              {/* Sélecteur de format de sortie (Beau site HTML ou Beau PDF) */}
+              <div className="output-format-card output-format-card-compact" role="group" aria-label="Format de sortie">
+                <span className="output-format-label">
+                  <FileText size={13} />
+                  <span>Format de sortie privilégié :</span>
+                </span>
+                <div className="output-format-toggle">
+                  <button
+                    type="button"
+                    className={`output-format-option ${outputFormat === "html" ? "is-selected" : ""}`}
+                    onClick={() => setOutputFormat("html")}
+                    title="Générer et consulter sous forme de beau site web HTML interactif (sommaire, navigation, thème sombre/clair)"
+                  >
+                    <Globe2 size={13} />
+                    <span>Beau site HTML</span>
+                    <small>Interactif & responsive</small>
+                  </button>
+                  <button
+                    type="button"
+                    className={`output-format-option ${outputFormat === "pdf" ? "is-selected" : ""}`}
+                    onClick={() => setOutputFormat("pdf")}
+                    title="Mise en page éditoriale A4 haute fidélité prête pour impression, archivage ou partage PDF"
+                  >
+                    <FileText size={13} />
+                    <span>Beau document PDF</span>
+                    <small>Édition & impression A4</small>
+                  </button>
+                </div>
+              </div>
+
+              {/* Curseur de niveau de détail (1 à 10 : de Synthèse courte à Ultra détaillé) */}
+              <div className="detail-level-slider-card" role="group" aria-label="Niveau de détail de la réponse">
+                <div className="detail-level-slider-header">
+                  <div className="detail-level-slider-title">
+                    <Sparkles size={13} />
+                    <span>Niveau de détail souhaité :</span>
+                    <strong className="detail-level-active-name">
+                      Niveau {detailLevel}/10 — {DEEPSEARCH_DETAIL_LEVELS[detailLevel]?.label}
+                    </strong>
+                  </div>
+                  <span className="detail-level-badge">
+                    {DEEPSEARCH_DETAIL_LEVELS[detailLevel]?.badge}
+                  </span>
+                </div>
+                <div className="detail-level-slider-control">
+                  <span
+                    className="detail-level-pole"
+                    onClick={() => !isLaunching && setDetailLevel(1)}
+                    title="Régler sur 1 : Synthèse très courte"
+                  >
+                    1 · Synthèse courte
+                  </span>
+                  <div className="detail-level-range-wrap">
+                    <input
+                      type="range"
+                      min={1}
+                      max={10}
+                      step={1}
+                      value={detailLevel}
+                      disabled={isLaunching}
+                      onChange={(e) => setDetailLevel(Number(e.target.value))}
+                      className="detail-level-range-input"
+                      aria-label="Curseur du niveau de détail de 1 à 10"
+                    />
+                    <div className="detail-level-ticks" aria-hidden="true">
+                      {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((lvl) => (
+                        <button
+                          key={lvl}
+                          type="button"
+                          disabled={isLaunching}
+                          className={`detail-level-tick ${detailLevel === lvl ? "is-active" : ""} ${detailLevel >= lvl ? "is-filled" : ""}`}
+                          onClick={() => setDetailLevel(lvl)}
+                          title={`Niveau ${lvl}/10 — ${DEEPSEARCH_DETAIL_LEVELS[lvl]?.label}`}
+                        >
+                          {lvl}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <span
+                    className="detail-level-pole detail-level-pole-right"
+                    onClick={() => !isLaunching && setDetailLevel(10)}
+                    title="Régler sur 10 : Ultra détaillé"
+                  >
+                    10 · Ultra détaillé
+                  </span>
+                </div>
+                <div className="detail-level-slider-desc">
+                  {DEEPSEARCH_DETAIL_LEVELS[detailLevel]?.desc}
+                </div>
+
+                {/* Pipeline Stages Mini-Summary Bar */}
+                <div className="mt-2.5 pt-2 border-t border-surface-border/50 flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <div className="flex flex-wrap items-center gap-1.5 text-text-muted">
+                    <span className="font-medium text-text-secondary">Pipeline IA :</span>
+                    <span className="px-1.5 py-0.5 rounded bg-surface-subtle font-mono text-[11px] border border-surface-border" title="Étape 1 · Planification">
+                      Plan: {stageModels.plan_model?.split("/").pop() || "Gemini Argon"}
+                    </span>
+                    <span className="text-text-muted/60">→</span>
+                    <span className="px-1.5 py-0.5 rounded bg-surface-subtle font-mono text-[11px] border border-surface-border" title="Étape 2 · Recherche & Approfondissement">
+                      Search: {stageModels.search_model?.split("/").pop() || "Gemini Flash"}
+                    </span>
+                    <span className="text-text-muted/60">→</span>
+                    <span className="px-1.5 py-0.5 rounded bg-surface-subtle font-mono text-[11px] border border-surface-border" title="Étape 3 · Collège des 3 Experts">
+                      3 Experts: {stageModels.expert_model?.split("/").pop() || "Gemini Flash"}
+                    </span>
+                    <span className="text-text-muted/60">→</span>
+                    <span className="px-1.5 py-0.5 rounded bg-surface-subtle font-mono text-[11px] border border-surface-border" title="Étape 4 · Rédaction Finale">
+                      Synthèse: {stageModels.synthesis_model?.split("/").pop() || "Gemini Flash"}
+                    </span>
+                    <span className="text-text-muted/60">→</span>
+                    <span className="px-1.5 py-0.5 rounded bg-surface-subtle font-mono text-[11px] border border-surface-border" title="Étape 5 · Relecture Critique Astra & Validation">
+                      Audit: {stageModels.audit_model?.split("/").pop() || "GPT-6 Astra"}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setStageModelsModalOpen(true)}
+                    className="text-primary hover:underline font-medium text-[11px] shrink-0"
+                  >
+                    Personnaliser les 5 étapes →
+                  </button>
+                </div>
+              </div>
+
               <div className="deepsearch-modal-body-top">
                 <div className="deepsearch-modal-plan-header-block">
                   <div className="deepsearch-modal-plan-title">
                     <ListFilter size={15} />
-                    <span>Requêtes planifiées</span>
+                    <span>Thèmes & angles planifiés (Gemini Argon · sans limite)</span>
                     <span className="deepsearch-modal-count-badge">{validQueriesCount}</span>
                   </div>
                   <span className="deepsearch-modal-plan-subtitle">
-                    4 à 6 mots-clés denses avec guillemets · Factuelles, critiques et internationales
+                    Vision 360° (ex. filières en tension ET filières bouchées) · Sortie en 2 temps (Agent Planificateur puis Agent Écrivain partie par partie)
                   </span>
                 </div>
                 <button
@@ -486,19 +696,27 @@ export function DeepSearchModal({
               ) : (
                 <div className="deepsearch-modal-queries-list">
                   {queries.map((query, index) => (
-                    <div key={index} className="deepsearch-modal-query-row">
+                    <div key={index} className="deepsearch-modal-query-row deepsearch-theme-card">
                       <span className="deepsearch-modal-query-num" aria-hidden="true">
                         {index + 1}
                       </span>
                       <textarea
                         ref={(el) => {
                           inputRefs.current[index] = el;
+                          if (el) {
+                            el.style.height = "auto";
+                            el.style.height = `${Math.max(44, el.scrollHeight)}px`;
+                          }
                         }}
-                        rows={2}
-                        className="deepsearch-modal-query-input deepsearch-module-textarea"
+                        rows={1}
+                        className="deepsearch-modal-query-input deepsearch-module-textarea deepsearch-theme-full-textarea"
                         value={query}
                         placeholder="Ex: 1. Définition et délimitation conceptuelle : analyser les principes clés et enjeux..."
-                        onChange={(e) => handleQueryChange(index, e.target.value)}
+                        onChange={(e) => {
+                          handleQueryChange(index, e.target.value);
+                          e.target.style.height = "auto";
+                          e.target.style.height = `${Math.max(44, e.target.scrollHeight)}px`;
+                        }}
                         onKeyDown={(e) => {
                           if (e.key === "Enter" && !e.shiftKey) {
                             e.preventDefault();
@@ -512,8 +730,8 @@ export function DeepSearchModal({
                         className="deepsearch-modal-query-delete-btn"
                         onClick={() => handleRemoveQuery(index)}
                         disabled={isLaunching}
-                        title="Supprimer cette requête"
-                        aria-label={`Supprimer la requête ${index + 1}`}
+                        title="Supprimer cette thématique"
+                        aria-label={`Supprimer la thématique ${index + 1}`}
                       >
                         <Trash2 size={15} />
                       </button>
@@ -527,7 +745,7 @@ export function DeepSearchModal({
                     disabled={isLaunching}
                   >
                     <Plus size={15} />
-                    <span>Ajouter un angle ou une sous-requête de recherche</span>
+                    <span>Ajouter un angle ou une thématique de recherche</span>
                   </button>
                 </div>
               )}
@@ -815,6 +1033,29 @@ export function DeepSearchModal({
                     remarkPlugins={[remarkGfm]}
                     rehypePlugins={[rehypeKatex]}
                     components={{
+                      img: ({ src, alt }) =>
+                        typeof src === "string" && src.trim() ? (
+                          <span className="markdown-inline-figure">
+                            <span className="markdown-inline-img-wrap">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
+                                src={src}
+                                alt={alt || "Illustration"}
+                                loading="lazy"
+                                className="markdown-inline-img"
+                                onError={e => {
+                                  const fig = e.currentTarget.closest(".markdown-inline-figure") as HTMLElement | null;
+                                  if (fig) fig.style.display = "none";
+                                }}
+                              />
+                            </span>
+                            {alt && (
+                              <span className="markdown-inline-caption">
+                                <span className="markdown-inline-caption-text">{alt}</span>
+                              </span>
+                            )}
+                          </span>
+                        ) : null,
                       pre: ({ children }) => (
                         <div className="code-block">
                           <div className="code-label">
@@ -917,6 +1158,18 @@ export function DeepSearchModal({
           </div>
         )}
       </div>
+
+      {stageModelsModalOpen && (
+        <StageModelsModal
+          isOpen={stageModelsModalOpen}
+          modeTitle="DeepSearch"
+          config={stageModels}
+          models={models}
+          onChangeConfig={handleUpdateStageModels}
+          onClose={() => setStageModelsModalOpen(false)}
+          onRefreshModels={onRefreshModels}
+        />
+      )}
     </div>
   );
 }

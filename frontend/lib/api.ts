@@ -104,7 +104,28 @@ export type DocumentExtraction = {
   annotations: { title: string; summary: string }[];
   warnings: string[];
 };
-export type Source = { title: string; url: string; snippet?: string; query?: string; provider?: string; search_notice?: string; auto_search_reason?: string };
+export interface StageModelsConfig {
+  plan_model?: string;
+  search_model?: string;
+  expert_model?: string;
+  synthesis_model?: string;
+  audit_model?: string;
+}
+
+export type Source = {
+  title: string;
+  url: string;
+  snippet?: string;
+  query?: string;
+  provider?: string;
+  search_notice?: string;
+  auto_search_reason?: string;
+  img_src?: string;
+  thumbnail_src?: string;
+  image_source?: string;
+  resolution?: string;
+  media_type?: "web" | "image";
+};
 export type AgentPersonaConfig = {
   id?: string;
   name: string;
@@ -364,6 +385,8 @@ export async function streamMessage(
     deep_search_queries?: string[];
     learn_mode?: boolean;
     learn_mode_queries?: string[];
+    detail_level?: number;
+    stage_models?: StageModelsConfig;
     code_mode?: boolean;
     finance_mode?: boolean;
     multi_agent?: boolean;
@@ -474,11 +497,12 @@ export async function deleteBlogPost(blogId: string, postId: string): Promise<vo
 export async function planDeepSearch(
   conversationId: string | null | undefined,
   content: string,
+  stage_models?: StageModelsConfig,
 ): Promise<string[]> {
   const url = conversationId ? `/conversations/${conversationId}/deep-search/plan` : "/deep-search/plan";
   const res = await api<{ queries: string[] }>(url, {
     method: "POST",
-    body: JSON.stringify({ content }),
+    body: JSON.stringify({ content, stage_models }),
   });
   return res.queries || [];
 }
@@ -506,11 +530,12 @@ export async function createReportFromMessage(messageId: string): Promise<DeepSe
 export async function planLearnMode(
   conversationId: string | null | undefined,
   content: string,
+  stage_models?: StageModelsConfig,
 ): Promise<string[]> {
   const url = conversationId ? `/conversations/${conversationId}/learn/plan` : "/learn/plan";
   const res = await api<{ queries: string[] }>(url, {
     method: "POST",
-    body: JSON.stringify({ content }),
+    body: JSON.stringify({ content, stage_models }),
   });
   return res.queries || [];
 }

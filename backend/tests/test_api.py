@@ -51,8 +51,12 @@ def events(response):
     result = []
     for block in response.text.strip().split("\n\n"):
         lines = block.splitlines()
-        name = next(line[7:] for line in lines if line.startswith("event: "))
-        data = json.loads(next(line[6:] for line in lines if line.startswith("data: ")))
+        event_lines = [line[7:] for line in lines if line.startswith("event: ")]
+        data_lines = [line[6:] for line in lines if line.startswith("data: ")]
+        if not event_lines or not data_lines:
+            continue
+        name = event_lines[0]
+        data = json.loads(data_lines[0])
         result.append((name, data))
     return result
 
@@ -67,7 +71,10 @@ def test_config_and_disabled_credentials(client):
     assert client.get("/api/health").json() == {"status": "ok"}
     config = client.get("/api/config").json()
     assert config["demo_mode"] is True
-    assert config["features"] == {"chat": True, "web_search": False, "ocr": False, "image_generation": False}
+    assert config["features"] == {
+        "chat": True, "web_search": False, "ocr": False, "image_generation": False,
+        "sound_effects": False, "music_generation": False,
+    }
     assert "api_key" not in json.dumps(config).lower()
 
 
@@ -949,6 +956,7 @@ def test_deep_search_executes_multi_wave_searxng_and_global_synthesis(tmp_path, 
 
     async def stream(_settings, messages, model):
         captured_context["messages"] = messages
+        captured_context["model"] = model
         yield "## Synthèse globale\n Selon [1] et [2]..."
 
     monkeypatch.setattr(providers, "plan_deep_search_queries", plan_initial)
@@ -978,6 +986,8 @@ def test_deep_search_executes_multi_wave_searxng_and_global_synthesis(tmp_path, 
         ]
         system_content = captured_context["messages"][0]["content"]
         assert "Mode DeepSearch" in system_content
+        assert captured_context["model"] == settings.deep_search_synthesis_model
+        assert captured_context["model"] != settings.deep_search_plan_model
         saved_sources = client.get(f"/api/conversations/{item}").json()["messages"][-1]["sources"]
         assert len(saved_sources) == 4
         assert saved_sources[0]["query"] == "hydrogène vert électrolyse coûts"

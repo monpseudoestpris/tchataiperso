@@ -234,6 +234,14 @@ class UpdateAgentTeam(BaseModel):
     agents: list[AgentPersonaConfig] | None = None
 
 
+class StageModelsConfig(BaseModel):
+    plan_model: str | None = Field(default=None, max_length=200)
+    search_model: str | None = Field(default=None, max_length=200)
+    expert_model: str | None = Field(default=None, max_length=200)
+    synthesis_model: str | None = Field(default=None, max_length=200)
+    audit_model: str | None = Field(default=None, max_length=200)
+
+
 class SendMessage(BaseModel):
     content: str = Field(default="", max_length=20000)
     model: str | None = None
@@ -248,8 +256,10 @@ class SendMessage(BaseModel):
     multi_agent_config: MultiAgentConfig | None = None
     attachment_ids: list[str] = Field(default_factory=list, max_length=5)
     skill_ids: list[str] = Field(default_factory=list, max_length=10)
-    deep_search_queries: list[str] | None = Field(default=None, max_length=20)
-    learn_mode_queries: list[str] | None = Field(default=None, max_length=20)
+    deep_search_queries: list[str] | None = Field(default=None)
+    learn_mode_queries: list[str] | None = Field(default=None)
+    detail_level: int | None = Field(default=None, ge=1, le=10)
+    stage_models: StageModelsConfig | None = None
 
     @field_validator("attachment_ids")
     @classmethod
@@ -270,12 +280,13 @@ class SendMessage(BaseModel):
     def sanitize_search_and_learn_queries(cls, values: list[str] | None) -> list[str] | None:
         if values is None:
             return None
-        cleaned = [" ".join(q.split())[:300] for q in values if isinstance(q, str) and q.strip()]
-        return cleaned[:20]
+        cleaned = [" ".join(q.split())[:1000] for q in values if isinstance(q, str) and q.strip()]
+        return cleaned
 
 
 class PlanDeepSearch(BaseModel):
     content: str = Field(min_length=1, max_length=20000)
+    stage_models: StageModelsConfig | None = None
 
 
 class DeepSearchPlanResponse(BaseModel):
@@ -284,6 +295,7 @@ class DeepSearchPlanResponse(BaseModel):
 
 class PlanLearnMode(BaseModel):
     content: str = Field(min_length=1, max_length=20000)
+    stage_models: StageModelsConfig | None = None
 
 
 class LearnModePlanResponse(BaseModel):

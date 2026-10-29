@@ -15,6 +15,8 @@ from ..base_prompt import BASE_USER_PROMPT
 from ..config import Settings
 from ..context import build_context
 from ..deep_search import execute_deep_search
+from ..evidence_ledger import extract_deterministic_evidence_from_sources
+from ..fact_verifier import format_verification_markdown, remedy_unverified_claims, run_repair_loop, verify_report_figures
 from ..chat_export_html import generate_chat_export_html
 from ..deep_search_html import generate_report_html
 from ..learn_mode import execute_learn_mode
@@ -31,8 +33,11 @@ from ..web import fetch_and_parse_web_url
 
 
 _DEFAULT_STREAM_CHAT = providers.stream_chat
+_DEFAULT_PLAN_REPORT_OUTLINE = providers.plan_report_outline
 _DEFAULT_CLASSIFY_CONVERSATION = providers.classify_conversation
 _DEFAULT_REWRITE_SEARCH_QUERY = providers.rewrite_search_query
+_DEFAULT_SEARCH_WEB = providers.search_web
+_DEFAULT_SEARCH_WEB_IMAGES = providers.search_web_images
 _logger = logging.getLogger("uvicorn.error")
 
 router = APIRouter(tags=["messages"])
@@ -59,14 +64,55 @@ async def send_message(
     try:
         with sessions() as db:
             conversation = get_conversation(db, conversation_id, user.id)
-            model = body.model or conversation.model
-            # Fable 5.1 est strictement dédié à la planification stratégique.
-            # Pour la suite (synthèse globale, rapport d'analyse, cours complet), bascule automatique sur un modèle rapide et économique.
-            if (body.deep_search or body.learn_mode) and (not body.model or model == getattr(settings, "deep_search_plan_model", "anthropic/claude-fable-5.1")):
-                synthesis_model = getattr(settings, "deep_search_synthesis_model", None) or "google/gemini-3.8-flash"
-                if any(m["id"] == synthesis_model for m in settings.models):
-                    model = synthesis_model
-            model_info = check_model(settings, model)
+            user_selected_model = body.model or conversation.model
+            if body.model and body.model in {m["id"] for m in settings.models}:
+                conversation.model = body.model
+            model = user_selected_model
+
+            # Configuration modulaire des modèles par étape pour DeepSearch et Mode Apprendre
+            st_cfg = body.stage_models
+            stage_plan_model = (
+                (st_cfg.plan_model if st_cfg and st_cfg.plan_model else None)
+                or getattr(settings, "deep_search_plan_model", None)
+                or "google/gemini-4-argon"
+            )
+            stage_search_model = (
+                (st_cfg.search_model if st_cfg and st_cfg.search_model else None)
+                or getattr(settings, "deep_search_synthesis_model", None)
+                or "google/gemini-3.8-flash"
+            )
+            stage_expert_model = (
+                (st_cfg.expert_model if st_cfg and st_cfg.expert_model else None)
+                or (body.model if body.model else None)
+                or getattr(settings, "deep_search_synthesis_model", None)
+                or "google/gemini-3.8-flash"
+            )
+            stage_synthesis_model = (
+                (st_cfg.synthesis_model if st_cfg and st_cfg.synthesis_model else None)
+                or (body.model if body.model else None)
+                or getattr(settings, "deep_search_synthesis_model", None)
+                or "google/gemini-3.8-flash"
+            )
+            stage_audit_model = (
+                (st_cfg.audit_model if st_cfg and st_cfg.audit_model else None)
+                or getattr(settings, "deep_search_audit_model", None)
+                or "openai/gpt-6-astra"
+            )
+
+            if body.deep_search or body.learn_mode:
+                model = stage_synthesis_model
+            try:
+                model_info = check_model(settings, model)
+            except HTTPException:
+                if body.deep_search or body.learn_mode:
+                    model_info = {
+                        "id": model,
+                        "name": model,
+                        "vision": True,
+                        "provider": model.split("/")[0] if "/" in model else "openrouter",
+                    }
+                else:
+                    raise
             attachments = []
             for attachment_id in body.attachment_ids:
                 item = db.scalar(
@@ -173,7 +219,8 @@ async def send_message(
             except Exception as exc:
                 _logger.warning("Échec lors de la recherche financière: %s", exc)
 
-            conversation.model = model
+            if not (body.deep_search or body.learn_mode):
+                conversation.model = model
             conversation.updated_at = now()
             auto_title_eligible = False
             if not conversation.messages or len(conversation.messages) <= 1:
@@ -209,7 +256,11 @@ async def send_message(
         ping_interval: float = 2.0,
         enable_cache: bool = True,
     ) -> AsyncIterator[tuple[str, bool]]:
-        aiterator = providers.stream_chat(settings, chat_context, target_model, enable_cache=enable_cache).__aiter__()
+        try:
+            gen = providers.stream_chat(settings, chat_context, target_model, enable_cache=enable_cache)
+        except TypeError:
+            gen = providers.stream_chat(settings, chat_context, target_model)
+        aiterator = gen.__aiter__()
         pending: asyncio.Task | None = None
         while True:
             if pending is None:
@@ -225,6 +276,19 @@ async def send_message(
                     break
             else:
                 yield (": keepalive\n\n", True)
+
+    async def _collect_chat(chat_context: list[dict], target_model: str, enable_cache: bool = True) -> str:
+        """Appel LLM indépendant dont la réponse complète est collectée (analyse d'un expert)."""
+        try:
+            gen = providers.stream_chat(settings, chat_context, target_model, enable_cache=enable_cache)
+        except TypeError:
+            gen = providers.stream_chat(settings, chat_context, target_model)
+        text = ""
+        async for chunk in gen:
+            text += chunk
+            if len(text) > 60000:
+                break
+        return text
 
     async def stream():
         accumulated = ""
@@ -293,6 +357,23 @@ async def send_message(
                     status_text = "Analyse et synthèse des pages web jointes…"
                 yield sse("status", {"message": status_text})
             findings: list[str] = []
+            aspect_checklist: list[dict[str, str]] = []
+            inter_questions: list[str] = []
+            should_fetch_images = (
+                not body.code_mode
+                and bool(getattr(settings, "searxng_url", "").strip())
+                and (
+                    providers.search_web is _DEFAULT_SEARCH_WEB
+                    or providers.search_web_images is not _DEFAULT_SEARCH_WEB_IMAGES
+                )
+            )
+            image_attachment_hints = [
+                att.extracted_text.strip()[:500]
+                for att in attachments
+                if att.mime_type.startswith("image/") and (att.extracted_text or "").strip()
+            ]
+            effective_detail_level = body.detail_level if body.detail_level is not None else 8
+            detail_spec = providers.get_detail_level_spec(effective_detail_level, learn_mode=body.learn_mode)
             if body.deep_search:
                 raw_query = body.content.strip()[:1500]
                 with sessions() as db:
@@ -309,8 +390,10 @@ async def send_message(
                     recent_turns=search_context,
                     search_fn=_search_with_limit,
                     initial_queries=body.deep_search_queries,
-                    max_iterations=5,
+                    max_iterations=detail_spec["max_iterations"],
                     max_sources=None,
+                    plan_model=stage_plan_model,
+                    search_model=stage_search_model,
                 ):
                     if event["type"] == "status":
                         yield sse("status", {"message": event["message"]})
@@ -319,6 +402,12 @@ async def send_message(
                     elif event["type"] == "done":
                         sources = event["sources"]
                         findings = event.get("findings", [])
+                        aspect_checklist = event.get("aspect_checklist", [])
+                        inter_questions = event.get("intermediate_questions", [])
+                if should_fetch_images and raw_query:
+                    web_imgs = await providers.search_web_images(settings, raw_query[:400], limit=6)
+                    if web_imgs:
+                        sources = list(sources) + web_imgs
             elif body.learn_mode:
                 raw_query = body.content.strip()[:1500]
                 with sessions() as db:
@@ -335,8 +424,10 @@ async def send_message(
                     recent_turns=search_context,
                     search_fn=_search_with_limit,
                     initial_queries=body.learn_mode_queries,
-                    max_iterations=5,
+                    max_iterations=detail_spec["max_iterations"],
                     max_sources=None,
+                    plan_model=stage_plan_model,
+                    search_model=stage_search_model,
                 ):
                     if event["type"] == "status":
                         yield sse("status", {"message": event["message"]})
@@ -345,6 +436,12 @@ async def send_message(
                     elif event["type"] == "done":
                         sources = event["sources"]
                         findings = event.get("findings", [])
+                        aspect_checklist = event.get("aspect_checklist", [])
+                        inter_questions = event.get("intermediate_questions", [])
+                if should_fetch_images and raw_query:
+                    web_imgs = await providers.search_web_images(settings, raw_query[:400], limit=6)
+                    if web_imgs:
+                        sources = list(sources) + web_imgs
             else:
                 perform_search = body.web_search
                 auto_search_allowed = (
@@ -357,6 +454,13 @@ async def send_message(
                     and (body.auto_web_search is True or body.web_search_mode == "auto" or getattr(settings, "auto_web_search", True))
                 )
                 auto_search_reason = ""
+                effective_user_query = body.content.strip()
+                if image_attachment_hints and providers.stream_chat is _DEFAULT_STREAM_CHAT:
+                    effective_user_query = (
+                        f"{effective_user_query}\n[Contenu visuel de l'image jointe : {' | '.join(image_attachment_hints)}]"
+                        if effective_user_query
+                        else " | ".join(image_attachment_hints)
+                    )
                 if auto_search_allowed:
                     with sessions() as db:
                         conversation = get_conversation(db, conversation_id, user.id)
@@ -369,7 +473,7 @@ async def send_message(
                     try:
                         should_search, reason = await providers.decide_web_search(
                             settings,
-                            query=body.content.strip(),
+                            query=effective_user_query,
                             summary=search_summary,
                             recent_turns=search_context,
                         )
@@ -381,7 +485,7 @@ async def send_message(
                         _logger.warning("Arbitrage web automatique indisponible: %s", exc)
 
                 if perform_search:
-                    query = body.content.strip()[:1000]
+                    query = effective_user_query[:1000]
                     with sessions() as db:
                         conversation = get_conversation(db, conversation_id, user.id)
                         search_summary = conversation.summary
@@ -400,17 +504,37 @@ async def send_message(
                             )
                         except providers.ProviderError as exc:
                             _logger.warning("Reformulation de recherche indisponible; question originale conservée: %s", exc)
+                            query = (body.content.strip() or effective_user_query)[:1000]
                             yield sse("status", {"message": "Reformulation indisponible; recherche avec la question originale…"})
-                    yield sse("status", {"message": "Recherche web en cours…"})
-                    sources = await providers.search_web(settings, query)
+                    yield sse("status", {"message": "Recherche web & images SearXNG en cours…" if should_fetch_images else "Recherche web en cours…"})
+                    if should_fetch_images:
+                        text_res, img_res = await asyncio.gather(
+                            providers.search_web(settings, query),
+                            providers.search_web_images(settings, query, limit=6),
+                            return_exceptions=True,
+                        )
+                        if isinstance(text_res, BaseException):
+                            raise text_res
+                        sources = list(text_res)
+                        web_imgs = list(img_res) if isinstance(img_res, list) else []
+                    else:
+                        sources = await providers.search_web(settings, query)
+                        web_imgs = []
                     if auto_search_reason and sources:
                         for s in sources:
                             s["auto_search_reason"] = auto_search_reason
+                    if web_imgs and (sources or not body.web_search):
+                        if auto_search_reason and not sources:
+                            web_imgs[0]["auto_search_reason"] = auto_search_reason
+                        sources = sources + web_imgs
                     if not sources and body.web_search:
-                        raise providers.ProviderError(
-                            "Aucune source web exploitable n’a été trouvée. "
-                            "Reformulez ou désactivez Web pour continuer sans recherche."
-                        )
+                        if web_imgs:
+                            sources = web_imgs
+                        else:
+                            raise providers.ProviderError(
+                                "Aucune source web exploitable n’a été trouvée. "
+                                "Reformulez ou désactivez Web pour continuer sans recherche."
+                            )
                     elif not sources:
                         yield sse("status", {"message": "Aucune source externe trouvée ; réponse basée sur les connaissances internes…"})
                     elif notice := sources[0].get("search_notice"):
@@ -612,23 +736,246 @@ async def send_message(
                     user_system_prompt=user_general_prompt,
                     prompt_cache_enabled=user_prompt_cache,
                 )
-                if body.deep_search:
-                    status_label = f"DeepSearch · Synthèse globale et rapport approfondi ({len(sources)} source{'s' if len(sources) != 1 else ''})…"
-                elif body.learn_mode:
-                    status_label = f"Mode Apprendre · Rédaction du cours complet et structuré ({len(sources)} support{'s' if len(sources) != 1 else ''})…"
-                elif body.code_mode:
-                    status_label = "Canvas Code · Conception et génération des fichiers…"
+                use_two_step_section_writer = (
+                    (body.deep_search or body.learn_mode)
+                    and (
+                        providers.stream_chat is _DEFAULT_STREAM_CHAT
+                        or providers.plan_report_outline is not _DEFAULT_PLAN_REPORT_OUTLINE
+                    )
+                )
+                if use_two_step_section_writer:
+                    mode_prefix = "Mode Apprendre" if body.learn_mode else "DeepSearch"
+                    plan_display_name = stage_plan_model.split("/")[-1] if "/" in stage_plan_model else stage_plan_model
+                    yield sse(
+                        "status",
+                        {
+                            "message": (
+                                f"{mode_prefix} · Étape 1/2 — Agent Planificateur [{plan_display_name}] (Niveau {detail_spec['level']}/10 : {detail_spec['label']}) : "
+                                f"sélection des 3 experts et plan détaillé ({len(sources)} source{'s' if len(sources) != 1 else ''})…"
+                            )
+                        },
+                    )
+                    raw_query_for_outline = body.content.strip()[:1500]
+                    structured_findings = [
+                        {"sub_query": "", "summary": f} if isinstance(f, str) else f
+                        for f in (findings or [])
+                    ]
+                    try:
+                        outline = await providers.plan_report_outline(
+                            settings=settings,
+                            query=raw_query_for_outline,
+                            sources=sources,
+                            findings=structured_findings,
+                            aspect_checklist=aspect_checklist,
+                            intermediate_questions=inter_questions,
+                            learn_mode=body.learn_mode,
+                            detail_level=effective_detail_level,
+                            model=stage_plan_model,
+                        )
+                    except TypeError:
+                        try:
+                            outline = await providers.plan_report_outline(
+                                settings=settings,
+                                query=raw_query_for_outline,
+                                sources=sources,
+                                findings=structured_findings,
+                                aspect_checklist=aspect_checklist,
+                                intermediate_questions=inter_questions,
+                                learn_mode=body.learn_mode,
+                                detail_level=effective_detail_level,
+                            )
+                        except TypeError:
+                            outline = await providers.plan_report_outline(
+                                settings=settings,
+                                query=raw_query_for_outline,
+                                sources=sources,
+                                findings=structured_findings,
+                                aspect_checklist=aspect_checklist,
+                                intermediate_questions=inter_questions,
+                                learn_mode=body.learn_mode,
+                            )
+                    outline_md = providers.format_report_outline_markdown(
+                        outline,
+                        learn_mode=body.learn_mode,
+                        detail_level=effective_detail_level,
+                    )
+                    accumulated += outline_md
+                    yield sse("delta", {"text": outline_md})
+
+                    parts = outline.get("parts") or []
+                    total_parts = len(parts)
+                    written_headings: list[str] = []
+
+                    # Evidence Ledger (V2 Evidence-First) extrait des sources collectées
+                    evidence_ledger_text = ""
+                    if sources:
+                        ledger = extract_deterministic_evidence_from_sources(sources)
+                        evidence_ledger_text = ledger.format_for_analysts(max_items=50)
+
+                    for part_idx, part_item in enumerate(parts):
+                        part_heading = str(part_item.get("heading") or f"## Partie {part_idx + 1}")
+                        clean_heading_label = part_heading.lstrip("#").strip()[:75]
+                        yield sse(
+                            "status",
+                            {
+                                "message": (
+                                    f"{mode_prefix} · Étape 2/2 — Agent Écrivain (3 experts · Niveau {detail_spec['level']}/10) : "
+                                    f"rédaction de la partie {part_idx + 1}/{total_parts} ({clean_heading_label})…"
+                                )
+                            },
+                        )
+                        part_subparts = part_item.get("subparts") or []
+                        is_flashcard_module = (
+                            body.learn_mode
+                            and part_idx == total_parts - 1
+                            and "flashcard" in (part_heading + " " + " ".join(part_subparts)).lower()
+                        )
+                        expert_drafts: list[str] | None = None
+                        if not is_flashcard_module:
+                            expert_display_name = stage_expert_model.split("/")[-1] if "/" in stage_expert_model else stage_expert_model
+                            yield sse(
+                                "status",
+                                {
+                                    "message": (
+                                        f"{mode_prefix} · Partie {part_idx + 1}/{total_parts} — Analyse experte du domaine [{expert_display_name}] "
+                                        "appuyée sur l'Evidence Ledger…"
+                                    )
+                                },
+                            )
+                            expert_task = asyncio.create_task(_collect_chat(
+                                providers.build_expert_analysis_messages(
+                                    base_context=context,
+                                    query=raw_query_for_outline,
+                                    outline=outline,
+                                    part_index=part_idx,
+                                    expert_index=0,
+                                    learn_mode=body.learn_mode,
+                                    detail_level=effective_detail_level,
+                                    evidence_ledger=evidence_ledger_text,
+                                ),
+                                stage_expert_model,
+                                user_prompt_cache,
+                            ))
+                            try:
+                                while True:
+                                    done, pending_expert = await asyncio.wait([expert_task], timeout=2.0)
+                                    if not pending_expert:
+                                        break
+                                    yield ": keepalive\n\n"
+                            except BaseException:
+                                expert_task.cancel()
+                                raise
+                            expert_analysis = expert_task.result() if not expert_task.cancelled() and expert_task.exception() is None else ""
+                            if expert_analysis.strip():
+                                expert_drafts = [expert_analysis]
+                            else:
+                                _logger.warning("Aucune analyse d'expert exploitable pour la partie %s", part_idx + 1)
+                            synth_display_name = stage_synthesis_model.split("/")[-1] if "/" in stage_synthesis_model else stage_synthesis_model
+                            yield sse(
+                                "status",
+                                {
+                                    "message": (
+                                        f"{mode_prefix} · Étape 2/2 — Agent Écrivain [{synth_display_name}] (synthèse unifiée · Niveau {detail_spec['level']}/10) : "
+                                        f"rédaction de la partie {part_idx + 1}/{total_parts} ({clean_heading_label})…"
+                                    )
+                                },
+                            )
+                        part_messages = providers.build_section_writer_messages(
+                            base_context=context,
+                            query=raw_query_for_outline,
+                            outline=outline,
+                            part_index=part_idx,
+                            written_headings=written_headings,
+                            previous_tail=accumulated[-800:],
+                            learn_mode=body.learn_mode,
+                            detail_level=effective_detail_level,
+                            expert_drafts=expert_drafts,
+                            evidence_ledger=evidence_ledger_text,
+                        )
+                        part_text = ""
+                        async for chunk, is_ping in _stream_chat_with_keepalive(
+                            part_messages, stage_synthesis_model, enable_cache=user_prompt_cache
+                        ):
+                            if is_ping:
+                                yield chunk
+                            else:
+                                part_text += chunk
+                                accumulated += chunk
+                                if len(accumulated) > 320000:
+                                    raise providers.ProviderError("La réponse dépasse la limite autorisée")
+                                yield sse("delta", {"text": chunk})
+                        if part_text.strip() and not part_text.endswith("\n\n"):
+                            sep = "\n\n" if not part_text.endswith("\n") else "\n"
+                            accumulated += sep
+                            yield sse("delta", {"text": sep})
+                        written_headings.append(part_heading)
+                    if body.deep_search or body.learn_mode:
+                        # 1. Déduplication des images identiques insérées à travers plusieurs parties
+                        accumulated = providers.deduplicate_markdown_images(accumulated)
+
+                        # 2. Étape 5/5 — Relecture critique approfondie et arbitrage par GPT-6 Astra
+                        audit_display_name = stage_audit_model.split("/")[-1] if "/" in stage_audit_model else stage_audit_model
+                        yield sse(
+                            "status",
+                            {
+                                "message": (
+                                    f"{mode_prefix} · Étape 5/5 — Relecture critique & validation des sources et du texte par {audit_display_name}…"
+                                )
+                            },
+                        )
+
+                        # Pré-contrôle déterministe pour guider l'auditeur
+                        body_content = accumulated[len(outline_md):]
+                        pre_check = verify_report_figures(body_content, sources)
+
+                        # Appel à l'auditeur critique (GPT-6 Astra)
+                        audit_result = await providers.review_report_with_auditor(
+                            settings=settings,
+                            query=raw_query_for_outline,
+                            report_markdown=body_content,
+                            sources=sources,
+                            pre_check=pre_check,
+                            learn_mode=body.learn_mode,
+                            model=stage_audit_model,
+                        )
+
+                        # 3. Application des corrections de l'auditeur et boucle de réparation multi-cycles V2
+                        remedied_body = audit_result.get("remedied_markdown") or body_content
+                        # Boucle de réparation multi-cycles déterministe (Claim Validator + Repair Loop V2)
+                        remedied_body, final_check = run_repair_loop(remedied_body, sources, max_cycles=2)
+                        if remedied_body != body_content:
+                            accumulated = accumulated[:len(outline_md)] + remedied_body
+
+                        # 4. Registre de vérification factuelle final consolidé avec avis d'audit GPT-6 Astra
+                        registry_md = format_verification_markdown(final_check, audit_review=audit_result)
+                        if registry_md:
+                            decision_label = str(audit_result.get("decision") or "validé").replace("_", " ")
+                            yield sse(
+                                "status",
+                                {
+                                    "message": f"{mode_prefix} · Relecture {audit_display_name} terminée : statut {decision_label}."
+                                },
+                            )
+                            accumulated += "\n" + registry_md
+                            yield sse("delta", {"text": "\n" + registry_md})
                 else:
-                    status_label = "Rédaction de la réponse…"
-                yield sse("status", {"message": status_label})
-                async for chunk, is_ping in _stream_chat_with_keepalive(context, model, enable_cache=user_prompt_cache):
-                    if is_ping:
-                        yield chunk
+                    if body.deep_search:
+                        status_label = f"DeepSearch · Synthèse globale et rapport approfondi ({len(sources)} source{'s' if len(sources) != 1 else ''})…"
+                    elif body.learn_mode:
+                        status_label = f"Mode Apprendre · Rédaction du cours complet et structuré ({len(sources)} support{'s' if len(sources) != 1 else ''})…"
+                    elif body.code_mode:
+                        status_label = "Canvas Code · Conception et génération des fichiers…"
                     else:
-                        accumulated += chunk
-                        if len(accumulated) > 160000:
-                            raise providers.ProviderError("La réponse dépasse la limite autorisée")
-                        yield sse("delta", {"text": chunk})
+                        status_label = "Rédaction de la réponse…"
+                    yield sse("status", {"message": status_label})
+                    async for chunk, is_ping in _stream_chat_with_keepalive(context, model, enable_cache=user_prompt_cache):
+                        if is_ping:
+                            yield chunk
+                        else:
+                            accumulated += chunk
+                            if len(accumulated) > 240000:
+                                raise providers.ProviderError("La réponse dépasse la limite autorisée")
+                            yield sse("delta", {"text": chunk})
                 if not accumulated.strip():
                     _logger.warning("Réponse vide du modèle %s ; nouvelle tentative", model)
                     yield sse("status", {"message": "Réponse vide du modèle · nouvelle tentative…"})
@@ -645,9 +992,36 @@ async def send_message(
                             yield chunk
                         else:
                             accumulated += chunk
-                            if len(accumulated) > 160000:
+                            if len(accumulated) > 240000:
                                 raise providers.ProviderError("La réponse dépasse la limite autorisée")
                             yield sse("delta", {"text": chunk})
+                if not use_two_step_section_writer and (body.deep_search or body.learn_mode):
+                    mode_prefix = "Mode Apprendre" if body.learn_mode else "DeepSearch"
+                    accumulated = providers.deduplicate_markdown_images(accumulated)
+                    audit_display_name = stage_audit_model.split("/")[-1] if "/" in stage_audit_model else stage_audit_model
+                    yield sse(
+                        "status",
+                        {
+                            "message": f"{mode_prefix} · Étape 5/5 — Relecture critique & validation par {audit_display_name}…"
+                        },
+                    )
+                    pre_check = verify_report_figures(accumulated, sources)
+                    audit_result = await providers.review_report_with_auditor(
+                        settings=settings,
+                        query=body.content.strip()[:1500],
+                        report_markdown=accumulated,
+                        sources=sources,
+                        pre_check=pre_check,
+                        learn_mode=body.learn_mode,
+                        model=stage_audit_model,
+                    )
+                    remedied_body = audit_result.get("remedied_markdown") or accumulated
+                    remedied_body, final_check = run_repair_loop(remedied_body, sources, max_cycles=2)
+                    accumulated = remedied_body
+                    registry_md = format_verification_markdown(final_check, audit_review=audit_result)
+                    if registry_md:
+                        accumulated += "\n" + registry_md
+                        yield sse("delta", {"text": "\n" + registry_md})
             if not accumulated.strip():
                 raise providers.ProviderError("Le fournisseur a retourné une réponse vide (deux tentatives). Réessayez ou changez de modèle.")
             generated_meta: dict | None = None
@@ -820,10 +1194,11 @@ async def plan_conversation_deep_search(
         ]
 
     raw_query = body.content.strip()[:1500]
+    st_plan_model = body.stage_models.plan_model if body.stage_models and body.stage_models.plan_model else None
     try:
         try:
             queries = await providers.plan_deep_search_queries(
-                settings, raw_query, search_summary, search_context, max_queries=8,
+                settings, raw_query, search_summary, search_context, model=st_plan_model,
             )
         except TypeError:
             queries = await providers.plan_deep_search_queries(
@@ -848,10 +1223,11 @@ async def plan_direct_deep_search(
         raise HTTPException(503, "La recherche web nécessite SearXNG, BRAVE_API_KEY ou DUCKDUCKGO_ENABLED en mode IA réel")
 
     raw_query = body.content.strip()[:1500]
+    st_plan_model = body.stage_models.plan_model if body.stage_models and body.stage_models.plan_model else None
     try:
         try:
             queries = await providers.plan_deep_search_queries(
-                settings, raw_query, "", [], max_queries=8,
+                settings, raw_query, "", [], model=st_plan_model,
             )
         except TypeError:
             queries = await providers.plan_deep_search_queries(
@@ -1034,10 +1410,11 @@ async def plan_conversation_learn_mode(
         ]
 
     raw_query = body.content.strip()[:1500]
+    st_plan_model = body.stage_models.plan_model if body.stage_models and body.stage_models.plan_model else None
     try:
         try:
             queries = await providers.plan_learn_queries(
-                settings, raw_query, search_summary, search_context, max_queries=8,
+                settings, raw_query, search_summary, search_context, model=st_plan_model,
             )
         except TypeError:
             queries = await providers.plan_learn_queries(
@@ -1062,10 +1439,11 @@ async def plan_direct_learn_mode(
         raise HTTPException(503, "La recherche web nécessite SearXNG, BRAVE_API_KEY ou DUCKDUCKGO_ENABLED en mode IA réel")
 
     raw_query = body.content.strip()[:1500]
+    st_plan_model = body.stage_models.plan_model if body.stage_models and body.stage_models.plan_model else None
     try:
         try:
             queries = await providers.plan_learn_queries(
-                settings, raw_query, "", [], max_queries=8,
+                settings, raw_query, "", [], model=st_plan_model,
             )
         except TypeError:
             queries = await providers.plan_learn_queries(

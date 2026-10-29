@@ -2,7 +2,7 @@
 
 import {
   ArrowDown, ArrowRightLeft, ArrowUp, BookOpen, Brain, Check, ChevronDown, ChevronLeft, ChevronRight,
-  CircleAlert, Code2, Compass, Copy, ExternalLink, Eye, FileCode2, FileText, FolderArchive,
+  CircleAlert, Code2, Compass, Copy, Download, ExternalLink, Eye, FileCode2, FileText, FolderArchive,
   Globe2, GraduationCap, ImagePlus, LineChart, Link2, LoaderCircle, LogOut, Menu, MessageCircle, Newspaper, PanelLeftClose, Paperclip,
   Pencil, Plus, Search, RefreshCw, Settings, Share2, Shield, Sparkles, Square, SquarePlay, Trash2, TrendingUp, Users, UsersRound, Volume2, WandSparkles, X,
 } from "lucide-react";
@@ -26,7 +26,8 @@ import { ModelModal } from "@/components/model-modal";
 import { SettingsModal } from "@/components/settings-modal";
 import { SkillsPanel } from "@/components/skills-panel";
 import { StudyModal } from "@/components/study-modal";
-import { ApiError, api, attachUrl, createLearnReportFromMessage, createReportFromMessage, errorMessage, skillToSlug, streamMessage, type Attachment, type AuthUser, type Config, type Conversation, type DocumentExtraction, type FamilyGroupInfo, type FinancialDashboardData, type GeneratedSound, type Memory, type Message, type Model, type MultiAgentConfig, type Skill } from "@/lib/api";
+import { StageModelsModal } from "@/components/stage-models-modal";
+import { ApiError, api, attachUrl, createLearnReportFromMessage, createReportFromMessage, errorMessage, skillToSlug, streamMessage, type Attachment, type AuthUser, type Config, type Conversation, type DocumentExtraction, type FamilyGroupInfo, type FinancialDashboardData, type GeneratedSound, type Memory, type Message, type Model, type MultiAgentConfig, type Skill, type Source, type StageModelsConfig } from "@/lib/api";
 import { collectConversationCanvasFiles, createZipBlob, extractCanvasFiles, hasExplicitCanvasFiles, triggerBlobDownload } from "@/lib/code-canvas";
 import { hasInteractiveLearnModules, stripInteractiveModulesForBody } from "@/lib/learn-parser";
 
@@ -282,6 +283,197 @@ function AttachmentView({
   </div>;
 }
 
+type LightboxImageInfo = {
+  src: string;
+  fallbackSrc?: string;
+  title: string;
+  pageUrl?: string;
+  domain?: string;
+  resolution?: string;
+};
+
+function safeHostname(url?: string): string {
+  if (!url) return "";
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+
+function MarkdownInlineImage({
+  src,
+  alt,
+  imageSources,
+  onOpenLightbox,
+}: {
+  src?: string;
+  alt?: string;
+  imageSources: Source[];
+  onOpenLightbox: (info: LightboxImageInfo) => void;
+}) {
+  const rawSrc = typeof src === "string" ? src.trim() : "";
+  const matched = useMemo(
+    () =>
+      imageSources.find(
+        item =>
+          item.img_src === rawSrc ||
+          item.thumbnail_src === rawSrc ||
+          item.url === rawSrc,
+      ),
+    [imageSources, rawSrc],
+  );
+  const primarySrc = matched?.img_src || rawSrc;
+  const fallbackSrc =
+    matched?.thumbnail_src && matched.thumbnail_src !== primarySrc
+      ? matched.thumbnail_src
+      : undefined;
+  const [activeSrc, setActiveSrc] = useState(primarySrc);
+  const [triedFallback, setTriedFallback] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setActiveSrc(primarySrc);
+    setTriedFallback(false);
+    setFailed(false);
+  }, [primarySrc]);
+
+  if (!activeSrc || failed) return null;
+
+  const caption = (alt && alt.trim() && alt.trim() !== "Image" ? alt.trim() : matched?.title) || "";
+  const pageUrl = matched?.url || primarySrc;
+  const domain = matched?.image_source || safeHostname(pageUrl);
+
+  return (
+    <span className="markdown-inline-figure">
+      <span
+        className="markdown-inline-img-wrap"
+        role="button"
+        tabIndex={0}
+        title="Cliquer pour agrandir l’image"
+        onClick={() =>
+          onOpenLightbox({
+            src: activeSrc,
+            fallbackSrc,
+            title: caption || "Illustration Web",
+            pageUrl,
+            domain,
+            resolution: matched?.resolution,
+          })
+        }
+        onKeyDown={e => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onOpenLightbox({
+              src: activeSrc,
+              fallbackSrc,
+              title: caption || "Illustration Web",
+              pageUrl,
+              domain,
+              resolution: matched?.resolution,
+            });
+          }
+        }}
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={activeSrc}
+          alt={caption || "Illustration web"}
+          loading="lazy"
+          className="markdown-inline-img"
+          onError={() => {
+            if (!triedFallback && fallbackSrc) {
+              setTriedFallback(true);
+              setActiveSrc(fallbackSrc);
+            } else {
+              setFailed(true);
+            }
+          }}
+        />
+        <span className="markdown-inline-zoom-badge">
+          <Eye size={12} />
+          <span>Agrandir</span>
+        </span>
+      </span>
+      {(caption || domain) && (
+        <span className="markdown-inline-caption">
+          {caption && <span className="markdown-inline-caption-text">{caption}</span>}
+          {pageUrl && domain && (
+            <a
+              href={pageUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="markdown-inline-source-pill"
+              title={`Voir la page d’origine sur ${domain}`}
+              onClick={e => e.stopPropagation()}
+            >
+              <Globe2 size={10} />
+              <span>{domain}</span>
+              <ExternalLink size={10} />
+            </a>
+          )}
+        </span>
+      )}
+    </span>
+  );
+}
+
+function SourceImageThumb({
+  source,
+  onOpenLightbox,
+}: {
+  source: Source;
+  onOpenLightbox: (info: LightboxImageInfo) => void;
+}) {
+  const thumbSrc = source.thumbnail_src || source.img_src || "";
+  const fullSrc = source.img_src || source.thumbnail_src || "";
+  const [activeSrc, setActiveSrc] = useState(thumbSrc);
+  const [triedFallback, setTriedFallback] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  if (!activeSrc || failed) return null;
+  const domain = source.image_source || safeHostname(source.url);
+
+  return (
+    <button
+      type="button"
+      className="source-image-card"
+      onClick={() =>
+        onOpenLightbox({
+          src: fullSrc,
+          fallbackSrc: thumbSrc !== fullSrc ? thumbSrc : undefined,
+          title: source.title || "Illustration Web",
+          pageUrl: source.url,
+          domain,
+          resolution: source.resolution,
+        })
+      }
+      title={`${source.title || "Image Web"}${domain ? ` (${domain})` : ""}`}
+    >
+      <span className="source-image-thumb-wrap">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={activeSrc}
+          alt={source.title || "Image web"}
+          loading="lazy"
+          onError={() => {
+            if (!triedFallback && fullSrc && fullSrc !== activeSrc) {
+              setTriedFallback(true);
+              setActiveSrc(fullSrc);
+            } else {
+              setFailed(true);
+            }
+          }}
+        />
+      </span>
+      <span className="source-image-meta">
+        <span className="source-image-title">{source.title || domain || "Image"}</span>
+        {domain && <small className="source-image-domain">{domain}</small>}
+      </span>
+    </button>
+  );
+}
+
 function MessageView({
   message,
   streaming,
@@ -301,6 +493,7 @@ function MessageView({
   const [zipDownloaded, setZipDownloaded] = useState(false);
   const [showAllSources, setShowAllSources] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [lightboxImage, setLightboxImage] = useState<LightboxImageInfo | null>(null);
   const exportRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -315,19 +508,28 @@ function MessageView({
   }, [exportOpen]);
   const isUser = message.role === "user";
   const sources = message.sources ?? [];
+  const imageSources = useMemo(
+    () => sources.filter(source => source.media_type === "image" || source.provider === "searxng_images" || Boolean(source.img_src)),
+    [sources],
+  );
+  const textSources = useMemo(
+    () => sources.filter(source => source.media_type !== "image" && source.provider !== "searxng_images" && !source.img_src),
+    [sources],
+  );
   const autoSearchReason = sources.find(source => source.auto_search_reason)?.auto_search_reason;
   const searchNotices = [...new Set(sources.flatMap(source => source.provider === "duckduckgo_instant_answers" && source.search_notice ? [source.search_notice] : []))];
-  const exploredQueries = Array.from(new Set(sources.map(item => item.query?.trim()).filter((item): item is string => Boolean(item))));
+  const exploredQueries = Array.from(new Set(textSources.map(item => item.query?.trim()).filter((item): item is string => Boolean(item))));
   const hasFinance = sources.some(source => source.provider === "yahoo_finance" || source.provider === "eodhd") ||
     message.attachments?.some(item => item.filename.startsWith("📈") || item.mime_type.includes("finance"));
   const financeSources = sources.filter(source => source.provider === "yahoo_finance" || source.provider === "eodhd");
   const financeProviders = [...new Set(financeSources.map(source => source.provider === "eodhd" ? "EOD Historical Data" : "Yahoo Finance"))];
   const financeSymbols = [...new Set(financeSources.map(source => /\(([^()]+)\)\s*$/.exec(source.title ?? "")?.[1]).filter((item): item is string => Boolean(item)))];
   const isLearnResult = Boolean(message.learn_report_id);
-  const isDeepSearchResult = !isLearnResult && (exploredQueries.length > 0 || sources.length > 5);
+  const isDeepSearchResult = !isLearnResult && (exploredQueries.length > 0 || textSources.length > 5);
   const hasInteractiveModules = !isUser && (isLearnResult || hasInteractiveLearnModules(message.content));
-  const displayContent = hasInteractiveModules ? stripInteractiveModulesForBody(message.content) : message.content;
-  const visibleSources = showAllSources ? sources : sources.slice(0, 8);
+  const rawDisplayContent = hasInteractiveModules ? stripInteractiveModulesForBody(message.content) : message.content;
+  const displayContent = streaming ? rawDisplayContent.replace(/!\[[^\]]*\]\([^)]*$/, "") : rawDisplayContent;
+  const visibleSources = showAllSources ? textSources : textSources.slice(0, 8);
   const explicitCanvasFiles = useMemo(
     () => (isUser ? [] : extractCanvasFiles(displayContent, { isStreaming: streaming, includeUnnamed: false })),
     [isUser, displayContent, streaming],
@@ -397,6 +599,14 @@ function MessageView({
     {displayContent ? <div className={`markdown ${streaming ? "is-streaming" : ""}`}><ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins} components={{
       p: ({ children }) => <p>{isUser ? renderNodeWithMentions(children) : children}</p>,
       a: ({ children, href }) => <a href={href} target="_blank" rel="noreferrer">{children}</a>,
+      img: ({ src, alt }) => (
+        <MarkdownInlineImage
+          src={typeof src === "string" ? src : undefined}
+          alt={alt}
+          imageSources={imageSources}
+          onOpenLightbox={setLightboxImage}
+        />
+      ),
       pre: ({ children }) => <div className="code-block"><div className="code-label"><span>Code</span>{onOpenCanvas && canvasFiles.length > 0 && <button type="button" className="code-open-canvas" onClick={() => onOpenCanvas(message.id, canvasFiles[0]?.path, !isExplicitCanvas)}><Code2 size={11} />Ouvrir dans le Canvas</button>}</div><pre>{children}</pre></div>,
       table: ({ children }) => <div className="table-scroll"><table>{children}</table></div>,
     }}>{normalizeMathMarkdown(displayContent)}</ReactMarkdown></div> : streaming && <div className="thinking-dots" aria-label="Réponse en cours"><i /><i /><i /></div>}
@@ -447,13 +657,13 @@ function MessageView({
       <div className="sources-header">
         <p>
           {isLearnResult ? (
-            <><GraduationCap size={13} /> Cours structuré · {sources.length} supports didactiques</>
+            <><GraduationCap size={13} /> Cours structuré · {textSources.length || sources.length} supports didactiques{imageSources.length > 0 ? ` · ${imageSources.length} images web` : ""}</>
           ) : isDeepSearchResult ? (
-            <><Compass size={13} /> Rapport DeepSearch · {sources.length} sources croisées</>
+            <><Compass size={13} /> Rapport DeepSearch · {textSources.length || sources.length} sources collectées{imageSources.length > 0 ? ` · ${imageSources.length} images web` : ""}</>
           ) : autoSearchReason ? (
-            <><Globe2 size={13} /><span className="auto-badge">Auto</span> Recherche activée automatiquement ({sources.length}) · <span className="auto-reason">{autoSearchReason}</span></>
+            <><Globe2 size={13} /><span className="auto-badge">Auto</span> Recherche activée automatiquement ({textSources.length || sources.length}{imageSources.length > 0 ? ` + ${imageSources.length} images` : ""}) · <span className="auto-reason">{autoSearchReason}</span></>
           ) : (
-            <><Globe2 size={13} /> Résultats de recherche & données ({sources.length})</>
+            <><Globe2 size={13} /> Résultats de recherche & données ({textSources.length || sources.length}{imageSources.length > 0 ? ` · ${imageSources.length} images web` : ""})</>
           )}
         </p>
         <div className="sources-header-actions">
@@ -478,6 +688,15 @@ function MessageView({
                 <FileText size={12} />
                 <span>Beau PDF</span>
               </a>
+              <a
+                href={message.learn_report_id ? `/api/learn/reports/${message.learn_report_id}/html?download=1` : `/api/messages/${message.id}/html?download=1`}
+                download
+                className="sources-report-btn sources-download-btn"
+                title="Télécharger directement le fichier HTML du cours"
+              >
+                <Download size={12} />
+                <span>Télécharger HTML</span>
+              </a>
             </div>
           )}
           {isDeepSearchResult && (
@@ -501,18 +720,100 @@ function MessageView({
                 <FileText size={12} />
                 <span>Beau PDF</span>
               </a>
+              <a
+                href={message.deep_search_report_id ? `/api/deep-search/reports/${message.deep_search_report_id}/html?download=1` : `/api/messages/${message.id}/html?download=1`}
+                download
+                className="sources-report-btn sources-download-btn"
+                title="Télécharger directement le fichier HTML du rapport"
+              >
+                <Download size={12} />
+                <span>Télécharger HTML</span>
+              </a>
             </div>
           )}
-          {sources.length > 8 && <button type="button" className="sources-toggle" onClick={() => setShowAllSources(old => !old)}>{showAllSources ? "Réduire" : `Voir les ${sources.length} sources`}</button>}
+          {textSources.length > 8 && <button type="button" className="sources-toggle" onClick={() => setShowAllSources(old => !old)}>{showAllSources ? "Réduire" : `Voir les ${textSources.length} sources`}</button>}
         </div>
       </div>
+      {imageSources.length > 0 && (
+        <div className="sources-images-section" aria-label="Images web SearXNG associées">
+          <div className="sources-images-label">
+            <ImagePlus size={12} />
+            <span>Images web trouvées via SearXNG ({imageSources.length})</span>
+          </div>
+          <div className="sources-images-strip">
+            {imageSources.map((imgSource, idx) => (
+              <SourceImageThumb
+                key={`${imgSource.img_src || imgSource.url}-${idx}`}
+                source={imgSource}
+                onOpenLightbox={setLightboxImage}
+              />
+            ))}
+          </div>
+        </div>
+      )}
       {exploredQueries.length > 0 && <div className="sources-queries" aria-label="Pistes explorées sur SearXNG">{exploredQueries.map(q => <span key={q} className="source-query-pill"><Search size={10} />{q}</span>)}</div>}
-      <div className="sources-links">{visibleSources.map((source, index) => <a key={`${source.url}-${index}`} href={source.url} target="_blank" rel="noreferrer" title={source.query ? `[Piste : ${source.query}]\n${source.snippet ?? ""}` : source.snippet}><span>{index + 1}</span><span>{source.title || new URL(source.url).hostname}</span>{source.provider === "yahoo_finance" ? <small className="source-provider source-provider-finance">Yahoo Finance</small> : source.provider === "eodhd" ? <small className="source-provider source-provider-finance">EOD Historical Data</small> : source.provider === "duckduckgo_instant_answers" ? <small className="source-provider">DuckDuckGo</small> : null}<ExternalLink size={12} /></a>)}</div>
+      {visibleSources.length > 0 && <div className="sources-links">{visibleSources.map((source, index) => <a key={`${source.url}-${index}`} href={source.url} target="_blank" rel="noreferrer" title={source.query ? `[Piste : ${source.query}]\n${source.snippet ?? ""}` : source.snippet}><span>{index + 1}</span><span>{source.title || safeHostname(source.url) || "Source"}</span>{source.provider === "yahoo_finance" ? <small className="source-provider source-provider-finance">Yahoo Finance</small> : source.provider === "eodhd" ? <small className="source-provider source-provider-finance">EOD Historical Data</small> : source.provider === "duckduckgo_instant_answers" ? <small className="source-provider">DuckDuckGo</small> : null}<ExternalLink size={12} /></a>)}</div>}
       {searchNotices.map(notice => <p className="source-notice" key={notice}><CircleAlert size={12} />{notice}</p>)}
       {sources.some(source => source.provider === "yahoo_finance") && <p className="source-attribution source-attribution-finance"><TrendingUp size={12} />Cours de bourse et états financiers téléchargés en direct sur <a href="https://finance.yahoo.com" target="_blank" rel="noreferrer">Yahoo Finance<ExternalLink size={10} /></a>.</p>}
       {sources.some(source => source.provider === "eodhd") && <p className="source-attribution source-attribution-finance"><TrendingUp size={12} />Cotations et historique téléchargés en direct via <a href="https://eodhd.com" target="_blank" rel="noreferrer">EOD Historical Data<ExternalLink size={10} /></a>.</p>}
       {sources.some(source => source.provider === "duckduckgo_instant_answers") && <p className="source-attribution">Réponses instantanées fournies par <a href="https://duckduckgo.com" target="_blank" rel="noreferrer">DuckDuckGo<ExternalLink size={10} /></a>.</p>}
     </div>}
+    {lightboxImage && (
+      <div
+        className="web-image-lightbox-backdrop"
+        role="dialog"
+        aria-modal="true"
+        aria-label={lightboxImage.title}
+        onClick={() => setLightboxImage(null)}
+      >
+        <div className="web-image-lightbox-card" onClick={e => e.stopPropagation()}>
+          <div className="web-image-lightbox-header">
+            <div className="web-image-lightbox-title-wrap">
+              <strong>{lightboxImage.title}</strong>
+              <div className="web-image-lightbox-badges">
+                {lightboxImage.domain && <span className="web-image-lightbox-domain">{lightboxImage.domain}</span>}
+                {lightboxImage.resolution && <span className="web-image-lightbox-res">{lightboxImage.resolution}</span>}
+              </div>
+            </div>
+            <div className="web-image-lightbox-actions">
+              {lightboxImage.pageUrl && (
+                <a
+                  href={lightboxImage.pageUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="web-image-lightbox-source-btn"
+                >
+                  <Globe2 size={13} />
+                  <span>Voir la page source</span>
+                  <ExternalLink size={12} />
+                </a>
+              )}
+              <button
+                type="button"
+                className="web-image-lightbox-close"
+                onClick={() => setLightboxImage(null)}
+                aria-label="Fermer l’aperçu"
+              >
+                <X size={18} />
+              </button>
+            </div>
+          </div>
+          <div className="web-image-lightbox-body">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={lightboxImage.src}
+              alt={lightboxImage.title}
+              onError={e => {
+                const target = e.currentTarget;
+                if (lightboxImage.fallbackSrc && target.src !== lightboxImage.fallbackSrc) {
+                  target.src = lightboxImage.fallbackSrc;
+                }
+              }}
+            />
+          </div>
+        </div>
+      </div>
+    )}
     {!isUser && message.content && !streaming && (
       <div className="message-actions">
         <button type="button" onClick={copy} aria-label={copied ? "Réponse copiée" : "Copier la réponse"}>
@@ -576,6 +877,16 @@ function MessageView({
                     <FileText size={12} />
                     <span>Beau PDF</span>
                   </a>
+                  <a
+                    href={`/api/messages/${message.id}/html?scope=turn&download=1`}
+                    download
+                    className="export-link-btn btn-download-html"
+                    title="Télécharger directement le fichier HTML de ce tour"
+                    onClick={() => setExportOpen(false)}
+                  >
+                    <Download size={12} />
+                    <span>Télécharger .html</span>
+                  </a>
                 </div>
               </div>
 
@@ -613,6 +924,16 @@ function MessageView({
                     <FileText size={12} />
                     <span>Beau PDF</span>
                   </a>
+                  <a
+                    href={`/api/messages/${message.id}/html?scope=conversation&download=1`}
+                    download
+                    className="export-link-btn btn-download-html"
+                    title="Télécharger directement la synthèse au format HTML"
+                    onClick={() => setExportOpen(false)}
+                  >
+                    <Download size={12} />
+                    <span>Télécharger .html</span>
+                  </a>
                 </div>
               </div>
             </div>
@@ -646,11 +967,37 @@ export function ChatApp() {
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [webSearchMode, setWebSearchMode] = useState<"auto" | "always" | "off">("auto");
   const [deepSearch, setDeepSearch] = useState(false);
+  const [deepSearchStageModels, setDeepSearchStageModels] = useState<StageModelsConfig>(() => {
+    try {
+      const stored = localStorage.getItem("clair_stage_models_deep_search");
+      if (stored) return JSON.parse(stored);
+    } catch {}
+    return {
+      plan_model: "google/gemini-4-argon",
+      search_model: "google/gemini-3.8-flash",
+      expert_model: "google/gemini-3.8-flash",
+      synthesis_model: "google/gemini-3.8-flash",
+      audit_model: "openai/gpt-6-astra",
+    };
+  });
   const [deepSearchModalOpen, setDeepSearchModalOpen] = useState(false);
   const [deepSearchModalQuestion, setDeepSearchModalQuestion] = useState("");
   const [deepSearchModalTab, setDeepSearchModalTab] = useState<"plan" | "reports">("plan");
   const [deepSearchModalReportId, setDeepSearchModalReportId] = useState<string | null>(null);
   const [learnMode, setLearnMode] = useState(false);
+  const [learnModeStageModels, setLearnModeStageModels] = useState<StageModelsConfig>(() => {
+    try {
+      const stored = localStorage.getItem("clair_stage_models_learn_mode");
+      if (stored) return JSON.parse(stored);
+    } catch {}
+    return {
+      plan_model: "google/gemini-4-argon",
+      search_model: "google/gemini-3.8-flash",
+      expert_model: "google/gemini-3.8-flash",
+      synthesis_model: "google/gemini-3.8-flash",
+      audit_model: "openai/gpt-6-astra",
+    };
+  });
   const [learnModalOpen, setLearnModalOpen] = useState(false);
   const [learnModalQuestion, setLearnModalQuestion] = useState("");
   const [learnModalTab, setLearnModalTab] = useState<"plan" | "reports">("plan");
@@ -1253,7 +1600,13 @@ export function ChatApp() {
     }
   }
 
-  async function send(event?: FormEvent, customDeepSearchQueries?: string[], customLearnQueries?: string[]) {
+  async function send(
+    event?: FormEvent,
+    customDeepSearchQueries?: string[],
+    customLearnQueries?: string[],
+    customDetailLevel?: number,
+    customStageModels?: StageModelsConfig,
+  ) {
     event?.preventDefault();
     if (!config) return;
 
@@ -1349,6 +1702,8 @@ export function ChatApp() {
           deep_search_queries: customDeepSearchQueries,
           learn_mode: useLearnMode,
           learn_mode_queries: customLearnQueries,
+          detail_level: customDetailLevel,
+          stage_models: customStageModels || (useDeepSearch ? deepSearchStageModels : useLearnMode ? learnModeStageModels : undefined),
           code_mode: useCodeMode,
           finance_mode: financeMode,
           multi_agent: multiAgentActive,
@@ -2019,6 +2374,16 @@ export function ChatApp() {
                       <FileText size={14} />
                       <span>Beau PDF</span>
                     </a>
+                    <a
+                      href={`/api/conversations/${conversation.id}/html?download=1`}
+                      download
+                      className="topbar-export-link btn-download-html"
+                      onClick={() => setTopbarExportOpen(false)}
+                      title="Télécharger la discussion au format fichier .html complet"
+                    >
+                      <Download size={14} />
+                      <span>Télécharger .html</span>
+                    </a>
                   </div>
                 </div>
               )}
@@ -2465,12 +2830,17 @@ export function ChatApp() {
         conversationId={conversation?.id}
         initialTab={deepSearchModalTab}
         initialReportId={deepSearchModalReportId}
+        models={config?.models ?? []}
+        stageModels={deepSearchStageModels}
+        onChangeStageModels={(cfg) => setDeepSearchStageModels(cfg)}
+        onRefreshModels={refreshModels}
         onClose={() => {
           setDeepSearchModalOpen(false);
           setDeepSearchModalReportId(null);
         }}
-        onLaunch={async (finalQueries) => {
-          await send(undefined, finalQueries);
+        onLaunch={async (finalQueries, detailLevel, stageModels) => {
+          if (stageModels) setDeepSearchStageModels(stageModels);
+          await send(undefined, finalQueries, undefined, detailLevel, stageModels || deepSearchStageModels);
         }}
       />
     )}
@@ -2481,12 +2851,17 @@ export function ChatApp() {
         conversationId={conversation?.id}
         initialTab={learnModalTab}
         initialReportId={learnModalReportId}
+        models={config?.models ?? []}
+        stageModels={learnModeStageModels}
+        onChangeStageModels={(cfg) => setLearnModeStageModels(cfg)}
+        onRefreshModels={refreshModels}
         onClose={() => {
           setLearnModalOpen(false);
           setLearnModalReportId(null);
         }}
-        onLaunch={async (finalQueries) => {
-          await send(undefined, undefined, finalQueries);
+        onLaunch={async (finalQueries, detailLevel, stageModels) => {
+          if (stageModels) setLearnModeStageModels(stageModels);
+          await send(undefined, undefined, finalQueries, detailLevel, stageModels || learnModeStageModels);
         }}
       />
     )}

@@ -1,3 +1,639 @@
+# Relais — 30 octobre 2026 (Architecture V2 Evidence-First Finale : Chercheur-Analyste Multidisciplinaire & Rédaction Calibrée sur les Preuves)
+
+## 1. Project Overview
+cLAIr est une plateforme d'assistance IA avec recherche documentaire approfondie (DeepSearch) et mode d'apprentissage intensif (Mode Apprendre). Le pipeline opère désormais selon l'architecture **Evidence-First** sobre et rigoureuse : la recherche construit une base de preuves vérifiables (`EvidenceLedger`), sur laquelle raisonne un **Chercheur-Analyste Multidisciplinaire** unique (analyse interne structurée en 7 dimensions avec contradiction explicite), avant une rédaction unifiée et dense par l'Agent Écrivain (calibrée sur les preuves réelles de 1 500 à 3 000 mots sans délayage) et un contrôle qualité factuel indépendant (QualityGate Python déterministe + boucle de réparation 2 cycles + audit critique GPT-6 Astra).
+
+## 2. Current Objective
+Achever l'alignement méthodologique complet demandé :
+1. **Contrat du Chercheur-Analyste Multidisciplinaire ([`providers.py`](file:///home/chabert/Projets/tchataiperso/backend/app/providers.py))** :
+   - Fin des personas artificiels et des anecdotes de terrain inventées.
+   - Mandat méthodologique strict : analyser les preuves récupérées, confronter les explications alternatives, expliciter les contradictions documentaires, distinguer faits avérés / hypothèses / projections, quantifier uniquement si les données le permettent, reconnaître les limites et questions ouvertes.
+   - Sortie interne structurée en 7 clés YAML :
+     `established_facts`, `main_findings`, `competing_explanations`, `contradictions`, `uncertainties`, `actionable_recommendations`, `evidence_ids`.
+2. **Calibrage naturel de rédaction sur les preuves réelles ([`providers.py`](file:///home/chabert/Projets/tchataiperso/backend/app/providers.py))** :
+   - Suppression définitive des quotas artificiels de mots boursouflés dans `_DETAIL_LEVEL_SPECS` (calibrage de 200–450 mots utiles par section au lieu de 1 500–2 400 mots délayés).
+   - Consigne stricte à l'Agent Écrivain : densité maximale, zéro remplissage, texte dense de 1 500 à 3 000 mots au total pour l'ensemble du rapport.
+3. **Séparation étanche Chercheur-Analyste / Écrivain / Vérificateur Factuel** :
+   - L'analyste et le rédacteur ne certifient JAMAIS leur propre texte.
+   - Le vérificateur indépendant (Fact-Checker Astra + QualityGate Python déterministe) contrôle les affirmations en accédant directement aux sources d'origine et à l'Evidence Ledger, avec boucle de réparation (`run_repair_loop`).
+
+## 3. Completed Work
+- `backend/app/evidence_ledger.py` : registre des preuves déterministes, typage, dédoublonnage et familles d'éditeurs.
+- `backend/app/research_planner.py` : planificateur de recherche par sous-questions et audit de couverture déterministe.
+- `backend/app/fact_verifier.py` : boucle de réparation chirurgicale multi-cycles (`run_repair_loop`) et QualityGate déterministe.
+- `backend/app/providers.py` :
+  - `_DETAIL_LEVEL_SPECS` recalibré sur des échelles sobres proportionnées aux preuves (1 500 à 3 000 mots max pour un grand rapport complet).
+  - `build_expert_analysis_messages` : contrat du Chercheur-Analyste Multidisciplinaire avec format de sortie YAML en 7 dimensions préservant la contradiction interne.
+  - `build_section_writer_messages` : intégration des 7 dimensions d'analyse et consigne d'écriture dense sans délayage ni quota arbitraire.
+  - `default_domain_experts`, `default_report_outline`, `plan_report_outline`, `format_report_outline_markdown` alignés sur l'analyste unique.
+- `backend/app/routers/messages.py` : exécution sobre d'un seul appel d'analyste par partie, injection de l'Evidence Ledger, transition directe vers l'Agent Écrivain et passage par `run_repair_loop`.
+- `backend/tests/` : l'intégralité des 314 tests backend réussis avec succès (`pytest backend/tests/`).
+- `frontend/` : `npm run typecheck` avec 0 erreur.
+
+## 4. Verification
+- `PYTHONPATH=backend backend/.venv/bin/pytest backend/tests/` : **314 passed, 0 failures** (100% succès).
+- `npm --prefix frontend run typecheck` : **0 erreur**.
+- Docker compose : `tchataiperso-clair-api-1` statut **healthy**.
+
+## 5. Next Action
+Mission entièrement achevée. Le système opère de bout en bout selon l'algorithme cLAIr DeepSearch V2 — Evidence First :
+- Prêt pour la mise en production ou l'exécution d'investigations DeepSearch réelles avec l'expert unique et les contrôles qualité déterministes.
+
+---
+
+# Relais — 30 octobre 2026 (cLAIr DeepSearch V2 — Evidence First : Boucle de Réparation Multi-Cycles et Recherche Récursive sur Lacunes)
+
+## 1. Project Overview
+cLAIr est une plateforme d'assistance IA avec recherche documentaire approfondie (DeepSearch) et mode d'apprentissage intensif (Mode Apprendre). Le pipeline opère désormais selon le paradigme **Evidence-First** : la recherche construit une base de preuves vérifiables (`EvidenceLedger`), sur laquelle raisonnent trois analystes spécialisés (Factuel, Critique, Décisionnel), avant une rédaction unifiée et un contrôle qualité déterministe avec boucle de réparation 2 cycles.
+
+## 2. Current Objective
+Achever l'implémentation complète des piliers de la V2 :
+1. **Analystes Spécialisés à sorties denses ([`providers.py`](file:///home/chabert/Projets/tchataiperso/backend/app/providers.py))** :
+   - Remplacement de la prose longue répétée par des analyses denses (200 à 350 mots) : thèse centrale, faits probants étayés par `[EV_xxxx]`, limites de portée/biais et arbitrage.
+   - La rédaction finale de la prose est exclusivement confiée à l'Agent Écrivain qui unifie les 3 analyses en évitant toute redite.
+2. **Boucle de Réparation Ciblée 2 Cycles (`Claim Validator + Repair Loop V2`) ([`fact_verifier.py`](file:///home/chabert/Projets/tchataiperso/backend/app/fact_verifier.py))** :
+   - Fonction `run_repair_loop(report_markdown, sources, max_cycles=2)` : exécute jusqu'à 2 cycles de contrôle et de remédiation chirurgicale sur les phrases litigieuses (non sourcées, non retrouvées, portée divergente ou catégoriques).
+   - Revérification immédiate après correction pour garantir qu'aucune anomalie résiduelle ne persiste sans avertissement explicite.
+3. **Recherche Récursive pilotée par les lacunes de l'Evidence Auditor ([`deep_search.py`](file:///home/chabert/Projets/tchataiperso/backend/app/deep_search.py) & [`learn_mode.py`](file:///home/chabert/Projets/tchataiperso/backend/app/learn_mode.py))** :
+   - L'auditeur de preuves inspecte l'état des aspects de recherche (`aspect_checklist`). Si des points critiques restent `pending` ou `partial` et qu'aucune requête complémentaire n'a été formulée, une micro-requête ciblée vers les données primaires du point non couvert est automatiquement injectée.
+4. **Intégration transparente dans le routeur SSE ([`messages.py`](file:///home/chabert/Projets/tchataiperso/backend/app/routers/messages.py))** :
+   - Les corrections d'Astra et les remédiations résiduelles passent par `run_repair_loop(remedied_body, sources, max_cycles=2)`.
+
+## 3. Completed Work
+- `backend/app/evidence_ledger.py` : module complet d'Evidence Ledger (EV_xxxx, dédoublonnage, familles de sources).
+- `backend/app/research_planner.py` : ResearchPlan et audit de couverture déterministe.
+- `backend/app/fact_verifier.py` : implémentation de `run_repair_loop`.
+- `backend/app/providers.py` : format court structuré des 3 analystes et injection de l'Evidence Ledger.
+- `backend/app/deep_search.py` & `backend/app/learn_mode.py` : déclencheur de requêtes de rattrapage sur lacunes documentaires.
+- `backend/app/routers/messages.py` : pipeline complet intégrant Evidence Ledger, analystes et `run_repair_loop`.
+- `backend/tests/test_fact_verifier.py` : ajout du test `test_run_repair_loop_multi_cycles`.
+
+## 4. Verification
+- `PYTHONPATH=backend pytest backend/tests/` : **314 passed, 0 failures** (100% de succès sur la suite complète du backend).
+- `npm --prefix frontend run typecheck` : **0 erreur**.
+- Conteneur Docker `tchataiperso-clair-api-1` : statut **healthy**.
+
+## 5. Next Action
+Prêt pour lancer des requêtes de test en situation réelle sur DeepSearch et Mode Apprendre.
+
+---
+
+# Relais — 29 octobre 2026 (Refonte cLAIr DeepSearch V2 — Evidence First : Evidence Ledger, Research Planner et Analystes Spécialisés)
+
+## 1. Project Overview
+cLAIr est une plateforme d'assistance IA avec recherche documentaire approfondie (DeepSearch) et mode d'apprentissage intensif (Mode Apprendre). Le pipeline opère en 5 étapes hautement spécialisées, désormais refondu selon le paradigme **Evidence-First** : la recherche construit une base de preuves vérifiables (`EvidenceLedger`), sur laquelle raisonnent trois analystes spécialisés (Factuel, Critique, Décisionnel), avant une rédaction unifiée et un contrôle qualité déterministe avec boucle de réparation.
+
+## 2. Current Objective
+Implémenter la transition vers l'architecture **Evidence-First** :
+1. **Module `EvidenceLedger` ([`evidence_ledger.py`](file:///home/chabert/Projets/tchataiperso/backend/app/evidence_ledger.py))** :
+   - Structure `EvidenceItem` avec identifiant immuable `EV_xxxx`, extrait textuel exact (150-400 caractères), typage de preuve (`statistic`, `regulatory_norm`, `scientific_finding`, `methodological_caveat`, `factual_statement`), tier de source, métrique normalisée et nature (*constat*, *projection*, *simulation*).
+   - Registre centralisé `EvidenceLedger` avec dédoublonnage de passages par similarité et regroupement par famille d'éditeurs (`source_family_id`).
+   - Extraction déterministe automatique depuis les sources collectées (`extract_deterministic_evidence_from_sources`).
+2. **Module `ResearchPlan` ([`research_planner.py`](file:///home/chabert/Projets/tchataiperso/backend/app/research_planner.py))** :
+   - Découpage par sous-questions (`SubQuestion`) avec suivi de cycle de vie mesurable (`NOT_STARTED` -> `SEARCHING` -> `PARTIAL` -> `COVERED`).
+   - Audit déterministe de couverture (`audit_sub_question_coverage`) basé sur la diversité et le niveau de preuve (au moins 2 familles indépendantes ou 1 source Tier A/B directe).
+3. **Spécialisation des 3 Analystes ([`providers.py`](file:///home/chabert/Projets/tchataiperso/backend/app/providers.py))** :
+   - Remplacement de la simple redite parallèle par 3 rôles méthodologiques complémentaires :
+     1. *Analyste Factuel* : déduit ce que les documents et preuves vérifiables permettent d'affirmer avec certitude.
+     2. *Analyste Critique* : identifie les contradictions, hypothèses fragiles, biais de sélection et limites de portée.
+     3. *Analyste Décisionnel* : traduit les faits en arbitrages concrets, stratégies et recommandations actionnables pour l'utilisateur.
+   - Injection du grand livre de preuves (`evidence_ledger`) dans le contexte de prompt des experts et de l'Agent Écrivain.
+4. **Intégration dans le flux d'exécution ([`messages.py`](file:///home/chabert/Projets/tchataiperso/backend/app/routers/messages.py))** :
+   - Dès la collecte et le filtrage des sources, l'Evidence Ledger est extrait et formatté pour alimenter directement les experts et le rédacteur unifié.
+   - Préservation de la remédiation et du contrôle déterministe par `compute_validation_status`.
+
+## 3. Completed Work
+- `backend/app/evidence_ledger.py` : module complet d'extraction et de gestion des preuves structurées.
+- `backend/app/research_planner.py` : planificateur par sous-questions et audit de couverture.
+- `backend/app/providers.py` : intégration de l'Evidence Ledger et des rôles méthodologiques (Factuel, Critique, Décisionnel) dans `build_expert_analysis_messages` et `build_section_writer_messages`.
+- `backend/app/routers/messages.py` : extraction de l'Evidence Ledger et passage aux experts et à l'Agent Écrivain.
+- `backend/tests/test_evidence_ledger.py` : tests unitaires d'extraction, dédoublonnage et sérialisation.
+- `backend/tests/test_research_planner.py` : tests unitaires d'audit de couverture du plan de recherche.
+
+## 4. Verification
+- `PYTHONPATH=backend pytest backend/tests/` : **313 passed, 0 failures** (100% de succès sur la suite complète du backend).
+- `npm --prefix frontend run typecheck` : **0 erreur**.
+- Conteneur Docker `tchataiperso-clair-api-1` : redémarré et statut **healthy**.
+
+## 5. Next Action
+Prêt pour tester en situation réelle une recherche DeepSearch ou un Mode Apprendre avec le nouveau pipeline Evidence-First.
+
+---
+
+# Relais — 29 octobre 2026 (Généralisation Universelle Agnostique du Domaine des Règles Épistémologiques et du Vérificateur Factuel)
+
+## 1. Project Overview
+cLAIr est une plateforme d'assistance IA avec recherche documentaire approfondie (DeepSearch) et mode d'apprentissage intensif (Mode Apprendre). Le pipeline opère en 5 étapes hautement spécialisées : planification d'architecture d'outline (Argon), recherche web multilingue récursive (Brave/SearXNG), comité aveugle de 3 experts par section, rédaction de synthèse unifiée, et relecture critique et arbitrage factuel par GPT-6 Astra.
+
+## 2. Current Objective
+Généraliser toutes les règles méthodologiques, épistémologiques et déterministes afin qu'elles ne soient plus liées au cas d'étude sur l'orientation scolaire (Parcoursup / ST2S / IFSI / RNCP / Licence vs BUT / travailleurs étrangers), mais s'appliquent universellement à **tout domaine** (médecine, économie, finance, informatique, ingénierie, droit, géopolitique, sciences fondamentales, éducation) :
+1. **Diversité documentaire multi-écosystèmes universelle (`plan_deep_search_queries` & `plan_learn_queries`)** :
+   - Interdiction de la monoculture documentaire en exigeant systématiquement l'interrogation d'au moins 3 écosystèmes méthodologiques distincts : (1) Producteurs de données primaires et statistiques, (2) Autorités de régulation, normalisation ou certification, (3) Recherche scientifique, observatoires et retours terrain.
+2. **Principes méthodologiques universels pour les Experts, l'Écrivain (`FACT_DISCIPLINE_RULE`) et l'Auditeur GPT-6 Astra (`review_report_with_auditor`)** :
+   - **Adéquation stricte source-affirmation (Scope & Entailment)** : interdiction d'extrapoler une étude locale, préclinique, expérimentale ou un texte réglementaire restreint hors de son périmètre propre.
+   - **Rigueur méthodologique des comparaisons statistiques (Contrôle des dénominateurs et biais)** : obligation d'expliciter la population de référence et de neutraliser les effets de structure, biais de sélection ou flux de transition/poursuite avant de comparer deux options, cohortes, traitements, technologies ou filières.
+   - **Rigueur terminologique, normative et statutaire** : interdiction de confondre norme officielle homologuée vs certification privée, grade ou statut réglementé vs appellation sectorielle, corrélation vs causalité.
+   - **Distinction faits observés ex post vs modélisations/projections prospectives**.
+3. **Détection universelle des divergences de portée et des formulations absolutistes (`fact_verifier.py`)** :
+   - Implémentation de `_has_scope_divergence` couvrant les incompatibilités de régime multi-domaines (in vitro/modèle animal vs efficacité clinique humaine, simulation/benchmark synthétique vs production industrielle réelle, régime administratif restreint vs population générale) ainsi que l'orthogonalité lexicale totale sur les affirmations causales fortes.
+   - Extension de `_ABSOLUTE_RE` et `_ABSOLUTE_REPLACEMENTS` à tous les domaines (santé : « sans aucun effet secondaire », finance : « rendement garanti », sécurité : « inviolable », sciences : « preuve irréfutable », « corrélation parfaite »).
+
+## 3. Completed Work
+- `backend/app/providers.py` : généralisation complète de `plan_deep_search_queries`, `plan_learn_queries`, `review_report_with_auditor` et `FACT_DISCIPLINE_RULE`.
+- `backend/app/fact_verifier.py` : implémentation de `_INCOMPATIBLE_SCOPES`, `_has_scope_divergence` (multi-domaines + orthogonalité lexicale) et élargissement multi-domaines de `_ABSOLUTE_RE` et `_ABSOLUTE_REPLACEMENTS`.
+- `backend/tests/test_fact_verifier.py` : ajout de `test_universal_multi_domain_scope_divergence_and_categorical_nuances` (couvrant la médecine préclinique vs clinique, l'orthogonalité lexicale et les hyperboles santé/finance/cybersécurité).
+- `backend/tests/test_providers.py` : alignement de `test_plan_deep_search_queries_uses_powerful_model_and_falls_back` sur la directive universelle multi-écosystèmes.
+
+## 4. Verification
+- `PYTHONPATH=backend backend/.venv/bin/pytest backend/tests/test_deep_search.py backend/tests/test_fact_verifier.py backend/tests/test_learn_mode.py backend/tests/test_source_filter.py backend/tests/test_providers.py` : **152 passed, 0 failures**.
+- Conteneur Docker `tchataiperso-clair-api-1` : redémarré et `healthy`.
+
+## 5. Next Action
+Prêt pour de nouvelles recherches sur n'importe quel sujet (sciences, médecine, informatique, économie, droit, etc.).
+
+---
+
+# Relais — 29 octobre 2026 (Vérité Terrain Déterministe, Élimination du Bruit et Séparation Bibliographie Citée vs Explorée)
+
+## 1. Project Overview
+cLAIr est une plateforme d'assistance IA avec recherche documentaire approfondie (DeepSearch) et mode d'apprentissage intensif (Mode Apprendre). Le pipeline opère en 5 étapes hautement spécialisées : planification d'architecture d'outline (Argon), recherche web multilingue récursive (Brave/SearXNG), comité aveugle de 3 experts par section, rédaction de synthèse unifiée, et relecture critique et arbitrage factuel par GPT-6 Astra.
+
+## 2. Current Objective
+Résoudre les problèmes de fond mis en évidence par le retour critique sur la 5e version :
+1. **P0 : Contradiction logique flagrante entre le verdict global et les affirmations non vérifiées** :
+   - *Origine du bug* : le code prenait textuellement la `decision` littéraire retournée par le LLM (ou le fallback "validé") pour afficher le badge sans confronter ce statut aux résultats réels du contrôle factuel.
+   - *Correction* : implémentation de `compute_validation_status` en pur Python qui calcule mathématiquement le badge. Si la moindre affirmation chiffrée n'est pas vérifiée, la validation intégrale est STRICTEMENT impossible.
+2. **P0 : Application effective des corrections avant publication (`rewrite_or_research` orphelins)** :
+   - *Origine* : `remedy_unverified_claims` annotait la phrase comme indicative mais le `ClaimEvidenceValidator` réanalysait les chiffres sans détecter cette mention d'atténuation.
+   - *Correction* : reconnaissance explicite de `is_explicitly_indicative` dans `validate_claim_evidence`. Le statut passe à `mention indicative nuancée` avec action `retained_with_caveat`.
+3. **P1 : Filtrage drastique de la pollution documentaire et du bruit commercial/hors sujet** :
+   - Ajout dans `_POLLUTION_JUNK_DOMAINS` et `is_junk_source` des sites d'e-commerce pur (Galeries Lafayette, Cdiscount, Shein, Temu, AliExpress, etc.), des dictionnaires/traducteurs lexicaux (Youdao, WordReference, etc.) et blocage étendu du contenu érotique / accessoires pour adultes / jeux de hasard.
+   - Ajout d'un garde-fou lexical thématique dans `curate_sources` pour éliminer les sources à score 0 (sujets orthogonaux comme le cinéma ou des personnalités politiques sans rapport).
+4. **P2 : Séparation nette entre Bibliographie citée et Journal des sources explorées** :
+   - Extraction des numéros de sources citées dans le Markdown.
+   - Affichage principal : **« Bibliographie effective citée dans l'analyse ({N}) »** avec ancres `#source-{idx}`.
+   - Affichage secondaire : **« Journal des sources explorées ({M}) »** replié dans un volet `<details>` discret.
+5. **Rigueur des comparaisons statistiques (Licence vs BUT / Bacs technologiques)** :
+   - Intégration dans `FACT_DISCIPLINE_RULE` et dans le mandat de l'auditeur Astra de l'obligation de neutraliser le taux de poursuite d'études lors des comparaisons de taux d'emploi à 12 mois (la poursuite d'études massive en Master expliquant le taux salarié brut de 61,9 % en licence).
+
+## 3. Completed Work
+- `backend/app/fact_verifier.py` : `compute_validation_status` déterministe, reconnaissance des mentions indicatives nuancées dans `validate_claim_evidence`, recalibration des statistiques.
+- `backend/app/source_filter.py` : exclusion Tier F des sites d'e-commerce pur, dictionnaires et accessoires adultes ; garde-fou lexical dans `curate_sources`.
+- `backend/app/deep_search_html.py` & `backend/app/learn_html.py` : séparation stricte bibliographie citée vs tiroir des sources explorées.
+- `backend/app/providers.py` : consigne de neutralisation de la poursuite d'études dans `FACT_DISCIPLINE_RULE` et mandat d'audit Astra.
+- `backend/app/routers/messages.py` : contrôle intermédiaire avant remédiation déterministe.
+- `backend/tests/test_fact_verifier.py` : tests d'intégrité interdisant la validation intégrale en présence d'anomalies chiffrées.
+- `backend/tests/test_source_filter.py` : tests d'exclusion junk pour e-commerce, Youdao et adultes.
+
+## 4. Verification
+- `PYTHONPATH=backend pytest backend/tests/test_deep_search.py backend/tests/test_fact_verifier.py backend/tests/test_learn_mode.py backend/tests/test_source_filter.py backend/tests/test_providers.py` : **151 passed, 0 failures**.
+- `npm --prefix frontend run typecheck` : **0 erreur**.
+- Conteneur Docker `clair-api` : statut **healthy**.
+
+---
+
+# Relais — 29 octobre 2026 (Phase de Relecture et Arbitrage Critique par GPT-6 Astra)
+
+## 1. Project Overview
+cLAIr est une plateforme d'assistance IA avec recherche documentaire approfondie (DeepSearch) et mode d'apprentissage intensif (Mode Apprendre). Le pipeline opère en 5 étapes hautement spécialisées : planification d'architecture d'outline (Argon), recherche web multilingue récursive (Brave/SearXNG), comité aveugle de 3 experts par section, rédaction de synthèse unifiée, et désormais relecture critique et arbitrage factuel par GPT-6 Astra.
+
+## 2. Current Objective
+Intégrer une phase explicite de relecture et d'arbitrage critique assurée par `openai/gpt-6-astra` (ou le modèle configurable de l'étape 5 `audit_model`), capable de valider ou d'invalider formellement le texte et les sources :
+1. **Évaluation impitoyable de la fidélité documentaire** : contrôle du respect des sources primaires, interdiction des extrapolations hasardeuses (ex: faire passer une projection prospective 2030 pour une certitude d'embauche actuelle, assimilation de grilles de salaires non consolidées à des vérités établies).
+2. **Remédiation active et chirurgicale (`remedies`)** : l'auditeur fournit des remplacements textuels ciblés (`target` -> `replacement`) qui sont appliqués directement sur le texte du rapport avant sa publication.
+3. **Validation / Invalidation des sources et de leur portée** : détection des sources citées hors sujet ou détournées de leur objet statistique/réglementaire.
+4. **Décision formelle et registre d'arbitrage** : attribution d'un statut officiel (*Validé*, *Validé avec réserves*, *Remanié & Sécurisé*) assorti d'une synthèse critique, des faits majeurs corroborés et des réserves méthodologiques, intégré dans le registre de vérification factuelle et les rapports HTML.
+5. **Configuration unifiée** : `openai/gpt-6-astra` défini comme modèle par défaut de l'Étape 5 dans le backend (`config.py`, `messages.py`) et l'interface utilisateur (`stage-models-modal.tsx`, `deep-search-modal.tsx`, `learn-modal.tsx`, `chat-app.tsx`).
+
+## 3. Completed Work
+1. **Implémentation de `review_report_with_auditor` (`providers.py`)** :
+   - Pipeline de consultation de GPT-6 Astra recevant la question, le rapport rédigé, les extraits textuels complets des 12 meilleures sources et les anomalies du pré-contrôle.
+   - Parsing JSON strict avec application chirurgicale des remplacements (`remedies`) sur le Markdown.
+   - Production d'un avis d'arbitrage structuré : décision, synthèse critique, faits vérifiés, réserves méthodologiques, et évaluation de la diversité des sources.
+2. **Enrichissement du registre factuel (`fact_verifier.py`)** :
+   - Mise à jour de `format_verification_markdown` pour accueillir l'encadré d'audit critique Astra avec badges visuels (🟢 Validé, 🟡 Validé avec réserves, 🔵 Remanié & Sécurisé) tout en préservant le tableau ClaimEvidence déterministe.
+3. **Orchestration SSE en streaming (`messages.py`)** :
+   - Statut SSE dédié émis : `Étape 5/5 — Relecture critique & validation des sources et du texte par GPT-6 Astra…`.
+   - Application séquentielle : Pré-contrôle -> Audit Astra avec remédiation du texte -> Assainissement résiduel -> Contrôle final consolidé -> Émission du registre d'arbitrage.
+4. **Interface utilisateur & Presets (`frontend`)** :
+   - Étape 5 rebaptisée « Relecture Critique Astra & Validation » avec badge `GPT-6 Astra` et modèle par défaut `openai/gpt-6-astra`.
+   - Presets *Équilibré* et *Raisonnement & Rigueur Max* intégrant Astra en étape 5.
+   - Puces récapitulatives dans `deep-search-modal.tsx` et `learn-modal.tsx` affichant désormais `Audit: GPT-6 Astra`.
+
+## 4. Key Decisions
+- *Remédiation directe vs signalement passif* : Plutôt que de simplement lister les anomalies dans un tableau en laissant le texte erroné publié, l'auditeur GPT-6 Astra génère des remplacements exacts qui réécrivent les passages problématiques pour livrer un document garanti propre et rigoureux.
+- *Double sécurité* : Les remplacements d'Astra sont complétés par `remedy_unverified_claims` pour assurer l'absence totale d'expressions catégoriques résiduelles.
+
+## 5. Modified Files
+- `backend/app/config.py` : ajout de `deep_search_audit_model: str = "openai/gpt-6-astra"`.
+- `backend/app/providers.py` : implémentation de `review_report_with_auditor` et `_AUDIT_TIMEOUT`.
+- `backend/app/fact_verifier.py` : enrichissement de `format_verification_markdown` avec l'encadré d'arbitrage critique.
+- `backend/app/routers/messages.py` : intégration du streaming de l'étape 5 et application des remédiations.
+- `frontend/components/stage-models-modal.tsx` : définition et presets avec GPT-6 Astra.
+- `frontend/components/deep-search-modal.tsx` : défaut et badge Astra.
+- `frontend/components/learn-modal.tsx` : défaut et badge Astra.
+- `frontend/components/chat-app.tsx` : défauts pour DeepSearch et LearnMode.
+- `backend/tests/test_fact_verifier.py` : test de `format_verification_markdown` avec audit Astra.
+- `backend/tests/test_providers.py` : tests unitaires de `review_report_with_auditor`.
+
+## 6. Verification
+- `PYTHONPATH=backend pytest backend/tests/test_deep_search.py backend/tests/test_fact_verifier.py backend/tests/test_learn_mode.py backend/tests/test_source_filter.py backend/tests/test_providers.py` : **150 passed, 0 failures**.
+- `npm --prefix frontend run typecheck` : **0 erreur**.
+- Conteneur Docker `tchataiperso-clair-api-1` : statut `healthy`.
+
+## 7. Known Issues and Risks
+- Aucun. Les clés d'environnement et secrets sont strictement respectés sans aucun accès aux fichiers `.env` réels.
+
+## 8. Next Action
+Prêt pour les tests utilisateur ou les prochaines évolutions.
+
+---
+
+# Relais — 29 octobre 2026 (Normalisation Sémantique des Chiffres, Diversité Thématique et Réponse aux Questions Techniques)
+
+## 1. Project Overview
+cLAIr est une plateforme d'assistance IA avec recherche documentaire avancée (DeepSearch) et mode pédagogique intensif (Mode Apprendre). Le système repose sur une chaîne d'agents spécialisés (planification d'outline, 3 experts aveugles par section, vérificateur factuel avec remédiation contraignante, et moteur de rendu HTML/PDF interactif).
+
+## 2. Current Objective
+Résoudre les problèmes de fond mis en évidence par le retour critique sur la 4e version :
+1. **Éclaircissement technique Snippets vs Extraits complets** : Expliquer précisément à l'utilisateur comment fonctionne l'ingestion textuelle (`enrich_top_sources_content` scrappait les 5 premières pages jusqu'à 4 000 caractères, maintenant étendu à 10 pages et 8 000 caractères).
+2. **Bug de normalisation sémantique des chiffres** : Remplacement de la sous-chaîne naïve par `_figure_matches_text` avec tolérance d'arrondi usuel pour les projections (760 000 / 800 000 et 89 % / 90 % désormais correctement normalisés et reconnus).
+3. **Application obligatoire des corrections avant publication** : Réconciliation entre le texte généré et l'audit via `remedy_unverified_claims` qui insère une mise en garde explicite (*ordre de grandeur indicatif non consolidé dans les sources*) sur les phrases contenant des chiffres non corroborés ou rejetés.
+4. **Diversité documentaire thématique** : Injonction au planificateur (`plan_deep_search_queries`) d'explorer au moins 3 écosystèmes institutionnels distincts selon les sous-questions (ex. Onisep/SIES pour l'orientation, Céreq/APEC pour l'insertion, CTI/CEFDG pour les diplômes).
+5. **Suppression des snippets dupliqués dans le HTML** : Dédoublonnage strict par URL canonique et signature de snippet dans `deep_search_html.py` et `learn_html.py`.
+
+## 3. Completed Work
+1. **Normalisation sémantique (`fact_verifier.py`)** :
+   - Implémentation de `_figure_matches_text` : analyse des nombres dans le texte brut avec tolérance d'arrondi (ex. 760 000 -> 800 000, 89 % -> 90 %). Les 3 formulations d'un même chiffre sont désormais toutes identifiées comme `retrouvé`.
+   - Élargissement de `_FIGURE_RE` pour capturer les unités de dénombrement courantes (`postes`, `emplois`, `recrutements`, `salaires`, `euros`).
+2. **Enrichissement textuel doublé (`source_filter.py`, `deep_search.py`, `learn_mode.py`)** :
+   - `enrich_top_sources_content` : passe de 5 à 10 pages aspirées et de 4 000 à 8 000 caractères par page. Le vérificateur dispose du texte réel des publications et plus uniquement de snippets tronqués.
+3. **Diversité documentaire imposée (`providers.py`)** :
+   - Ajout d'une directive de couverture multi-axes dans `plan_deep_search_queries` exigeant des requêtes ciblant des organismes distincts pour éviter la monoculture d'une seule étude (ex. France Stratégie).
+4. **Nettoyage des snippets dupliqués dans la bibliographie (`deep_search_html.py`, `learn_html.py`)** :
+   - Dédoublonnage des sources documentaires affichées par URL et contenu de snippet.
+
+## 4. Key Decisions
+- *Tolérance d'arrondi contrôlée* : Une projection prospective à 10 ans n'est pas une constante physique ; autoriser un arrondi de vulgarisation (89 % -> 90 %, 760 000 -> 800 000) évite le faux négatif tout en maintenant le rejet des chiffres inventés.
+
+## 5. Modified Files
+- `backend/app/fact_verifier.py` : fonction `_figure_matches_text` et regex étendue.
+- `backend/app/source_filter.py` : capacité étendue à 10 sources et 8 000 caractères dans `enrich_top_sources_content`.
+- `backend/app/deep_search.py` : appel enrichissement limit=10.
+- `backend/app/learn_mode.py` : appel enrichissement limit=10.
+- `backend/app/providers.py` : consigne de diversité documentaire dans le planificateur.
+- `backend/app/deep_search_html.py` : dédoublonnage strict des cartes de sources et snippets.
+- `backend/app/learn_html.py` : dédoublonnage strict des cartes de sources et snippets.
+- `HANDOFF.md` : journal de bord mis à jour.
+
+## 6. Verification
+- `pytest backend/tests/test_fact_verifier.py backend/tests/test_source_filter.py` : **19 passed, 0 failures**.
+- `pytest backend/tests -k "deep_search or learn"` : **20 passed, 0 failures**.
+- Docker container `tchataiperso-clair-api-1` : statut `healthy`.
+
+## 7. Known Issues and Risks
+- Aucun blocage identifié.
+
+## 8. Next Action
+Répondre en toute transparence aux questions techniques et expliciter les correctifs apportés.
+
+---
+
+# Relais — 29 octobre 2026 (Parité 100% Mode Apprendre avec DeepSearch : Source Intelligence Layer, Résolution de Sources Primaires, Extraction Textuelle Complète & Badges Tier/Score)
+
+## 1. Project Overview
+cLAIr est une plateforme d'assistance IA avec recherche documentaire avancée (DeepSearch) et mode pédagogique intensif (Mode Apprendre). Le système repose sur une chaîne d'agents spécialisés (planification d'outline, 3 experts aveugles par section, vérificateur factuel avec remédiation contraignante, et moteur de rendu HTML/PDF interactif).
+
+## 2. Current Objective
+Assurer une parité totale des innovations de DeepSearch au sein du **Mode Apprendre** :
+- Classification universelle Tier A à E et scores de qualité sur 100.
+- Registre non exclusif de priorisation (`trusted_sources.yaml`).
+- Distinction `is_primary_domain` vs `is_primary_document`.
+- Fin du bannissement d'office des plateformes UGC (Scribd, Studocu, Reddit, Quora, Medium, Wikipédia en Tier E/D avec promotion dynamique C/B sur preuves documentaires).
+- Primary Source Resolution (`extract_primary_source_citations`) pour remonter aux sources primaires citées par des cours/synthèses secondaires.
+- Enrichissement textuel complet (`enrich_top_sources_content`, jusqu'à 4 000 caractères par source candidate pour alimenter le rédacteur pédagogique et le vérificateur avec de vrais extraits et non de simples snippets de 850 caractères).
+- Affichage visuel dans le rapport HTML pédagogique (`learn_html.py`) et DeepSearch (`deep_search_html.py`) des badges de niveau (`Niveau A/B/C/D/E`) et score de fiabilité documentaire (`X/100`).
+
+## 3. Completed Work
+1. **Intégration de la Source Intelligence Layer dans `learn_mode.py`** :
+   - Suppression des pénalités indues sur Quora/Pinterest dans `_authority_score` (seuls les trackers publicitaires restent négatifs).
+   - Intégration de `extract_primary_source_citations` dans `evaluate_node` pour remonter automatiquement aux publications primaires (INSEE, DARES, Céreq, OCDE, WHO, etc.) citées par des documents secondaires.
+   - Intégration de `enrich_top_sources_content` après `curate_sources` dans `execute_learn_mode` pour injecter jusqu'à 4 000 caractères de contenu réel sur les meilleures sources.
+2. **Context & Prompt Caching (`context.py`)** :
+   - Mise à jour de `_format_source` pour afficher le niveau documentaire `[Niveau {tier}]` et prioriser le contenu complet textuel (`s.get("content")` jusqu'à 3 500 caractères) sur les snippets de recherche.
+3. **Rendu HTML paritaire (`learn_html.py` & `deep_search_html.py`)** :
+   - Intégration des puces visuelles `source-tier-chip` (`tier-a` à `tier-e`) et `source-score-chip` (`{quality_score}/100`) dans la grille de sources des rapports interactifs.
+   - Intégration du CSS thématique complet pour les puces Tier A (vert émeraude), B (bleu ciel), C (violet), D (gris ardoise), E (ambre) et scores de qualité.
+4. **Robustesse et Tests (`test_source_filter.py`, `test_learn_mode.py`)** :
+   - Ajout d'un test dédié `test_learn_mode_source_intelligence_and_enrichment` couvrant la résolution des citations primaires et l'enrichissement textuel.
+   - Correction du support single-string et multilingue dans `extract_primary_source_citations` (`_PRIMARY_CITE_RE`).
+   - Correction de la signature et du déballage dans `enrich_top_sources_content` (support des tuples et des dictionnaires retournés par `fetch_and_parse_web_url`).
+
+## 4. Key Decisions
+- *Parité architecturale* : Le Mode Apprendre partage désormais exactement la même intelligence documentaire que DeepSearch. Aucune discrimination entre recherche pure et apprentissage.
+- *Résilience de l'extraction* : L'extraction de contenu web se fait de manière asynchrone concurrente (sémaphore de 3) avec un timeout strict de 4 secondes pour ne jamais bloquer le pipeline en cas de source lente.
+- *Priorisation du document sur le domaine* : Dans le Mode Apprendre comme en DeepSearch, les plateformes UGC (ex: mémoires universitaires sur Scribd ou thèses sur Studocu) sont évaluées sur le contenu et promues si elles contiennent des indicateurs de rigueur scientifique.
+
+## 5. Modified Files
+- `backend/app/source_filter.py` : import asyncio, robustesse de `extract_primary_source_citations` (types, multilingue) et `enrich_top_sources_content`.
+- `backend/app/learn_mode.py` : intégration de `extract_primary_source_citations` et `enrich_top_sources_content`.
+- `backend/app/context.py` : transmission du tier et du texte complet dans le contexte prompt.
+- `backend/app/learn_html.py` : puces `source-tier-chip` et `source-score-chip` dans le HTML du Mode Apprendre.
+- `backend/app/deep_search_html.py` : puces `source-tier-chip` et `source-score-chip` dans le HTML DeepSearch.
+- `backend/tests/test_learn_mode.py` : ajout du test `test_learn_mode_source_intelligence_and_enrichment`.
+- `HANDOFF.md` : mise à jour de la documentation d'avancement.
+
+## 6. Verification
+- `pytest backend/tests/test_source_filter.py backend/tests/test_deep_search.py backend/tests/test_fact_verifier.py backend/tests/test_learn_mode.py backend/tests/test_context.py backend/tests/test_providers.py` : **169 passed, 0 failures**.
+- `npm --prefix frontend run typecheck` : **0 erreur**.
+- Conteneur Docker `tchataiperso-clair-api-1` : redémarré avec succès et opérationnel.
+
+## 7. Known Issues and Risks
+- Aucun blocage identifié. Les deux modes bénéficient du cache de prompt et du registre unifié.
+
+## 8. Next Action
+Proposer à l'utilisateur de lancer une session en Mode Apprendre ou de tester l'export HTML avec les nouveaux indicateurs visuels de qualité documentaire.
+
+---
+
+# Relais — 29 octobre 2026 (Classification universelle des plateformes web : fin du bannissement systématique de Scribd/Studocu, niveaux initiaux E/D et promotions dynamiques)
+
+- **Principes implémentés (`source_filter.py`)** :
+  1. **Fin du bannissement aveugle de plateformes utiles (Scribd, Studocu, Reddit, Wikipédia, Medium)** :
+     - Scribd, Studocu, Course Hero, Docsity, Academia.edu, etc. ne sont **plus jamais classés en Tier F d'office**.
+     - Ils reçoivent le niveau initial **Tier E (Plateformes d'hébergement UGC non vérifiées)**.
+     - Reddit, Quora, Stack Overflow, forums reçoivent le niveau initial **Tier E (Communautés & avis)**.
+     - Medium, Substack, WordPress reçoivent le niveau initial **Tier D/E (Publications individuelles)**.
+     - Wikipédia reçoit le niveau initial **Tier D (Encyclopédie collaborative)**.
+  2. **Critères objectivables stricts pour le Tier F (Pollution documentaire / Exclusion après détection)** :
+     - Tier F est strictement réservé aux pollutions avérées : fermes de spam SEO, faux miroirs, sites de malwares/torrents/piratage, contenu adulte/pornographique hors sujet, et pages de définitions pures de dictionnaire sans analyse.
+  3. **Promotion dynamique d'un document vérifié (`is_promoted_ugc_document`)** :
+     - Un document original hébergé sur Scribd ou Studocu présentant un auteur identifiable, un titre académique (thèse, mémoire, working paper), un identifiant permanent (DOI), une méthodologie ou des données chiffrées complètes est **automatiquement promu de Tier E à Tier C** (voire Tier B si preuves substantielles).
+     - Une contribution technique sur Reddit/Stack Overflow apportant une réponse structurée peut être promue en **Tier D**.
+     - Un article Medium/Substack avec étude empirique et données est promu en **Tier C**.
+  4. **Les 3 décisions découplées respectées à 100 %** :
+     - *Niveau du domaine* : classement a priori A–E.
+     - *Qualité du document* : détection des preuves réelles, promotion ou rétrogradation.
+     - *Pertinence pour la question* : évaluation sémantique par le juge LLM et score global sur 100.
+
+- **Vérification** :
+  - `pytest backend/tests/test_source_filter.py backend/tests/test_deep_search.py backend/tests/test_fact_verifier.py backend/tests/test_providers.py backend/tests/test_context.py` : **161 passed, 0 failures**.
+  - `npm --prefix frontend run typecheck` : **0 erreur**.
+  - Conteneur API `tchataiperso-clair-api-1` redémarré et healthy.
+
+---
+
+# Relais — 29 octobre 2026 (Distinction `is_primary_domain` vs `is_primary_document` & YAML comme guide de priorisation non exclusif)
+
+- **Principes fondamentaux intégrés** :
+  1. **Le registre YAML n'est PAS une liste blanche exclusive** :
+     - Une source non répertoriée provenant du web ouvert n'est jamais exclue a priori.
+     - Elle est jugée sur ses mérites par le LLM rapide (`curate_sources`) et scorée sur 100 via `calculate_source_quality_score`. Une étude scientifique indépendante avec méthodologie, échantillon ou DOI peut obtenir un score de 80–90/100 et être retenue en tête de rapport.
+  2. **Distinction stricte `is_primary_domain` vs `is_primary_document` (`source_filter.py`)** :
+     - `is_primary_domain(source)` : reflète la réputation générale du domaine (ex: `education.gouv.fr`, `insee.fr`, `who.int`, `bls.gov`).
+     - `is_primary_document(source)` : inspecte la nature concrète de la page consultée.
+       * Si l'URL ou le contenu correspond à un communiqué de presse, un agenda ministériel, un discours, un événement ou une interview (`/actualites/`, `/news/`, `/communique-de-presse/`, etc.), la source est **déclassée en Tier B (communication institutionnelle)** et n'est plus traitée comme une preuve scientifique ou statistique primaire.
+       * Si l'URL et le contenu contiennent des données brutes, une étude empirique, un rapport d'enquête, un décret officiel, un PDF méthodologique ou des métriques (`n = `, `p < `, intervalle de confiance, DOI, cohorte), elle est validée comme **document primaire authentique (Tier A)**.
+       * Une étude empirique ou un rapport technique publié sur un domaine non répertorié bénéficie également du statut de document primaire et d'un bonus de qualité substantiel.
+
+- **Vérification** :
+  - `pytest backend/tests/test_source_filter.py backend/tests/test_deep_search.py backend/tests/test_fact_verifier.py backend/tests/test_providers.py backend/tests/test_context.py` : **160 passed, 0 failures**.
+  - `npm --prefix frontend run typecheck` : **0 erreur**.
+  - Conteneur API `tchataiperso-clair-api-1` redémarré et healthy.
+
+---
+
+# Relais — 29 octobre 2026 (Élargissement international & anglophone du registre trusted_sources.yaml et chargement dynamique)
+
+- **Réalisé (DeepSearch ET Mode Apprendre)** :
+  1. **Élargissement majeur de `backend/app/trusted_sources.yaml` aux sources de référence anglophones & internationales** :
+     - **Emploi & Éducation** : Ajout de `bls.gov` (US Bureau of Labor Statistics), `cedefop.europa.eu`, `ilo.org` (OIT), `nces.ed.gov`, `oecd.org`, `unesco.org`, `weforum.org`.
+     - **Science & Recherche** : Ajout de `biorxiv.org`, `medrxiv.org`, `cell.com`, `thelancet.com`, `nejm.org`, `jamanetwork.com`, `pnas.org`, `journals.plos.org`, `sciencedirect.com`, `ieeexplore.ieee.org`, `ieee.org`, `dl.acm.org`, `springer.com`, `wiley.com`.
+     - **Économie & Finances** : Ajout de `federalreserve.gov`, `bankofengland.co.uk`, `eurostat.ec.europa.eu`, `nber.org` (NBER USA), `bea.gov`, `cepr.org`, `piie.com`, `bruegel.org`, ainsi que la presse économique internationale Tier C (`ft.com`, `wsj.com`, `economist.com`, `bloomberg.com`, `reuters.com`).
+     - **Droit & Réglementation** : Ajout de `supremecourt.gov`, `congress.gov`, `echr.coe.int` (CEDH), `icj-cij.org` (CIJ), `un.org`, `legislation.gov.uk`.
+     - **Informatique & IA** : Ajout de `huggingface.co`, `paperswithcode.com`, `cve.org`, `csrc.nist.gov`, `ietf.org`, `datatracker.ietf.org`, `w3.org`, `pytorch.org`, `tensorflow.org`, `kubernetes.io`, `rust-lang.org`, `go.dev`.
+     - **Santé & Biomédical** (nouvelle catégorie dédiée) : `who.int` (OMS), `cdc.gov`, `fda.gov`, `ema.europa.eu`, `ecdc.europa.eu`, `has-sante.fr`, `inserm.fr`, `ansm.sante.fr`.
+     - **Climat, Énergie & Environnement** (nouvelle catégorie dédiée) : `ipcc.ch` (GIEC), `iea.org` (AIE), `irena.org`, `noaa.gov`, `climate.nasa.gov`, `eea.europa.eu`, `ademe.fr`, `wmo.int`.
+  2. **Chargement dynamique et couplage au filtre de sources (`source_filter.py`)** :
+     - Parsing automatique de `trusted_sources.yaml` au démarrage avec `yaml.safe_load`.
+     - Table de correspondance immédiate `DOMAIN_TIERS` (lookup $O(1)$) : chaque domaine interrogé reçoit instantanément son Tier configuré (A, B, C...) avec correspondance sur les sous-domaines.
+     - Intégration transparente dans `SPECIALTY_DOMAINS` pour le ciblage des requêtes de recherche et dans `PRIMARY_DOMAINS` pour le score d'autorité.
+  3. **Tests de validation** :
+     - `test_classify_international_english_domains` ajouté dans `backend/tests/test_source_filter.py`.
+
+- **Vérification** :
+  - `pytest backend/tests/test_source_filter.py backend/tests/test_deep_search.py backend/tests/test_fact_verifier.py backend/tests/test_providers.py backend/tests/test_context.py` : **159 passed, 0 failures**.
+  - `npm --prefix frontend run typecheck` : **0 erreur**.
+  - Conteneur API `tchataiperso-clair-api-1` redémarré et healthy.
+
+---
+
+# Relais — 29 octobre 2026 (Correction du rendu des images & infographies dans les exports HTML : pleine largeur lisible et suppression du rabougrissement à 540px)
+
+- **Problème identifié (mis en évidence par la capture d'écran utilisateur)** :
+  - Dans les exports HTML (`/api/messages/{id}/html?scope=turn`, DeepSearch et Mode Apprendre), les images et infographies verticales étaient soumises à `max-height: 540px; object-fit: contain; width: 100%`.
+  - Pour une infographie verticale de ratio 1:5 ou 1:6 (ex: 800 × 4000 px), la hauteur de 540px réduisait mathématiquement la largeur à 90–100 px, écrasant le graphique en un mince ruban vertical illisible au milieu de la page.
+  - De plus, les infographies légitimes avec ratio entre 0.2 et 0.4 risquaient d'être écartées à tort par le filtre de ratio d'aspect.
+
+- **Réalisé (Exports HTML & Pipeline de rendu)** :
+  1. **Rendu plein format lisible (`deep_search_html.py`, `learn_html.py`)** :
+     - Remplacement de `max-height: 540px; object-fit: contain;` par un dimensionnement naturel réactif : `width: 100%; height: auto; max-width: min(900px, 100%)`.
+     - L'infographie s'intègre désormais à pleine largeur de colonne (900px), permettant de lire instantanément chaque chiffre, légende et diagramme dans le flux naturel du document.
+     - Ajout dans la légende d'un bouton `🔍 Plein écran` (Lightbox haute résolution) et d'un lien direct `↗ Ouvrir source` pour afficher l'image native.
+  2. **Adaptation pour l'impression PDF (`@media print`)** :
+     - Règle CSS d'impression dédiée pour `.report-inline-figure` : `max-height: 760px !important; width: auto !important; object-fit: contain !important;` pour empêcher les débordements sur les pages A4.
+  3. **Ajustement du seuil de ratio d'aspect (`providers.py`)** :
+     - Seuil assoupli de `< 0.45` à `< 0.15` pour ne bloquer que les bannières filiformes publicitaires tout en conservant les infographies documentaires utiles (ratios 0.2 à 0.4).
+  4. **Redémarrage conteneur API Docker** :
+     - Conteneur `tchataiperso-clair-api-1` redémarré avec succès pour prise en compte immédiate des modifications HTML.
+
+- **Vérification** :
+  - `pytest backend/tests/test_deep_search.py backend/tests/test_context.py backend/tests/test_providers.py` : **144 passed, 0 failures**.
+  - `npm --prefix frontend run typecheck` : **0 erreur**.
+
+---
+
+# Relais — 29 octobre 2026 (Hiérarchie A-F, registre par spécialité, score qualité sur 100 et Primary Source Resolution)
+
+- **Réalisé (DeepSearch ET Mode Apprendre)** :
+  1. **Architecture de recherche interne de cLAIr** :
+     - DeepSearch utilise **SearXNG en direct à 100 %** (méta-moteur auto-hébergé `tchataiperso-clair-searxng-1`), avec repli possible sur **Brave Search API** si configurée.
+     - **Aucun modèle LLM n'utilise de recherche web native propriétaire** (ni OpenAI Search, ni Gemini Grounding, ni Perplexity). Tout le pipeline (découpage en vagues, requêtes, déduplication, scoring, filtrage junk, injection contextuelle avec Prompt Caching) est exécuté sous notre contrôle direct et transparent dans le backend Python.
+  2. **Hiérarchie des sources A à F & Registre par spécialité** (`backend/app/source_filter.py`) :
+     - `SPECIALTY_DOMAINS` : répertoires ciblés pour Emploi & éducation (`dares.travail-emploi.gouv.fr`, `france-strategie.fr`, `cereq.fr`, `onisep.fr`...), Science & recherche (`pubmed.ncbi.nlm.nih.gov`, `arxiv.org`, `nature.com`, `science.org`, `hal.science`...), Économie & finances (`insee.fr`, `banque-france.fr`, `oecd.org`, `ecb.europa.eu`...), Droit & réglementation (`legifrance.gouv.fr`, `eur-lex.europa.eu`, `service-public.fr`, `cnil.fr`...), Informatique & IA (`docs.python.org`, `developer.mozilla.org`, `github.com`, `nvd.nist.gov`...).
+     - `classify_source_tier(source)` : classification stricte de A (données primaires) à F (fermes à contenu / junk exclu).
+  3. **Score de pertinence et de fiabilité sur 100** (`calculate_source_quality_score`) :
+     - Implémente le barème pondéré :
+       * Pertinence exacte pour la question : 35 %
+       * Proximité source primaire / hiérarchie A-F : 20 %
+       * Qualité des preuves & méthodologie : 20 %
+       * Fraîcheur adaptée : 10 %
+       * Indépendance & réputation du domaine : 10 %
+       * Contenu accessible : 5 %
+  4. **Primary Source Resolution** (`extract_primary_source_citations` & `backend/app/deep_search.py`) :
+     - Détection automatique dans les notes (`findings`) des citations d'organismes officiels (DARES, France Stratégie, INSEE, Céreq, DEPP, OCDE, etc.) mentionnés par des articles secondaires.
+     - Injection prioritaire d'une requête ciblée vers la publication officielle d'origine dès la vague de relance suivante.
+
+- **Vérification** :
+  - `pytest backend/tests/test_source_filter.py backend/tests/test_deep_search.py backend/tests/test_fact_verifier.py backend/tests/test_providers.py backend/tests/test_context.py` : **161 passed, 0 failures**.
+  - `npm --prefix frontend run typecheck` : **0 erreur**.
+
+---
+
+# Relais — 29 octobre 2026 (Téléchargement HTML direct, assainissement factuel contraignant, élimination des images polluantes et séparation stricte des sources documentaires)
+
+- **Réalisé (DeepSearch ET Mode Apprendre)** :
+  1. **Téléchargement direct du fichier HTML (`?download=1`)** :
+     - Bouton dédié `📥 Télécharger .html` disponible dans la barre de navigation supérieure de tous les exports HTML (`chat_export_html.py`, `deep_search_html.py`, `learn_html.py`).
+     - Boutons d'action directs `📥 Télécharger HTML` ajoutés dans l'interface de tchat (`chat-app.tsx`) au niveau du pied de message (aux côtés de `Beau site HTML` et `Beau PDF`), dans le menu d'export contextuel de chaque tour (`Ce tour` et `Discussion`), et dans le menu d'export de l'en-tête de conversation.
+  2. **Réponse sur la nature du Registre de vérification factuelle (pages 36 à 39)** :
+     - Le registre de vérification factuelle est **100 % déterministe en code Python** (`backend/app/fact_verifier.py`) via regex, extraction numérique normalisée, détection de formulations catégoriques (`_ABSOLUTE_RE`) et recoupement avec les extraits de sources. Il n'est **ni produit par un LLM arbitre, ni par le même LLM que le rédacteur**, ce qui garantit son indépendance totale et son honnêteté stricte.
+  3. **Assainissement factuel contraignant pré-publication (`remedy_unverified_claims`)** :
+     - Plus de publication d'affirmations catégoriques : les formulations identifiées par `_ABSOLUTE_RE` (« pénurie structurelle garantie », « ratio imbattable », « vulnérabilité IA : nulle », « filtre automatisé binaire », « emploi garanti ») sont systématiquement nuancées avant publication.
+     - Les chiffres précis non sourcés ou absents des sources citées sont automatiquement contextualisés avec la mention `*(ordre de grandeur indicatif non consolidé dans les sources)*`.
+  4. **Séparation documentaire stricte vs Illustrations web & Nettoyage images** :
+     - Les images SearXNG ne polluent plus la bibliographie scientifique : les compteurs et les citations `[1]..[N]` pointent **exclusivement sur les sources documentaires textuelles**.
+     - Les domaines d'images indésirables (`pinterest.`, `pin.it`, `f95zone.`, adult, banques d'images spammées) sont rejetés dès la collecte d'images dans `_web_image_sources`.
+     - Élimination des infographies ultra-verticales (aspect ratio < 0.45 ou > 2.8) au format filiforme inadapté.
+     - Déduplication stricte des images dans le rapport (`deduplicate_markdown_images`) : une même URL ne peut plus être répétée 4 fois au fil des parties.
+     - Rendu des illustrations en cartes `<figure class="report-inline-figure">` avec `max-height: 540px; object-fit: contain; width: 100%`, bouton `🔍 Agrandir` et Lightbox plein écran haute résolution.
+  5. **Priorisation des sources primaires institutionnelles** :
+     - Inclusion de `.gouv.fr`, `insee.fr`, `france-strategie.fr`, `dares.travail-emploi.gouv.fr`, `cereq.fr`, `francetravail.fr`, `depp.education.gouv.fr`, `enseignementsup-recherche.gouv.fr`, `onisep.fr`, `legifrance.gouv.fr`, `ccomptes.fr`, `oecd.org`, `eurostat.ec.europa.eu` dans `PRIMARY_DOMAINS` avec bonus d'autorité (+10) dans `deep_search.py` et `learn_mode.py`.
+  6. **Mise en page PDF / Impression A4** :
+     - Sommaire compacté aux titres `##` en export unitaire pour éviter les tables des matières sur 3 pages.
+     - Tableaux avec `table-layout: fixed; word-break: break-word; break-inside: auto` pour empêcher tout débordement ou coupure de texte sur les pages A4.
+
+- **Vérification** :
+  - `pytest backend/tests` : **296 passed, 0 failures, 100% succès**.
+  - `npm --prefix frontend run typecheck` : **0 erreur**.
+
+---
+
+# Relais — 29 octobre 2026 (Filtrage de pertinence des sources + anti-affirmations catégoriques)
+
+- Réalisé (DeepSearch ET Mode Apprendre) :
+  - `backend/app/source_filter.py` : filtre déterministe (hébergeurs Scribd/Studocu…, adulte/piratage, pages de définition) à chaque vague de recherche, puis jugement sémantique LLM rapide (`providers.judge_source_relevance`, score 0-3, garde ≥2, plafond 60) avant la synthèse ; notes (`findings`) des sources écartées supprimées ; repli sur le filtre déterministe si le juge échoue. Statuts de filtrage diffusés en SSE.
+  - `fact_verifier.py` : détecte aussi les formulations catégoriques (« vulnérabilité IA : nulle », « filtre binaire », « aucun risque »…). Registre de vérification maintenant ajouté aussi en Mode Apprendre.
+  - `FACT_DISCIPLINE_RULE` renforcée : périmètre/année/population des statistiques, pas de généralisation, projections au conditionnel, processus complexes nuancés.
+- Vérifié : pytest `test_source_filter test_fact_verifier test_context test_providers test_deep_search test_learn_mode` → 162 passés.
+- Non résolu : 11 échecs restants dans `test_api.py` / `test_family.py` (27 avant mes modifs dans la même commande avec `git stash`) ; cause non investiguée, probablement antérieure/environnementale.
+- Limites : le juge LLM n'est pas exécuté en conditions réelles (tests mockés) ; mots-clés de blocage à enrichir au fil des cas.
+
+---
+
+# Relais — 29 octobre 2026 (Scepticisme : experts indépendants + vérificateur factuel)
+
+- Réalisé :
+  - **3 experts = 3 appels LLM séparés et aveugles** par partie (`build_expert_analysis_messages` dans `providers.py`, exécution parallèle dans `routers/messages.py`) ; l'Agent Écrivain arbitre ensuite (`expert_drafts`) et ajoute une sous-partie « Confrontation des hypothèses » sans lisser les désaccords. Module Flashcards/Quiz du Mode Apprendre exclu.
+  - **Discipline factuelle** (`FACT_DISCIPLINE_RULE`) : pas de chiffre précis sans source pertinente, confiance par affirmation, anti-remplissage.
+  - **Vérificateur factuel déterministe** (`backend/app/fact_verifier.py`) : registre Markdown ajouté en fin de rapport DeepSearch (statuts retrouvé / non retrouvé / non sourcé / source inexistante ; ne valide jamais le périmètre statistique).
+  - Badge global « sources analysées & croisées » remplacé par « sources collectées » (`deep_search_html.py`, `chat-app.tsx`).
+- Vérifié : `pytest test_fact_verifier test_context test_providers test_deep_search test_learn_mode` → 156 passés.
+- Limites / non fait : pas de recherches propres à chaque expert (contexte de sources partagé) ; le vérificateur ne lit que titre+extrait des sources (pas la page complète) ; validation documentaire (fraîcheur/dédoublonnage) inchangée ; surcoût LLM ≈ 4 appels par partie.
+- Prochaine action : lancer un DeepSearch et lire le « Registre de vérification factuelle » ; envisager une recherche dédiée par expert.
+
+---
+
+# Relais — 29 octobre 2026 (Curseur de Niveau de Détail en 10 Niveaux dans DeepSearch & Mode Apprendre, Images Grand Format + Lightbox HTML, Comité de 3 Experts du Domaine & Rédaction en 2 Temps)
+
+- Réalisé :
+  - **Curseur de Niveau de Détail en 10 Niveaux (`detail_level` : 1 à 10, de « Synthèse courte » à « Ultra détaillé »)** (`frontend/components/deep-search-modal.tsx`, `frontend/components/learn-modal.tsx`, `frontend/components/chat-app.tsx`, `frontend/lib/api.ts`, `frontend/app/globals.css`, `backend/app/schemas.py`, `backend/app/providers.py`, `backend/app/routers/messages.py`) :
+    - *Côté Frontend (Modales DeepSearch & Mode Apprendre)* :
+      - Ajout d'un bloc interactif `.detail-level-slider-card` dans l'onglet Plan de `DeepSearchModal` et `LearnModal` comprenant :
+        - Un curseur gradué `<input type="range" min={1} max={10} step={1} />` accompagné de 10 boutons de paliers cliquables (`1` à `10`) et de bornes rapides `1 · Synthèse courte` / `10 · Ultra détaillé`.
+        - Un badge dynamique affichant en temps réel l'intitulé du niveau sélectionné, le nombre de grandes parties/modules, la profondeur par expert et le nombre de vagues de recherche (défaut recommandé : **Niveau 8/10**).
+      - Transmission de `detail_level` depuis `onLaunch(finalQueries, detailLevel)` -> `send(..., customDetailLevel)` -> `streamMessage(..., { detail_level })`.
+    - *Côté Backend (`get_detail_level_spec`, `plan_report_outline`, `default_report_outline`, `build_section_writer_messages`, `messages.py`)* :
+      - Validation Pydantic `detail_level: int | None = Field(default=None, ge=1, le=10)` dans `SendMessage`.
+      - Fonction `get_detail_level_spec(detail_level, learn_mode)` calibrant les 10 niveaux :
+        - **Niveaux 1 à 3 (Synthèse courte à Résumé structuré)** : 2 à 3 grandes parties, 1 à 2 paragraphes synthétiques par expert (`150 à 450 mots` par partie), 2 à 3 vagues d'exploration.
+        - **Niveaux 4 à 6 (Aperçu analytique à Analyse détaillée)** : 4 à 5 grandes parties, 2 à 3 paragraphes par expert (`450 à 950 mots` par partie), 4 à 6 vagues d'exploration.
+        - **Niveaux 7 à 10 (Étude approfondie à Encyclopédique & Ultra-détaillé)** : 5 à 7 grandes parties, 4 à 8 paragraphes denses par expert (`950 à 2 400+ mots` par partie), 7 à 10 vagues d'exploration.
+      - En Mode Apprendre, quel que soit le niveau choisi (même `1/10`), le module final contenant les **20 Flashcards** et les **20 Questions de Quiz QCM** est toujours préservé pour garantir le fonctionnement des exercices interactifs.
+  - **Perspective de 3 Experts du Domaine dans Chaque Grande Partie (DeepSearch & Mode Apprendre)** (`backend/app/providers.py`, `backend/app/context.py`, `backend/app/routers/messages.py`) :
+    - **Sélection dynamique des 3 meilleurs experts du domaine (`default_domain_experts` + `plan_report_outline`)** :
+      - Dès l'Étape 1, l'Agent Planificateur constitue un **Comité de 3 Experts d'élite complémentaires et contrastés** adaptés exactement au sujet posé :
+        * *Exemple dette / économie / finances publiques* : 1. **Macroéconomiste & Historien des Crises Souveraines** (croissance potentielle, solde primaire, multiplicateur budgétaire), 2. **Banquier Central & Stratège des Marchés Obligataires Souverains** (taux directeurs, spreads OAT/Bund, liquidité, agences de notation), 3. **Haut Fonctionnaire du Budget (Cour des Comptes / Trésor) & Stratège Politique** (arbitrages budgétaires et sociaux, acceptabilité fiscale/électorale, contraintes constitutionnelles).
+        * *Exemple études / orientation / emploi* : 1. **Directeur des Études & Doyen de Grandes Écoles / Universités**, 2. **Directeur du Recrutement (DRH Groupe) & Chasseur de Têtes Senior**, 3. **Économiste du Travail & Prospectiviste des Mutations IA / Démographiques (DARES / France Stratégie)**.
+        * *Exemple santé / médecine*, *droit / géopolitique*, *ingénierie / sciences* : 3 profils d'experts spécialisés (théoricien fondamental, praticien opérationnel de terrain, auditeur critique / régulateur / systémique).
+    - **Chacun des 3 experts dans sa propre sous-partie (`###`) à chaque grande partie (`##`)** :
+      - Dans chaque grande partie du plan (`outline["parts"]`), les sous-parties donnent successivement la parole à l'Expert 1 (`### X.1 Perspective 1 — [Titre Expert 1] : ...`), à l'Expert 2 (`### X.2 Perspective 2 — [Titre Expert 2] : ...`) et à l'Expert 3 (`### X.3 Perspective 3 — [Titre Expert 3] : ...`).
+      - Lors de l'Étape 2 (`build_section_writer_messages`), l'Agent Écrivain incarne successivement chacun des 3 experts dans sa sous-partie dédiée (3 à 5 paragraphes denses par expert avec son jargon, ses chiffres, ses preuves et ses sources `[1], [2]`), puis synthétise leur confrontation dans un tableau comparatif Markdown.
+  - **Sortie en 2 Temps pour DeepSearch et le Mode Apprendre : 1) Agent Planificateur -> 2) Agent Écrivain Partie par Partie** (`backend/app/providers.py`, `backend/app/routers/messages.py`) :
+    - **Étape 1 (`plan_report_outline` + `default_report_outline` + `format_report_outline_markdown`) — Agent Planificateur** :
+      - Avant toute rédaction, un agent planificateur (propulsé par le modèle rapide et économique `google/gemini-3.8-flash`) analyse la question, la checklist initiale (`aspect_checklist`), les questions intermédiaires (`intermediate_questions`), les notes extraites (`findings`) et l'ensemble des sources collectées pour sélectionner les 3 experts et construire le **plan détaillé de la sortie en grandes parties (`##`) et sous-parties (`###`)**, accompagné de consignes précises (`focus`) pour chaque partie.
+      - En `Mode Apprendre` (`learn_mode=True`), le planificateur garantit systématiquement que la dernière partie du cours inclut la fiche de mémorisation active (croisant les règles d'or des 3 experts) ainsi que les **20 Flashcards** (`### Flashcard 1` à `20`) et les **20 questions de Quiz QCM** (`### Question 1` à `20`) afin que le moteur interactif (`learn_html.py`) génère les cartes 3D et le quiz.
+      - Le titre principal `# ...`, la présentation du **Comité des 3 Experts du Domaine** et le **Sommaire & Architecture Détaillée** générés par l'Agent Planificateur sont immédiatement diffusés en streaming SSE en tête de la réponse.
+    - **Étape 2 (`build_section_writer_messages` + boucle séquentielle dans `send_message`) — Agent Écrivain Partie par Partie** :
+      - Un agent écrivain rédige ensuite les grandes parties **les unes après les autres** (`for part_idx, part_item in enumerate(parts)`).
+      - Pour chaque partie `i/N`, l'Agent Écrivain reçoit :
+        1. L'intégralité des découvertes et sources numérotées (`base_context`, bénéficiant du Prompt Caching).
+        2. Le panel des 3 experts du domaine et leur prisme d'analyse respectif.
+        3. Le plan complet du document (avec le marquage `✓ [DÉJÀ RÉDIGÉE]`, `👉 [PARTIE ACTUELLE À RÉDIGER MAINTENANT]` et `[À RÉDIGER PLUS TARD]`).
+        4. La liste des parties déjà écrites et les dernières lignes de la partie précédente (`previous_tail`) pour assurer une transition fluide sans redondance.
+        5. L'obligation stricte de développer **exclusivement** la partie en cours avec chacune des 3 sous-parties d'experts `###` (1 000 à 1 600+ mots pour cette seule partie).
+  - **Alignement Complet du Mode Apprendre (`learn_mode.py`) sur Toutes les Améliorations DeepSearch** (`backend/app/providers.py`, `backend/app/learn_mode.py`, `backend/app/routers/messages.py`, `frontend/components/learn-modal.tsx`) :
+    - **Thèmes initiaux sans limite avec Gemini Argon & Vision Panoramique 360°** : `plan_learn_queries` n'est plus bridé à 8 modules (`max_queries: int | None = None`), utilise `google/gemini-4-argon` pour la définition initiale des thèmes et intègre la vision panoramique à 360° (compétences/usages en forte tension vs approches obsolètes ou filières bouchées, alternatives, ressources multilingues).
+    - **Découpage initial & validations intermédiaires en cours de route** : ajout de `decompose_learn_objective` (`default_learn_aspect_checklist`) et `validate_and_followup_learn` dans `providers.py` et branchement dans `learn_mode.py` (`HARD_MAX_ITERATIONS = 12`, `HARD_MAX_TOTAL_QUERIES = 40`, `max_iterations = 8`), avec génération de questions intermédiaires et relances dans toutes les langues pertinentes.
+  - **Affichage Intégral des Thématiques Sans Troncature** (`frontend/components/deep-search-modal.tsx`, `frontend/components/learn-modal.tsx`, `frontend/app/globals.css`, `backend/app/providers.py`, `backend/app/schemas.py`) :
+    - *Côté Frontend* :
+      - Auto-redimensionnement dynamique (`scrollHeight`) de chaque zone de texte de thématique (`.deepsearch-module-textarea`, `.learn-module-textarea`) à l'ouverture, au chargement et à la saisie, avec `overflow: hidden` et `resize: none` pour supprimer les mini-scrollbars internes (`rows={2}`) qui masquaient le début ou la fin des phrases longues.
+      - Intégration du résumé de la question et du sélecteur de format de sortie directement dans la zone défilante principale (`.deepsearch-modal-body`) et élargissement de la modale (`min(860px, 96vw)`, `min(900px, 92vh)`) afin d'offrir un espace vertical maximal à la liste complète des thématiques.
+    - *Côté Backend* :
+      - Extension de la limite de caractères par thématique de `300` à `1000` caractères dans `_parse_query_list` (`backend/app/providers.py`) et `sanitize_search_and_learn_queries` (`backend/app/schemas.py`), avec nettoyage des guillemets englobants superflus ou orphelins pour éviter les phrases coupées en fin de chaîne (ex: `prêts étudiants garantis par l'État, et` ou `reconnaissance des diplômes, Suis`).
+  - **Développement ×5 de la Synthèse Finale DeepSearch (Sous-Sections `###` & Tableaux Chiffrés)** (`backend/app/context.py`, `backend/app/config.py`, `backend/app/providers.py`, `.env.example`) :
+    - Refonte de `DEEP_SEARCH_PROMPT` dans `backend/app/context.py` avec une directive impérative de **développement ×5 minimum** qui neutralise les consignes générales de concision du tchat : interdiction des survols courts ou listes laconiques, obligation de découper chaque grande partie (`##`) en sous-sections détaillées (`###`) de 3 à 6 paragraphes denses, d'inclure les chiffres exacts (salaires débutant/5 ans, taux d'insertion à 6/18/30 mois, coûts, parts de marché, métriques), les noms exacts des diplômes/écoles/acteurs, au moins 2 grands tableaux comparatifs Markdown multi-colonnes, une section complète sur les filières bouchées/saturées vs en tension, et un guide stratégique par profil.
+    - Injection d'un rappel d'exhaustivité (`[RAPPEL D'EXHAUSTIVITÉ DEEPSEARCH : Développe chaque grande partie au moins ×5...]`) en tête du bloc de sources et passage de `deep_search_max_tokens` (`DEEP_SEARCH_MAX_TOKENS`) de `12288` à `24576` tokens.
+  - **Définition des Thèmes Initiaux Sans Limite (`google/gemini-4-argon`) vs Exécution, Planification de Sortie & Rédaction Partie par Partie par Modèle Rapide et Économique (`google/gemini-3.8-flash`)** (`backend/app/config.py`, `backend/app/providers.py`, `backend/app/schemas.py`, `backend/app/routers/messages.py`, `.env.example`) :
+    - `google/gemini-4-argon` (`deep_search_plan_model`) est strictement réservé à la définition initiale des thèmes (`plan_deep_search_queries` et `plan_learn_queries`).
+    - Toutes les étapes d'exécution suivantes (découpage de la checklist de validation, validations en cours de route et questions intermédiaires, relances, traduction des sources, **Agent Planificateur du plan de sortie** `plan_report_outline` et **Agent Écrivain partie par partie** dans `send_message`) utilisent automatiquement le modèle rapide et peu coûteux `deep_search_synthesis_model` (`google/gemini-3.8-flash`).
+  - **Affichage Grand Format & Lightbox des Images et Infographies dans les Sorties HTML & le Tchat** (`backend/app/deep_search_html.py`, `backend/app/learn_html.py`, `backend/app/chat_export_html.py`, `frontend/app/globals.css`) :
+    - *Cause du problème* : les images intégrées dans les sorties HTML (`/api/messages/{id}/html`, rapports DeepSearch et cours Mode Apprendre) avaient une contrainte CSS rigide `max-height: 420px; object-fit: cover` (et `max-height: 360px` dans le tchat). Lorsqu'une image était une infographie verticale (par ex. 600 × 2800 px), sa hauteur était écrasée à 420 px, ce qui réduisait proportionnellement sa largeur à ~85 px (une minuscule bandelette illisible au milieu de la page).
+    - *Correctif* :
+      - Suppression de `max-height: 420px` et `object-fit: cover` au profit d'un affichage grand format haute lisibilité (`min-width: min(520px, 100%)`, `max-width: 100%`, `height: auto`, `max-height: none`).
+      - Ajout d'une **Lightbox plein écran interactive** (`openImageLightbox` / `closeImageLightbox` + touche `Échap` + bouton `↗ Ouvrir l'original`) directement dans les pages HTML exportées (`deep_search_html.py`, `learn_html.py`, `chat_export_html.py`), avec un badge `🔍 Cliquer pour agrandir` sous chaque illustration.
+      - Élargissement des images inline dans l'interface de tchat (`.markdown-inline-figure` passé à `max-width: min(100%, 740px)` sans `max-height: 360px` bloquant).
+  - **Validation & Tests** :
+    - 150/150 tests passés sur `pytest backend/tests/test_context.py backend/tests/test_providers.py backend/tests/test_deep_search.py backend/tests/test_learn_mode.py`.
+    - Typecheck Next.js validé : 0 erreur (`npm --prefix frontend run typecheck`).
+- Fichiers modifiés :
+  - `backend/app/deep_search_html.py`, `backend/app/learn_html.py`, `backend/app/chat_export_html.py`, `backend/app/config.py`, `.env.example`, `backend/app/schemas.py`, `backend/app/providers.py`, `backend/app/deep_search.py`, `backend/app/learn_mode.py`, `backend/app/context.py`, `backend/app/routers/messages.py`, `backend/tests/test_providers.py`, `backend/tests/test_deep_search.py`, `backend/tests/test_learn_mode.py`, `backend/tests/test_api.py`, `frontend/lib/api.ts`, `frontend/components/chat-app.tsx`, `frontend/components/deep-search-modal.tsx`, `frontend/components/learn-modal.tsx`, `frontend/app/globals.css`, `HANDOFF.md`.
+- Prochaine action : ouvrir la modale **DeepSearch** ou **Mode Apprendre**, régler le curseur de niveau de détail entre **1 (Synthèse courte)** et **10 (Ultra détaillé)** et lancer la génération.
+
+---
+
+# Relais — 28 octobre 2026 (Illustrations & Images Web SearXNG Intégrées au Cœur des Réponses façon ChatGPT + Galerie & Lightbox)
+
+- Réalisé :
+  - **Recherche d'Images Web en Direct via SearXNG (`categories=images`)** (`backend/app/providers.py`, `backend/app/routers/messages.py`) :
+    - Nouvelle fonction `search_web_images(settings, query, limit=6)` interrogeant SearXNG avec `categories=images&format=json`.
+    - Nettoyage, filtrage de sécurité (`_safe_web_url`), déduplication et priorisation automatique des URLs `https://` (`img_src` et `thumbnail_src`) pour éviter tout blocage de contenu mixte par le navigateur.
+    - Exécution parallèle (`asyncio.gather`) de `search_web` (sources textuelles) et `search_web_images` (illustrations web) sans pénalité de latence, ainsi qu'en mode `DeepSearch` et `Mode Apprendre`.
+    - Enrichissement de l'agent d'arbitrage `decide_web_search` pour activer automatiquement la recherche web & images sur les requêtes visuelles (*« montre-moi », « photos de », « à quoi ressemble »*, monuments, lieux, véhicules, objets, espèces, etc.) et prise en compte de la description visuelle (`extracted_text`) lorsqu'une image est jointe par l'utilisateur.
+  - **Injection Contextuelle & Consigne Système d'Illustration Inline** (`backend/app/context.py`) :
+    - Séparation propre entre `text_sources` (numérotées `[1], [2]...` pour les citations bibliographiques) et `image_sources` (`URL_IMAGE` listées en tête des résultats web).
+    - Directive système incitant le modèle à insérer 1 à 4 images pertinentes directement au fil de sa réponse (sur une ligne dédiée après le paragraphe illustré) au format Markdown `![Légende descriptive](URL_IMAGE)` en utilisant exclusivement les URLs fournies par SearXNG.
+  - **Rendu Frontend Riche des Images Inline, Galerie des Sources & Lightbox** (`frontend/components/chat-app.tsx`, `frontend/components/deep-search-modal.tsx`, `frontend/components/learn-modal.tsx`, `frontend/lib/api.ts`, `frontend/app/globals.css`, `backend/app/deep_search_html.py`, `backend/app/learn_html.py`) :
+    - Composant `MarkdownInlineImage` branché sur `ReactMarkdown` (`img`) :
+      - Carte visuelle élégante avec bordures arrondies, effet de zoom doux au survol, badge `Agrandir`, légende descriptive et pastille cliquable vers le domaine source (`wikimedia.org ↗`).
+      - Résilience anti-liens brisés : repli automatique transparent de `img_src` vers `thumbnail_src` en cas d'erreur de chargement (protection hotlink 403/404), et masquage propre si les deux échouent (aucune icône d'image cassée).
+      - Masquage des balises `![...](http...` incomplètes en fin de flux pendant le streaming SSE pour éviter tout clignotement d'URL brute.
+    - Galerie horizontale `.sources-images-strip` (`SourceImageThumb`) dans le bloc des sources affichant toutes les images web trouvées par SearXNG pour la requête.
+    - Modale **Lightbox plein écran** au clic sur n'importe quelle image (inline ou galerie) avec titre, badge de résolution, domaine et bouton direct « Voir la page source ».
+    - Prise en charge des images Markdown `![alt](url)` dans les exports HTML et PDF (`deep_search_html.py`, `learn_html.py`, `chat_export_html.py`).
+  - **Validation & Tests** :
+    - 94/94 tests validés sur la suite backend (`pytest test_finance.py test_multi_agent.py test_memory_agent.py test_settings.py test_sounds.py test_study_material.py test_deep_search.py test_learn_mode.py test_context.py test_migrations.py`).
+    - 9/9 tests SearXNG / arbitrage / images validés dans `backend/tests/test_providers.py`.
+    - Typecheck Next.js validé : 0 erreur (`npm --prefix frontend run typecheck`).
+    - Production build Next.js validé : 0 erreur (`npm --prefix frontend run build`).
+    - Conteneurs Docker reconstruits et actifs : `clair-api` et `clair-web` healthy.
+- Fichiers modifiés :
+  - `backend/app/providers.py`, `backend/app/context.py`, `backend/app/routers/messages.py`, `backend/app/deep_search_html.py`, `backend/app/learn_html.py`, `backend/tests/test_context.py`, `backend/tests/test_providers.py`.
+  - `frontend/lib/api.ts`, `frontend/components/chat-app.tsx`, `frontend/components/deep-search-modal.tsx`, `frontend/components/learn-modal.tsx`, `frontend/app/globals.css`, `HANDOFF.md`.
+- Prochaine action : poser une question visuelle dans le tchat (ex. « Présente-moi les 3 plus beaux châteaux de la Loire avec des photos » ou « À quoi ressemble le télescope James Webb ? ») pour observer les images SearXNG intégrées au fil de la réponse ainsi que la galerie et la Lightbox.
+
+---
+
 # Relais — 28 octobre 2026 (Modale Boursière Dédiée : Courbe du Cours EOD & Tableaux Complets des Statistiques Financières Yahoo)
 
 - Réalisé :

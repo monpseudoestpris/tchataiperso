@@ -37,6 +37,8 @@ import {
   fetchLearnReports,
   planLearnMode,
   type LearnReport,
+  type Model,
+  type StageModelsConfig,
 } from "@/lib/api";
 import { LearnFlashcards } from "@/components/learn-flashcards";
 import { LearnQuiz } from "@/components/learn-quiz";
@@ -45,6 +47,7 @@ import {
   parseQuizFromMarkdown,
   stripInteractiveModulesForBody,
 } from "@/lib/learn-parser";
+import { StageModelsModal } from "@/components/stage-models-modal";
 
 type LearnModalProps = {
   isOpen: boolean;
@@ -52,8 +55,68 @@ type LearnModalProps = {
   conversationId?: string | null;
   initialTab?: "plan" | "reports";
   initialReportId?: string | null;
+  models?: Model[];
+  stageModels?: StageModelsConfig;
+  onChangeStageModels?: (cfg: StageModelsConfig) => void;
+  onRefreshModels?: () => Promise<void>;
   onClose: () => void;
-  onLaunch?: (queries: string[]) => void | Promise<void>;
+  onLaunch?: (queries: string[], detailLevel?: number, stageModels?: StageModelsConfig) => void | Promise<void>;
+};
+
+const LEARN_DETAIL_LEVELS: Record<
+  number,
+  { label: string; badge: string; desc: string }
+> = {
+  1: {
+    label: "Fiche synthèse ultra-courte",
+    badge: "Flash · 2 modules",
+    desc: "1 paragraphe court par expert + 20 Flashcards & 20 QCM · 2 vagues de recherche",
+  },
+  2: {
+    label: "Synthèse de révision concise",
+    badge: "Concis · 3 modules",
+    desc: "1 paragraphe synthétique par expert + 20 Flashcards & 20 QCM · 2 vagues de recherche",
+  },
+  3: {
+    label: "Résumé de cours structuré",
+    badge: "Résumé · 3 modules",
+    desc: "1 à 2 paragraphes par expert + 20 Flashcards & 20 QCM · 3 vagues de recherche",
+  },
+  4: {
+    label: "Cours synthétique & analytique",
+    badge: "Analytique · 4 modules",
+    desc: "2 paragraphes par expert + 20 Flashcards & 20 QCM · 4 vagues de recherche",
+  },
+  5: {
+    label: "Cours standard équilibré",
+    badge: "Standard · 5 modules",
+    desc: "2 à 3 paragraphes par expert + 20 Flashcards & 20 QCM · 5 vagues de recherche",
+  },
+  6: {
+    label: "Cours détaillé avec cas pratique",
+    badge: "Détaillé · 5 modules",
+    desc: "3 paragraphes denses par expert + 20 Flashcards & 20 QCM · 6 vagues de recherche",
+  },
+  7: {
+    label: "Formation approfondie",
+    badge: "Approfondi · 6 modules",
+    desc: "3 à 4 paragraphes denses par expert + 20 Flashcards & 20 QCM · 7 vagues de recherche",
+  },
+  8: {
+    label: "Grand cours magistral complet (Recommandé)",
+    badge: "Complet · 7 modules",
+    desc: "4 à 5 paragraphes denses par expert + exercices + 20 Flashcards & 20 QCM · 8 vagues",
+  },
+  9: {
+    label: "Traité académique très détaillé",
+    badge: "Exhaustif · 7 modules",
+    desc: "5 à 6 paragraphes très développés par expert + exercices + 20 Flashcards & 20 QCM",
+  },
+  10: {
+    label: "Manuel encyclopédique & Ultra-détaillé",
+    badge: "Maximum · 7 modules",
+    desc: "6 à 8 paragraphes exhaustifs par expert (x5+) + cas intégraux + 20 Flashcards & 20 QCM",
+  },
 };
 
 function formatCourseDate(dateStr: string): string {
@@ -92,11 +155,39 @@ export function LearnModal({
   conversationId,
   initialTab = "plan",
   initialReportId = null,
+  models = [],
+  stageModels: initialStageModels,
+  onChangeStageModels,
+  onRefreshModels,
   onClose,
   onLaunch,
 }: LearnModalProps) {
   const [activeTab, setActiveTab] = useState<"plan" | "reports">(initialTab);
   const [outputFormat, setOutputFormat] = useState<"html" | "pdf">("html");
+  const [detailLevel, setDetailLevel] = useState<number>(8);
+  const [stageModels, setStageModels] = useState<StageModelsConfig>(() => {
+    if (initialStageModels) return initialStageModels;
+    try {
+      const stored = localStorage.getItem("clair_stage_models_learn_mode");
+      if (stored) return JSON.parse(stored);
+    } catch {}
+    return {
+      plan_model: "google/gemini-4-argon",
+      search_model: "google/gemini-3.8-flash",
+      expert_model: "google/gemini-3.8-flash",
+      synthesis_model: "google/gemini-3.8-flash",
+      audit_model: "openai/gpt-6-astra",
+    };
+  });
+  const [stageModelsModalOpen, setStageModelsModalOpen] = useState(false);
+
+  const handleUpdateStageModels = (newCfg: StageModelsConfig) => {
+    setStageModels(newCfg);
+    try {
+      localStorage.setItem("clair_stage_models_learn_mode", JSON.stringify(newCfg));
+    } catch {}
+    if (onChangeStageModels) onChangeStageModels(newCfg);
+  };
 
   // Plan state
   const [queries, setQueries] = useState<string[]>([]);
@@ -136,7 +227,7 @@ export function LearnModal({
     if (activeTab === "plan" && question.trim() && queries.length === 0 && !loadingPlan) {
       setLoadingPlan(true);
       setPlanError(null);
-      planLearnMode(conversationId, question)
+      planLearnMode(conversationId, question, stageModels)
         .then((generated) => {
           setQueries(generated.length ? generated : [question.trim()]);
         })
@@ -204,6 +295,16 @@ export function LearnModal({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [isOpen, activeTab, queries, activeReport, reportToDelete]);
 
+  // Auto-resize all module textareas so the full text is always visible without internal scrollbar truncation
+  useEffect(() => {
+    inputRefs.current.forEach((el) => {
+      if (el instanceof HTMLTextAreaElement) {
+        el.style.height = "auto";
+        el.style.height = `${Math.max(44, el.scrollHeight)}px`;
+      }
+    });
+  }, [queries, loadingPlan, activeTab, isOpen]);
+
   if (!isOpen) return null;
 
   function handleQueryChange(index: number, value: string) {
@@ -249,7 +350,7 @@ export function LearnModal({
     setIsLaunching(true);
     setPlanError(null);
     try {
-      await onLaunch(finalQueries);
+      await onLaunch(finalQueries, detailLevel, stageModels);
       onClose();
     } catch (err) {
       setPlanError(
@@ -321,7 +422,7 @@ export function LearnModal({
                 <span className="deepsearch-modal-pill learn-modal-pill">
                   {activeReport
                     ? `Mode Cours Interactif · ${activeReport.sources_count} supports`
-                    : "Parcours pédagogique progressif"}
+                    : "3 Experts par module · Rédaction en 2 étapes"}
                 </span>
               </div>
               <p>
@@ -329,12 +430,24 @@ export function LearnModal({
                   ? `Sujet enseigné : « ${activeReport.topic} »`
                   : activeTab === "reports"
                   ? "Consultez, révisez et exportez vos grands cours magistraux sauvegardés."
-                  : "L'agent conçoit un véritable cours adapté à votre sujet, articulé autour des 5 axes pédagogiques clés."}
+                  : "Modules définis sans limite par Gemini Argon, validations multilingues, puis sortie en 2 temps : Planificateur + Écrivain développant chaque module avec la perspective de 3 experts du domaine."}
               </p>
             </div>
           </div>
 
           <div className="deepsearch-modal-header-right">
+            {!activeReport && (
+              <button
+                type="button"
+                onClick={() => setStageModelsModalOpen(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-xl border border-primary/30 bg-primary/10 text-primary hover:bg-primary/20 transition-colors shadow-sm"
+                title="Configurer les modèles IA utilisés pour chacune des 5 étapes du Mode Apprendre"
+              >
+                <Sparkles size={13} />
+                <span>Modèles des étapes</span>
+              </button>
+            )}
+
             {!activeReport && (
               <div className="deepsearch-tabs-pills" role="tablist">
                 <button
@@ -377,63 +490,159 @@ export function LearnModal({
         {/* ===================== TAB 1: PLAN VIEW ===================== */}
         {activeTab === "plan" && !activeReport && (
           <>
-            <div className="deepsearch-modal-target-box learn-modal-target-box">
-              <div className="deepsearch-modal-target-label learn-target-label">
-                <Sparkles size={13} />
-                <span>Planification pédagogique · Sujet à enseigner</span>
-              </div>
-              <div className="deepsearch-modal-target-text">
-                « {question.trim() || "Aucun sujet défini"} »
-              </div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginTop: "8px", fontSize: "11px" }}>
-                <span className="deepsearch-modal-pill learn-modal-pill" title="Intuitions premières, définitions et analogies">1. Prérequis & Fondations</span>
-                <span className="deepsearch-modal-pill learn-modal-pill" title="Fonctionnement interne, architectures et théories">2. Principes & Fonctionnement</span>
-                <span className="deepsearch-modal-pill learn-modal-pill" title="Tutoriels pas à pas, exemples de code ou exercices guidés">3. Cas pratiques & Applications</span>
-                <span className="deepsearch-modal-pill learn-modal-pill" title="Erreurs fréquentes, anti-patterns et règles de l'art">4. Pièges & Bonnes pratiques</span>
-                <span className="deepsearch-modal-pill learn-modal-pill" title="Questions de vérification et exercices avec corrigés">5. Auto-évaluation & Exercices</span>
-              </div>
-            </div>
-
-            {/* Sélecteur de format de sortie (Beau site HTML ou Beau PDF) */}
-            <div className="output-format-card learn-output-format-card" role="group" aria-label="Format de sortie">
-              <span className="output-format-label">
-                <FileText size={13} />
-                <span>Format de sortie privilégié :</span>
-              </span>
-              <div className="output-format-toggle">
-                <button
-                  type="button"
-                  className={`output-format-option ${outputFormat === "html" ? "is-selected" : ""}`}
-                  onClick={() => setOutputFormat("html")}
-                  title="Générer et consulter sous forme de cours interactif (avec 20 flashcards 3D et quizz interactif)"
-                >
-                  <Globe2 size={13} />
-                  <span>Beau site HTML</span>
-                  <small>Cours & modules 3D interactifs</small>
-                </button>
-                <button
-                  type="button"
-                  className={`output-format-option ${outputFormat === "pdf" ? "is-selected" : ""}`}
-                  onClick={() => setOutputFormat("pdf")}
-                  title="Polycopié de formation haute fidélité A4 avec cours intégral et grilles de révision prêtes à imprimer"
-                >
-                  <FileText size={13} />
-                  <span>Beau polycopié PDF</span>
-                  <small>Fiches de cours & révision A4</small>
-                </button>
-              </div>
-            </div>
-
             <div className="deepsearch-modal-body">
+              <div className="deepsearch-modal-target-box learn-modal-target-box deepsearch-modal-target-box-inline">
+                <div className="deepsearch-modal-target-label learn-target-label">
+                  <Sparkles size={13} />
+                  <span>Planification pédagogique · Sujet à enseigner</span>
+                </div>
+                <div className="deepsearch-modal-target-text">
+                  « {question.trim() || "Aucun sujet défini"} »
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginTop: "8px", fontSize: "11px" }}>
+                  <span className="deepsearch-modal-pill learn-modal-pill" title="Intuitions premières, définitions et analogies">1. Prérequis & Fondations</span>
+                  <span className="deepsearch-modal-pill learn-modal-pill" title="Fonctionnement interne, architectures et théories">2. Principes & Fonctionnement</span>
+                  <span className="deepsearch-modal-pill learn-modal-pill" title="Tutoriels pas à pas, exemples de code ou exercices guidés">3. Cas pratiques & Applications</span>
+                  <span className="deepsearch-modal-pill learn-modal-pill" title="Erreurs fréquentes, anti-patterns et règles de l'art">4. Pièges & Bonnes pratiques</span>
+                  <span className="deepsearch-modal-pill learn-modal-pill" title="Usages/compétences en tension vs approches obsolètes ou filières bouchées">5. Vision Panoramique 360°</span>
+                  <span className="deepsearch-modal-pill learn-modal-pill" title="Agent Planificateur puis Agent Écrivain partie par partie + 20 Flashcards & 20 QCM">6. Sortie 2 temps & Quiz</span>
+                </div>
+              </div>
+
+              {/* Sélecteur de format de sortie (Beau site HTML ou Beau PDF) */}
+              <div className="output-format-card learn-output-format-card output-format-card-compact" role="group" aria-label="Format de sortie">
+                <span className="output-format-label">
+                  <FileText size={13} />
+                  <span>Format de sortie privilégié :</span>
+                </span>
+                <div className="output-format-toggle">
+                  <button
+                    type="button"
+                    className={`output-format-option ${outputFormat === "html" ? "is-selected" : ""}`}
+                    onClick={() => setOutputFormat("html")}
+                    title="Générer et consulter sous forme de cours interactif (avec 20 flashcards 3D et quizz interactif)"
+                  >
+                    <Globe2 size={13} />
+                    <span>Beau site HTML</span>
+                    <small>Cours & modules 3D interactifs</small>
+                  </button>
+                  <button
+                    type="button"
+                    className={`output-format-option ${outputFormat === "pdf" ? "is-selected" : ""}`}
+                    onClick={() => setOutputFormat("pdf")}
+                    title="Polycopié de formation haute fidélité A4 avec cours intégral et grilles de révision prêtes à imprimer"
+                  >
+                    <FileText size={13} />
+                    <span>Beau polycopié PDF</span>
+                    <small>Fiches de cours & révision A4</small>
+                  </button>
+                </div>
+              </div>
+
+              {/* Curseur de niveau de détail (1 à 10 : de Synthèse courte à Ultra détaillé) */}
+              <div className="detail-level-slider-card learn-detail-level-slider-card" role="group" aria-label="Niveau de détail du cours">
+                <div className="detail-level-slider-header">
+                  <div className="detail-level-slider-title">
+                    <Sparkles size={13} />
+                    <span>Niveau de détail souhaité :</span>
+                    <strong className="detail-level-active-name">
+                      Niveau {detailLevel}/10 — {LEARN_DETAIL_LEVELS[detailLevel]?.label}
+                    </strong>
+                  </div>
+                  <span className="detail-level-badge learn-detail-level-badge">
+                    {LEARN_DETAIL_LEVELS[detailLevel]?.badge}
+                  </span>
+                </div>
+                <div className="detail-level-slider-control">
+                  <span
+                    className="detail-level-pole"
+                    onClick={() => !isLaunching && setDetailLevel(1)}
+                    title="Régler sur 1 : Synthèse très courte"
+                  >
+                    1 · Synthèse courte
+                  </span>
+                  <div className="detail-level-range-wrap">
+                    <input
+                      type="range"
+                      min={1}
+                      max={10}
+                      step={1}
+                      value={detailLevel}
+                      disabled={isLaunching}
+                      onChange={(e) => setDetailLevel(Number(e.target.value))}
+                      className="detail-level-range-input learn-detail-level-range-input"
+                      aria-label="Curseur du niveau de détail du cours de 1 à 10"
+                    />
+                    <div className="detail-level-ticks" aria-hidden="true">
+                      {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((lvl) => (
+                        <button
+                          key={lvl}
+                          type="button"
+                          disabled={isLaunching}
+                          className={`detail-level-tick learn-detail-level-tick ${detailLevel === lvl ? "is-active" : ""} ${detailLevel >= lvl ? "is-filled" : ""}`}
+                          onClick={() => setDetailLevel(lvl)}
+                          title={`Niveau ${lvl}/10 — ${LEARN_DETAIL_LEVELS[lvl]?.label}`}
+                        >
+                          {lvl}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <span
+                    className="detail-level-pole detail-level-pole-right"
+                    onClick={() => !isLaunching && setDetailLevel(10)}
+                    title="Régler sur 10 : Ultra détaillé"
+                  >
+                    10 · Ultra détaillé
+                  </span>
+                </div>
+                <div className="detail-level-slider-desc">
+                  {LEARN_DETAIL_LEVELS[detailLevel]?.desc}
+                </div>
+
+                {/* Pipeline Stages Mini-Summary Bar */}
+                <div className="mt-2.5 pt-2 border-t border-surface-border/50 flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <div className="flex flex-wrap items-center gap-1.5 text-text-muted">
+                    <span className="font-medium text-text-secondary">Pipeline IA :</span>
+                    <span className="px-1.5 py-0.5 rounded bg-surface-subtle font-mono text-[11px] border border-surface-border" title="Étape 1 · Planification">
+                      Plan: {stageModels.plan_model?.split("/").pop() || "Gemini Argon"}
+                    </span>
+                    <span className="text-text-muted/60">→</span>
+                    <span className="px-1.5 py-0.5 rounded bg-surface-subtle font-mono text-[11px] border border-surface-border" title="Étape 2 · Recherche & Approfondissement">
+                      Search: {stageModels.search_model?.split("/").pop() || "Gemini Flash"}
+                    </span>
+                    <span className="text-text-muted/60">→</span>
+                    <span className="px-1.5 py-0.5 rounded bg-surface-subtle font-mono text-[11px] border border-surface-border" title="Étape 3 · Collège des 3 Experts">
+                      3 Experts: {stageModels.expert_model?.split("/").pop() || "Gemini Flash"}
+                    </span>
+                    <span className="text-text-muted/60">→</span>
+                    <span className="px-1.5 py-0.5 rounded bg-surface-subtle font-mono text-[11px] border border-surface-border" title="Étape 4 · Rédaction Finale">
+                      Synthèse: {stageModels.synthesis_model?.split("/").pop() || "Gemini Flash"}
+                    </span>
+                    <span className="text-text-muted/60">→</span>
+                    <span className="px-1.5 py-0.5 rounded bg-surface-subtle font-mono text-[11px] border border-surface-border" title="Étape 5 · Relecture Critique Astra & Validation">
+                      Audit: {stageModels.audit_model?.split("/").pop() || "GPT-6 Astra"}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setStageModelsModalOpen(true)}
+                    className="text-primary hover:underline font-medium text-[11px] shrink-0"
+                  >
+                    Personnaliser les 5 étapes →
+                  </button>
+                </div>
+              </div>
+
               <div className="deepsearch-modal-body-top">
                 <div className="deepsearch-modal-plan-header-block">
                   <div className="deepsearch-modal-plan-title learn-plan-title">
                     <ListFilter size={15} />
-                    <span>Modules de recherche didactique</span>
+                    <span>Modules de recherche didactique (Gemini Argon · Sans limite)</span>
                     <span className="deepsearch-modal-count-badge learn-count-badge">{validQueriesCount}</span>
                   </div>
                   <span className="deepsearch-modal-plan-subtitle">
-                    4 à 6 mots-clés denses avec guillemets · Supports officiels, tutoriels et documentation de référence
+                    Vision 360° (usages en tension, pièges, filières saturées) · Sortie en 2 temps (Agent Planificateur puis Agent Écrivain partie par partie)
                   </span>
                 </div>
                 <button
@@ -463,19 +672,27 @@ export function LearnModal({
               ) : (
                 <div className="deepsearch-modal-queries-list">
                   {queries.map((query, index) => (
-                    <div key={index} className="deepsearch-modal-query-row learn-query-row">
+                    <div key={index} className="deepsearch-modal-query-row learn-query-row deepsearch-theme-card">
                       <span className="deepsearch-modal-query-num learn-query-num" aria-hidden="true">
                         {index + 1}
                       </span>
                       <textarea
                         ref={(el) => {
                           inputRefs.current[index] = el;
+                          if (el) {
+                            el.style.height = "auto";
+                            el.style.height = `${Math.max(44, el.scrollHeight)}px`;
+                          }
                         }}
-                        rows={2}
-                        className="deepsearch-modal-query-input learn-module-textarea"
+                        rows={1}
+                        className="deepsearch-modal-query-input learn-module-textarea deepsearch-theme-full-textarea"
                         value={query}
                         placeholder="Ex: 1. Genèse, intuition et fondations conceptuelles : comprendre la finalité du sujet..."
-                        onChange={(e) => handleQueryChange(index, e.target.value)}
+                        onChange={(e) => {
+                          handleQueryChange(index, e.target.value);
+                          e.target.style.height = "auto";
+                          e.target.style.height = `${Math.max(44, e.target.scrollHeight)}px`;
+                        }}
                         onKeyDown={(e) => {
                           if (e.key === "Enter" && !e.shiftKey) {
                             e.preventDefault();
@@ -870,6 +1087,29 @@ export function LearnModal({
                           remarkPlugins={[remarkGfm]}
                           rehypePlugins={[rehypeKatex]}
                           components={{
+                            img: ({ src, alt }) =>
+                              typeof src === "string" && src.trim() ? (
+                                <span className="markdown-inline-figure">
+                                  <span className="markdown-inline-img-wrap">
+                                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                                    <img
+                                      src={src}
+                                      alt={alt || "Illustration"}
+                                      loading="lazy"
+                                      className="markdown-inline-img"
+                                      onError={e => {
+                                        const fig = e.currentTarget.closest(".markdown-inline-figure") as HTMLElement | null;
+                                        if (fig) fig.style.display = "none";
+                                      }}
+                                    />
+                                  </span>
+                                  {alt && (
+                                    <span className="markdown-inline-caption">
+                                      <span className="markdown-inline-caption-text">{alt}</span>
+                                    </span>
+                                  )}
+                                </span>
+                              ) : null,
                             pre: ({ children }) => (
                               <div className="code-block">
                                 <div className="code-label">
@@ -1011,6 +1251,18 @@ export function LearnModal({
           </div>
         )}
       </div>
+
+      {stageModelsModalOpen && (
+        <StageModelsModal
+          isOpen={stageModelsModalOpen}
+          modeTitle="Mode Apprendre"
+          config={stageModels}
+          models={models}
+          onChangeConfig={handleUpdateStageModels}
+          onClose={() => setStageModelsModalOpen(false)}
+          onRefreshModels={onRefreshModels}
+        />
+      )}
     </div>
   );
 }

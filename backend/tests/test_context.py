@@ -133,8 +133,11 @@ def test_deep_search_context_expands_sources_and_injects_synthesis_instructions(
         sources, False, deep_search=True,
     )
     assert "Mode DeepSearch" in context[0]["content"]
+    assert "DÉVELOPPEMENT ×5" in context[0]["content"]
+    assert "4 000 à 8 000 mots" in context[0]["content"]
     assert "Traduis systématiquement" in context[0]["content"]
     reference_block = context[1]["content"]
+    assert "RAPPEL D'EXHAUSTIVITÉ DEEPSEARCH" in reference_block
     assert "Requête : piste 1" in reference_block
     assert "EXTRAIT_100" in reference_block
     assert sum(len(message["content"]) for message in context) <= settings.max_context_chars
@@ -150,4 +153,33 @@ def test_code_mode_context_injects_canvas_multi_file_instructions():
     assert "Mode Code Canvas" in context[0]["content"]
     assert 'path="chemin/relatif/fichier.ext"' in context[0]["content"]
     assert context[-1]["content"] == "Crée une application Pomodoro en HTML/CSS/JS"
+
+
+def test_web_image_sources_injected_into_context_with_markdown_instructions():
+    settings = Settings(_env_file=None, max_context_chars=30000)
+    sources = [
+        {"title": "Article Chambord", "url": "https://chambord.org/histoire", "snippet": "Histoire du château"},
+        {
+            "title": "Façade du Château de Chambord",
+            "url": "https://commons.wikimedia.org/wiki/File:Chambord.jpg",
+            "snippet": "Vue aérienne",
+            "img_src": "https://upload.wikimedia.org/wikipedia/commons/chambord.jpg",
+            "thumbnail_src": "https://thumb.wikimedia.org/wikipedia/commons/chambord_thumb.jpg",
+            "image_source": "wikimedia.org",
+            "provider": "searxng_images",
+            "media_type": "image",
+        },
+    ]
+    context = build_context(
+        settings, "", [],
+        [{"role": "user", "content": "Présente le Château de Chambord"}],
+        sources, False,
+    )
+    assert "![Légende descriptive](URL_IMAGE)" in context[0]["content"]
+    ref_text = context[1]["content"]
+    assert "Images web SearXNG associées à la recherche" in ref_text
+    assert "URL_IMAGE : https://upload.wikimedia.org/wikipedia/commons/chambord.jpg" in ref_text
+    assert "[1] Article Chambord" in ref_text
+    assert "[2]" not in ref_text
+
 

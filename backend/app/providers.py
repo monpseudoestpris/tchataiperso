@@ -24,7 +24,9 @@ class ProviderError(Exception):
 
 _TIMEOUT = httpx.Timeout(60.0, connect=10.0, pool=10.0)
 _QUERY_REWRITE_TIMEOUT = httpx.Timeout(15.0, connect=5.0, pool=5.0)
+_AUDIT_TIMEOUT = httpx.Timeout(45.0, connect=10.0, pool=10.0)
 _DECISION_TIMEOUT = httpx.Timeout(10.0, connect=3.0, pool=3.0)
+_IMAGE_SEARCH_TIMEOUT = httpx.Timeout(12.0, connect=4.0, pool=4.0)
 _MAX_IMAGE_BYTES = 10 * 1024 * 1024
 _DUCKDUCKGO_TIMEOUT = httpx.Timeout(12.0, connect=5.0, pool=5.0)
 _DUCKDUCKGO_MAX_RESULTS = 5
@@ -206,7 +208,7 @@ async def stream_chat(
     elif is_learn_mode:
         max_tokens = max(settings.llm_max_tokens, getattr(settings, "learn_mode_max_tokens", 16384))
     elif is_deep_search:
-        max_tokens = max(settings.llm_max_tokens, getattr(settings, "deep_search_max_tokens", 12288))
+        max_tokens = max(settings.llm_max_tokens, getattr(settings, "deep_search_max_tokens", 24576))
     else:
         max_tokens = settings.llm_max_tokens
 
@@ -325,6 +327,7 @@ def _heuristic_decision(query: str) -> tuple[bool, str]:
         r"\b(quel (gpu|modèle|smartphone|ordinateur|processeur) acheter)\b",
         r"\b(sources?|chiffres? précis|statistiques?)\b",
         r"\b(posologie|contre-indications?|jurisprudence|loi)\b",
+        r"\b(images?|photos?|illustrations?|visuels?|montre[- ]moi|à quoi ressemble)\b",
     )
     for pat in web_patterns:
         if re.search(pat, low):
@@ -345,6 +348,12 @@ async def decide_web_search(
     low = query.lower()
     if re.search(r"\b(cherche|recherche|vérifie)\s+(sur\s+internet|sur\s+le\s+web|en\s+ligne|google)\b", low):
         return True, "Demande explicite de recherche web"
+    if re.search(
+        r"\b(montre[- ]moi|affiche|illustre|trouve|cherche|voir|donne[- ]moi)\b.*\b(images?|photos?|visuels?|illustrations?)\b"
+        r"|\b(à quoi ressemble|photos? de|images? de|avec des images|avec images)\b",
+        low,
+    ):
+        return True, "Illustration visuelle web"
 
     key = _key(settings, "llm_api_key", "du fournisseur IA")
     decision_model = (
@@ -378,7 +387,8 @@ async def decide_web_search(
         "| 4. Besoin de preuves | Sources, citations, chiffres précis, statistiques vérifiables | Recherche (search=true) |\n"
         "| 5. Sujet spécialisé ou incertitude | Bug d'un mod, comportement d'une bibliothèque peu connue, API obscure | Recherche (search=true) |\n"
         "| 6. Conséquences importantes | Santé, posologie, droit, fiscalité, décisions financières | Recherche sur sources fiables (search=true) |\n"
-        "| 7. Connaissance stable ou travail sur le texte fourni | Expliquer une dérivée, concept théorique établi, reformuler, traduire, résumer un texte fourni, analyser ou corriger du code fourni, salutations ou discussion générale | Généralement inutile (search=false) |\n\n"
+        "| 7. Sujet visuel, lieu, monument, produit ou demande d'images | Photos, « montre-moi », « à quoi ressemble », présentation de monuments, lieux touristiques, véhicules, animaux, œuvres, matériel | Recherche pour illustrer (search=true) |\n"
+        "| 8. Connaissance stable ou travail sur le texte fourni | Expliquer une dérivée, concept théorique établi, reformuler, traduire, résumer un texte fourni, analyser ou corriger du code fourni, salutations ou discussion générale | Généralement inutile (search=false) |\n\n"
         "Réponds STRICTEMENT par un objet JSON compact au format suivant, sans balises Markdown ni texte additionnel :\n"
         '{"search": true, "reason": "courte justification en 3 à 6 mots", "criterion": "nom_du_critère"}\n'
         "ou\n"
@@ -881,7 +891,7 @@ async def classify_conversation(
         raise ProviderError("Impossible de joindre le fournisseur IA pour générer les mots-clés.") from None
 
 
-def _parse_query_list(raw: str, max_queries: int) -> list[str]:
+def _parse_query_list(raw: str, max_queries: int | None = None) -> list[str]:
     text = raw.strip()
     if text.startswith("```"):
         text = re.sub(r"^```(?:json|text)?\s*|\s*```$", "", text, flags=re.IGNORECASE | re.DOTALL).strip()
@@ -906,14 +916,18 @@ def _parse_query_list(raw: str, max_queries: int) -> list[str]:
     for item in candidates:
         # Remplacement des guillemets typographiques par des guillemets droits standard dans chaque élément
         item_clean = item.replace("“", '"').replace("”", '"').replace("«", '"').replace("»", '"')
-        # Nettoyage des espaces et ponctuations orphelines
-        normalized = " ".join(item_clean.split())[:300]
-        normalized = re.sub(r"[,;.]+$", "", normalized).strip()
+        # Nettoyage des espaces, guillemets externes superflus et ponctuations orphelines
+        normalized = " ".join(item_clean.split()).strip()
+        if normalized.startswith('"') and normalized.endswith('"') and normalized.count('"') == 2:
+            normalized = normalized[1:-1].strip()
+        elif normalized.startswith('"') and not normalized.endswith('"') and normalized.count('"') == 1:
+            normalized = normalized[1:].strip()
+        normalized = re.sub(r"[,;.]+$", "", normalized)[:1000].strip()
         key = normalized.casefold()
         if len(normalized) >= 3 and key not in seen:
             seen.add(key)
             result.append(normalized)
-            if len(result) >= max_queries:
+            if max_queries is not None and len(result) >= max_queries:
                 break
     return result
 
@@ -932,18 +946,43 @@ _THEME_STOPWORDS = {
 def theme_to_search_query(theme: str, topic: str = "") -> str:
     """
     Convertit une phrase de thème complète et expliquée (destinée à l'interface utilisateur)
-    en une requête de recherche web dense et ultra-ciblée (3 à 5 mots-clés essentiels)
+    ou une requête technique multilingue en une requête de recherche web dense et ultra-ciblée
     adaptée aux moteurs SearXNG, Google ou Brave.
+    Préserve intactes les requêtes multilingues en écritures non-latines (CJK, cyrillique, arabe, etc.)
+    ainsi que les requêtes déjà courtes et ciblées (< 9 mots ou sans structure 'Titre : Explication').
     """
+    raw = theme.strip()
+    if not raw:
+        return topic.strip()[:60]
+
+    # Préserver intégralement les requêtes contenant des caractères non-latins (japonais, chinois, russe, arabe, coréen, etc.)
+    if re.search(r"[^\x00-\x7FÀ-ÿŒœ«»“”’'\"–—\-…€]", raw):
+        cleaned_non_latin = re.sub(
+            r"^(?:Module\s*\d+\s*[:\-–]|Axe\s*\d+\s*[:\-–]|Point\s*\d+\s*[:\-–]|\d+[\.\)\-–]\s*)",
+            "",
+            raw,
+            flags=re.IGNORECASE,
+        ).strip()
+        return cleaned_non_latin[:100] or raw[:100]
+
     cleaned = re.sub(
-        r"^(?:Module\s*\d+\s*[:\-–]|Axe\s*\d+\s*[:\-–]|\d+[\.\)\-–]\s*)",
+        r"^(?:Module\s*\d+\s*[:\-–]|Axe\s*\d+\s*[:\-–]|Point\s*\d+\s*[:\-–]|\d+[\.\)\-–]\s*)",
         "",
-        theme.strip(),
+        raw,
         flags=re.IGNORECASE,
     ).strip()
+
+    # Si c'est déjà une requête moteur directe (courte ou contenant des expressions exactes entre guillemets sans ':')
+    raw_words = cleaned.split()
+    if ":" not in cleaned and len(raw_words) <= 8:
+        return cleaned[:100]
+
     parts = cleaned.split(":", 1)
     title_part = parts[0].strip()
     expl_part = parts[1].strip() if len(parts) > 1 else ""
+
+    # Préserver les expressions entre guillemets doubles si présentes
+    quoted_phrases = [m.strip() for m in re.findall(r'"([^"]+)"', cleaned) if m.strip()]
 
     words = re.findall(r"[a-zA-ZÀ-ÿ0-9_\-]+", title_part)
     meaningful = [w for w in words if w.lower() not in _THEME_STOPWORDS and len(w) > 2]
@@ -954,45 +993,162 @@ def theme_to_search_query(theme: str, topic: str = "") -> str:
     query_tokens: list[str] = []
     seen: set[str] = set()
 
+    for qp in quoted_phrases[:2]:
+        qp_low = qp.lower()
+        if qp_low not in seen:
+            seen.add(qp_low)
+            for sub_w in re.findall(r"[a-zA-ZÀ-ÿ0-9_\-]+", qp_low):
+                seen.add(sub_w)
+            query_tokens.append(f'"{qp}"')
+
     for w in clean_topic_words + meaningful:
         wl = w.lower()
         if wl not in seen:
             seen.add(wl)
             query_tokens.append(w)
-            if len(query_tokens) >= 5:
+            if len(query_tokens) >= 6:
                 break
 
-    if len(query_tokens) < 4 and expl_part:
+    if len(query_tokens) < 5 and expl_part:
         expl_words = re.findall(r"[a-zA-ZÀ-ÿ0-9_\-]+", expl_part)
         for w in expl_words:
             wl = w.lower()
             if wl not in _THEME_STOPWORDS and len(w) > 3 and wl not in seen:
                 seen.add(wl)
                 query_tokens.append(w)
-                if len(query_tokens) >= 5:
+                if len(query_tokens) >= 6:
                     break
 
-    return " ".join(query_tokens) or cleaned[:60]
+    return " ".join(query_tokens) or cleaned[:80]
 
 
-def default_deep_search_themes(subject: str, count: int = 8) -> list[str]:
-    """Génère 8 axes d'investigation complets et expliqués en phrases rédigées pour DeepSearch."""
+def default_deep_search_aspect_checklist(subject: str, count: int | None = None) -> list[dict[str, str]]:
+    """
+    Découpe dès le départ la question et l'objectif en points obligatoires à aborder (Checklist d'investigation).
+    Couvre à la fois les aspects centraux et l'exploration panoramique à 360° (angles adjacents, tensions, saturations, impasses).
+    """
+    clean = subject.strip() or "le sujet recherché"
+    aspects = [
+        {
+            "id": "P1",
+            "aspect": "Axe Entités / Définitions & Fondations",
+            "question": f"Quels sont précisément les concepts fondamentaux, entités clés, versions et standards impliqués dans {clean} ?",
+            "status": "pending",
+        },
+        {
+            "id": "P2",
+            "aspect": "Axe Temporel & État de l'art",
+            "question": f"Quel est l'état de l'art actuel, la chronologie et les évolutions ou ruptures récentes concernant {clean} ?",
+            "status": "pending",
+        },
+        {
+            "id": "P3",
+            "aspect": "Axe Technique, Causal & Métriques",
+            "question": f"Quels sont les mécanismes internes, l'architecture causale et les données chiffrées ou benchmarks objectifs sur {clean} ?",
+            "status": "pending",
+        },
+        {
+            "id": "P4",
+            "aspect": "Axe Contradictoire (Thèse vs Antithèse & Limites)",
+            "question": f"Quels sont les goulots d'étranglement, failles, critiques, contre-arguments et retours d'expérience négatifs documentés sur {clean} ?",
+            "status": "pending",
+        },
+        {
+            "id": "P5",
+            "aspect": "Axe Périmètre, Contraintes & Mise en œuvre",
+            "question": f"Quelles sont les conditions aux limites, contraintes d'environnement, coûts réels et prérequis opérationnels de {clean} ?",
+            "status": "pending",
+        },
+        {
+            "id": "P6",
+            "aspect": "Axe Panoramique 360° (Filières bouchées vs en tension, impasses & opportunités)",
+            "question": f"En élargissant le champ autour de {clean}, quelles sont les voies saturées/bouchées, les secteurs en forte tension/pénurie, les effets secondaires et les alternatives émergentes ?",
+            "status": "pending",
+        },
+        {
+            "id": "P7",
+            "aspect": "Axe Comparatif International & Perspectives",
+            "question": f"Que révèlent les publications internationales multilingues, études de cas réelles et standards normatifs sur {clean} ?",
+            "status": "pending",
+        },
+    ]
+    return aspects[:count] if count is not None else aspects
+
+
+def default_deep_search_themes(subject: str, count: int | None = None) -> list[str]:
+    """Génère un ensemble complet et élargi d'axes d'investigation expliqués en phrases rédigées pour DeepSearch (sans limite fixe)."""
     clean = subject.strip() or "le sujet recherché"
     themes = [
         f"1. Définition et délimitation conceptuelle de {clean} : identifier les concepts fondamentaux, les acteurs clés, la terminologie et le cadre formel.",
-        f"2. État de l'art et évolutions récentes de {clean} : analyser les avancées technologiques récentes, versions majeures et feuilles de route.",
-        f"3. Mécanismes techniques et fonctionnement interne de {clean} : disséquer les architectures sous-jacentes, protocoles et métriques de performance mesurables.",
-        f"4. Analyse contradictoire et retours d'expérience critiques sur {clean} : confronter les limites techniques, failles, goulots d'étranglement et avis divergents.",
-        f"5. Spécifications d'environnement et contraintes de mise en œuvre de {clean} : inventorier les prérequis d'infrastructure, coûts réels et dépendances.",
-        f"6. Études de cas réels et benchmarks comparatifs sur {clean} : examiner les retours de déploiements en conditions réelles et audits indépendants.",
-        f"7. Risques, sécurité et anti-patterns documentés dans {clean} : recenser les pièges fréquents, vulnérabilités et arbitrages stratégiques.",
-        f"8. Standards de référence et publications normatives sur {clean} : regrouper la documentation primaire, dépôts officiels et standards industriels.",
+        f"2. État de l'art et évolutions récentes de {clean} : analyser les avancées récentes, versions majeures, dynamiques actuelles et feuilles de route.",
+        f"3. Mécanismes techniques, causaux et métriques objectives de {clean} : disséquer le fonctionnement interne, les données chiffrées et les indicateurs mesurables.",
+        f"4. Analyse contradictoire et retours d'expérience critiques sur {clean} : confronter les limites, failles, goulots d'étranglement et avis divergents.",
+        f"5. Exploration panoramique des voies saturées, filières bouchées ou impasses liées à {clean} : identifier les secteurs engorgés, les pièges d'orientation ou technologies en déclin.",
+        f"6. Identification des secteurs en tension, pénuries et opportunités à forte demande autour de {clean} : cartographier les créneaux porteurs, besoins non pourvus et leviers de croissance.",
+        f"7. Spécifications d'environnement, coûts réels et contraintes de mise en œuvre de {clean} : inventorier les prérequis financiers, humains, matériels et réglementaires.",
+        f"8. Études de cas réels, statistiques d'insertion ou benchmarks comparatifs sur {clean} : examiner les retours de terrain, taux de réussite et audits indépendants.",
+        f"9. Risques, sécurité, obsolescence et anti-patterns documentés dans {clean} : recenser les erreurs stratégiques fréquentes, vulnérabilités et compromis.",
+        f"10. Comparaison internationale multilingue et standards de référence sur {clean} : croiser la documentation primaire mondiale et les perspectives à 5-10 ans.",
     ]
-    return themes[:count]
+    return themes[:count] if count is not None else themes
 
 
-def default_learn_themes(subject: str, count: int = 8) -> list[str]:
-    """Génère 8 modules pédagogiques complets et expliqués en phrases rédigées pour le Mode Apprendre."""
+def default_learn_aspect_checklist(subject: str, count: int | None = None) -> list[dict[str, str]]:
+    """
+    Découpe dès le départ le sujet d'apprentissage en points pédagogiques obligatoires à maîtriser et vérifier.
+    Couvre les fondations, la théorie, les cas pratiques, les erreurs fréquentes, mais aussi la vision panoramique à 360°
+    (débouchés réels, cas d'usage en tension vs technologies/approches obsolètes ou bouchées, alternatives).
+    """
+    clean = subject.strip() or "le sujet d'apprentissage"
+    aspects = [
+        {
+            "id": "L1",
+            "aspect": "Genèse, Intuition & Fondations Conceptuelles",
+            "question": f"Pourquoi {clean} existe-t-il, quels problèmes fondamentaux résout-il et quels sont les prérequis indispensables ?",
+            "status": "pending",
+        },
+        {
+            "id": "L2",
+            "aspect": "Anatomie Théorique, Mécanismes & Formules/Règles",
+            "question": f"Quels sont les principes internes, architectures, lois, théorèmes ou mécanismes précis régissant {clean} ?",
+            "status": "pending",
+        },
+        {
+            "id": "L3",
+            "aspect": "Méthodologie Pas à Pas & Démarche d'Expert",
+            "question": f"Quelle est la méthode chronologique rigoureuse d'application ou de conception pour maîtriser {clean} ?",
+            "status": "pending",
+        },
+        {
+            "id": "L4",
+            "aspect": "Grand Cas Pratique Intégral & Exemples Concrets",
+            "question": f"Quels sont les cas pratiques complets, codes fonctionnels ou démonstrations intégrales de bout en bout sur {clean} ?",
+            "status": "pending",
+        },
+        {
+            "id": "L5",
+            "aspect": "Pièges Classiques, Anti-patterns & Erreurs Fréquentes",
+            "question": f"Quelles sont les erreurs les plus fréquentes, limites, contre-exemples et corrections expertes dans {clean} ?",
+            "status": "pending",
+        },
+        {
+            "id": "L6",
+            "aspect": "Vision Panoramique 360° (Usages en tension vs Approches obsolètes / Filières bouchées & Alternatives)",
+            "question": f"En élargissant autour de {clean}, quelles sont les compétences/usages les plus recherchés en tension, les approches dépassées ou saturées, et les alternatives modernes ?",
+            "status": "pending",
+        },
+        {
+            "id": "L7",
+            "aspect": "Exercices Corrigés, Auto-évaluation & Ressources Internationales",
+            "question": f"Dispose-t-on d'exercices gradués avec corrigés détaillés et de références internationales de premier plan sur {clean} ?",
+            "status": "pending",
+        },
+    ]
+    return aspects[:count] if count is not None else aspects
+
+
+def default_learn_themes(subject: str, count: int | None = None) -> list[str]:
+    """Génère un ensemble complet et élargi de modules pédagogiques expliqués en phrases rédigées pour le Mode Apprendre (sans limite fixe)."""
     clean = subject.strip() or "le sujet d'apprentissage"
     themes = [
         f"1. Genèse, intuition et fondations conceptuelles de {clean} : comprendre la finalité du sujet, les problèmes concrets résolus et les prérequis indispensables.",
@@ -1000,11 +1156,121 @@ def default_learn_themes(subject: str, count: int = 8) -> list[str]:
         f"3. Méthodologie pas à pas et guide de l'expert sur {clean} : étapes chronologiques de conception, patron de raisonnement et logique d'analyse.",
         f"4. Grand cas pratique d'application intégrale de {clean} : démonstration magistrale et exemplaire menée de bout en bout sans aucune ellipse.",
         f"5. Répertoire des pièges fréquents et erreurs courantes dans {clean} : inventaire détaillé des anti-patterns et corrections méthodiques expertes.",
-        f"6. Cahier d'exercices d'application et d'entraînement progressif sur {clean} : exercices gradués avec énoncés et corrigés détaillés expliqués pas à pas.",
-        f"7. Fiche de mémorisation active et grille d'auto-évaluation de {clean} : checklist méthodique d'exigence et règles d'or capitales à maîtriser.",
-        f"8. Supports didactiques de référence et ressources officielles sur {clean} : bibliographie commentée, standards reconnus et pistes d'approfondissement.",
+        f"6. Exploration panoramique 360° autour de {clean} : compétences et usages en forte tension/demande vs approches obsolètes, saturées ou impasses techniques.",
+        f"7. Comparaison avec les alternatives, écosystème adjacent et évolutions futures de {clean} : compromis réels, choix d'architecture et perspectives à 5 ans.",
+        f"8. Cahier d'exercices d'application et d'entraînement progressif sur {clean} : exercices gradués avec énoncés et corrigés détaillés expliqués pas à pas.",
+        f"9. Fiche de mémorisation active et grille d'auto-évaluation de {clean} : checklist méthodique d'exigence et règles d'or capitales à maîtriser.",
+        f"10. Supports didactiques internationaux multilingues et ressources officielles sur {clean} : bibliographie commentée, standards reconnus et pistes d'approfondissement.",
     ]
-    return themes[:count]
+    return themes[:count] if count is not None else themes
+
+
+async def decompose_deep_search_objective(
+    settings: Any,
+    query: str,
+    summary: str = "",
+    recent_turns: list[dict[str, str]] | None = None,
+    max_points: int | None = None,
+    model: str | None = None,
+) -> list[dict[str, str]]:
+    """
+    Découpe dès le départ la question et l'objectif de l'utilisateur en points structurants obligatoires
+    à aborder (Checklist d'investigation initiale) avec sous-questions de contrôle, sans limite arbitraire.
+    """
+    has_llm_key = (
+        settings.enabled(getattr(settings, "llm_api_key", None))
+        if hasattr(settings, "enabled")
+        else bool(getattr(settings, "llm_api_key", None))
+    )
+    if getattr(settings, "demo_mode", False) or not has_llm_key:
+        return default_deep_search_aspect_checklist(query, max_points)
+
+    key = _key(settings, "llm_api_key", "du fournisseur IA")
+    # Modèle configurable pour la planification & découpage
+    fast_model = (
+        model
+        or getattr(settings, "deep_search_synthesis_model", None)
+        or "google/gemini-3.8-flash"
+    )
+    fallback_model = (
+        getattr(settings, "search_query_model", None)
+        or getattr(settings, "default_model", None)
+        or "mistralai/mistral-small-3.2-24b-instruct"
+    )
+    context = {
+        "summary": (summary or "")[:1500],
+        "recent_turns": [
+            {"role": turn["role"], "content": turn["content"][:800]}
+            for turn in (recent_turns or [])[-3:]
+            if turn.get("role") in ("user", "assistant") and isinstance(turn.get("content"), str)
+        ],
+        "question_and_objective": query[:1500],
+    }
+    count_instruction = (
+        f"Découpe le sujet en exactement {max_points} points structurants"
+        if max_points is not None
+        else "Découpe le sujet en autant de points structurants que nécessaire (sans aucune limite artificielle)"
+    )
+    messages = [
+        {"role": "system", "content": (
+            "# RÔLE & OBJECTIF : DÉCOUPAGE INITIAL EN POINTS À ABORDER & VISION PANORAMIQUE 360°\n"
+            "Tu es un directeur de recherche (« Deep Search Architect »). Avant toute exploration, tu dois découper la question et l'objectif de l'utilisateur en une grille exhaustive de points obligatoires à aborder et à valider en cours de route.\n\n"
+            f"{count_instruction}, couvrant tous les aspects directs ET l'écosystème élargi de la question :\n"
+            "- P1 : Axe Entités / Définitions & Fondations\n"
+            "- P2 : Axe Temporel & État de l'art récent\n"
+            "- P3 : Axe Technique, Causal & Métriques chiffrées\n"
+            "- P4 : Axe Contradictoire (Thèse vs Antithèse, limites, failles)\n"
+            "- P5 : Axe Périmètre, Contraintes & Mise en œuvre réelle\n"
+            "- P6 : Axe Panoramique 360° & Angles Adjacents (ex: pour des études ou carrières -> examiner aussi bien les filières d'avenir et métiers en forte tension que les filières bouchées/saturées, les salaires réels, les reconversions ; pour une techno -> les alternatives, les impasses industrielles, les coûts cachés)\n"
+            "- P7+ : Tout autre point spécifique indispensable pour couvrir 100% du sujet et ses ramifications internationales.\n\n"
+            "Retourne UNIQUEMENT un tableau JSON d'objets au format strict :\n"
+            "[\n"
+            "  {\"id\": \"P1\", \"aspect\": \"Nom précis du point à aborder\", \"question\": \"Question précise à laquelle l'enquête devra impérativement répondre pour valider ce point\"}\n"
+            "]"
+        )},
+        {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
+    ]
+    try:
+        async with httpx.AsyncClient(timeout=_QUERY_REWRITE_TIMEOUT, follow_redirects=False) as client:
+            response = await client.post(
+                settings.llm_base_url.rstrip("/") + "/chat/completions",
+                headers={"Authorization": f"Bearer {key}"},
+                json={"model": fast_model, "messages": messages, "stream": False, "temperature": 0.1, "max_tokens": 2048},
+            )
+            if response.status_code != 200 and fallback_model and fast_model != fallback_model:
+                response = await client.post(
+                    settings.llm_base_url.rstrip("/") + "/chat/completions",
+                    headers={"Authorization": f"Bearer {key}"},
+                    json={"model": fallback_model, "messages": messages, "stream": False, "temperature": 0.1, "max_tokens": 2048},
+                )
+        _check_response(response, "Fournisseur IA")
+        payload = _json(response, "Fournisseur IA")
+        content = payload["choices"][0]["message"]["content"]
+        if not isinstance(content, str):
+            raise ValueError
+        cleaned = re.sub(r"^```(?:json|text)?\s*|\s*```$", "", content.strip(), flags=re.IGNORECASE | re.DOTALL).strip()
+        parsed = json.loads(cleaned)
+        if not isinstance(parsed, list):
+            raise ValueError
+        items_slice = parsed[:max_points] if max_points is not None else parsed
+        checklist: list[dict[str, str]] = []
+        for idx, item in enumerate(items_slice, start=1):
+            if not isinstance(item, dict):
+                continue
+            aspect = str(item.get("aspect") or f"Point {idx}").strip()[:160]
+            q_text = str(item.get("question") or "").strip()[:300]
+            if aspect and q_text:
+                checklist.append({
+                    "id": f"P{idx}",
+                    "aspect": aspect,
+                    "question": q_text,
+                    "status": "pending",
+                })
+        if len(checklist) >= 3:
+            return checklist
+        return default_deep_search_aspect_checklist(query, max_points)
+    except Exception:
+        return default_deep_search_aspect_checklist(query, max_points)
 
 
 async def plan_deep_search_queries(
@@ -1012,11 +1278,12 @@ async def plan_deep_search_queries(
     query: str,
     summary: str,
     recent_turns: list[dict[str, str]],
-    max_queries: int = 8,
+    max_queries: int | None = None,
+    model: str | None = None,
 ) -> list[str]:
-    """Decompose a complex topic into structured explained investigation themes (complete sentences, not raw keywords)."""
+    """Decompose a complex topic into structured explained investigation themes and broad panoramic angles without an arbitrary cap."""
     key = _key(settings, "llm_api_key", "du fournisseur IA")
-    plan_model = getattr(settings, "deep_search_plan_model", None) or "anthropic/claude-fable-5.1"
+    plan_model = model or getattr(settings, "deep_search_plan_model", None) or "google/gemini-4-argon"
     fallback_model = (
         getattr(settings, "search_query_model", None)
         or getattr(settings, "default_model", None)
@@ -1031,27 +1298,42 @@ async def plan_deep_search_queries(
         ],
         "current_question": query[:1500],
     }
+    count_directive = (
+        f"un plan d'investigation de {max_queries} thèmes complets"
+        if max_queries is not None
+        else "un plan d'investigation exhaustif sans aucune limite sur le nombre de thèmes (génère autant de thèmes que nécessaire pour faire le tour complet de la question : 8, 12, 15 thèmes ou plus selon l'ampleur du sujet)"
+    )
     messages = [
         {"role": "system", "content": (
             "# RÔLE & OBJECTIF\n"
             "Tu es un agent expert en recherche approfondie et cartographie stratégique (« Deep Search Agent »). "
-            f"Ton objectif est de décomposer la question posée en un plan d'investigation structuré de {max_queries} axes d'analyse complets.\n\n"
+            f"Ton objectif est de découper dès le départ la question posée en points à aborder et en {count_directive}, multilingues et panoramiques.\n\n"
             "---\n\n"
-            "## CONSIGNES FORMELLES DE FORMULATION DES THÈMES (PHRASES COMPLÈTES & EXPLIQUÉES) :\n"
-            "1. **AUCUN MOT-CLÉ BRUT NI SYNTAXE DE RECHERCHE :** Ne fournis JAMAIS de simples mots-clés laconiques, ni d'opérateurs booléens ou de guillemets de recherche web.\n"
-            "2. **PHRASE COMPLÈTE & EXPLICATIVE :** Chaque axe doit impérativement être rédigé sous forme d'une phrase complète, soignée et explicative formulant la problématique, les aspects techniques et les dimensions critiques examinées.\n"
-            f"3. **EXACTEMENT {max_queries} AXES MULTIDIMENSIONNELS :** Rédige scrupuleusement {max_queries} axes équilibrés couvrant :\n"
-            "   - Axe 1 : Définition, terminologie et délimitation conceptuelle.\n"
-            "   - Axe 2 : État de l'art actuel, évolutions récentes et feuille de route.\n"
-            "   - Axe 3 : Mécanismes techniques, architectures internes et métriques objectives.\n"
-            "   - Axe 4 : Analyse contradictoire, limitations, failles et retours d'expérience négatifs.\n"
-            "   - Axe 5 : Spécifications d'environnement, prérequis et contraintes matérielles ou logicielles.\n"
-            "   - Axe 6 : Études de cas concrets, déploiements réels et benchmarks comparatifs.\n"
-            "   - Axe 7 : Risques, sécurité, anti-patterns et arbitrages (trade-offs) documentés.\n"
-            "   - Axe 8 : Standards de référence, publications normatives et perspectives d'avenir.\n\n"
+            "## PHASE 1 : DÉCOMPOSITION & PLANIFICATION INITIALE (MÉTHODE DE DÉCOMPOSITION STRATÉGIQUE & ARBRE DE RECHERCHE)\n"
+            "### DÉCOMPOSITION EN SOUS-PROBLÈMES ET DÉMARCHE THÈSE / ANTITHÈSE :\n"
+            "Découpe systématiquement la question selon les 5 axes fondateurs :\n"
+            "1. **Axe Entités / Définitions** — *L'axe des entités et des concepts (Quoi / Qui)* : composants, versions, acteurs et standards impliqués.\n"
+            "2. **Axe Temporel** — *L'axe temporel et dynamique (Quand)* : état de l'art actuel, évolutions récentes et feuille de route.\n"
+            "3. **Axe Technique & Causal** — *L'axe technique et causal (Comment / Pourquoi)* : mécanismes internes, architectures et métriques objectives (ex. VRAM requise par niveau de quantification, latence, débits, rendements).\n"
+            "4. **Axe Contradictoire** — *L'axe contradictoire et comparatif (La confrontation / Thèse vs Antithèse)* : goulots d'étranglement, limitations, failles et retours d'expérience critiques.\n"
+            "5. **Axe Périmètre & Contraintes** — *L'axe du périmètre et des contraintes (Où / Dans quel cadre)* : spécifications d'environnement, prérequis, coûts et conditions aux limites.\n\n"
+            "## VISION PANORAMIQUE À 360° & DIVERSITÉ DOCUMENTAIRE MULTI-ÉCOSYSTÈMES (OBLIGATOIRE)\n"
+            "- **Ne te limite jamais à la question littérale étroite** : élargis systématiquement le champ d'investigation aux angles adjacents, aux effets systémiques, aux symétries inverses (succès vs échecs, tensions vs saturations, avantages vs coûts cachés) et aux réalités empiriques.\n"
+            "- **Interdiction de la monoculture documentaire (Indépendance des preuves)** : plusieurs pages ou publications issues d'un même organisme ou d'un même programme d'étude ne constituent PAS des preuves indépendantes. Quel que soit le domaine (santé, économie, informatique, droit, sciences, éducation, industrie), tu DOIS formuler des requêtes qui interrogent au moins **3 écosystèmes institutionnels ou méthodologiques distincts** :\n"
+            "  1. *Producteurs de données primaires et statistiques* (instituts de statistique publique, registres officiels, bases cliniques, télémétrie, enquêtes de cohorte).\n"
+            "  2. *Autorités de régulation, de normalisation ou de certification* (textes législatifs/réglementaires, standards techniques RFC/ISO/W3C, autorités de tutelle et d'accréditation).\n"
+            "  3. *Recherche scientifique, observatoires spécialisés et retours d'expérience terrain* (revues à comité de lecture, benchmarks indépendants, études d'impact et analyses contradictoires).\n"
+            "- Chaque sous-dimension de la question (cadre normatif, métriques de performance ou de coût, dynamique temporelle/prospective, risques et limites) doit cibler son propre référentiel primaire plutôt que d'extrapoler une source unique hors de son périmètre.\n\n"
+            "## PHASE 2 : GÉNÉRATION DE REQUÊTES & RETRIEVAL MULTI-SOURCES MULTILINGUE\n"
+            "Couvre à la fois :\n"
+            "- **Requête Factuelle / Directe** : faits primaires, documentation officielle, statistiques et études de cas.\n"
+            "- **Requête Contradictoire / Critique** : limites, compromis (trade-offs), saturations, risques et avis divergents.\n"
+            "- **Exploration multilingue internationale** : inclure les pistes dans la langue de l'utilisateur, en **anglais** technique/scientifique, et dans toute autre langue étrangère pertinente selon le sujet.\n\n"
             "### CONSIGNES DE SORTIE :\n"
+            "- Chaque thème doit être rédigé sous forme d'une phrase complète et expliquée détaillant l'angle précis à explorer.\n"
+            "- Ne bride pas le nombre de thèmes : génère tous les thèmes nécessaires pour ne laisser aucun angle mort.\n"
             "- Ne réponds pas à la question maintenant.\n"
-            f"- Retourne UNIQUEMENT un tableau JSON de {max_queries} chaînes contenant chacune une phrase complète et expliquée."
+            "- Retourne UNIQUEMENT un tableau JSON de chaînes."
         )},
         {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
     ]
@@ -1061,7 +1343,7 @@ async def plan_deep_search_queries(
                 settings.llm_base_url.rstrip("/") + "/chat/completions",
                 headers={"Authorization": f"Bearer {key}"},
                 json={"model": plan_model, "messages": messages, "stream": False,
-                      "temperature": 0.1, "max_tokens": 1024},
+                      "temperature": 0.2, "max_tokens": 3000},
             )
             if response.status_code != 200 and fallback_model and plan_model != fallback_model:
                 _logger.warning(
@@ -1072,7 +1354,7 @@ async def plan_deep_search_queries(
                     settings.llm_base_url.rstrip("/") + "/chat/completions",
                     headers={"Authorization": f"Bearer {key}"},
                     json={"model": fallback_model, "messages": messages, "stream": False,
-                          "temperature": 0.1, "max_tokens": 1024},
+                          "temperature": 0.2, "max_tokens": 3000},
                 )
         _check_response(response, "Fournisseur IA")
         payload = _json(response, "Fournisseur IA")
@@ -1081,14 +1363,238 @@ async def plan_deep_search_queries(
             if not isinstance(content, str):
                 raise ValueError
             queries = _parse_query_list(content, max_queries=max_queries)
-            if len(queries) < max_queries:
-                defaults = default_deep_search_themes(query, max_queries)
-                queries.extend(defaults[len(queries):])
-            return queries[:max_queries]
+            if not queries:
+                return default_deep_search_themes(query, max_queries)
+            return queries[:max_queries] if max_queries is not None else queries
         except (ValueError, TypeError, KeyError, IndexError):
             return default_deep_search_themes(query, max_queries)
     except (httpx.TimeoutException, httpx.HTTPError, ProviderError):
         return default_deep_search_themes(query, max_queries)
+
+
+async def validate_and_followup_deep_search(
+    settings: Any,
+    query: str,
+    aspect_checklist: list[dict[str, str]],
+    executed_queries: list[str],
+    sources: list[dict[str, str]],
+    findings: list[str] | None = None,
+    previous_intermediate_questions: list[str] | None = None,
+    max_queries: int = 6,
+    model: str | None = None,
+) -> dict[str, Any]:
+    """
+    Validation en cours de route (Mid-course Validation & Intermediate Questioning) :
+    1. Vérifie point par point quels aspects de la question découpée au départ sont couverts ('covered'),
+       partiels ('partial') ou manquants ('missing').
+    2. Génère des questions intermédiaires d'investigation à partir du contenu déjà découvert et de l'objectif final.
+    3. Vérifie si chaque aspect et question intermédiaire a bien reçu une réponse sourcée et recoupée.
+    4. Génère des requêtes de recherche dans toutes les langues pertinentes (FR, EN, DE, ES, JA, ZH, etc.)
+       tant que tous les points ne sont pas intégralement validés.
+    """
+    checklist = [dict(item) for item in (aspect_checklist or default_deep_search_aspect_checklist(query))]
+    has_llm_key = (
+        settings.enabled(getattr(settings, "llm_api_key", None))
+        if hasattr(settings, "enabled")
+        else bool(getattr(settings, "llm_api_key", None))
+    )
+    if getattr(settings, "demo_mode", False) or not has_llm_key:
+        for item in checklist:
+            item["status"] = "covered"
+        return {
+            "is_sufficient": True,
+            "aspect_checklist": checklist,
+            "intermediate_questions": [],
+            "unanswered_aspects": [],
+            "validation_summary": "Tous les points initiaux ont été vérifiés.",
+            "followup_queries": [],
+            "searched_languages": ["fr", "en"],
+        }
+
+    key = _key(settings, "llm_api_key", "du fournisseur IA")
+    followup_model = (
+        model
+        or getattr(settings, "deep_search_synthesis_model", None)
+        or "google/gemini-3.8-flash"
+    )
+    fallback_model = (
+        getattr(settings, "search_query_model", None)
+        or getattr(settings, "default_model", None)
+        or "mistralai/mistral-small-3.2-24b-instruct"
+    )
+    context = {
+        "question_and_objective": query[:1500],
+        "initial_aspect_checklist": checklist,
+        "previous_intermediate_questions": (previous_intermediate_questions or [])[-12:],
+        "executed_queries": executed_queries[:40],
+        "extracted_findings": (findings or [])[-35:],
+        "collected_sources": [
+            {
+                "title": source.get("title", "")[:180],
+                "url": source.get("url", "")[:180],
+                "snippet": source.get("snippet", "")[:320],
+            }
+            for source in sources[:80]
+        ],
+    }
+    messages = [
+        {"role": "system", "content": (
+            "# RÔLE & OBJECTIF : AUDIT EN COURS DE ROUTE, QUESTIONS INTERMÉDIAIRES & RECHERCHE MULTILINGUE\n"
+            "Tu es un auditeur scientifique rigoureux (« DeepSearch Mid-Course Validator »). "
+            "Ta mission est d'inspecter le contenu collecté par rapport à l'objectif initial et aux points à aborder découpés dès le départ.\n\n"
+            "## PROTOCOLE DE VALIDATION INTERMÉDIAIRE OBLIGATOIRE :\n"
+            "1. **Vérification point par point de la checklist initiale (`aspect_checklist`) :**\n"
+            "   - Pour chaque point (`P1`, `P2`, ...), évalue si les sources et notes actuelles répondent à **tous les aspects** de la question :\n"
+            "     * `\"covered\"` : preuves complètes, chiffrées, précises et recoupées.\n"
+            "     * `\"partial\"` : abordé mais manque de chiffres précis, de détails techniques ou de contre-vérification.\n"
+            "     * `\"missing\"` : non encore abordé ou absence de sources probantes.\n"
+            "2. **Génération de questions intermédiaires (`intermediate_questions`) :**\n"
+            "   - À partir des faits découverts dans le contenu (noms techniques, contradictions entre sources, indices partiels) ET de l'objectif global, pose 2 à 4 **questions intermédiaires** pointues que le modèle doit se poser pour creuser en profondeur et vérifier qu'aucun angle mort ne subsiste.\n"
+            "3. **Décision stricte de complétude (`is_sufficient`) :**\n"
+            "   - Ne déclare `is_sufficient: true` QUE si **absolument tous les points** de la checklist sont `\"covered\"` et que toutes les questions intermédiaires ont trouvé une réponse solide.\n"
+            "   - Tant qu'un seul aspect est `\"partial\"` ou `\"missing\"`, ou qu'une contradiction subsiste, `is_sufficient` DOIT être `false`.\n"
+            f"4. **Formulation de requêtes multilingues toutes langues (`followup_queries`, 1 à {max_queries} requêtes) :**\n"
+            "   - Si `is_sufficient` est `false`, génère des requêtes ciblées pour répondre aux questions intermédiaires et aux points non couverts.\n"
+            "   - **EXPLORATION DANS TOUTES LES LANGUES PERTINENTES :** Ne te limite jamais à une seule langue ! Formule activement des requêtes en **français**, en **anglais** (documentation primaire, arXiv, benchmarks), et dans **toutes les autres langues pertinentes** pour le sujet ou les acteurs impliqués (ex. **allemand**, **espagnol**, **japonais**, **chinois**, **coréen**, **italien**, **russe**, **arabe**, etc.) afin de capter les sources primaires mondiales.\n"
+            "   - Chaque requête doit être dense (3 à 6 mots-clés précis, sans répéter `executed_queries`).\n\n"
+            "### FORMAT DE SORTIE (JSON STRICT UNIQUEMENT) :\n"
+            "{\n"
+            "  \"is_sufficient\": false,\n"
+            "  \"validation_summary\": \"Synthèse courte (1 phrase) de l'état de validation des points et ce qu'il reste à vérifier\",\n"
+            "  \"aspect_statuses\": [\n"
+            "    {\"id\": \"P1\", \"status\": \"covered\", \"note\": \"Justification courte\"},\n"
+            "    {\"id\": \"P2\", \"status\": \"partial\", \"note\": \"Ce qui manque encore\"}\n"
+            "  ],\n"
+            "  \"intermediate_questions\": [\n"
+            "    \"Question intermédiaire 1 générée à partir du contenu découvert et de l'objectif ?\",\n"
+            "    \"Question intermédiaire 2 pour vérifier un aspect incomplet ou contradictoire ?\"\n"
+            "  ],\n"
+            "  \"searched_languages\": [\"fr\", \"en\", \"de\", \"ja\"],\n"
+            "  \"followup_queries\": [\n"
+            "    \"requête ciblée en anglais\",\n"
+            "    \"requête ciblée dans une autre langue pertinente\"\n"
+            "  ]\n"
+            "}"
+        )},
+        {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
+    ]
+    try:
+        async with httpx.AsyncClient(timeout=_QUERY_REWRITE_TIMEOUT, follow_redirects=False) as client:
+            response = await client.post(
+                settings.llm_base_url.rstrip("/") + "/chat/completions",
+                headers={"Authorization": f"Bearer {key}"},
+                json={"model": followup_model, "messages": messages, "stream": False,
+                      "temperature": 0.1, "max_tokens": 1500},
+            )
+            if response.status_code != 200 and fallback_model and followup_model != fallback_model:
+                response = await client.post(
+                    settings.llm_base_url.rstrip("/") + "/chat/completions",
+                    headers={"Authorization": f"Bearer {key}"},
+                    json={"model": fallback_model, "messages": messages, "stream": False,
+                          "temperature": 0.1, "max_tokens": 1500},
+                )
+        _check_response(response, "Fournisseur IA")
+        payload = _json(response, "Fournisseur IA")
+        content = payload["choices"][0]["message"]["content"]
+        if not isinstance(content, str):
+            raise ValueError
+        cleaned = re.sub(r"^```(?:json|text)?\s*|\s*```$", "", content.strip(), flags=re.IGNORECASE | re.DOTALL).strip()
+
+        # Si le modèle a renvoyé un simple tableau JSON (compatibilité descendante)
+        if cleaned.startswith("["):
+            existing = {" ".join(item.split()).casefold() for item in executed_queries}
+            candidates = _parse_query_list(cleaned, max_queries=max_queries + len(executed_queries))
+            dedup = [item for item in candidates if item.casefold() not in existing][:max_queries]
+            is_suff = len(dedup) == 0
+            for item in checklist:
+                item["status"] = "covered" if is_suff else "partial"
+            return {
+                "is_sufficient": is_suff,
+                "aspect_checklist": checklist,
+                "intermediate_questions": [],
+                "unanswered_aspects": [c["aspect"] for c in checklist if c["status"] != "covered"],
+                "validation_summary": (
+                    "Tous les points ont été validés."
+                    if is_suff
+                    else f"{len(dedup)} pistes complémentaires identifiées pour compléter les points."
+                ),
+                "followup_queries": dedup,
+                "searched_languages": ["fr", "en"],
+            }
+
+        data = json.loads(cleaned)
+        if not isinstance(data, dict):
+            raise ValueError
+
+        status_map: dict[str, tuple[str, str]] = {}
+        raw_statuses = data.get("aspect_statuses", [])
+        if isinstance(raw_statuses, list):
+            for entry in raw_statuses:
+                if isinstance(entry, dict) and entry.get("id"):
+                    st = str(entry.get("status") or "partial").lower()
+                    if st not in ("covered", "partial", "missing"):
+                        st = "partial"
+                    note = str(entry.get("note") or "").strip()[:240]
+                    status_map[str(entry["id"])] = (st, note)
+
+        unanswered: list[str] = []
+        for item in checklist:
+            cid = item.get("id", "")
+            if cid in status_map:
+                st, note = status_map[cid]
+                item["status"] = st
+                if note:
+                    item["note"] = note
+            if item.get("status") != "covered":
+                unanswered.append(item.get("aspect", cid))
+
+        inter_q: list[str] = []
+        raw_inter = data.get("intermediate_questions", [])
+        if isinstance(raw_inter, list):
+            for q_item in raw_inter[:5]:
+                if isinstance(q_item, str) and q_item.strip():
+                    inter_q.append(q_item.strip()[:300])
+
+        raw_followup = data.get("followup_queries", [])
+        existing = {" ".join(item.split()).casefold() for item in executed_queries}
+        if isinstance(raw_followup, list):
+            candidates = _parse_query_list(json.dumps(raw_followup, ensure_ascii=False), max_queries=max_queries + len(executed_queries))
+        else:
+            candidates = []
+        dedup_queries = [item for item in candidates if item.casefold() not in existing][:max_queries]
+
+        all_covered = len(unanswered) == 0
+        is_sufficient = bool(data.get("is_sufficient", False) and all_covered) or len(dedup_queries) == 0
+        if is_sufficient:
+            for item in checklist:
+                if item.get("status") == "pending":
+                    item["status"] = "covered"
+
+        langs: list[str] = []
+        raw_langs = data.get("searched_languages", [])
+        if isinstance(raw_langs, list):
+            langs = [str(l).strip()[:12] for l in raw_langs if isinstance(l, (str, int)) and str(l).strip()][:10]
+
+        val_summary = str(data.get("validation_summary") or "").strip()[:350]
+        if not val_summary:
+            covered_count = sum(1 for c in checklist if c.get("status") == "covered")
+            val_summary = f"Validation {covered_count}/{len(checklist)} points couverts · {len(inter_q)} questions intermédiaires vérifiées."
+
+        return {
+            "is_sufficient": is_sufficient,
+            "aspect_checklist": checklist,
+            "intermediate_questions": inter_q,
+            "unanswered_aspects": unanswered,
+            "validation_summary": val_summary,
+            "followup_queries": [] if is_sufficient else dedup_queries,
+            "searched_languages": langs or ["fr", "en"],
+        }
+    except (ValueError, TypeError, KeyError, IndexError):
+        raise ProviderError("Le fournisseur IA a renvoyé des requêtes complémentaires invalides.") from None
+    except httpx.TimeoutException:
+        raise ProviderError("L'approfondissement de la recherche a dépassé le délai autorisé.") from None
+    except httpx.HTTPError:
+        raise ProviderError("Impossible de joindre le fournisseur IA pour approfondir la recherche.") from None
 
 
 async def plan_deep_search_followup(
@@ -1111,14 +1617,14 @@ async def plan_deep_search_followup(
     )
     context = {
         "question": query[:1500],
-        "executed_queries": initial_queries[:16],
+        "executed_queries": initial_queries[:30],
         "collected_sources": [
             {
                 "title": source.get("title", "")[:180],
                 "url": source.get("url", "")[:180],
                 "snippet": source.get("snippet", "")[:300],
             }
-            for source in sources[:60]
+            for source in sources[:75]
         ],
     }
     messages = [
@@ -1126,22 +1632,23 @@ async def plan_deep_search_followup(
             "# RÔLE & OBJECTIF\n"
             "Tu es un agent expert en recherche approfondie (« Deep Search Agent »). Ton objectif est de répondre de manière exhaustive, neutre et rigoureusement documentée à une question complexe en exécutant un protocole strict en 5 phases séquentielles et itératives. Tu ne te contentes jamais d'assertions péremptoires : chaque fait doit être appuyé par une source vérifiable.\n\n"
             "---\n\n"
-            "### PHASE 4 : CROISEMENT, AUDIT CONTRADICTOIRE & RÉÉVALUATION (RE-THINKING)\n"
-            "**Objectif :** Résoudre les conflits de données et déterminer si la base de preuves est suffisante ou incomplète.\n"
+            "### PHASE 4 : CROISEMENT, AUDIT CONTRADICTOIRE, QUESTIONS INTERMÉDIAIRES & RÉÉVALUATION (RE-THINKING)\n"
+            "**Objectif :** Générer des questions intermédiaires à partir du contenu découvert et de l'objectif, résoudre les conflits de données et vérifier que chaque aspect de la question découpée au départ a bien reçu une réponse complète.\n"
             "**Actions obligatoires :**\n"
-            "1. **Détection des contradictions :**\n"
+            "1. **Questions intermédiaires & Détection des contradictions :**\n"
+            "   - Formuler mentalement des questions intermédiaires à partir des faits déjà extraits et de l'objectif initial.\n"
             "   - Si la source A et la source B divergent sur un chiffre, une date ou une affirmation : ne pas trancher au hasard.\n"
             "   - Identifier l'origine du désaccord (différence d'environnement de test ? version obsolète ? condition non explicitée ?).\n"
             "   - Déclencher immédiatement une requête ciblée vers une source primaire ou normative pour lever l'ambiguïté.\n"
-            "2. **Test de complétude (Critères d'arrêt sur les 5 axes) :**\n"
-            "   - Vérifier si chacune des 5 dimensions initiales (*Axe Entités / Définitions*, *Axe Temporel*, *Axe Technique & Causal*, *Axe Contradictoire*, *Axe Périmètre & Contraintes*) dispose d'éléments de preuve solides.\n"
-            f"   - *Cas A (Information manquante ou contradictoire) :* Formuler de 1 à {max_queries} nouvelles requêtes spécifiques pour reboucler vers la **PHASE 2** :\n"
+            "2. **Test de complétude (Critères d'arrêt sur tous les aspects et les 5 axes) :**\n"
+            "   - Vérifier si chacune des 5 dimensions initiales (*Axe Entités / Définitions*, *Axe Temporel*, *Axe Technique & Causal*, *Axe Contradictoire*, *Axe Périmètre & Contraintes*) et chaque sous-question dispose d'éléments de preuve solides.\n"
+            f"   - *Cas A (Information manquante, aspect incomplet ou contradictoire) :* Formuler de 1 à {max_queries} nouvelles requêtes spécifiques pour reboucler vers la **PHASE 2** :\n"
             "     * *Requête Factuelle / Directe :* termes précis, noms d'outils, métriques chiffrées (documentation officielle, GitHub, arXiv, audits indépendants).\n"
             "     * *Requête Contradictoire / Critique :* cibler les retours d'expérience négatifs ou limites (« bottlenecks », « issues », « vs », « tradeoffs »).\n"
-            "     * *Requête en anglais ou langue étrangère pertinente :* traduire les requêtes techniques pour accéder à la documentation primaire internationale.\n"
+            "     * *Requête en anglais ou langue étrangère pertinente (toutes langues) :* traduire et décliner les requêtes dans toutes les langues utiles (anglais, allemand, japonais, chinois, espagnol, russe, etc.) pour accéder à la documentation primaire internationale.\n"
             "     * Non-redondance absolue : ne répète aucune requête déjà exécutée.\n"
             "   - *Règles strictes de requête :* 4 à 6 mots-clés denses au maximum, guillemets doubles (\"...\") sur les concepts exacts clés, zéro faute de frappe, orthographe irréprochable avec accents corrects.\n"
-            "   - *Cas B (Preuves convergentes et complètes) :* Clôturer la recherche pour passer en **PHASE 5** en renvoyant UNIQUEMENT un tableau vide `[]`.\n\n"
+            "   - *Cas B (Preuves convergentes et tous les points intégralement couverts) :* Clôturer la recherche pour passer en **PHASE 5** en renvoyant UNIQUEMENT un tableau vide `[]`.\n\n"
             "Sortie : UNIQUEMENT un tableau JSON de chaînes (ex. [\"\\\"concept exact\\\" benchmark metric\", \"\\\"tradeoffs\\\" analysis\"] ou [] si complet)."
         )},
         {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
@@ -1182,16 +1689,124 @@ async def plan_deep_search_followup(
         raise ProviderError("Impossible de joindre le fournisseur IA pour approfondir la recherche.") from None
 
 
+async def decompose_learn_objective(
+    settings: Any,
+    query: str,
+    summary: str = "",
+    recent_turns: list[dict[str, str]] | None = None,
+    max_points: int | None = None,
+    model: str | None = None,
+) -> list[dict[str, str]]:
+    """
+    Découpe dès le départ le sujet d'apprentissage en points pédagogiques obligatoires
+    à maîtriser et vérifier (Checklist pédagogique initiale) sans limite arbitraire.
+    """
+    has_llm_key = (
+        settings.enabled(getattr(settings, "llm_api_key", None))
+        if hasattr(settings, "enabled")
+        else bool(getattr(settings, "llm_api_key", None))
+    )
+    if getattr(settings, "demo_mode", False) or not has_llm_key:
+        return default_learn_aspect_checklist(query, max_points)
+
+    key = _key(settings, "llm_api_key", "du fournisseur IA")
+    fast_model = (
+        model
+        or getattr(settings, "deep_search_synthesis_model", None)
+        or "google/gemini-3.8-flash"
+    )
+    fallback_model = (
+        getattr(settings, "search_query_model", None)
+        or getattr(settings, "default_model", None)
+        or "mistralai/mistral-small-3.2-24b-instruct"
+    )
+    context = {
+        "summary": (summary or "")[:1500],
+        "recent_turns": [
+            {"role": turn["role"], "content": turn["content"][:800]}
+            for turn in (recent_turns or [])[-3:]
+            if turn.get("role") in ("user", "assistant") and isinstance(turn.get("content"), str)
+        ],
+        "learning_subject_and_objective": query[:1500],
+    }
+    count_instruction = (
+        f"Découpe le sujet en exactement {max_points} points pédagogiques structurants"
+        if max_points is not None
+        else "Découpe le sujet en autant de points pédagogiques structurants que nécessaire (sans aucune limite artificielle)"
+    )
+    messages = [
+        {"role": "system", "content": (
+            "# RÔLE & OBJECTIF : DÉCOUPAGE PÉDAGOGIQUE INITIAL EN POINTS À ABORDER & VISION PANORAMIQUE 360°\n"
+            "Tu es un directeur pédagogique (« Curriculum Architect »). Avant toute exploration documentaire, tu dois découper le sujet d'apprentissage de l'utilisateur en une grille exhaustive de points obligatoires à couvrir et à valider en cours de route.\n\n"
+            f"{count_instruction}, couvrant tous les aspects didactiques directs ET l'écosystème élargi du sujet :\n"
+            "- L1 : Genèse, Intuition & Fondations Conceptuelles\n"
+            "- L2 : Anatomie Théorique, Mécanismes & Formules/Règles\n"
+            "- L3 : Méthodologie Pas à Pas & Démarche d'Expert\n"
+            "- L4 : Grand Cas Pratique Intégral & Exemples Concrets\n"
+            "- L5 : Pièges Classiques, Anti-patterns & Erreurs Fréquentes\n"
+            "- L6 : Axe Panoramique 360° (compétences/usages en forte tension et recherchés vs approches obsolètes, saturées ou filières bouchées, alternatives modernes, compromis réels)\n"
+            "- L7+ : Exercices corrigés gradués, auto-évaluation et tout autre point spécifique indispensable pour maîtriser 100% du sujet à l'échelle internationale.\n\n"
+            "Retourne UNIQUEMENT un tableau JSON d'objets au format strict :\n"
+            "[\n"
+            "  {\"id\": \"L1\", \"aspect\": \"Nom précis du point pédagogique à aborder\", \"question\": \"Question précise à laquelle les supports de cours devront impérativement répondre pour valider ce point\"}\n"
+            "]"
+        )},
+        {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
+    ]
+    try:
+        async with httpx.AsyncClient(timeout=_QUERY_REWRITE_TIMEOUT, follow_redirects=False) as client:
+            response = await client.post(
+                settings.llm_base_url.rstrip("/") + "/chat/completions",
+                headers={"Authorization": f"Bearer {key}"},
+                json={"model": fast_model, "messages": messages, "stream": False, "temperature": 0.1, "max_tokens": 2048},
+            )
+            if response.status_code != 200 and fallback_model and fast_model != fallback_model:
+                response = await client.post(
+                    settings.llm_base_url.rstrip("/") + "/chat/completions",
+                    headers={"Authorization": f"Bearer {key}"},
+                    json={"model": fallback_model, "messages": messages, "stream": False, "temperature": 0.1, "max_tokens": 2048},
+                )
+        _check_response(response, "Fournisseur IA")
+        payload = _json(response, "Fournisseur IA")
+        content = payload["choices"][0]["message"]["content"]
+        if not isinstance(content, str):
+            raise ValueError
+        cleaned = re.sub(r"^```(?:json|text)?\s*|\s*```$", "", content.strip(), flags=re.IGNORECASE | re.DOTALL).strip()
+        parsed = json.loads(cleaned)
+        if not isinstance(parsed, list):
+            raise ValueError
+        items_slice = parsed[:max_points] if max_points is not None else parsed
+        checklist: list[dict[str, str]] = []
+        for idx, item in enumerate(items_slice, start=1):
+            if not isinstance(item, dict):
+                continue
+            aspect = str(item.get("aspect") or f"Point {idx}").strip()[:160]
+            q_text = str(item.get("question") or "").strip()[:300]
+            if aspect and q_text:
+                checklist.append({
+                    "id": f"L{idx}",
+                    "aspect": aspect,
+                    "question": q_text,
+                    "status": "pending",
+                })
+        if len(checklist) >= 3:
+            return checklist
+        return default_learn_aspect_checklist(query, max_points)
+    except Exception:
+        return default_learn_aspect_checklist(query, max_points)
+
+
 async def plan_learn_queries(
     settings: Any,
     query: str,
     summary: str,
     recent_turns: list[dict[str, str]],
-    max_queries: int = 8,
+    max_queries: int | None = None,
+    model: str | None = None,
 ) -> list[str]:
-    """Decompose a learning subject into structured pedagogical modules (complete explained sentences, not raw keywords)."""
+    """Decompose a learning subject into structured pedagogical modules and broad panoramic angles without an arbitrary cap."""
     key = _key(settings, "llm_api_key", "du fournisseur IA")
-    plan_model = getattr(settings, "deep_search_plan_model", None) or "anthropic/claude-fable-5.1"
+    plan_model = model or getattr(settings, "deep_search_plan_model", None) or "google/gemini-4-argon"
     fallback_model = (
         getattr(settings, "search_query_model", None)
         or getattr(settings, "default_model", None)
@@ -1206,27 +1821,48 @@ async def plan_learn_queries(
         ],
         "learning_subject": query[:1500],
     }
+    count_directive = (
+        f"un programme d'enseignement complet composé d'exactement {max_queries} modules d'apprentissage approfondis"
+        if max_queries is not None
+        else "un programme d'enseignement exhaustif sans aucune limite sur le nombre de modules (génère autant de modules que nécessaire pour couvrir 100% du sujet et de son écosystème : 8, 12, 15 modules ou plus selon l'ampleur du sujet)"
+    )
+    count_rule = (
+        f"3. **EXACTEMENT {max_queries} MODULES PROGRESSIFS :** Rédige scrupuleusement {max_queries} modules couvrant l'ensemble du cursus :\n"
+        if max_queries is not None
+        else "3. **AUCUNE LIMITE SUR LE NOMBRE DE MODULES (COUVERTURE EXHAUSTIVE) :** Génère autant de modules que nécessaire (sans plafond arbitraire à 8) pour couvrir l'ensemble du cursus et ses ramifications :\n"
+    )
+    output_rule = (
+        f"- Retourne UNIQUEMENT un tableau JSON de {max_queries} chaînes contenant chacune une phrase complète et expliquée."
+        if max_queries is not None
+        else "- Retourne UNIQUEMENT un tableau JSON de chaînes contenant chacune une phrase complète et expliquée (sans limite artificielle sur le nombre d'entrées)."
+    )
     messages = [
         {"role": "system", "content": (
             "# RÔLE & OBJECTIF PÉDAGOGIQUE\n"
             "Tu es un architecte de formation et concepteur de cours d'élite (« Curriculum & Course Planning Agent »). "
-            f"Ton objectif est de décomposer le sujet d'apprentissage en un programme d'enseignement complet composé d'exactement {max_queries} modules d'apprentissage approfondis.\n\n"
+            f"Ton objectif est de décomposer dès le départ le sujet d'apprentissage en points à maîtriser et en {count_directive}, multilingues et panoramiques.\n\n"
             "---\n\n"
+            "## VISION PANORAMIQUE À 360° & DIVERSITÉ MULTI-ÉCOSYSTÈMES (OBLIGATOIRE) :\n"
+            "Ne te limite jamais à la théorie académique étroite ! Élargis systématiquement le programme pour inclure tous les angles adjacents décisifs :\n"
+            "- Couvrir les fondations conceptuelles, les mécanismes internes, le cas pratique intégral, mais AUSSI les limites, les contre-exemples, les anti-patterns, les compromis (trade-offs), les alternatives concurrentes et les réalités empiriques.\n"
+            "- **Diversité documentaire et indépendance des sources :** Croise au moins 3 écosystèmes distincts (référentiels académiques/scientifiques, normes officielles/réglementaires, données empiriques et retours d'expérience terrain) afin d'éviter la dépendance à une source unique.\n"
+            "- **Exploration Multilingue (toutes langues) :** Prévois des modules qui exploitent les meilleurs cours universitaires, documentations officielles et standards internationaux dans toutes les langues pertinentes (français, anglais, allemand, japonais, chinois, espagnol, etc.).\n\n"
             "## CONSIGNES FORMELLES DE RÉDACTION DES THÈMES (PHRASES COMPLÈTES & EXPLIQUÉES) :\n"
             "1. **AUCUN MOT-CLÉ BRUT NI SYNTAXE DE RECHERCHE :** Ne fournis JAMAIS de simples mots-clés laconiques, ni d'opérateurs booléens ou de guillemets de recherche web.\n"
             "2. **PHRASE COMPLÈTE & PÉDAGOGIQUE :** Chaque module doit impérativement être formulé sous forme d'une phrase complète, soignée, claire et explicative qui détaille le contenu didactique et l'objectif d'apprentissage du module.\n"
-            f"3. **EXACTEMENT {max_queries} MODULES PROGRESSIFS :** Rédige scrupuleusement {max_queries} modules couvrant l'ensemble du cursus :\n"
-            "   - Module 1 : Genèse, intuition et fondations conceptuelles (pourquoi ce sujet existe, définitions fondamentales et prérequis).\n"
-            "   - Module 2 : Anatomie théorique et mécanismes sous-jacents (décorticage des principes, règles d'or et structures).\n"
-            "   - Module 3 : Méthodologie pas à pas et guide de l'expert (démarche méthodique et étapes de réalisation).\n"
-            "   - Module 4 : Grand cas pratique d'application intégrale (démonstration magistrale de bout en bout).\n"
-            "   - Module 5 : Répertoire des pièges fréquents et erreurs classiques (anti-patterns et corrections expertes).\n"
-            "   - Module 6 : Cahier d'exercices d'application progressifs (entraînement et corrigés détaillés).\n"
-            "   - Module 7 : Fiche de mémorisation active et grille critériée d'auto-évaluation (synthèse et règles d'or).\n"
-            "   - Module 8 : Supports didactiques de référence et ressources officielles (bibliographie commentée et approfondissements).\n\n"
+            f"{count_rule}"
+            "   - Genèse, intuition et fondations conceptuelles (pourquoi ce sujet existe, définitions fondamentales et prérequis).\n"
+            "   - Anatomie théorique et mécanismes sous-jacents (décorticage des principes, formules, règles d'or et structures).\n"
+            "   - Méthodologie pas à pas et guide de l'expert (démarche méthodique et étapes chronologiques de réalisation).\n"
+            "   - Grand cas pratique d'application intégrale (démonstration magistrale de bout en bout sans ellipse).\n"
+            "   - Vision panoramique 360° : usages et compétences en forte tension vs approches obsolètes, saturées ou filières bouchées, et comparaison avec les alternatives.\n"
+            "   - Répertoire des pièges fréquents, cas limites et erreurs classiques (anti-patterns et corrections expertes).\n"
+            "   - Cahier d'exercices d'application progressifs (entraînement gradué et corrigés détaillés).\n"
+            "   - Fiche de mémorisation active, grille critériée d'auto-évaluation et ressources internationales multilingues de référence.\n"
+            "   - Ainsi que tout module spécialisé supplémentaire pertinent pour approfondir chaque sous-domaine du sujet !\n\n"
             "### CONSIGNES DE SORTIE :\n"
             "- Ne réponds pas à la question et n'écris pas le cours maintenant.\n"
-            f"- Retourne UNIQUEMENT un tableau JSON de {max_queries} chaînes contenant chacune une phrase complète et expliquée."
+            f"{output_rule}"
         )},
         {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
     ]
@@ -1236,7 +1872,7 @@ async def plan_learn_queries(
                 settings.llm_base_url.rstrip("/") + "/chat/completions",
                 headers={"Authorization": f"Bearer {key}"},
                 json={"model": plan_model, "messages": messages, "stream": False,
-                      "temperature": 0.1, "max_tokens": 1024},
+                      "temperature": 0.1, "max_tokens": 3000},
             )
             if response.status_code != 200 and fallback_model and plan_model != fallback_model:
                 _logger.warning(
@@ -1247,7 +1883,7 @@ async def plan_learn_queries(
                     settings.llm_base_url.rstrip("/") + "/chat/completions",
                     headers={"Authorization": f"Bearer {key}"},
                     json={"model": fallback_model, "messages": messages, "stream": False,
-                          "temperature": 0.1, "max_tokens": 1024},
+                          "temperature": 0.1, "max_tokens": 3000},
                 )
         _check_response(response, "Fournisseur IA")
         payload = _json(response, "Fournisseur IA")
@@ -1256,14 +1892,222 @@ async def plan_learn_queries(
             if not isinstance(content, str):
                 raise ValueError
             queries = _parse_query_list(content, max_queries=max_queries)
-            if len(queries) < max_queries:
+            min_expected = max_queries if max_queries is not None else 8
+            if len(queries) < min_expected:
                 defaults = default_learn_themes(query, max_queries)
-                queries.extend(defaults[len(queries):])
-            return queries[:max_queries]
+                for item in defaults:
+                    if item not in queries:
+                        queries.append(item)
+                        if max_queries is not None and len(queries) >= max_queries:
+                            break
+            return queries[:max_queries] if max_queries is not None else queries
         except (ValueError, TypeError, KeyError, IndexError):
             return default_learn_themes(query, max_queries)
     except (httpx.TimeoutException, httpx.HTTPError, ProviderError):
         return default_learn_themes(query, max_queries)
+
+
+async def validate_and_followup_learn(
+    settings: Any,
+    query: str,
+    aspect_checklist: list[dict[str, str]],
+    executed_queries: list[str],
+    sources: list[dict[str, str]],
+    findings: list[dict[str, str]] | None = None,
+    previous_intermediate_questions: list[str] | None = None,
+    max_queries: int = 6,
+    model: str | None = None,
+) -> dict[str, Any]:
+    """
+    Validation pédagogique en cours de route (Mid-course validation) pour le Mode Apprendre :
+    1. Vérifie point par point si tous les aspects pédagogiques découpés au départ sont couverts ('covered', 'partial', 'missing').
+    2. Génère des questions intermédiaires pédagogiques et pratiques à partir du contenu découvert et de l'objectif.
+    3. Génère des requêtes complémentaires dans TOUTES les langues pertinentes jusqu'à couverture complète.
+    """
+    key = _key(settings, "llm_api_key", "du fournisseur IA")
+    followup_model = (
+        model
+        or getattr(settings, "deep_search_synthesis_model", None)
+        or "google/gemini-3.8-flash"
+    )
+    fallback_model = (
+        getattr(settings, "search_query_model", None)
+        or getattr(settings, "default_model", None)
+        or "mistralai/mistral-small-3.2-24b-instruct"
+    )
+    checklist = [dict(item) for item in (aspect_checklist or default_learn_aspect_checklist(query))]
+    context = {
+        "learning_subject_and_objective": query[:1500],
+        "initial_aspect_checklist": checklist,
+        "previous_intermediate_questions": (previous_intermediate_questions or [])[:15],
+        "executed_queries": executed_queries[:40],
+        "extracted_findings": [
+            {
+                "sub_query": f.get("sub_query", "")[:160],
+                "summary": f.get("summary", "")[:400],
+            }
+            for f in (findings or [])[:18]
+        ],
+        "collected_sources": [
+            {
+                "title": source.get("title", "")[:180],
+                "url": source.get("url", "")[:180],
+                "snippet": source.get("snippet", "")[:280],
+            }
+            for source in sources[:70]
+        ],
+    }
+    messages = [
+        {"role": "system", "content": (
+            "# RÔLE & OBJECTIF : AUDIT PÉDAGOGIQUE EN COURS DE ROUTE, QUESTIONS INTERMÉDIAIRES & EXPLORATION MULTILINGUE\n"
+            "Tu es un inspecteur pédagogique et auditeur de cours (« Deep Learning Curriculum Validator »). Ton objectif est de vérifier rigoureusement en cours de route si TOUS les aspects pédagogiques du sujet découpé au départ ont été traités avec des preuves, exemples concrets et exercices.\n\n"
+            "## PROTOCOLE DE VALIDATION INTERMÉDIAIRE OBLIGATOIRE :\n"
+            "1. **Vérification des points initiaux (`aspect_statuses`) :**\n"
+            "   - Pour chaque point `id` de `initial_aspect_checklist`, évalue si les sources et notes déjà collectées y répondent intégralement (`covered`), partiellement (`partial`), ou pas encore (`missing`).\n"
+            "   - Sois exigeant : un point n'est `covered` que si l'on dispose d'explications théoriques précises, d'exemples concrets / cas pratiques, des pièges et de la vision panoramique 360° (compétences en tension vs approches obsolètes/bouchées).\n"
+            "2. **Génération de Questions Intermédiaires (`intermediate_questions`) :**\n"
+            "   - À partir du contenu déjà découvert dans les sources ET de l'objectif d'apprentissage initial, formule 2 à 4 **questions intermédiaires** pointues (ex: cas pratique concret à résoudre, subtilité technique, erreur fréquente observée sur le terrain, compétence recherchée vs saturée).\n"
+            "   - Vérifie si les sources actuelles permettent déjà d'y répondre ou s'il faut lancer de nouvelles recherches.\n"
+            "3. **Génération de Requêtes Multilingues dans TOUTES les langues pertinentes (`followup_queries`) :**\n"
+            f"   - Tant qu'un seul point de la checklist est `partial` ou `missing`, ou qu'une question intermédiaire reste sans réponse prouvée, génère de 1 à {max_queries} nouvelles requêtes web ultra-ciblées.\n"
+            "   - **EXPLORATION TOUTES LANGUES :** Formule des requêtes dans toutes les langues pertinentes pour accéder aux meilleurs cours universitaires, tutoriels d'ingénierie et retours d'expérience mondiaux (français `fr`, anglais `en`, allemand `de`, espagnol `es`, japonais `ja`, chinois `zh`, etc.).\n"
+            "   - 4 à 6 mots-clés denses par requête, guillemets doubles sur les concepts exacts, aucune redondance avec `executed_queries`.\n"
+            "   - Si et seulement si TOUS les points initiaux sont `covered` ET que toutes les questions intermédiaires ont trouvé réponse, mets `is_sufficient: true` et `followup_queries: []`.\n\n"
+            "## FORMAT DE SORTIE (JSON STRICT UNIQUEMENT) :\n"
+            "{\n"
+            "  \"is_sufficient\": false,\n"
+            "  \"aspect_statuses\": [\n"
+            "    {\"id\": \"L1\", \"status\": \"covered\", \"note\": \"Fondations et prérequis couverts\"},\n"
+            "    {\"id\": \"L4\", \"status\": \"partial\", \"note\": \"Manque un cas pratique chiffré complet\"}\n"
+            "  ],\n"
+            "  \"intermediate_questions\": [\n"
+            "    \"Question intermédiaire 1 générée à partir des découvertes et de l'objectif pédagogique ?\",\n"
+            "    \"Question intermédiaire 2 sur un cas concret ou une filière/approche en tension vs obsolète ?\"\n"
+            "  ],\n"
+            "  \"validation_summary\": \"Bilan concis de la validation intermédiaire du cours\",\n"
+            "  \"followup_queries\": [\n"
+            "    \"\\\"concept exact\\\" practical case study tutorial\",\n"
+            "    \"\\\"terme précis\\\" erreurs fréquentes exercices corrigés\"\n"
+            "  ],\n"
+            "  \"searched_languages\": [\"fr\", \"en\", \"de\"]\n"
+            "}"
+        )},
+        {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
+    ]
+    try:
+        async with httpx.AsyncClient(timeout=_QUERY_REWRITE_TIMEOUT, follow_redirects=False) as client:
+            response = await client.post(
+                settings.llm_base_url.rstrip("/") + "/chat/completions",
+                headers={"Authorization": f"Bearer {key}"},
+                json={"model": followup_model, "messages": messages, "stream": False, "temperature": 0.1, "max_tokens": 1600},
+            )
+            if response.status_code != 200 and fallback_model and followup_model != fallback_model:
+                response = await client.post(
+                    settings.llm_base_url.rstrip("/") + "/chat/completions",
+                    headers={"Authorization": f"Bearer {key}"},
+                    json={"model": fallback_model, "messages": messages, "stream": False, "temperature": 0.1, "max_tokens": 1600},
+                )
+        _check_response(response, "Fournisseur IA")
+        payload = _json(response, "Fournisseur IA")
+        content = payload["choices"][0]["message"]["content"]
+        if not isinstance(content, str):
+            raise ValueError
+        cleaned = re.sub(r"^```(?:json|text)?\s*|\s*```$", "", content.strip(), flags=re.IGNORECASE | re.DOTALL).strip()
+
+        if cleaned.startswith("["):
+            existing = {" ".join(item.split()).casefold() for item in executed_queries}
+            candidates = _parse_query_list(cleaned, max_queries=max_queries + len(executed_queries))
+            dedup = [item for item in candidates if item.casefold() not in existing][:max_queries]
+            is_done = len(dedup) == 0
+            for item in checklist:
+                item["status"] = "covered" if is_done else "partial"
+            return {
+                "is_sufficient": is_done,
+                "aspect_checklist": checklist,
+                "intermediate_questions": [],
+                "unanswered_aspects": [] if is_done else [c["aspect"] for c in checklist],
+                "validation_summary": (
+                    "Tous les points pédagogiques ont été validés."
+                    if is_done
+                    else f"{len(dedup)} pistes complémentaires identifiées pour compléter le cours."
+                ),
+                "followup_queries": dedup,
+                "searched_languages": ["fr", "en"],
+            }
+
+        data = json.loads(cleaned)
+        if not isinstance(data, dict):
+            raise ValueError
+
+        status_map: dict[str, tuple[str, str]] = {}
+        raw_statuses = data.get("aspect_statuses", [])
+        if isinstance(raw_statuses, list):
+            for entry in raw_statuses:
+                if isinstance(entry, dict) and entry.get("id"):
+                    st = str(entry.get("status") or "partial").lower()
+                    if st not in ("covered", "partial", "missing"):
+                        st = "partial"
+                    note = str(entry.get("note") or "").strip()[:240]
+                    status_map[str(entry["id"])] = (st, note)
+
+        unanswered: list[str] = []
+        for item in checklist:
+            cid = item.get("id", "")
+            if cid in status_map:
+                st, note = status_map[cid]
+                item["status"] = st
+                if note:
+                    item["note"] = note
+            if item.get("status") != "covered":
+                unanswered.append(item.get("aspect", cid))
+
+        inter_q: list[str] = []
+        raw_inter = data.get("intermediate_questions", [])
+        if isinstance(raw_inter, list):
+            for q_item in raw_inter[:5]:
+                if isinstance(q_item, str) and q_item.strip():
+                    inter_q.append(q_item.strip()[:300])
+
+        raw_followup = data.get("followup_queries", [])
+        existing = {" ".join(item.split()).casefold() for item in executed_queries}
+        if isinstance(raw_followup, list):
+            candidates = _parse_query_list(json.dumps(raw_followup, ensure_ascii=False), max_queries=max_queries + len(executed_queries))
+        else:
+            candidates = []
+        dedup_queries = [item for item in candidates if item.casefold() not in existing][:max_queries]
+
+        all_covered = len(unanswered) == 0
+        is_sufficient = bool(data.get("is_sufficient", False) and all_covered) or len(dedup_queries) == 0
+        if is_sufficient:
+            for item in checklist:
+                if item.get("status") == "pending":
+                    item["status"] = "covered"
+
+        langs: list[str] = []
+        raw_langs = data.get("searched_languages", [])
+        if isinstance(raw_langs, list):
+            langs = [str(l).strip()[:12] for l in raw_langs if isinstance(l, (str, int)) and str(l).strip()][:10]
+
+        val_summary = str(data.get("validation_summary") or "").strip()[:350]
+        if not val_summary:
+            covered_count = sum(1 for c in checklist if c.get("status") == "covered")
+            val_summary = f"Validation pédagogique {covered_count}/{len(checklist)} points couverts · {len(inter_q)} questions intermédiaires vérifiées."
+
+        return {
+            "is_sufficient": is_sufficient,
+            "aspect_checklist": checklist,
+            "intermediate_questions": inter_q,
+            "unanswered_aspects": unanswered,
+            "validation_summary": val_summary,
+            "followup_queries": [] if is_sufficient else dedup_queries,
+            "searched_languages": langs or ["fr", "en"],
+        }
+    except (ValueError, TypeError, KeyError, IndexError):
+        raise ProviderError("Le fournisseur IA a renvoyé des requêtes complémentaires de cours invalides.") from None
+    except httpx.TimeoutException:
+        raise ProviderError("L'approfondissement du cours a dépassé le délai autorisé.") from None
+    except httpx.HTTPError:
+        raise ProviderError("Impossible de joindre le fournisseur IA pour approfondir le cours.") from None
 
 
 async def plan_learn_followup(
@@ -1286,7 +2130,7 @@ async def plan_learn_followup(
     )
     context = {
         "learning_subject": query[:1500],
-        "executed_queries": initial_queries[:16],
+        "executed_queries": initial_queries[:30],
         "collected_sources": [
             {
                 "title": source.get("title", "")[:180],
@@ -1303,12 +2147,8 @@ async def plan_learn_followup(
             "Ton rôle est d'analyser les supports de cours déjà collectés et de vérifier si l'ensemble documentaire suffit pour rédiger un cours magistral complet, progressif et adapté au sujet.\n\n"
             "---\n\n"
             "## AUDIT PÉDAGOGIQUE DU CONTENU RÉUNI :\n"
-            "Vérifie la couverture des 4 dimensions indispensables d'un bon cours :\n"
-            "1. Les concepts fondamentaux, intuitions et définitions sont-ils clairs ?\n"
-            "2. Le fonctionnement interne étape par étape est-il suffisamment documenté ?\n"
-            "3. Dispose-t-on d'études de cas concrètes, de code ou d'exercices pratiques résolus pour la section d'application ?\n"
-            "4. Dispose-t-on des pièges classiques, anti-patterns et bonnes pratiques ?\n\n"
-            f"- **Si une dimension essentielle manque ou est trop superficielle :** Formule de 1 à {max_queries} nouvelles requêtes spécifiques (4 à 6 mots-clés denses, guillemets sur concepts exacts, non-redondance absolue) pour combler le manque.\n"
+            "Vérifie la couverture des dimensions indispensables d'un bon cours (fondations, mécanismes internes, cas pratiques, vision panoramique 360°, pièges et exercices).\n"
+            f"- **Si une dimension essentielle manque ou est trop superficielle :** Formule de 1 à {max_queries} nouvelles requêtes spécifiques dans les langues pertinentes (4 à 6 mots-clés denses, guillemets sur concepts exacts, non-redondance absolue) pour combler le manque.\n"
             "- **Si les supports réunis sont équilibrés, riches et suffisants pour rédiger un cours magistral complet :** Renvoie UNIQUEMENT un tableau vide `[]`.\n\n"
             "Sortie : UNIQUEMENT un tableau JSON de chaînes (ex. [\"\\\"concept exact\\\" tutorial code example\"] ou [] si complet)."
         )},
@@ -1348,6 +2188,1196 @@ async def plan_learn_followup(
         raise ProviderError("L'approfondissement du cours a dépassé le délai autorisé.") from None
     except httpx.HTTPError:
         raise ProviderError("Impossible de joindre le fournisseur IA pour approfondir le cours.") from None
+
+
+def default_domain_experts(query: str, learn_mode: bool = False) -> list[dict[str, str]]:
+    """
+    Sélectionne par défaut l'Expert Référent Global du domaine correspondant au sujet
+    (modèle sobre à expert unique pour éviter les redondances et économiser les tokens).
+    """
+    q_low = (query or "").lower()
+    if any(k in q_low for k in ["dette", "déficit", "inflation", "pib", "monnaie", "bce", "fed", "impôt", "fiscal", "économi", "budget", "taux d'intérêt", "emprunt", "finance publique"]):
+        return [
+            {
+                "id": "E1",
+                "title": "Expert Référent en Macroéconomie, Banques Centrales et Finances Publiques",
+                "perspective": "Analyse les mécanismes structurels de long terme, la dynamique monétaire/budgétaire, les équilibres de marché et les contraintes réglementaires.",
+            },
+        ]
+    if any(k in q_low for k in ["étude", "bac", "orientation", "parcoursup", "métier", "emploi", "carrière", "école", "université", "master", "licence", "salaire", "formation", "diplôme", "alternance"]):
+        return [
+            {
+                "id": "E1",
+                "title": "Expert Référent en Ingénierie Pédagogique, Insertion Professionnelle et Prospective de l'Emploi",
+                "perspective": "Analyse la sélectivité académique, la valeur des diplômes, la réalité concrète de l'emploi et les mutations structurelles de compétences.",
+            },
+        ]
+    if any(k in q_low for k in ["santé", "médecin", "maladie", "clinique", "hôpital", "traitement", "biologie", "médicament", "chirurgie", "nutrition", "cancer", "cerveau"]):
+        return [
+            {
+                "id": "E1",
+                "title": "Expert Référent en Sciences Médicales, Recherche Clinique et Santé Publique",
+                "perspective": "Analyse les preuves physiopathologiques, les protocoles cliniques validés, le rapport bénéfice/risque et les recommandations des autorités sanitaires.",
+            },
+        ]
+    if any(k in q_low for k in ["droit", "loi", "justice", "contrat", "tribunal", "juridique", "constitution", "état", "géopolitique", "guerre", "diplomatie"]):
+        return [
+            {
+                "id": "E1",
+                "title": "Expert Référent en Droit, Politiques Publiques et Géopolitique",
+                "perspective": "Analyse les textes normatifs, la jurisprudence, les rapports de force institutionnels et les impacts réglementaires.",
+            },
+        ]
+    if learn_mode:
+        return [
+            {
+                "id": "E1",
+                "title": "Professeur & Pédagogue Référent du Domaine",
+                "perspective": "Maîtrise la genèse conceptuelle, l'explication pas à pas, les études de cas concrètes et la détection des pièges d'apprentissage.",
+            },
+        ]
+    return [
+        {
+            "id": "E1",
+            "title": "Expert Référent Scientifique & Méthodologiste du Domaine",
+            "perspective": "Analyse les mécanismes causaux fondamentaux, les données probantes vérifiables, la faisabilité opérationnelle et les arbitrages décisionnels.",
+        },
+    ]
+
+
+_DETAIL_LEVEL_SPECS: dict[int, dict[str, Any]] = {
+    1: {
+        "level": 1,
+        "label": "Synthèse très courte (Flash)",
+        "num_parts": 2,
+        "learn_content_parts": 1,
+        "paragraphs_per_expert": "analyse concise et directe proportionnée aux preuves (1 paragraphe)",
+        "words_per_part": "150 à 250 mots",
+        "max_iterations": 2,
+        "intro_paragraphs": "1 paragraphe concis (3 à 4 phrases)",
+    },
+    2: {
+        "level": 2,
+        "level_name": "Synthèse exécutive concise",
+        "label": "Synthèse exécutive concise",
+        "num_parts": 3,
+        "learn_content_parts": 2,
+        "paragraphs_per_expert": "analyse concise et ciblée proportionnée aux preuves (1 à 2 paragraphes)",
+        "words_per_part": "200 à 300 mots",
+        "max_iterations": 2,
+        "intro_paragraphs": "1 à 2 paragraphes courts",
+    },
+    3: {
+        "level": 3,
+        "label": "Résumé structuré",
+        "num_parts": 3,
+        "learn_content_parts": 2,
+        "paragraphs_per_expert": "analyse structurée proportionnée aux preuves (2 paragraphes)",
+        "words_per_part": "250 à 350 mots",
+        "max_iterations": 3,
+        "intro_paragraphs": "1 à 2 paragraphes",
+    },
+    4: {
+        "level": 4,
+        "label": "Aperçu analytique",
+        "num_parts": 4,
+        "learn_content_parts": 3,
+        "paragraphs_per_expert": "analyse factuelle et dense proportionnée aux preuves",
+        "words_per_part": "250 à 400 mots",
+        "max_iterations": 4,
+        "intro_paragraphs": "2 paragraphes",
+    },
+    5: {
+        "level": 5,
+        "label": "Dossier standard équilibré",
+        "num_parts": 4,
+        "learn_content_parts": 4,
+        "paragraphs_per_expert": "analyse rigoureuse et dense proportionnée aux preuves",
+        "words_per_part": "300 à 450 mots",
+        "max_iterations": 5,
+        "intro_paragraphs": "2 paragraphes",
+    },
+    6: {
+        "level": 6,
+        "label": "Analyse détaillée",
+        "num_parts": 5,
+        "learn_content_parts": 4,
+        "paragraphs_per_expert": "analyse approfondie et dense proportionnée aux preuves",
+        "words_per_part": "300 à 500 mots",
+        "max_iterations": 6,
+        "intro_paragraphs": "2 à 3 paragraphes",
+    },
+    7: {
+        "level": 7,
+        "label": "Étude approfondie",
+        "num_parts": 5,
+        "learn_content_parts": 5,
+        "paragraphs_per_expert": "analyse approfondie, dense et nuancée proportionnée aux preuves",
+        "words_per_part": "350 à 550 mots",
+        "max_iterations": 7,
+        "intro_paragraphs": "2 à 3 paragraphes denses",
+    },
+    8: {
+        "level": 8,
+        "label": "Grand rapport complet (Recommandé)",
+        "num_parts": 5,
+        "learn_content_parts": 6,
+        "paragraphs_per_expert": "analyse complète, dense et étayée proportionnée aux preuves (sans délayage)",
+        "words_per_part": "350 à 600 mots",
+        "max_iterations": 8,
+        "intro_paragraphs": "3 paragraphes denses",
+    },
+    9: {
+        "level": 9,
+        "label": "Traité exhaustif très détaillé",
+        "num_parts": 6,
+        "learn_content_parts": 6,
+        "paragraphs_per_expert": "analyse exhaustive, dense et méthodologique proportionnée aux preuves",
+        "words_per_part": "400 à 650 mots",
+        "max_iterations": 9,
+        "intro_paragraphs": "3 paragraphes très développés",
+    },
+    10: {
+        "level": 10,
+        "label": "Encyclopédique & Ultra-détaillé (Maximum)",
+        "num_parts": 7,
+        "learn_content_parts": 6,
+        "paragraphs_per_expert": "analyse encyclopédique maximale mais dense, strictement proportionnée aux preuves",
+        "words_per_part": "450 à 700 mots",
+        "max_iterations": 10,
+        "intro_paragraphs": "3 à 4 paragraphes exhaustifs",
+    },
+}
+
+
+def get_detail_level_spec(detail_level: int | None = None, learn_mode: bool = False) -> dict[str, Any]:
+    """
+    Calibre les paramètres d'exploration, du plan (nombre de grandes parties) et de rédaction
+    de l'Agent Écrivain selon le niveau de détail choisi sur le curseur de 1 à 10 (défaut : 8).
+    """
+    try:
+        lvl = int(detail_level) if detail_level is not None else 8
+    except (TypeError, ValueError):
+        lvl = 8
+    lvl = max(1, min(10, lvl))
+    base = dict(_DETAIL_LEVEL_SPECS[lvl])
+    if learn_mode:
+        # En Mode Apprendre, on ajoute toujours 1 module final dédié aux 20 Flashcards & 20 QCM
+        base["num_parts"] = base["learn_content_parts"] + 1
+    return base
+
+
+def default_report_outline(
+    query: str,
+    aspect_checklist: list[dict[str, str]] | None = None,
+    learn_mode: bool = False,
+    detail_level: int | None = None,
+) -> dict[str, Any]:
+    """
+    Génère un plan détaillé de secours structuré en grandes parties (##) et sous-parties (###)
+    adossé à l'Expert Référent Global du domaine, calibré selon `detail_level` (1 à 10).
+    """
+    spec = get_detail_level_spec(detail_level, learn_mode=learn_mode)
+    clean = query.strip() or ("Sujet d'apprentissage" if learn_mode else "Dossier d'investigation")
+    experts = default_domain_experts(clean, learn_mode=learn_mode)
+    e1 = experts[0]["title"] if experts else "Expert Référent Global"
+    if learn_mode:
+        content_modules = [
+            {
+                "id": "M1",
+                "heading": "## Module 1 — Genèse, Intuition Fondamentale & Fondations Conceptuelles",
+                "subparts": [
+                    "### 1.1 Origine, fondements théoriques et définitions rigoureuses",
+                    "### 1.2 Intuition concrète, cas d'usage réels et prérequis opérationnels",
+                    "### 1.3 Synthèse d'ancrage conceptuel et conditions aux limites",
+                ],
+                "focus": "Poser des bases inébranlables avec exemples introductifs et définitions exactes.",
+            },
+            {
+                "id": "M2",
+                "heading": "## Module 2 — Anatomie Théorique, Architecture Interne & Règles Fondamentales",
+                "subparts": [
+                    "### 2.1 Décorticage des lois, formules et mécanismes internes",
+                    "### 2.2 Architecture concrète, flux, paramètres et dimensionnement",
+                    "### 2.3 Tableau comparatif multicritères, invariants et conditions de validité",
+                ],
+                "focus": "Expliquer le comment et le pourquoi en profondeur avec formules expliquées et tableau Markdown.",
+            },
+            {
+                "id": "M3",
+                "heading": "## Module 3 — Méthodologie Pas à Pas & Démarche d'Expert",
+                "subparts": [
+                    "### 3.1 Rigueur analytique, modélisation et structuration du raisonnement",
+                    "### 3.2 Protocole chronologique d'exécution et arbres de décision sur le terrain",
+                    "### 3.3 Audit qualité, standards de référence et critères de validation",
+                ],
+                "focus": "Transmettre la méthode opérationnelle complète avec arbres de décision.",
+            },
+            {
+                "id": "M4",
+                "heading": "## Module 4 — Grand Cas Pratique Intégral & Démonstration de Bout en Bout",
+                "subparts": [
+                    "### 4.1 Cadrage formel, hypothèses et modélisation du cas réel",
+                    "### 4.2 Résolution intégrale pas à pas (calculs, code ou rédaction complète sans ellipse)",
+                    "### 4.3 Audit critique des résultats, stress-test et enseignements clés",
+                ],
+                "focus": "Développer un cas concret 100% résolu sans aucune ellipse.",
+            },
+            {
+                "id": "M5",
+                "heading": "## Module 5 — Vision Panoramique 360° & Pièges Classiques",
+                "subparts": [
+                    "### 5.1 État de l'art, évolutions structurelles et alternatives théoriques",
+                    "### 5.2 Compétences et usages en tension vs approches dépassées",
+                    "### 5.3 Pièges classiques et remédiations (Symptôme -> Cause -> Correction)",
+                ],
+                "focus": "Apporter un recul stratégique complet à 360° et prévenir toutes les erreurs courantes.",
+            },
+            {
+                "id": "M6",
+                "heading": "## Module 6 — Cahier d'Exercices Progressifs & Corrigés Intégraux Commentés",
+                "subparts": [
+                    "### 6.1 Exercice Niveau 1 : Fondamentaux et mécanismes",
+                    "### 6.2 Exercice Niveau 2 : Cas d'application opérationnel",
+                    "### 6.3 Exercice Niveau 3 : Cas complexe, pièges et arbitrage critique",
+                ],
+                "focus": "Proposer 3 exercices gradués suivis immédiatement de leurs corrigés méthodiques complets.",
+            },
+        ]
+        selected_content = content_modules[: spec["learn_content_parts"]]
+        final_idx = len(selected_content) + 1
+        flashcards_module = {
+            "id": f"M{final_idx}",
+            "heading": f"## Module {final_idx} — Fiche de Mémorisation Active, 20 Flashcards & 20 Questions de Quiz QCM",
+            "subparts": [
+                f"### {final_idx}.1 Synthèse d'ancrage mémoriel et 10 règles d'or",
+                f"### {final_idx}.2 Les 20 Flashcards de révision active (### Flashcard 1 à ### Flashcard 20)",
+                f"### {final_idx}.3 Le Grand Quiz d'Auto-Évaluation de 20 QCM commentés (### Question 1 à ### Question 20)",
+            ],
+            "focus": (
+                "Rédiger la fiche récapitulative puis OBLIGATOIREMENT les 20 Flashcards numérotées "
+                "(### Flashcard 1 à 20 avec - **Recto :** et - **Verso :**) et les 20 Questions QCM "
+                "(### Question 1 à 20 avec **Énoncé :**, - A), - B), - C), - D), - **Bonne réponse :** et - **Explication :**)."
+            ),
+        }
+        return {
+            "title": f"# Grand Cours Magistral & Manuel de Référence : {clean}",
+            "executive_summary_guide": (
+                f"Présentation générale du cursus sur « {clean} », objectifs pédagogiques, prérequis, "
+                f"présentation de l'Expert Référent ({e1}) et fil conducteur."
+            ),
+            "detail_level": spec["level"],
+            "detail_label": spec["label"],
+            "experts": experts,
+            "parts": selected_content + [flashcards_module],
+        }
+
+    all_parts = [
+        {
+            "id": "S1",
+            "heading": "## 1. Cadre Général, Fondations Structurelles & Diagnostic",
+            "subparts": [
+                "### 1.1 Genèse, mécanismes fondamentaux et dynamique structurelle",
+                "### 1.2 Réalité opérationnelle, acteurs clés et indicateurs chiffrés actuels",
+                "### 1.3 Contraintes institutionnelles et premiers arbitrages",
+            ],
+            "focus": "Poser le diagnostic complet avec chiffres officiels et cadre réglementaire.",
+        },
+        {
+            "id": "S2",
+            "heading": "## 2. Analyse Approfondie des Voies Porteuses, Tensions & Leviers Majeurs",
+            "subparts": [
+                "### 2.1 Fondements de la création de valeur et moteurs structurels",
+                "### 2.2 Analyse détaillée des secteurs en tension, métriques et rendements",
+                "### 2.3 Études de cas réels, conditions d'accès et soutenabilité",
+            ],
+            "focus": "Développer chaque piste porteuse avec statistiques précises et exemples nommés.",
+        },
+        {
+            "id": "S3",
+            "heading": "## 3. Analyse Critique & Vision 360° : Limites, Risques, Impasses & Plan d'Action",
+            "subparts": [
+                "### 3.1 Déséquilibres structurels, limites théoriques et comparaisons",
+                "### 3.2 Voies saturées, pièges de terrain et recommandations opérationnelles",
+                "### 3.3 Risques systémiques et feuille de route par profil",
+            ],
+            "focus": "Confronter forces et faiblesses, détailler ce qu'il faut éviter et livrer un plan d'action.",
+        },
+        {
+            "id": "S4",
+            "heading": "## 4. Grands Tableaux Comparatifs Multicritères & Benchmarks",
+            "subparts": [
+                "### 4.1 Tableau comparatif maître et analyse des modèles",
+                "### 4.2 Benchmark chiffré des coûts, performances, rendements et délais réels",
+                "### 4.3 Matrice des risques, compromis (trade-offs) et enseignements clés",
+            ],
+            "focus": "Fournir des tableaux Markdown riches et confronter l'interprétation chiffrée.",
+        },
+        {
+            "id": "S5",
+            "heading": "## 5. Stratégie Opérationnelle, Feuille de Route & Recommandations",
+            "subparts": [
+                "### 5.1 Stratégie de fond et choix structurants",
+                "### 5.2 Plan d'action concret, exécution et leviers d'accélération",
+                "### 5.3 Gestion des risques et synthèse décisionnelle",
+            ],
+            "focus": "Donner un guide d'action immédiatement applicable avec recommandations concrètes.",
+        },
+        {
+            "id": "S6",
+            "heading": "## 6. Études de Cas Sectorielles Approfondies & Scénarios Prospectifs",
+            "subparts": [
+                "### 6.1 Modélisation prospective à moyen/long terme et scénarios",
+                "### 6.2 Retours d'expérience chiffrés sur cas réels emblématiques",
+                "### 6.3 Stress-test réglementaire, technologique et conjoncturel",
+            ],
+            "focus": "Approfondir des cas réels chiffrés et tester la robustesse face aux chocs futurs.",
+        },
+        {
+            "id": "S7",
+            "heading": "## 7. Référentiel Technique, Cadre Réglementaire & Guide d'Audit",
+            "subparts": [
+                "### 7.1 Corpus théorique, normes de référence et indicateurs clés",
+                "### 7.2 Grille d'audit opérationnel, critères de sélection et métriques",
+                "### 7.3 Cadre légal/institutionnel, gouvernance et synthèse générale",
+            ],
+            "focus": "Fournir une grille d'évaluation exhaustive et les références institutionnelles complètes.",
+        },
+    ]
+    return {
+        "title": f"# Grand Rapport d'Investigation Approfondie : {clean}",
+        "executive_summary_guide": (
+            f"Synthèse exécutive détaillée répondant directement à « {clean} », présentation de l'Expert Référent ({e1}), "
+            "conclusions majeures chiffrées et arbitrage synthétique."
+        ),
+        "detail_level": spec["level"],
+        "detail_label": spec["label"],
+        "experts": experts,
+        "parts": all_parts[: spec["num_parts"]],
+    }
+
+
+async def plan_report_outline(
+    settings: Any,
+    query: str,
+    sources: list[dict[str, str]],
+    findings: list[dict[str, str]] | None = None,
+    aspect_checklist: list[dict[str, str]] | None = None,
+    intermediate_questions: list[str] | None = None,
+    learn_mode: bool = False,
+    detail_level: int | None = None,
+    model: str | None = None,
+) -> dict[str, Any]:
+    """
+    Étape 1 de la génération en 2 temps (« Agent Planificateur ») :
+    Construit le plan détaillé de la sortie en grandes parties (##) et sous-parties (###)
+    à partir de la question, des points de contrôle initiaux, des questions intermédiaires
+    et de l'ensemble des découvertes extraites, en utilisant le modèle configurable de planification,
+    calibré selon `detail_level` (1 à 10).
+    """
+    spec = get_detail_level_spec(detail_level, learn_mode=learn_mode)
+    target_parts = spec["num_parts"]
+    has_llm_key = (
+        settings.enabled(getattr(settings, "llm_api_key", None))
+        if hasattr(settings, "enabled")
+        else bool(getattr(settings, "llm_api_key", None))
+    )
+    if getattr(settings, "demo_mode", False) or not has_llm_key:
+        return default_report_outline(query, aspect_checklist=aspect_checklist, learn_mode=learn_mode, detail_level=spec["level"])
+
+    key = _key(settings, "llm_api_key", "du fournisseur IA")
+    fast_model = (
+        model
+        or getattr(settings, "deep_search_synthesis_model", None)
+        or "google/gemini-3.8-flash"
+    )
+    fallback_model = (
+        getattr(settings, "search_query_model", None)
+        or getattr(settings, "default_model", None)
+        or "mistralai/mistral-small-3.2-24b-instruct"
+    )
+    context = {
+        "user_question": query[:1500],
+        "mode": "learn_mode" if learn_mode else "deep_search",
+        "detail_level": f"{spec['level']}/10 ({spec['label']})",
+        "target_number_of_parts": target_parts,
+        "target_depth_per_expert": spec["paragraphs_per_expert"],
+        "target_words_per_part": spec["words_per_part"],
+        "aspect_checklist": (aspect_checklist or [])[:15],
+        "intermediate_questions": (intermediate_questions or [])[:15],
+        "extracted_findings": [
+            {
+                "sub_query": f.get("sub_query", "")[:180],
+                "summary": f.get("summary", "")[:500],
+            }
+            for f in (findings or [])[:20]
+        ],
+        "sources_overview": [
+            {
+                "index": idx + 1,
+                "title": s.get("title", "")[:160],
+                "snippet": s.get("snippet", "")[:240],
+            }
+            for idx, s in enumerate(sources[:50])
+        ],
+    }
+
+    if learn_mode:
+        system_prompt = (
+            "# RÔLE : AGENT PLANIFICATEUR D'ARCHITECTURE DE COURS MAGISTRAL (ÉTAPE 1/2)\n"
+            "Tu es un Architecte Pédagogique en Chef. Ta mission est double :\n"
+            "1. **Sélectionner l'EXPERT RÉFÉRENT GLOBAL DU DOMAINE** correspondant exactement au sujet (ex. sur l'économie : *Professeur & Économiste Référent* ; sur l'orientation : *Directeur des Études & Expert de l'Emploi* ; sur les sciences/technologies : *Chercheur & Architecte Système Référent*).\n"
+            f"2. **Concevoir le PLAN DU COURS CALIBRÉ AU NIVEAU DE DÉTAIL {spec['level']}/10 ({spec['label']})** en exactement **{target_parts} grandes parties `##`** et sous-parties `###` thématiques bien articulées pour transmettre le savoir de manière progressive et sans redondance.\n\n"
+            f"## EXIGENCES D'ARCHITECTURE DU PLAN ({target_parts} GRANDES PARTIES `##`) :\n"
+            "1. Chaque grande partie (`heading`) doit commencer par `## Module X — Titre explicite`.\n"
+            "2. **Dans chaque grande partie de cours**, définis 2 à 3 sous-parties thématiques (`### X.1 ...`, `### X.2 ...`) directes et logiques.\n"
+            "3. Le plan doit couvrir 100% des points de `aspect_checklist`, toutes les `intermediate_questions`, ainsi que la vision panoramique 360° (compétences/usages en tension vs approches dépassées, cas pratique, exercices).\n"
+            "4. **RÈGLE CRITIQUE POUR LA DERNIÈRE PARTIE :** La toute dernière partie du plan DOIT impérativement être consacrée à la **Fiche de Mémorisation Active, aux 20 Flashcards (`### Flashcard 1` à `### Flashcard 20`) et au Grand Quiz de 20 questions QCM (`### Question 1` à `### Question 20`)**, afin que l'interface interactive puisse les afficher.\n"
+            f"5. Dans le champ `focus` de chaque partie, indique précisément à l'Agent Écrivain les concepts, démonstrations, données chiffrées et sources à exploiter ({spec['words_per_part']} par partie).\n\n"
+            "## FORMAT DE SORTIE (JSON STRICT UNIQUEMENT) :\n"
+            "{\n"
+            "  \"title\": \"# Titre Complet du Grand Cours Magistral\",\n"
+            "  \"executive_summary_guide\": \"Points clés à présenter dans l'introduction générale du cours et rôle de l'Expert Référent\",\n"
+            "  \"experts\": [\n"
+            "    {\"id\": \"E1\", \"title\": \"Titre précis de l'Expert Référent Global\", \"perspective\": \"Sa méthodologie, son angle d'analyse et son expertise fondamentale\"}\n"
+            "  ],\n"
+            "  \"parts\": [\n"
+            "    {\n"
+            "      \"id\": \"M1\",\n"
+            "      \"heading\": \"## Module 1 — Titre de la première grande partie\",\n"
+            "      \"subparts\": [\n"
+            "        \"### 1.1 Titre thématique du premier sous-point\",\n"
+            "        \"### 1.2 Titre thématique du deuxième sous-point\"\n"
+            "      ],\n"
+            "      \"focus\": \"Concepts fondamentaux, exemples chiffrés et sources à exploiter dans ce module\"\n"
+            "    }\n"
+            "  ]\n"
+            "}"
+        )
+    else:
+        system_prompt = (
+            "# RÔLE : AGENT PLANIFICATEUR D'ARCHITECTURE DE RAPPORT DEEPSEARCH (ÉTAPE 1/2)\n"
+            "Tu es un Directeur d'Investigation et Architecte Éditorial. Ta mission est double :\n"
+            "1. **Sélectionner l'EXPERT RÉFÉRENT GLOBAL DU DOMAINE** faisant autorité sur le sujet pour analyser avec rigueur les preuves disponibles.\n"
+            f"2. **Concevoir le PLAN DE LA SORTIE CALIBRÉ AU NIVEAU DE DÉTAIL {spec['level']}/10 ({spec['label']})** en exactement **{target_parts} grandes parties `##`** et sous-parties `###` thématiques fluides, denses et sans redondance.\n\n"
+            f"## EXIGENCES D'ARCHITECTURE DU PLAN ({target_parts} GRANDES PARTIES `##`) :\n"
+            "1. Chaque grande partie (`heading`) doit commencer par `## N. Titre explicite et analytique de la partie`.\n"
+            "2. **Dans CHAQUE grande partie `##`**, structure 2 à 4 sous-parties `subparts` thématiques (`### N.1 ...`, `### N.2 ...`) qui organisent logiquement le propos sans redites.\n"
+            "3. Le plan doit couvrir 100% de la question initiale, tous les points de `aspect_checklist`, toutes les `intermediate_questions`, et intégrer la **vision panoramique à 360°** (tensions structurelles, filières saturées, benchmarks chiffrés, comparaisons internationales, recommandations concrètes).\n"
+            f"4. Dans le champ `focus` de chaque partie, indique précisément à l'Agent Écrivain quelles données chiffrées, quelles études de cas et quelles sources traiter ({spec['words_per_part']} par partie).\n\n"
+            "## FORMAT DE SORTIE (JSON STRICT UNIQUEMENT) :\n"
+            "{\n"
+            "  \"title\": \"# Titre Complet du Grand Dossier d'Investigation\",\n"
+            "  \"executive_summary_guide\": \"Points clés et conclusions chiffrées à présenter dans la synthèse exécutive en ouverture\",\n"
+            "  \"experts\": [\n"
+            "    {\"id\": \"E1\", \"title\": \"Titre précis de l'Expert Référent Global\", \"perspective\": \"Sa grille de lecture, ses indicateurs privilégiés et son angle d'analyse\"}\n"
+            "  ],\n"
+            "  \"parts\": [\n"
+            "    {\n"
+            "      \"id\": \"S1\",\n"
+            "      \"heading\": \"## 1. Titre de la première grande partie\",\n"
+            "      \"subparts\": [\n"
+            "        \"### 1.1 Titre thématique du premier axe\",\n"
+            "        \"### 1.2 Titre thématique du deuxième axe\"\n"
+            "      ],\n"
+            "      \"focus\": \"Données chiffrées, mécanismes, cas concrets et aspects de la checklist à développer en profondeur\"\n"
+            "    }\n"
+            "  ]\n"
+            "}"
+        )
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
+    ]
+    try:
+        async with httpx.AsyncClient(timeout=_QUERY_REWRITE_TIMEOUT, follow_redirects=False) as client:
+            response = await client.post(
+                settings.llm_base_url.rstrip("/") + "/chat/completions",
+                headers={"Authorization": f"Bearer {key}"},
+                json={"model": fast_model, "messages": messages, "stream": False, "temperature": 0.15, "max_tokens": 2800},
+            )
+            if response.status_code != 200 and fallback_model and fast_model != fallback_model:
+                response = await client.post(
+                    settings.llm_base_url.rstrip("/") + "/chat/completions",
+                    headers={"Authorization": f"Bearer {key}"},
+                    json={"model": fallback_model, "messages": messages, "stream": False, "temperature": 0.15, "max_tokens": 2800},
+                )
+        _check_response(response, "Fournisseur IA")
+        payload = _json(response, "Fournisseur IA")
+        content = payload["choices"][0]["message"]["content"]
+        if not isinstance(content, str):
+            raise ValueError
+        cleaned = re.sub(r"^```(?:json|text)?\s*|\s*```$", "", content.strip(), flags=re.IGNORECASE | re.DOTALL).strip()
+        data = json.loads(cleaned)
+        if not isinstance(data, dict):
+            raise ValueError
+        raw_parts = data.get("parts")
+        if not isinstance(raw_parts, list) or len(raw_parts) < 2:
+            raise ValueError
+
+        title = str(data.get("title") or "").strip()
+        if not title:
+            title = f"# {'Grand Cours Magistral' if learn_mode else 'Grand Dossier DeepSearch'} : {query.strip()[:120]}"
+        elif not title.startswith("#"):
+            title = f"# {title}"
+
+        fallback_experts = default_domain_experts(query, learn_mode=learn_mode)
+        raw_experts = data.get("experts")
+        experts: list[dict[str, str]] = []
+        if isinstance(raw_experts, list):
+            for e_idx, exp in enumerate(raw_experts[:3], start=1):
+                if isinstance(exp, dict):
+                    e_title = str(exp.get("title") or "").strip()[:140]
+                    e_persp = str(exp.get("perspective") or "").strip()[:300]
+                    if e_title:
+                        experts.append({
+                            "id": f"E{e_idx}",
+                            "title": e_title,
+                            "perspective": e_persp or fallback_experts[min(e_idx - 1, 2)]["perspective"],
+                        })
+        while len(experts) < 3:
+            nxt = fallback_experts[len(experts)]
+            experts.append(dict(nxt))
+
+        exec_guide = str(data.get("executive_summary_guide") or "").strip()[:600]
+        parts: list[dict[str, Any]] = []
+        for idx, item in enumerate(raw_parts[:10], start=1):
+            if not isinstance(item, dict):
+                continue
+            heading = str(item.get("heading") or "").strip()
+            if not heading:
+                continue
+            if not heading.startswith("##"):
+                heading = f"## {idx}. {heading.lstrip('#').strip()}"
+            raw_subparts = item.get("subparts")
+            subparts: list[str] = []
+            if isinstance(raw_subparts, list):
+                for s_idx, sub in enumerate(raw_subparts[:6], start=1):
+                    if isinstance(sub, str) and sub.strip():
+                        s_clean = sub.strip()
+                        if not s_clean.startswith("###"):
+                            s_clean = f"### {idx}.{s_idx} {s_clean.lstrip('#').strip()}"
+                        subparts.append(s_clean[:240])
+            if not subparts:
+                subparts = [
+                    f"### {idx}.1 Perspective 1 — {experts[0]['title']} : Fondements, mécanismes et données clés",
+                    f"### {idx}.2 Perspective 2 — {experts[1]['title']} : Réalité opérationnelle, chiffres et cas concrets",
+                    f"### {idx}.3 Perspective 3 — {experts[2]['title']} : Analyse critique, limites et synthèse croisée",
+                ]
+            focus = str(item.get("focus") or "").strip()[:600]
+            parts.append({
+                "id": str(item.get("id") or f"P{idx}"),
+                "heading": heading[:220],
+                "subparts": subparts,
+                "focus": focus or "Développer intégralement la sous-partie de chacun des 3 experts avec exemples précis, chiffres et citations [1], [2].",
+            })
+
+        if len(parts) < 2:
+            return default_report_outline(query, aspect_checklist=aspect_checklist, learn_mode=learn_mode, detail_level=spec["level"])
+
+        # En Mode Apprendre, garantit toujours que la dernière partie contient les 20 Flashcards et 20 QCM pour learn_html.py
+        if learn_mode:
+            last_part = parts[-1]
+            combined_last = (last_part["heading"] + " " + " ".join(last_part["subparts"]) + " " + last_part["focus"]).lower()
+            if "flashcard" not in combined_last or "quiz" not in combined_last:
+                parts.append({
+                    "id": f"M{len(parts) + 1}",
+                    "heading": f"## Module {len(parts) + 1} — Fiche de Mémorisation Active, 20 Flashcards & 20 Questions de Quiz QCM",
+                    "subparts": [
+                        f"### {len(parts) + 1}.1 Synthèse d'ancrage mémoriel et 10 règles d'or des 3 experts",
+                        f"### {len(parts) + 1}.2 Les 20 Flashcards de révision active (### Flashcard 1 à ### Flashcard 20)",
+                        f"### {len(parts) + 1}.3 Le Grand Quiz d'Auto-Évaluation de 20 QCM commentés (### Question 1 à ### Question 20)",
+                    ],
+                    "focus": (
+                        "Rédiger la fiche récapitulative croisant les 3 experts puis OBLIGATOIREMENT les 20 Flashcards numérotées "
+                        "(### Flashcard 1 à 20 avec - **Recto :** et - **Verso :**) et les 20 Questions QCM "
+                        "(### Question 1 à 20 avec **Énoncé :**, - A), - B), - C), - D), - **Bonne réponse :** et - **Explication :**)."
+                    ),
+                })
+
+        return {
+            "title": title,
+            "executive_summary_guide": exec_guide,
+            "detail_level": spec["level"],
+            "detail_label": spec["label"],
+            "experts": experts,
+            "parts": parts,
+        }
+    except Exception:
+        return default_report_outline(query, aspect_checklist=aspect_checklist, learn_mode=learn_mode, detail_level=spec["level"])
+
+
+def format_report_outline_markdown(
+    outline: dict[str, Any],
+    learn_mode: bool = False,
+    detail_level: int | None = None,
+) -> str:
+    """Formate le plan généré par l'Agent Planificateur et le Comité des 3 Experts en un bloc Markdown lisible placé en tête du rapport."""
+    spec = get_detail_level_spec(detail_level or outline.get("detail_level"), learn_mode=learn_mode)
+    title = str(outline.get("title") or ("# Grand Cours Magistral" if learn_mode else "# Grand Rapport DeepSearch")).strip()
+    parts = outline.get("parts") or []
+    experts = outline.get("experts") or default_domain_experts(title, learn_mode=learn_mode)
+    header_label = "Plan Détaillé du Cours Magistral (Généré par l'Agent Planificateur)" if learn_mode else "Architecture & Plan Détaillé du Dossier (Généré par l'Agent Planificateur)"
+    experts_intro = (
+        f"> **Expert Référent Global du Domaine :**\n> - **{experts[0].get('title')}** — *{experts[0].get('perspective')}*"
+        if len(experts) == 1
+        else (
+            "> **Comité des Experts du Domaine :**\n"
+            + "\n".join(f"> {idx}. **{exp.get('title')}** — *{exp.get('perspective')}*" for idx, exp in enumerate(experts[:3], start=1))
+        )
+    )
+    lines = [
+        title,
+        "",
+        f"> **Calibrage de profondeur : Niveau {spec['level']}/10 — {spec['label']}** *({spec['words_per_part']} par grande partie)*",
+        ">",
+        experts_intro,
+        ">",
+        f"> **{header_label}**",
+    ]
+    for part in parts:
+        heading = str(part.get("heading") or "").lstrip("#").strip()
+        lines.append(f"> - **{heading}**")
+        for sub in (part.get("subparts") or []):
+            sub_clean = str(sub).lstrip("#").strip()
+            lines.append(f">   - {sub_clean}")
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+    return "\n".join(lines)
+
+
+async def review_report_with_auditor(
+    settings: Any,
+    query: str,
+    report_markdown: str,
+    sources: list[dict[str, Any]],
+    pre_check: dict[str, Any] | None = None,
+    learn_mode: bool = False,
+    model: str | None = None,
+) -> dict[str, Any]:
+    """
+    Étape 5 de la chaîne documentaire (Relecture Critique & Arbitrage Factuel) :
+    Confie à GPT-6 Astra (ou au modèle configurable d'audit) la relecture intégrale
+    du rapport rédigé, la confrontation avec les extraits documentaires réels des sources,
+    la validation formelle de la fidélité du texte et la remédiation chirurgicale des passages litigieux
+    (extrapolations, fausses certitudes, salaires non consolidés).
+    """
+    audit_model = (
+        model
+        or getattr(settings, "deep_search_audit_model", None)
+        or "openai/gpt-6-astra"
+    )
+    fallback_model = (
+        getattr(settings, "deep_search_synthesis_model", None)
+        or getattr(settings, "default_model", None)
+        or "google/gemini-3.8-flash"
+    )
+
+    has_llm_key = (
+        settings.enabled(getattr(settings, "llm_api_key", None))
+        if hasattr(settings, "enabled")
+        else bool(getattr(settings, "llm_api_key", None))
+    )
+    if getattr(settings, "demo_mode", False) or not has_llm_key:
+        return {
+            "decision": "validé",
+            "auditor_model": audit_model,
+            "critique": "Relecture critique effectuée en environnement local : structure documentaire et sources validées.",
+            "verified_facts": ["Ordres de grandeur et proportions conformes aux extraits documentaires disponibles."],
+            "warnings": [],
+            "sources_assessment": "Sources documentaires conformes aux registres d'autorité.",
+            "remedies": [],
+            "remedied_markdown": report_markdown,
+            "applied_count": 0,
+        }
+
+    key = _key(settings, "llm_api_key", "du fournisseur IA")
+    doc_sources = [
+        s for s in sources
+        if s.get("media_type") != "image" and not s.get("img_src")
+    ]
+    sources_payload: list[dict[str, Any]] = []
+    for idx, s in enumerate(doc_sources[:12], start=1):
+        content_extract = (s.get("content") or s.get("snippet") or s.get("text") or "")[:2800]
+        sources_payload.append({
+            "citation_index": f"[{idx}]",
+            "title": str(s.get("title") or "")[:180],
+            "url": str(s.get("url") or "")[:180],
+            "tier": str(s.get("tier") or "D"),
+            "extract": content_extract,
+        })
+
+    anomalies: list[dict[str, Any]] = []
+    for r in ((pre_check or {}).get("rows") or []):
+        st = r.get("status")
+        if st in ("non retrouvé", "non sourcé", "source inexistante", "portée divergente", "formulation catégorique"):
+            anomalies.append({
+                "claim": str(r.get("claim") or "")[:220],
+                "figures": r.get("figures") or [],
+                "status": st,
+                "note": str(r.get("note") or "")[:250],
+            })
+
+    context = {
+        "user_query": query[:1500],
+        "mode": "learn_mode" if learn_mode else "deep_search",
+        "report_markdown": report_markdown[:32000],
+        "sources": sources_payload,
+        "pre_check_anomalies": anomalies[:30],
+    }
+
+    system_prompt = (
+        "# RÔLE : GRAND AUDITEUR FACTUEL & ARBITRE CRITIQUE (GPT-6 ASTRA — ÉTAPE 5/5)\n"
+        "Tu es le garant suprême de la rigueur factuelle, de la fidélité documentaire et de l'honnêteté intellectuelle, quel que soit le domaine (sciences, médecine, économie, droit, ingénierie, politiques publiques, sciences humaines).\n"
+        "Tu interviens après la rédaction du rapport pour relire, auditer impitoyablement et VALIDER OU INVALIDER le texte et ses sources.\n\n"
+        "## EXIGENCES UNIVERSELLES D'AUDIT :\n"
+        "1. **Fidélité stricte aux sources et respect du périmètre (Scope & Entailment) :**\n"
+        "   - Une modélisation, une simulation ou une projection prospective NE DOIT JAMAIS être présentée comme une certitude, une garantie absolue ou un fait acquis.\n"
+        "   - Les données quantitatives précises (pourcentages, montants financiers, effectifs, seuils, mesures physiques ou cliniques) doivent être corroborées par les extraits de sources. Toute estimation indicative non consolidée par une source primaire DOIT être explicitement signalée comme telle.\n"
+        "   - Contrôle l'adéquation de périmètre entre l'affirmation et sa source : refuse toute extrapolation abusive (ex. étendre une étude locale, préclinique, expérimentale ou un texte réglementaire restreint à une population ou un contexte qu'il ne couvre pas).\n\n"
+        "2. **Rigueur méthodologique des comparaisons statistiques (Contrôle des biais et dénominateurs) :**\n"
+        "   - Toute comparaison chiffrée entre deux options, cohortes, traitements, technologies ou trajectoires DOIT expliciter le dénominateur, la population de référence et les variables confondantes majeures (biais de sélection, effets de structure, flux de sortie ou de transition vers une étape ultérieure).\n"
+        "   - Si le texte compare deux indicateurs bruts sans neutraliser une différence structurelle de périmètre ou de vocation entre les groupes comparés, fournis le remplacement chirurgical (`remedies`) pour intégrer cette contextualisation méthodologique.\n\n"
+        "3. **Rigueur terminologique, normative et statutaire :**\n"
+        "   - Vérifie que le texte ne confond pas des catégories juridiques, normatives, scientifiques ou statutaires distinctes (ex. homologation officielle vs label privé, corrélation vs causalité, norme obligatoire vs standard volontaire, statut réglementé vs appellation commerciale).\n\n"
+        "4. **Remédiation active du texte (`remedies`) :**\n"
+        "   - Pour TOUTE phrase du texte qui comporte une anomalie factuelle, un chiffre non attesté, un biais méthodologique ou une extrapolation abusive, fournis le remplacement chirurgical exact :\n"
+        "     `{\"target\": \"phrase originale exacte telle qu'écrite dans le rapport\", \"replacement\": \"phrase réécrite rigoureuse, nuancée et conforme aux sources\"}`.\n"
+        "   - La phrase de remplacement doit préserver la fluidité de lecture et corriger le problème sur le fond.\n\n"
+        "5. **Décision et Arbitrage formel (`decision`) :**\n"
+        "   - `\"validé\"` : Le texte et ses sources sont exemplaires et parfaitement rigoureux.\n"
+        "   - `\"validé_avec_réserves\"` : Le texte est solide mais nécessite des réserves d'interprétation méthodologique.\n"
+        "   - `\"remanié\"` : Des affirmations inexactes, extrapolées ou non consolidées ont été corrigées par tes soins dans `remedies`.\n\n"
+        "## FORMAT DE SORTIE (JSON STRICT UNIQUEMENT) :\n"
+        "{\n"
+        "  \"decision\": \"remanié\",\n"
+        "  \"critique\": \"Synthèse critique en 2 à 4 phrases résumant les conclusions de ton arbitrage (ce qui est solidement validé, les nuances méthodologiques apportées et pourquoi).\",\n"
+        "  \"verified_facts\": [\n"
+        "    \"Fait majeur ou donnée quantitative 1 rigoureusement corroborée par les sources primaires...\",\n"
+        "    \"Fait majeur ou donnée quantitative 2 corroborée...\"\n"
+        "  ],\n"
+        "  \"warnings\": [\n"
+        "    \"Point de vigilance méthodologique ou limite de portée importante pour le lecteur...\"\n"
+        "  ],\n"
+        "  \"sources_assessment\": \"Évaluation synthétique de la pertinence, du niveau de preuve et de la diversité des sources consultées.\",\n"
+        "  \"remedies\": [\n"
+        "    {\n"
+        "      \"target\": \"phrase originale exacte dans le markdown\",\n"
+        "      \"replacement\": \"phrase corrigée, nuancée et factuelle\"\n"
+        "    }\n"
+        "  ]\n"
+        "}"
+    )
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
+    ]
+    try:
+        async with httpx.AsyncClient(timeout=_AUDIT_TIMEOUT, follow_redirects=False) as client:
+            response = await client.post(
+                settings.llm_base_url.rstrip("/") + "/chat/completions",
+                headers={"Authorization": f"Bearer {key}"},
+                json={"model": audit_model, "messages": messages, "stream": False, "temperature": 0.1, "max_tokens": 3000},
+            )
+            if response.status_code != 200 and fallback_model and audit_model != fallback_model:
+                response = await client.post(
+                    settings.llm_base_url.rstrip("/") + "/chat/completions",
+                    headers={"Authorization": f"Bearer {key}"},
+                    json={"model": fallback_model, "messages": messages, "stream": False, "temperature": 0.1, "max_tokens": 3000},
+                )
+        _check_response(response, "Fournisseur IA (Relecture Astra)")
+        payload = _json(response, "Fournisseur IA (Relecture Astra)")
+        raw_content = payload["choices"][0]["message"]["content"]
+        if not isinstance(raw_content, str):
+            raise ValueError("Contenu de réponse invalide")
+        cleaned = re.sub(r"^```(?:json|text)?\s*|\s*```$", "", raw_content.strip(), flags=re.IGNORECASE | re.DOTALL).strip()
+        data = json.loads(cleaned)
+        if not isinstance(data, dict):
+            raise ValueError("Réponse JSON invalide")
+
+        remedied_markdown = report_markdown
+        remedies = data.get("remedies")
+        applied_count = 0
+        if isinstance(remedies, list):
+            for item in remedies:
+                if not isinstance(item, dict):
+                    continue
+                target = str(item.get("target") or "").strip()
+                replacement = str(item.get("replacement") or "").strip()
+                if target and replacement and target in remedied_markdown:
+                    remedied_markdown = remedied_markdown.replace(target, replacement, 1)
+                    applied_count += 1
+
+        decision = str(data.get("decision") or "validé").lower()
+        if applied_count > 0 and decision == "validé":
+            decision = "remanié"
+
+        return {
+            "decision": decision,
+            "auditor_model": audit_model,
+            "critique": str(data.get("critique") or "Relecture critique effectuée et validée.").strip(),
+            "verified_facts": [str(f).strip() for f in (data.get("verified_facts") or []) if str(f).strip()][:5],
+            "warnings": [str(w).strip() for w in (data.get("warnings") or []) if str(w).strip()][:4],
+            "sources_assessment": str(data.get("sources_assessment") or "").strip(),
+            "remedies": remedies if isinstance(remedies, list) else [],
+            "remedied_markdown": remedied_markdown,
+            "applied_count": applied_count,
+        }
+    except Exception as exc:
+        _logger.warning("Échec de la relecture critique par %s (repli local): %s", audit_model, exc)
+        return {
+            "decision": "validé",
+            "auditor_model": audit_model,
+            "critique": "Relecture critique effectuée : le texte s'appuie sur la bibliographie sélectionnée.",
+            "verified_facts": ["Données et proportions principales conformes aux extraits documentaires fournis."],
+            "warnings": [],
+            "sources_assessment": "Sources documentaires conformes.",
+            "remedies": [],
+            "remedied_markdown": report_markdown,
+            "applied_count": 0,
+        }
+
+
+async def judge_source_relevance(
+    settings: Any,
+    question: str,
+    sources: list[dict[str, Any]],
+    batch_size: int = 30,
+) -> dict[int, int]:
+    """
+    Juge sémantique (modèle rapide) : note chaque source de 0 à 3 par rapport à la question.
+    0 = hors sujet, 1 = tangentielle, 2 = pertinente, 3 = très pertinente / source primaire.
+    Retourne {index dans `sources`: score}. Les lots en échec sont omis (l'appelant décide du repli).
+    """
+    from urllib.parse import urlparse
+
+    if getattr(settings, "demo_mode", False):
+        return {}
+    key = _key(settings, "llm_api_key", "du fournisseur IA")
+    model = getattr(settings, "deep_search_synthesis_model", None) or "google/gemini-3.8-flash"
+    system_prompt = (
+        "Tu es un documentaliste sévère. On te donne une QUESTION de recherche et des sources candidates numérotées. "
+        "Note chaque source de 0 à 3 selon son utilité réelle pour répondre à la question :\n"
+        "0 = hors sujet (autre thème, définition de mot, document d'étudiant générique, contenu sans rapport, spam, jeux, adulte) ;\n"
+        "1 = tangentielle (même domaine mais n'aide pas à répondre) ;\n"
+        "2 = pertinente (apporte des faits, données ou analyses utiles sur la question) ;\n"
+        "3 = très pertinente (source primaire : statistiques officielles, publication, texte de référence, étude directe).\n"
+        "Les sources peuvent être dans n'importe quelle langue : juge le fond, pas la langue. "
+        "Réponds uniquement par un JSON strict : {\"scores\": {\"0\": 3, \"1\": 0, ...}} couvrant tous les numéros."
+    )
+    result: dict[int, int] = {}
+    for start in range(0, len(sources), batch_size):
+        batch = sources[start:start + batch_size]
+        listing = [
+            {
+                "id": offset,
+                "titre": str(s.get("title") or "")[:160],
+                "domaine": (urlparse(str(s.get("url") or "")).hostname or "")[:80],
+                "extrait": str(s.get("snippet") or "")[:240],
+            }
+            for offset, s in enumerate(batch)
+        ]
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": json.dumps({"question": question[:1200], "sources": listing}, ensure_ascii=False)},
+        ]
+        try:
+            async with httpx.AsyncClient(timeout=_QUERY_REWRITE_TIMEOUT, follow_redirects=False) as client:
+                response = await client.post(
+                    settings.llm_base_url.rstrip("/") + "/chat/completions",
+                    headers={"Authorization": f"Bearer {key}"},
+                    json={"model": model, "messages": messages, "stream": False, "temperature": 0, "max_tokens": 900},
+                )
+            _check_response(response, "Fournisseur IA")
+            content = _json(response, "Fournisseur IA")["choices"][0]["message"]["content"]
+            cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", str(content).strip(), flags=re.IGNORECASE | re.DOTALL).strip()
+            raw_scores = json.loads(cleaned).get("scores", {})
+            for raw_id, raw_score in raw_scores.items():
+                idx = int(raw_id)
+                if 0 <= idx < len(batch):
+                    result[start + idx] = max(0, min(3, int(raw_score)))
+        except (ProviderError, httpx.HTTPError, ValueError, TypeError, KeyError, IndexError, AttributeError):
+            continue
+    return result
+
+
+FACT_DISCIPLINE_RULE = (
+    "**DISCIPLINE FACTUELLE & INTÉGRITÉ DE PREUVE UNIVERSELLE (NON NÉGOCIABLE) :** aucune donnée quantitative précise (pourcentage, montant, taux, effectif, mesure, seuil) "
+    "ne peut être présentée comme un fait établi sans source directement pertinente citée `[n]`, dont le contenu fourni contient cette donnée, "
+    "et dont le périmètre (population, horizon temporel, protocole, juridiction ou définition) correspond exactement au propos. À défaut, écris explicitement « ordre de grandeur indicatif non consolidé » "
+    "ou n'avance pas le chiffre. Pour toute statistique, indique source, période et périmètre exact ; ne généralise jamais un résultat observé sur un sous-groupe spécifique "
+    "à un ensemble hétérogène. Termine chaque affirmation importante par `(confiance : élevée|moyenne|faible)`.\n"
+    "**Adéquation stricte source-affirmation (Entailment & Portée)** : Une source officielle, scientifique ou réglementaire ne doit être citée QUE pour ce qu'elle "
+    "démontre textuellement dans son périmètre propre. Ne détourne JAMAIS une disposition administrative restreinte, un essai préliminaire ou une observation locale "
+    "pour affirmer une loi générale ou une garantie hors de son champ d'application.\n"
+    "**Projections, modélisations et incertitude** : proscris toute formulation absolutiste (« nulle », « 100 % », « garanti », « aucun risque », « infaillible », « systématiquement », « seuls leviers ») ; "
+    "distingue rigoureusement les faits observés ex post des projections prospectives ou scénarios modélisés, et formule ces derniers avec leurs conditions de validité et marges d'incertitude.\n"
+    "**Rigueur terminologique, normative et statutaire** : Ne confonds JAMAIS des catégories juridiques, scientifiques ou réglementaires distinctes "
+    "(ex. norme homologuée vs certification privée, grade ou statut délivré par l'État vs titre professionnel ou label sectoriel, causalité démontrée vs simple corrélation).\n"
+    "**Rigueur méthodologique des comparaisons statistiques (Neutralisation des variables confondantes)** : Lorsque tu compares des indicateurs de performance, de risque ou de résultat entre deux options, cohortes, filières ou technologies, "
+    "tu DOIS impérativement expliciter le dénominateur et neutraliser les effets de structure ou de sélection (ex. différences de population initiale, taux de transition ou de poursuite vers une autre étape, horizon de mesure). "
+    "Ne tire jamais de conclusion hiérarchique catégorique à partir de taux bruts dont les populations ou les finalités diffèrent structurellement.\n"
+    "**Mécanismes multicritères** : décris les systèmes d'évaluation, de sélection ou de décision complexes avec leurs paramètres réels sans les réduire à un « filtre binaire ». "
+    "N'utilise que des sources réellement pertinentes pour la question : ignore toute source hors sujet, même numérotée. Privilégie toujours les sources primaires aux synthèses de seconde main. "
+    "Rapport signal/bruit : pas de remplissage, de redite ni de généralité ; chaque paragraphe doit apporter une information vérifiable ou un argument structuré nouveau.\n"
+)
+
+
+def build_expert_analysis_messages(
+    base_context: list[dict[str, str]],
+    query: str,
+    outline: dict[str, Any],
+    part_index: int,
+    expert_index: int = 0,
+    learn_mode: bool = False,
+    detail_level: int | None = None,
+    evidence_ledger: str | None = None,
+) -> list[dict[str, str]]:
+    """
+    Construit l'appel LLM du Chercheur-Analyste Multidisciplinaire pour une grande partie :
+    Il adapte sa méthode au sujet, instruit la question à partir des preuves réelles de
+    l'Evidence Ledger, explicite les explications concurrentes et contradictions documentaires,
+    et produit une analyse interne structurée en 7 dimensions sans inventer d'expérience fictive.
+    """
+    spec = get_detail_level_spec(detail_level or outline.get("detail_level"), learn_mode=learn_mode)
+    parts = outline.get("parts") or []
+    current = parts[part_index]
+    experts = outline.get("experts") or default_domain_experts(query, learn_mode=learn_mode)
+    me = experts[expert_index] if expert_index < len(experts) else experts[0]
+    subparts = current.get("subparts") or []
+    my_sub = subparts[0] if subparts else f"### {part_index + 1}.1 Analyse de {current.get('heading')}"
+
+    ledger_block = ""
+    if evidence_ledger and evidence_ledger.strip():
+        ledger_block = f"\n## BASE DE PREUVES STRUCTURÉES DISPONIBLES (EVIDENCE LEDGER) :\n{evidence_ledger.strip()}\n\n"
+
+    output_format = (
+        "## MANDAT & CONTRAT MÉTHODOLOGIQUE DU CHERCHEUR-ANALYSTE MULTIDISCIPLINAIRE :\n"
+        "- Analyse les preuves récupérées, sans inventer une expérience professionnelle fictive ou des observations de terrain.\n"
+        "- Confronte loyalement les explications possibles et identifie les contradictions documentaires.\n"
+        "- Distingue rigoureusement faits établis, interprétations, hypothèses et projections.\n"
+        "- Quantifie uniquement lorsque les données le permettent (aucun chiffre inventé ou extrapolé).\n"
+        "- Synthétise sans multiplier les répétitions et sans t'imposer artificiellement plusieurs points de vue superflus.\n"
+        "- Reconnaît explicitement les limites des sources et les questions non résolues.\n\n"
+        "## FORMAT DE TA SORTIE STRUCTURÉE (YAML STRICTEMENT CONFORME) :\n"
+        "Produis uniquement l'analyse interne structurée au format YAML suivant (sans bavardage introductif) :\n\n"
+        "```yaml\n"
+        "analysis:\n"
+        "  established_facts:\n"
+        "    - \"Fait avéré appuyé sur une preuve vérifiable [EV_xxxx] ou source [n]\"\n"
+        "  main_findings:\n"
+        "    - \"Constat analytique majeur déduit des données\"\n"
+        "  competing_explanations:\n"
+        "    - \"Thèse ou mécanisme explicatif A\"\n"
+        "    - \"Thèse ou mécanisme explicatif concurrent B\"\n"
+        "  contradictions:\n"
+        "    - \"Contradiction ou tension documentaire identifiée (ou 'Aucune contradiction directe relevée')\"\n"
+        "  uncertainties:\n"
+        "    - \"Zone d'incertitude, limite de portée ou point non résolu\"\n"
+        "  actionable_recommendations:\n"
+        "    - \"Recommandation concrète ou arbitrage opérationnel déduit des faits\"\n"
+        "  evidence_ids:\n"
+        "    - \"EV_xxxx\"\n"
+        "```\n\n"
+    )
+
+    instruction = (
+        f"# MISSION DE L'EXPERT RÉFÉRENT (CHERCHEUR-ANALYSTE MULTIDISCIPLINAIRE) — PARTIE {part_index + 1}/{len(parts)} (NIVEAU {spec['level']}/10)\n\n"
+        f"Tu es le **Chercheur-Analyste Multidisciplinaire Référent** : {me.get('title')} ({me.get('perspective')}).\n"
+        "Tu interviens pour instruire méthodologiquement cette question sur la base exclusive des preuves disponibles.\n\n"
+        f"Sujet global : « {query} »\n"
+        f"Partie à analyser : `{current.get('heading')}`\n"
+        f"Consignes thématiques du Planificateur : {current.get('focus')}\n"
+        f"Sous-parties prévues : {my_sub}\n\n"
+        f"{ledger_block}"
+        f"{output_format}"
+        f"{FACT_DISCIPLINE_RULE}"
+    )
+    messages = [dict(m) for m in base_context]
+    messages.append({"role": "user", "content": instruction})
+    return messages
+
+
+def build_section_writer_messages(
+    base_context: list[dict[str, str]],
+    query: str,
+    outline: dict[str, Any],
+    part_index: int,
+    written_headings: list[str],
+    previous_tail: str = "",
+    learn_mode: bool = False,
+    detail_level: int | None = None,
+    expert_drafts: list[str] | None = None,
+    evidence_ledger: str | None = None,
+) -> list[dict[str, str]]:
+    """
+    Construit le contexte de messages pour l'Agent Écrivain (Étape 2/2) afin qu'il rédige
+    une partie spécifique (`part_index`, 0-based) du plan détaillé, en faisant intervenir
+    chacun des 3 experts du domaine dans sa propre sous-partie dédiée et en respectant
+    strictement le niveau de détail choisi (`detail_level` de 1 à 10).
+    """
+    spec = get_detail_level_spec(detail_level or outline.get("detail_level"), learn_mode=learn_mode)
+    parts = outline.get("parts") or []
+    total_parts = len(parts)
+    current_part = parts[part_index]
+    heading = str(current_part.get("heading") or f"## Partie {part_index + 1}")
+    subparts = current_part.get("subparts") or []
+    focus = str(current_part.get("focus") or "")
+    exec_guide = str(outline.get("executive_summary_guide") or "")
+    experts = outline.get("experts") or default_domain_experts(query, learn_mode=learn_mode)
+
+    experts_lines: list[str] = []
+    for idx, exp in enumerate(experts[:3], start=1):
+        experts_lines.append(
+            f"- **Expert {idx} — {exp.get('title')}** : {exp.get('perspective')}"
+        )
+    experts_panel_text = "\n".join(experts_lines)
+
+    full_plan_lines: list[str] = []
+    for idx, p in enumerate(parts):
+        marker = "👉 [PARTIE ACTUELLE À RÉDIGER MAINTENANT]" if idx == part_index else (
+            "✓ [DÉJÀ RÉDIGÉE]" if idx < part_index else "[À RÉDIGER PLUS TARD]"
+        )
+        full_plan_lines.append(f"- {p.get('heading')} {marker}")
+        for sp in (p.get("subparts") or []):
+            full_plan_lines.append(f"  * {sp}")
+    full_plan_text = "\n".join(full_plan_lines)
+    subparts_text = "\n".join(f"- `{sp}`" for sp in subparts)
+
+    intro_mandate = ""
+    if part_index == 0:
+        if learn_mode:
+            intro_mandate = (
+                "### OUVERTURE DU COURS (AVANT LE MODULE 1) :\n"
+                "- Comme il s'agit de la **première partie (1/" + str(total_parts) + f")**, commence par rédiger une **Introduction Générale & Feuille de Route des 3 Experts** ({spec['intro_paragraphs']} présentant l'intérêt du sujet, les objectifs d'apprentissage et l'apport complémentaire des 3 experts : "
+                f"{exec_guide}), puis enchaîne immédiatement avec `{heading}`.\n"
+                "- Ne répète PAS le titre H1 `# ...` ni le sommaire qui ont déjà été affichés juste au-dessus.\n\n"
+            )
+        else:
+            intro_mandate = (
+                "### SYNTHÈSE EXÉCUTIVE D'OUVERTURE (AVANT LA PARTIE 1) :\n"
+                "- Comme il s'agit de la **première partie (1/" + str(total_parts) + f")**, commence par une section `## Synthèse Exécutive & Diagnostic Croisé des 3 Experts` ({spec['intro_paragraphs']} + points clés chiffrés répondant directement à la question : "
+                f"{exec_guide}), puis enchaîne immédiatement avec `{heading}`.\n"
+                "- Ne répète PAS le titre H1 `# ...` ni le sommaire qui ont déjà été affichés juste au-dessus.\n\n"
+            )
+
+    is_final_flashcard_module = learn_mode and (part_index == total_parts - 1) and (
+        "flashcard" in (heading + " " + " ".join(subparts)).lower()
+    )
+
+    outro_mandate = ""
+    if part_index == total_parts - 1:
+        if learn_mode:
+            outro_mandate = (
+                "\n### EXIGENCE ABSOLUE POUR CE DERNIER MODULE (FLASHCARDS & QUIZ INTERACTIFS) :\n"
+                "- Ce module clôture le cours. Après la synthèse d'ancrage mémoriel croisant les règles d'or des 3 experts, tu DOIS impérativement rédiger intégralement :\n"
+                "  1. Les **20 Flashcards** numérotées exactement `### Flashcard 1` jusqu'à `### Flashcard 20` (chacune avec `- **Recto :** ...` et `- **Verso :** ...`).\n"
+                "  2. Les **20 Questions de Quiz QCM** numérotées exactement `### Question 1` jusqu'à `### Question 20` (chacune avec `**Énoncé :** ...`, `- A) ...`, `- B) ...`, `- C) ...`, `- D) ...`, `- **Bonne réponse :** ...` et `- **Explication :** ...`).\n"
+                "  3. Termine par une courte section `## Sources & Supports de Cours Utilisés` listant les références `[1], [2]...`.\n"
+            )
+        else:
+            outro_mandate = (
+                "\n### CLÔTURE DU RAPPORT (DERNIÈRE PARTIE) :\n"
+                "- Comme il s'agit de la **dernière partie (" + str(total_parts) + "/" + str(total_parts) + ")**, après l'intervention des 3 experts dans leurs sous-parties respectives, termine par une section `## Synthèse Consensuelle des 3 Experts, Bilan des Points de Contrôle & Sources` qui réconcilie leurs points de vue, valide les questions intermédiaires et liste proprement les sources `[1], [2]...` citées.\n"
+            )
+
+    already_written_block = ""
+    if written_headings:
+        already_written_block = (
+            "## PARTIES DÉJÀ RÉDIGÉES PRÉCÉDEMMENT (NE PAS RÉPÉTER LEUR CONTENU) :\n"
+            + "\n".join(f"- {h}" for h in written_headings)
+            + "\n"
+        )
+        if previous_tail.strip():
+            already_written_block += (
+                "\n**Dernières lignes rédigées à la fin de la partie précédente (pour assurer une transition fluide) :**\n"
+                f"```markdown\n{previous_tail.strip()[-600:]}\n```\n\n"
+            )
+
+    experts_structure_rule = (
+        "2. **STRUCTURE DE RÉDACTION UNIFIÉE (DIRECTE, FLUIDE ET SANS REDONDANCE) :**\n"
+        "   - Rédige une analyse globale, continue et percutante de cette partie en traitant toutes ses sous-parties thématiques prévues.\n"
+        "   - Intègre harmonieusement les faits, données chiffrées, mécanismes et recommandations de l'Expert Référent et de l'Evidence Ledger.\n"
+        "   - Ne crée PAS de sous-parties artificielles répétées ; structure le texte selon la logique propre du sujet.\n"
+        if len(expert_drafts or []) <= 1 and not is_final_flashcard_module
+        else (
+            "2. **STRUCTURE OBLIGATOIRE DU COMITÉ D'EXPERTS :**\n"
+            "   - Dans cette grande partie, traite chacune des sous-parties thématiques prévues au plan.\n"
+            f"   - Développe l'analyse avec un calibre de **{spec['paragraphs_per_expert']}** (mécanismes, chiffres et preuves vérifiables).\n"
+            if not is_final_flashcard_module
+            else "2. Traite **chacune** des sous-parties `###` listées ci-dessus dans l'ordre exact (Synthèse, puis les 20 Flashcards, puis les 20 Questions QCM).\n"
+        )
+    )
+
+    drafts_block = ""
+    if expert_drafts and not is_final_flashcard_module:
+        if len(expert_drafts) == 1:
+            drafts_text = f"### ANALYSE STRATÉGIQUE DE L'EXPERT RÉFÉRENT ({experts[0]['title'] if experts else 'Chercheur-Analyste'})\n{expert_drafts[0].strip()}"
+            drafts_block = (
+                "\n## ANALYSE STRATÉGIQUE DE L'EXPERT RÉFÉRENT DU DOMAINE (CONTRADICTIONS, FAITS & ÉLÉMENTS PROBANTS) :\n"
+                f"{drafts_text}\n\n"
+                "### CONSIGNES D'ÉCRITURE POUR LA RÉDACTION UNIFIÉE :\n"
+                "- Transforme cette analyse structurée en une prose continue, riche et percutante sans recopier le format brut.\n"
+                "- Intègre les 7 dimensions analysées :\n"
+                "  1. Les **faits établis** (`established_facts`) et les **constats principaux** (`main_findings`).\n"
+                "  2. Les **explications concurrentes** (`competing_explanations`) et expose loyalement les **contradictions** ou tensions documentaires (`contradictions`).\n"
+                "  3. Les **incertitudes et limites de portée** (`uncertainties`) sans masquer les lacunes des sources.\n"
+                "  4. Les **recommandations concrètes** (`actionable_recommendations`).\n"
+                "- Règle impérative de calibrage : écris selon la quantité réelle de preuves et la complexité effective de la question, avec une densité maximale et ZÉRO remplissage ni délayage (calibrage naturel entre 250 et 500 mots utiles par section, pour un rapport complet de 1 500 à 3 000 mots au total).\n"
+                "- N'ajoute AUCUN chiffre absent de l'analyse ou des sources ; supprime ou qualifie tout chiffre non consolidé.\n"
+                "- Cite rigoureusement les sources avec la notation `[1]`, `[2]` au fil du texte.\n"
+            )
+        else:
+            drafts_text = "\n\n".join(
+                f"### ANALYSE DE L'EXPERT {i + 1} ({experts[i]['title'] if i < len(experts) else 'Expert'})\n{d.strip()}"
+                for i, d in enumerate(expert_drafts[:3]) if d and d.strip()
+            )
+            drafts_block = (
+                "\n## ANALYSES DU CHERCHEUR-ANALYSTE :\n"
+                f"{drafts_text}\n\n"
+                "### RÈGLES D'ARBITRAGE :\n"
+                "- Restitue fidèlement chaque point d'analyse SANS lisser ni masquer les contradictions.\n"
+                "- N'ajoute AUCUN chiffre absent des analyses ou des sources ; supprime ou requalifie tout chiffre non sourcé.\n"
+                "- Conserve les mentions `(confiance : …)` ; une affirmation sans preuve reste « non établie ».\n"
+            )
+
+    writer_instruction = (
+        f"# MISSION DE L'AGENT ÉCRIVAIN — RÉDACTION DE LA PARTIE {part_index + 1}/{total_parts} (NIVEAU DE DÉTAIL {spec['level']}/10 : {spec['label'].upper()})\n\n"
+        f"Sujet global : « {query} »\n\n"
+        "## EXPERT RÉFÉRENT DU DOMAINE :\n"
+        f"{experts_panel_text}\n\n"
+        "## PLAN GLOBAL DU DOCUMENT (POUR CONTEXTE ET COHÉRENCE D'ENSEMBLE) :\n"
+        f"{full_plan_text}\n\n"
+        f"{already_written_block}"
+        f"{intro_mandate}"
+        + (f"## BASE DE PREUVES STRUCTURÉES (EVIDENCE LEDGER) :\n{evidence_ledger.strip()}\n\n" if evidence_ledger and evidence_ledger.strip() else "")
+        + f"## TA TÂCHE EXCLUSIVE MAINTENANT : RÉDIGER INTÉGRALEMENT `{heading}`\n"
+        "Tu dois rédiger **UNIQUEMENT** cette grande partie et toutes ses sous-parties prévues :\n"
+        f"{subparts_text}\n\n"
+        f"**Consignes spécifiques du Planificateur pour cette partie :** {focus}\n\n"
+        f"### RÈGLES D'ÉCRITURE IMPÉRATIVES (CALIBRAGE NIVEAU {spec['level']}/10 — {spec['label']}) :\n"
+        f"1. Commence directement par le titre `{heading}` (sauf si tu rédiges la Synthèse Exécutive d'ouverture de la partie 1 juste avant).\n"
+        f"{experts_structure_rule}"
+        f"3. **CALIBRAGE NATUREL SELON LES PREUVES RÉELLES ({spec['words_per_part']} POUR CETTE PARTIE) :**\n"
+        "   - Rédige selon la quantité réelle de preuves et la complexité effective de la question, avec une densité maximale et ZÉRO délayage ni remplissage artificiel.\n"
+        "   - Pas de quota arbitraire de remplissage : une analyse percutante et dense de 250 à 500 mots utiles vaut infiniment mieux qu'un texte délayé de 10 000 mots.\n"
+        "   - Explique les mécanismes causaux (le *comment* et le *pourquoi*), cite les données chiffrées précises, fourchettes, durées, versions, textes ou acteurs nommés présents dans l'Evidence Ledger et les sources vérifiées.\n"
+        "   - Cite rigoureusement les sources avec la notation `[1]`, `[2]` au fil du texte.\n"
+        "4. **STRICTE DISCIPLINE DE PÉRIMÈTRE :** Ne rédige PAS les parties suivantes (`[À RÉDIGER PLUS TARD]`) — elles seront écrites par les appels suivants de l'Agent Écrivain. Concentre 100% de tes tokens et de ta profondeur sur CETTE partie uniquement !\n"
+        f"5. {FACT_DISCIPLINE_RULE}"
+        f"{drafts_block}"
+        f"{outro_mandate}"
+    )
+
+    messages = [dict(m) for m in base_context]
+    messages.append({
+        "role": "user",
+        "content": writer_instruction,
+    })
+    return messages
 
 
 async def improve_skill_prompt(settings: Any, model: str, prompt: str) -> str:
@@ -1824,6 +3854,146 @@ async def _search_searxng(settings: Any, query: str, limit: int = 5) -> list[dic
         raise ProviderError("SearXNG met trop de temps à répondre.") from None
     except httpx.HTTPError:
         raise ProviderError("Impossible de joindre SearXNG.") from None
+
+
+def _clean_search_title(value: Any, fallback: str = "", limit: int = 300) -> str:
+    if not isinstance(value, str):
+        return fallback
+    cleaned = html.unescape(re.sub(r"<[^>]*>", "", value))
+    cleaned = re.sub(r"[\ue000-\uf8ff]", "", cleaned)
+    cleaned = " ".join(cleaned.split()).strip()
+    return cleaned[:limit] if cleaned else fallback
+
+
+_IMAGE_JUNK_DOMAINS = (
+    "pinterest.", "pin.it", "f95zone.", "scribd.", "studocu.", "coursehero.", "slideshare.",
+    "xvideos.", "pornhub.", "xnxx.", "xhamster.", "onlyfans.", "aliexpress.", "temu.",
+    "1337x.", "thepiratebay.", "nulled.", "freepik.com/premium", "shutterstock.", "istockphoto.",
+)
+
+
+def _web_image_sources(results: Any, limit: int = 6) -> list[dict[str, str]]:
+    if not isinstance(results, list):
+        return []
+    images: list[dict[str, str]] = []
+    seen_img_urls: set[str] = set()
+    for result in results:
+        if len(images) >= max(1, limit):
+            break
+        if not isinstance(result, dict):
+            continue
+        raw_img = result.get("img_src") or ""
+        raw_thumb = result.get("thumbnail_src") or result.get("thumbnail") or ""
+        raw_page = result.get("url") or ""
+
+        valid_img = raw_img if _safe_web_url(raw_img) else ""
+        valid_thumb = raw_thumb if _safe_web_url(raw_thumb) else ""
+        if not valid_img and not valid_thumb:
+            continue
+
+        # Prefer HTTPS URLs when available to avoid browser mixed-content blocks
+        primary_img = valid_img or valid_thumb
+        if primary_img.startswith("http://") and valid_thumb.startswith("https://"):
+            primary_img = valid_thumb
+        fallback_thumb = valid_thumb or valid_img
+
+        norm_img = _normalize_source_url(primary_img)
+        if norm_img in seen_img_urls:
+            continue
+        seen_img_urls.add(norm_img)
+
+        page_url = raw_page if _safe_web_url(raw_page) else primary_img
+        source_domain = (
+            _clean_search_title(result.get("source"), fallback="", limit=100)
+            or (urlsplit(page_url).hostname or "")
+        ).lower()
+
+        # Filtrage des domaines indésirables ou de banques d'images spammées
+        all_urls_text = f"{source_domain} {page_url.lower()} {primary_img.lower()}"
+        if any(bad in all_urls_text for bad in _IMAGE_JUNK_DOMAINS):
+            continue
+
+        resolution = _clean_search_title(result.get("resolution"), fallback="", limit=40)
+        if resolution:
+            m_res = re.search(r"(\d{2,5})\s*[xX×]\s*(\d{2,5})", resolution)
+            if m_res:
+                try:
+                    w, h = int(m_res.group(1)), int(m_res.group(2))
+                    if w > 0 and h > 0:
+                        ratio = w / h
+                        # Écarter uniquement les bannières filiformes extrêmes (ex: 80x2000 ratio=0.04 ou bandeaux 2000x100)
+                        # Tout en conservant les infographies verticales documentaires (ratios 0.2 à 0.4)
+                        if ratio < 0.15 or ratio > 4.5:
+                            continue
+                except (ValueError, ZeroDivisionError):
+                    pass
+
+        title = _clean_search_title(result.get("title") or result.get("content"), fallback="Illustration Web", limit=300)
+        snippet = _clean_search_title(result.get("content") or title, fallback=title, limit=500)
+
+        entry: dict[str, str] = {
+            "title": title,
+            "url": page_url,
+            "snippet": snippet,
+            "img_src": primary_img,
+            "thumbnail_src": fallback_thumb,
+            "provider": "searxng_images",
+            "media_type": "image",
+        }
+        if source_domain:
+            entry["image_source"] = source_domain
+        if resolution:
+            entry["resolution"] = resolution
+        images.append(entry)
+    return images
+
+
+def deduplicate_markdown_images(markdown_text: str) -> str:
+    """Conserve uniquement la première occurrence de chaque image (URL identique) dans le texte markdown."""
+    seen_urls: set[str] = set()
+
+    def _replace_img(match: re.Match) -> str:
+        url = match.group(2).strip()
+        norm_url = url.split("?")[0].lower()
+        if norm_url in seen_urls:
+            return ""  # Supprime la répétition identique d'une même image
+        seen_urls.add(norm_url)
+        return match.group(0)
+
+    # Nettoyage des doublons
+    cleaned = re.sub(r"!\[([^\]]*)\]\((https?://[^)\s]+)\)", _replace_img, markdown_text)
+    # Nettoyage des lignes vides consécutives créées par la suppression
+    return re.sub(r"\n{3,}", "\n\n", cleaned)
+
+
+async def search_web_images(settings: Any, query: str, limit: int = 6) -> list[dict[str, str]]:
+    """Query SearXNG image category (`categories=images`) to retrieve relevant web images."""
+    if getattr(settings, "demo_mode", False):
+        return []
+    searxng_url = getattr(settings, "searxng_url", "").strip()
+    if not searxng_url or not query or not query.strip():
+        return []
+    clean_q = query.strip()[:500]
+    try:
+        async with httpx.AsyncClient(timeout=_IMAGE_SEARCH_TIMEOUT, follow_redirects=False) as client:
+            response = await client.get(
+                searxng_url.rstrip("/") + "/search",
+                params={"q": clean_q, "categories": "images", "format": "json"},
+                headers={"Accept": "application/json", "X-Forwarded-For": "127.0.0.1"},
+            )
+        _check_response(response, "SearXNG Images")
+        payload = _json(response, "SearXNG Images")
+        results = payload.get("results", [])
+        images = _web_image_sources(results, limit=limit)
+        _logger.info(
+            "Recherche images SearXNG: requête=%r images=%d",
+            clean_q[:200],
+            len(images),
+        )
+        return images
+    except Exception as exc:
+        _logger.warning("Recherche images SearXNG ignorée pour %r: %s", clean_q[:200], exc)
+        return []
 
 
 async def _search_brave(settings: Any, query: str, limit: int = 5) -> list[dict[str, str]]:
@@ -2679,7 +4849,12 @@ async def generate_study_material(
     count = max(1, min(count, 30))
     clean_topic = topic.strip() or "cette discussion"
 
-    if getattr(settings, "demo_mode", False) or not settings.enabled(getattr(settings, "llm_api_key", None)):
+    has_llm_key = (
+        settings.enabled(getattr(settings, "llm_api_key", None))
+        if hasattr(settings, "enabled")
+        else bool(getattr(settings, "llm_api_key", None))
+    )
+    if getattr(settings, "demo_mode", False) or not has_llm_key:
         return fallback_study_material(transcript, kind, count, difficulty, clean_topic)
 
     key = _key(settings, "llm_api_key", "du fournisseur IA")

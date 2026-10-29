@@ -77,19 +77,20 @@ def generate_chat_export_html(
         user_body_html, _ = markdown_to_html(user_content)
         asst_body_html, asst_toc = markdown_to_html(asst_content, asst_sources)
 
-        # Sommaire interne de la réponse si riche
+        # Sommaire interne de la réponse si riche (compacté aux grandes parties ## en export ciblé)
         toc_html = ""
-        if asst_toc:
+        compact_toc = [item for item in asst_toc if int(item.get("level", 3)) <= 2] or asst_toc[:8]
+        if compact_toc:
             toc_html = (
                 '<div class="chat-toc-box">'
                 '<div class="chat-toc-header">'
                 '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>'
-                '<span>Plan de la réponse</span>'
+                '<span>Plan synthétique de la réponse</span>'
                 '</div>'
                 '<nav class="chat-toc-nav">'
                 + "".join(
                     f'<a href="#{item["anchor"]}" class="chat-toc-link toc-level-{item["level"]}">{html.escape(item["text"])}</a>'
-                    for item in asst_toc
+                    for item in compact_toc
                 )
                 + '</nav></div>'
             )
@@ -224,22 +225,58 @@ def generate_chat_export_html(
         </section>
         """
 
-    # Section Sources bibliographiques
+    # Section Sources bibliographiques documentaires (dédoublonnées et séparées des illustrations)
+    seen_doc_urls: set[str] = set()
+    doc_sources: list[dict[str, Any]] = []
+    for s in active_sources:
+        if s.get("media_type") == "image" or s.get("img_src"):
+            continue
+        u = str(s.get("url") or "").strip().rstrip("/")
+        if u and u in seen_doc_urls:
+            continue
+        if u:
+            seen_doc_urls.add(u)
+        doc_sources.append(s)
+
+    seen_img_urls: set[str] = set()
+    img_sources: list[dict[str, Any]] = []
+    for s in active_sources:
+        if s.get("media_type") == "image" or s.get("img_src"):
+            u = str(s.get("img_src") or s.get("url") or "").strip()
+            if u and u in seen_img_urls:
+                continue
+            if u:
+                seen_img_urls.add(u)
+            img_sources.append(s)
+
+    sources_badge_parts = []
+    if doc_sources:
+        sources_badge_parts.append(f"✓ {len(doc_sources)} source{'s' if len(doc_sources) > 1 else ''} documentaire{'s' if len(doc_sources) > 1 else ''}")
+    if img_sources:
+        sources_badge_parts.append(f"{len(img_sources)} infographie{'s' if len(img_sources) > 1 else ''}")
+    sources_badge_html = f'<span class="hero-badge">{" · ".join(sources_badge_parts)}</span>' if sources_badge_parts else ""
+
     sources_html = ""
-    if active_sources:
+    if doc_sources:
         sources_cards = []
-        for idx, src in enumerate(active_sources, start=1):
+        for idx, src in enumerate(doc_sources, start=1):
             s_title = html.escape(src.get("title") or f"Source {idx}")
             s_url = html.escape(src.get("url") or "#")
             s_domain = html.escape(extract_domain(src.get("url") or ""))
             s_snippet = html.escape(src.get("snippet") or "")
             s_provider = html.escape(src.get("provider") or "web")
+            s_tier = html.escape(str(src.get("tier") or "").upper())
+            s_tier_badge = f'<span class="source-tier-chip tier-{s_tier.lower()}">Niveau {s_tier}</span>' if s_tier else ""
+            s_qscore = src.get("quality_score")
+            s_score_badge = f'<span class="source-score-chip" title="Indice de qualité et fiabilité documentaires">{s_qscore}/100</span>' if s_qscore is not None else ""
 
             sources_cards.append(
                 f'<article id="source-{idx}" class="source-card">'
                 f'<div class="source-card-top">'
                 f'<span class="source-index">#{idx}</span>'
                 f'<span class="source-domain">{s_domain}</span>'
+                f'{s_tier_badge}'
+                f'{s_score_badge}'
                 f'<span class="source-provider-badge">{s_provider}</span>'
                 f'</div>'
                 f'<h3 class="source-title">'
@@ -258,7 +295,7 @@ def generate_chat_export_html(
         <section id="bibliography-sources" class="report-sources-section">
           <div class="report-sources-header">
             <h2>
-              <span class="sources-icon">🌐</span> Sources et références bibliographiques ({len(active_sources)})
+              <span class="sources-icon">🌐</span> Sources et références bibliographiques ({len(doc_sources)})
             </h2>
             <p>Données et sources externes consultées et croisées lors de cet échange.</p>
           </div>
@@ -859,6 +896,54 @@ def generate_chat_export_html(
       background: var(--bg-surface-elevated);
       color: var(--text-muted);
     }}
+    .source-tier-chip {{
+      display: inline-flex;
+      align-items: center;
+      padding: 1px 7px;
+      border-radius: 999px;
+      font-size: 0.70rem;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      background: rgba(99, 102, 241, 0.15);
+      color: #a5b4fc;
+      border: 1px solid rgba(99, 102, 241, 0.3);
+    }}
+    .source-tier-chip.tier-a {{
+      background: rgba(16, 185, 129, 0.15);
+      color: #34d399;
+      border-color: rgba(16, 185, 129, 0.3);
+    }}
+    .source-tier-chip.tier-b {{
+      background: rgba(59, 130, 246, 0.15);
+      color: #60a5fa;
+      border-color: rgba(59, 130, 246, 0.3);
+    }}
+    .source-tier-chip.tier-c {{
+      background: rgba(168, 85, 247, 0.15);
+      color: #c084fc;
+      border-color: rgba(168, 85, 247, 0.3);
+    }}
+    .source-tier-chip.tier-d {{
+      background: rgba(148, 163, 184, 0.15);
+      color: #cbd5e1;
+      border-color: rgba(148, 163, 184, 0.3);
+    }}
+    .source-tier-chip.tier-e {{
+      background: rgba(245, 158, 11, 0.15);
+      color: #fbbf24;
+      border-color: rgba(245, 158, 11, 0.3);
+    }}
+    .source-score-chip {{
+      display: inline-flex;
+      align-items: center;
+      padding: 1px 6px;
+      border-radius: 999px;
+      font-size: 0.68rem;
+      font-weight: 600;
+      background: rgba(15, 23, 42, 0.6);
+      color: #94a3b8;
+      border: 1px solid rgba(148, 163, 184, 0.25);
+    }}
     .source-title {{
       font-size: 0.88rem;
       font-weight: 600;
@@ -996,9 +1081,25 @@ def generate_chat_export_html(
         font-size: 8.5pt !important;
       }}
       .report-table-wrapper {{
-        break-inside: avoid;
-        page-break-inside: avoid;
+        break-inside: auto !important;
+        page-break-inside: auto !important;
         border: 1px solid #cbd5e1 !important;
+        overflow: visible !important;
+        margin: 12px 0 !important;
+      }}
+      .report-table {{
+        width: 100% !important;
+        max-width: 100% !important;
+        table-layout: fixed !important;
+        font-size: 8pt !important;
+        line-height: 1.35 !important;
+        word-break: break-word !important;
+        overflow-wrap: break-word !important;
+      }}
+      .report-table th, .report-table td {{
+        padding: 5px 8px !important;
+        border: 1px solid #cbd5e1 !important;
+        vertical-align: top !important;
       }}
       .report-table th {{
         background: #f1f5f9 !important;
@@ -1032,6 +1133,10 @@ def generate_chat_export_html(
         <span>📋</span>
         <span>Copier</span>
       </button>
+      <a href="?download=1" class="topbar-btn" download title="Télécharger le fichier .html complet">
+        <span>📥</span>
+        <span>Télécharger .html</span>
+      </a>
       <button type="button" class="topbar-btn primary" onclick="printPdf()" title="Imprimer ou enregistrer au format Beau PDF d'édition (A4)">
         <span>📕</span>
         <span>Beau PDF</span>
@@ -1060,7 +1165,7 @@ def generate_chat_export_html(
     <header class="chat-export-hero">
       <div class="hero-badges-row">
         <span class="hero-badge highlight">{scope_badge}</span>
-        {f'<span class="hero-badge">✓ {len(active_sources)} sources</span>' if active_sources else ''}
+        {sources_badge_html}
         <span class="hero-badge">Édition cLAIr</span>
       </div>
 
@@ -1095,7 +1200,45 @@ def generate_chat_export_html(
     </footer>
   </main>
 
+  <!-- Lightbox plein écran pour agrandir les images et infographies -->
+  <div id="html-img-lightbox" onclick="if(event.target===this)closeImageLightbox()" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(2,6,23,0.92);backdrop-filter:blur(8px);padding:24px;overflow:auto;align-items:center;justify-content:center;flex-direction:column;">
+    <div style="position:sticky;top:0;display:flex;align-items:center;justify-content:space-between;width:min(1200px,96vw);padding:10px 16px;margin-bottom:14px;border-radius:12px;background:rgba(15,23,42,0.9);border:1px solid rgba(148,163,184,0.25);color:#f8fafc;">
+      <span id="html-img-lightbox-caption" style="font-size:0.95rem;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:70%;">Aperçu haute résolution</span>
+      <div style="display:flex;gap:10px;align-items:center;">
+        <a id="html-img-lightbox-link" href="#" target="_blank" rel="noopener noreferrer" style="padding:6px 12px;border-radius:8px;background:rgba(99,102,241,0.2);color:#a5b4fc;text-decoration:none;font-size:0.84rem;font-weight:600;">↗ Ouvrir l'original</a>
+        <button type="button" onclick="closeImageLightbox()" style="padding:6px 12px;border-radius:8px;border:1px solid rgba(148,163,184,0.3);background:rgba(30,41,59,0.9);color:#f8fafc;cursor:pointer;font-size:0.84rem;font-weight:600;">✕ Fermer (Échap)</button>
+      </div>
+    </div>
+    <div style="max-width:min(1200px,96vw);text-align:center;">
+      <img id="html-img-lightbox-img" src="" alt="" style="max-width:100%;height:auto;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,0.65);background:#0f172a;" />
+    </div>
+  </div>
+
   <script>
+    function openImageLightbox(url, caption) {{
+      const modal = document.getElementById('html-img-lightbox');
+      const img = document.getElementById('html-img-lightbox-img');
+      const cap = document.getElementById('html-img-lightbox-caption');
+      const link = document.getElementById('html-img-lightbox-link');
+      if (!modal || !img) return;
+      img.src = url;
+      img.alt = caption || '';
+      if (cap) cap.textContent = caption || 'Aperçu plein écran';
+      if (link) link.href = url;
+      modal.style.display = 'flex';
+      document.body.style.overflow = 'hidden';
+    }}
+
+    function closeImageLightbox() {{
+      const modal = document.getElementById('html-img-lightbox');
+      if (modal) modal.style.display = 'none';
+      document.body.style.overflow = '';
+    }}
+
+    document.addEventListener('keydown', (e) => {{
+      if (e.key === 'Escape') closeImageLightbox();
+    }});
+
     function printPdf() {{
       window.print();
     }}

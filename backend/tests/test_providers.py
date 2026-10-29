@@ -40,7 +40,7 @@ def settings():
         duckduckgo_enabled=False,
         search_query_model="mistralai/mistral-small-3.2-24b-instruct",
         web_search_decision_model="google/gemini-3.5-flash-lite",
-        deep_search_plan_model="anthropic/claude-fable-5.1",
+        deep_search_plan_model="google/gemini-4-argon",
         deep_search_synthesis_model="google/gemini-3.8-flash",
         searxng_url="",
         brave_api_key=SecretStr("fake-brave-secret"),
@@ -981,6 +981,19 @@ def test_parse_query_list_formatting_and_quotes():
         '"charge cognitive" Sweller 1988',
     ]
 
+    # 3. Thématique longue (> 300 caractères) non tronquée à 300 caractères et sans guillemets externes superflus
+    long_theme = (
+        '"Axe Périmètre & Contraintes — Décrire les prérequis concrets par filière convoitée : spécialités '
+        "de bac quasi obligatoires (mathématiques et physique-chimie pour ingénierie et santé, NSI pour "
+        "informatique, SES/HGGSP pour droit et sciences politiques), coûts de scolarité des écoles privées "
+        "vs université et CPGE, bourses du CROUS, contrats d'apprentissage rémunérés, mobilité en Europe (Suisse, Belgique).\""
+    )
+    parsed_long = providers._parse_query_list(json.dumps([long_theme]))
+    assert len(parsed_long) == 1
+    assert len(parsed_long[0]) > 350
+    assert parsed_long[0].endswith("(Suisse, Belgique)")
+    assert not parsed_long[0].startswith('"')
+
 
 def test_plan_deep_search_queries_uses_powerful_model_and_falls_back(settings, transport):
     called_models = []
@@ -988,9 +1001,9 @@ def test_plan_deep_search_queries_uses_powerful_model_and_falls_back(settings, t
     def handler(request):
         payload = json.loads(request.content)
         called_models.append(payload["model"])
-        # First call uses anthropic/claude-fable-5.1; simulate a 404/503 to test fallback
+        # First call uses google/gemini-4-argon; simulate a 404/503 to test fallback
         if len(called_models) == 1:
-            assert payload["model"] == "anthropic/claude-fable-5.1"
+            assert payload["model"] == "google/gemini-4-argon"
             sys_content = payload["messages"][0]["content"]
             assert "# RÔLE & OBJECTIF" in sys_content
             assert "PHASE 1 : DÉCOMPOSITION & PLANIFICATION INITIALE" in sys_content
@@ -1000,6 +1013,9 @@ def test_plan_deep_search_queries_uses_powerful_model_and_falls_back(settings, t
             assert "Axe Technique & Causal" in sys_content
             assert "Axe Contradictoire" in sys_content
             assert "Axe Périmètre & Contraintes" in sys_content
+            assert "VISION PANORAMIQUE À 360°" in sys_content
+            assert "DIVERSITÉ DOCUMENTAIRE MULTI-ÉCOSYSTÈMES" in sys_content
+            assert "symétries inverses" in sys_content
             assert "Requête Factuelle / Directe" in sys_content
             assert "Requête Contradictoire / Critique" in sys_content
             assert "MÉTHODE DE DÉCOMPOSITION STRATÉGIQUE" in sys_content
@@ -1014,17 +1030,19 @@ def test_plan_deep_search_queries_uses_powerful_model_and_falls_back(settings, t
             return httpx.Response(503, json={"error": "Model temporarily unavailable"})
         # Second call falls back to fallback model
         assert payload["model"] == settings.search_query_model
-        return httpx.Response(200, json={"choices": [{"message": {"content": (
-            '["Architecture quantique 2026", "Quantum computing error correction benchmarks"]'
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(
+            [f"Thème quantique {i}" for i in range(1, 13)]
         )}}]})
 
     transport(handler)
     queries = asyncio.run(providers.plan_deep_search_queries(
         settings, "Quel avenir pour l'informatique quantique ?", "", [],
     ))
-    assert called_models == ["anthropic/claude-fable-5.1", settings.search_query_model]
-    assert len(queries) == 2
-    assert "Architecture quantique 2026" in queries
+    assert called_models == ["google/gemini-4-argon", settings.search_query_model]
+    # Vérifie qu'il n'y a plus de limite à 8 thèmes
+    assert len(queries) == 12
+    assert "Thème quantique 1" in queries
+    assert "Thème quantique 12" in queries
 
 
 
@@ -1072,7 +1090,7 @@ def test_chat_stream_raises_max_tokens_in_code_canvas_mode(settings, transport):
 def test_chat_stream_raises_max_tokens_in_deep_search_mode(settings, transport):
     def handler(request):
         payload = json.loads(request.content)
-        assert payload["max_tokens"] == 12288
+        assert payload["max_tokens"] == 24576
         return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=Chunks(
             b'data: {"choices":[{"delta":{"content":"# Grand Rapport DeepSearch\\n\\n## 1. Introduction\\n"},"finish_reason":"stop"}]}\n\n',
             b'data: [DONE]\n\n',
@@ -1211,4 +1229,158 @@ def test_decide_web_search_demo_mode_uses_heuristics():
     assert search_needed is False
 
 
+def test_search_web_images_queries_searxng_images_category(settings, transport):
+    settings.searxng_url = "https://searx.example.org"
+    captured_params = {}
+
+    def handler(request):
+        assert request.url.path == "/search"
+        captured_params.update(dict(request.url.params))
+        return httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "title": "\ue000Château\ue001 de Chambord",
+                        "content": "Façade Renaissance",
+                        "url": "https://commons.wikimedia.org/wiki/Chambord",
+                        "img_src": "https://upload.wikimedia.org/chambord.jpg",
+                        "thumbnail_src": "https://thumb.wikimedia.org/chambord_thumb.jpg",
+                        "source": "wikimedia.org",
+                        "resolution": "1920x1080",
+                    },
+                    {
+                        "title": "Image HTTP avec miniature HTTPS",
+                        "url": "http://oldsite.example.org/page",
+                        "img_src": "http://oldsite.example.org/pic.jpg",
+                        "thumbnail_src": "https://ts4.mm.bing.net/th?id=OIP.123",
+                    },
+                ]
+            },
+        )
+
+    transport(handler)
+    images = asyncio.run(providers.search_web_images(settings, "Château de Chambord", limit=5))
+    assert captured_params.get("categories") == "images"
+    assert captured_params.get("format") == "json"
+    assert len(images) == 2
+    assert images[0]["title"] == "Château de Chambord"
+    assert images[0]["img_src"] == "https://upload.wikimedia.org/chambord.jpg"
+    assert images[0]["thumbnail_src"] == "https://thumb.wikimedia.org/chambord_thumb.jpg"
+    assert images[0]["media_type"] == "image"
+    assert images[0]["provider"] == "searxng_images"
+    # Second image prefers HTTPS thumbnail_src over HTTP img_src
+    assert images[1]["img_src"] == "https://ts4.mm.bing.net/th?id=OIP.123"
+
+
+def test_detail_level_spec_and_outline_scaling():
+    spec_min = providers.get_detail_level_spec(1, learn_mode=False)
+    assert spec_min["level"] == 1
+    assert spec_min["num_parts"] == 2
+    assert spec_min["max_iterations"] == 2
+
+    spec_max = providers.get_detail_level_spec(10, learn_mode=False)
+    assert spec_max["level"] == 10
+    assert spec_max["num_parts"] == 7
+    assert spec_max["max_iterations"] == 10
+
+    outline_short = providers.default_report_outline("Causes de la dette publique", learn_mode=False, detail_level=1)
+    assert len(outline_short["parts"]) == 2
+    assert len(outline_short["experts"]) == 1
+    assert outline_short["experts"][0]["id"] == "E1"
+
+    outline_ultra = providers.default_report_outline("Causes de la dette publique", learn_mode=False, detail_level=10)
+    assert len(outline_ultra["parts"]) == 7
+
+    # In Learn Mode, the final module is always the 20 Flashcards & 20 QCM module regardless of detail_level
+    learn_short = providers.default_report_outline("Apprendre Rust", learn_mode=True, detail_level=1)
+    assert len(learn_short["parts"]) == 2
+    assert "Flashcard" in learn_short["parts"][-1]["heading"]
+
+    learn_ultra = providers.default_report_outline("Apprendre Rust", learn_mode=True, detail_level=10)
+    assert len(learn_ultra["parts"]) == 7
+    assert "Flashcard" in learn_ultra["parts"][-1]["heading"]
+
+    msgs_short = providers.build_section_writer_messages(
+        base_context=[{"role": "system", "content": "sys"}],
+        query="Causes de la dette publique",
+        outline=outline_short,
+        part_index=0,
+        written_headings=[],
+        learn_mode=False,
+        detail_level=1,
+    )
+    assert "NIVEAU DE DÉTAIL 1/10" in msgs_short[-1]["content"]
+    assert "150 à 250 mots" in msgs_short[-1]["content"]
+
+    msgs_ultra = providers.build_section_writer_messages(
+        base_context=[{"role": "system", "content": "sys"}],
+        query="Causes de la dette publique",
+        outline=outline_ultra,
+        part_index=0,
+        written_headings=[],
+        learn_mode=False,
+        detail_level=10,
+    )
+    assert "NIVEAU DE DÉTAIL 10/10" in msgs_ultra[-1]["content"]
+    assert "450 à 700 mots" in msgs_ultra[-1]["content"]
+
+
+
+
+
+
+
+def test_judge_parses_scores_and_skips_failed_batches(settings, transport):
+    def handler(request):
+        payload = json.loads(request.content)
+        assert "documentaliste" in payload["messages"][0]["content"]
+        return httpx.Response(200, json={"choices": [{"message": {"content": '```json\n{"scores": {"0": 3, "1": 0, "7": 2}}\n```'}}]})
+
+    transport(handler)
+    scores = asyncio.run(providers.judge_source_relevance(settings, "q", [{"title": "Insertion", "url": "https://www.cereq.fr/i", "snippet": "x"}, {"title": "Scribd", "url": "https://scribd.com/d", "snippet": "y"}], batch_size=30))
+    assert scores == {0: 3, 1: 0}
+
+
+def test_review_report_with_auditor_demo_mode(settings):
+    settings.demo_mode = True
+    report = "Le salaire garanti de 75 000 € est systématique dès la sortie."
+    sources = [{"title": "DARES", "url": "https://dares.fr", "snippet": "Étude prospective"}]
+    res = asyncio.run(providers.review_report_with_auditor(settings, "quelles perspectives ?", report, sources))
+    assert res["decision"] == "validé"
+    assert res["remedied_markdown"] == report
+    assert res["applied_count"] == 0
+
+
+def test_review_report_with_auditor_applies_remedies_and_sets_remanie(settings, transport):
+    payload = {
+        "choices": [
+            {
+                "message": {
+                    "content": json.dumps({
+                        "decision": "remanié",
+                        "critique": "Les estimations de salaires ont été ramenées à des fourchettes indicatives non garanties.",
+                        "verified_facts": ["Projection DARES 2030 validée."],
+                        "warnings": ["Rémunération débutant dépendante de la spécialité."],
+                        "sources_assessment": "Source DARES de rang primaire.",
+                        "remedies": [
+                            {
+                                "target": "Le salaire garanti de 75 000 € est systématique dès la sortie.",
+                                "replacement": "Le salaire moyen indicatif est estimé autour de 45 000 € selon les spécialités.",
+                            }
+                        ],
+                    })
+                }
+            }
+        ]
+    }
+    transport(lambda req: httpx.Response(200, json=payload))
+    original = "Introduction.\nLe salaire garanti de 75 000 € est systématique dès la sortie.\nConclusion."
+    sources = [{"title": "DARES", "url": "https://dares.fr", "snippet": "Étude prospective"}]
+    res = asyncio.run(providers.review_report_with_auditor(settings, "perspectives", original, sources))
+    assert res["decision"] == "remanié"
+    assert res["applied_count"] == 1
+    assert "Le salaire garanti de 75 000 €" not in res["remedied_markdown"]
+    assert "Le salaire moyen indicatif est estimé" in res["remedied_markdown"]
+    assert len(res["verified_facts"]) == 1
 

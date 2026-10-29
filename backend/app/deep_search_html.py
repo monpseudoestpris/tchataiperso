@@ -101,14 +101,31 @@ def markdown_to_html(md_text: str, sources: list[dict[str, Any]] | None = None) 
         escaped = re.sub(r"\*([^*]+)\*", r"<em>\1</em>", escaped)
         escaped = re.sub(r"(?<!\w)_([^_]+)_(?!\w)", r"<em>\1</em>", escaped)
 
+        # Images ![alt](url) — grandes, centrées, pleine largeur (lisibles pour schémas et infographies) et cliquables en Lightbox
+        escaped = re.sub(
+            r'!\[([^\]]*)\]\((https?://[^)\s]+)\)',
+            r'<figure class="report-inline-figure" style="display:flex;flex-direction:column;align-items:center;margin:36px auto;max-width:100%;width:100%;">'
+            r'<div class="report-figure-img-wrap" style="display:block;max-width:min(900px,100%);width:100%;cursor:zoom-in;border-radius:14px;overflow:hidden;border:1px solid rgba(148,163,184,0.22);box-shadow:0 12px 32px rgba(15,23,42,0.28);text-align:center;background:transparent;">'
+            r'<img src="\2" alt="\1" loading="lazy" onclick="if(typeof openImageLightbox===\'function\')openImageLightbox(this.src, this.alt)" title="Cliquer pour afficher en haute résolution (Plein écran)" style="display:block;width:100%;max-width:100%;height:auto;margin:0 auto;border-radius:13px;" onerror="this.closest(\'.report-inline-figure\').style.display=\'none\'" />'
+            r'</div>'
+            r'<figcaption style="display:inline-flex;align-items:center;gap:10px;margin-top:12px;font-size:0.9rem;color:#94a3b8;font-style:italic;text-align:center;flex-wrap:wrap;justify-content:center;">'
+            r'<span>\1</span>'
+            r'<button type="button" onclick="if(typeof openImageLightbox===\'function\')openImageLightbox(\'\2\', \'\1\')" style="display:inline-flex;align-items:center;gap:4px;font-style:normal;font-size:0.75rem;font-weight:600;padding:3px 10px;border-radius:999px;background:rgba(99,102,241,0.18);color:#a5b4fc;border:1px solid rgba(99,102,241,0.35);cursor:pointer;">🔍 Plein écran</button>'
+            r'<a href="\2" target="_blank" rel="noopener noreferrer" style="display:inline-flex;align-items:center;gap:4px;font-style:normal;font-size:0.75rem;font-weight:500;padding:3px 10px;border-radius:999px;background:rgba(148,163,184,0.12);color:#cbd5e1;border:1px solid rgba(148,163,184,0.25);text-decoration:none;">↗ Ouvrir source</a>'
+            r'</figcaption>'
+            r'</figure>',
+            escaped,
+        )
+
         # Liens [texte](url)
         escaped = re.sub(
-            r'\[([^\]]+)\]\((https?://[^)]+)\)',
+            r'(?<!!)\[([^\]]+)\]\((https?://[^)]+)\)',
             r'<a href="\2" target="_blank" rel="noopener noreferrer" class="report-link">\1 <svg class="external-icon" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg></a>',
             escaped,
         )
 
-        # Citations de sources [1], [2], [1, 2], [1-3]
+        # Citations de sources [1], [2], [1, 2], [1-3] (sur sources documentaires uniquement)
+        doc_sources = [s for s in sources if s.get("media_type") != "image" and not s.get("img_src")]
         def replace_citations(match: re.Match) -> str:
             raw_nums = match.group(1)
             # Découper par virgule ou espace
@@ -125,8 +142,8 @@ def markdown_to_html(md_text: str, sources: list[dict[str, Any]] | None = None) 
                 if p.isdigit():
                     num = int(p)
                     source_title = ""
-                    if sources and 1 <= num <= len(sources):
-                        source_title = html.escape(sources[num - 1].get("title") or "")
+                    if doc_sources and 1 <= num <= len(doc_sources):
+                        source_title = html.escape(doc_sources[num - 1].get("title") or "")
                     tip = f' title="Source {num} : {source_title}"' if source_title else f' title="Voir source {num}"'
                     badges.append(f'<a href="#source-{num}" class="report-cite-chip"{tip}>[{num}]</a>')
                 else:
@@ -300,8 +317,25 @@ def generate_report_html(
 ) -> str:
     """Génère un document HTML complet, autonome et haut de gamme pour le rapport DeepSearch."""
     sources = sources or []
+    # Distinction stricte entre sources documentaires textuelles et illustrations web, avec déduplication stricte par URL canonique et par snippet
+    raw_doc_sources = [s for s in sources if s.get("media_type") != "image" and not s.get("img_src")]
+    doc_sources: list[dict[str, Any]] = []
+    seen_urls: set[str] = set()
+    seen_snippets: set[str] = set()
+    for s in raw_doc_sources:
+        u = str(s.get("url") or "").strip().rstrip("/")
+        snip = re.sub(r"\s+", " ", str(s.get("snippet") or "")).strip().lower()[:120]
+        if u and u in seen_urls:
+            continue
+        if snip and len(snip) > 20 and snip in seen_snippets:
+            continue
+        if u:
+            seen_urls.add(u)
+        if snip and len(snip) > 20:
+            seen_snippets.add(snip)
+        doc_sources.append(s)
     reading_time = estimate_reading_time_minutes(markdown_content)
-    body_html, toc = markdown_to_html(markdown_content, sources)
+    body_html, toc = markdown_to_html(markdown_content, doc_sources)
     clean_title = title.strip() or "Rapport d'analyse approfondie DeepSearch"
     clean_topic = topic.strip() or clean_title
 
@@ -324,30 +358,58 @@ def generate_report_html(
         toc_html_parts.append('</nav></div>')
     toc_html = "".join(toc_html_parts)
 
-    # Construction de la section des sources
+    # Détection des indices de sources citées dans le rapport Markdown
+    cited_nums: set[int] = set()
+    for m in re.finditer(r"\[(\d{1,3}(?:\s*[,;–-]\s*\d{1,3})*)\]", markdown_content):
+        for tok in re.split(r"[,;–-]", m.group(1)):
+            tok = tok.strip()
+            if tok.isdigit():
+                cited_nums.add(int(tok))
+
+    cited_sources = [
+        (idx, s) for idx, s in enumerate(doc_sources, start=1)
+        if idx in cited_nums
+    ]
+    uncited_sources = [
+        (idx, s) for idx, s in enumerate(doc_sources, start=1)
+        if idx not in cited_nums
+    ]
+
+    # Construction de la section des sources documentaires (hors images)
+    # RÈGLE D'OR P2 : Séparation claire entre Bibliographie citée dans l'analyse et Journal des sources explorées
     sources_html_parts = []
-    if sources:
+    if doc_sources:
+        primary_list = cited_sources if cited_sources else list(enumerate(doc_sources, start=1))
         sources_html_parts.append('<section id="bibliography-sources" class="report-sources-section">')
         sources_html_parts.append('<div class="report-sources-header">')
         sources_html_parts.append('<h2>')
-        sources_html_parts.append(f'<span class="sources-icon">🌐</span> Sources et références bibliographiques ({len(sources)})')
+        sources_html_parts.append(f'<span class="sources-icon">📚</span> Bibliographie effective citée dans l’analyse ({len(primary_list)})')
         sources_html_parts.append('</h2>')
-        sources_html_parts.append(f'<p>Toutes les affirmations factuelles du rapport ci-dessus sont adossées aux extraits et domaines recensés ci-dessous lors de l’exploration web.</p>')
+        sources_html_parts.append(
+            f'<p>Ces {len(primary_list)} références constituent le socle probatoire directement mobilisé par les experts '
+            f'et vérifié par le validateur factuel dans le corps du texte ci-dessus.</p>'
+        )
         sources_html_parts.append('</div>')
         sources_html_parts.append('<div class="report-sources-grid">')
 
-        for idx, src in enumerate(sources, start=1):
+        for idx, src in primary_list:
             s_title = html.escape(src.get("title") or f"Source {idx}")
             s_url = html.escape(src.get("url") or "#")
             s_domain = html.escape(extract_domain(src.get("url") or ""))
             s_snippet = html.escape(src.get("snippet") or "")
             s_provider = html.escape(src.get("provider") or "web")
+            s_tier = html.escape(str(src.get("tier") or "").upper())
+            s_tier_badge = f'<span class="source-tier-chip tier-{s_tier.lower()}">Niveau {s_tier}</span>' if s_tier else ""
+            s_qscore = src.get("quality_score")
+            s_score_badge = f'<span class="source-score-chip" title="Indice de qualité et fiabilité documentaires">{s_qscore}/100</span>' if s_qscore is not None else ""
 
             sources_html_parts.append(
-                f'<article id="source-{idx}" class="source-card">'
+                f'<article id="source-{idx}" class="source-card cited-source">'
                 f'<div class="source-card-top">'
                 f'<span class="source-index">#{idx}</span>'
                 f'<span class="source-domain">{s_domain}</span>'
+                f'{s_tier_badge}'
+                f'{s_score_badge}'
                 f'<span class="source-provider-badge">{s_provider}</span>'
                 f'</div>'
                 f'<h3 class="source-title">'
@@ -365,7 +427,40 @@ def generate_report_html(
                 f'</article>'
             )
 
-        sources_html_parts.append('</div></section>')
+        sources_html_parts.append('</div>')
+
+        # Si des sources explorées n'ont pas été directement citées, les reléguer dans le volet dépliable
+        if cited_sources and uncited_sources:
+            sources_html_parts.append('<details class="report-explored-drawer">')
+            sources_html_parts.append('<summary class="explored-drawer-summary">')
+            sources_html_parts.append(
+                f'<span class="drawer-title">📁 Journal des sources explorées ({len(uncited_sources)} sources complémentaires)</span>'
+                f'<span class="drawer-desc">Sources collectées au cours de la recherche exploratoire mais non mobilisées comme preuve directe dans le texte final (cliquer pour afficher).</span>'
+            )
+            sources_html_parts.append('</summary>')
+            sources_html_parts.append('<div class="report-sources-grid explored-grid">')
+            for idx, src in uncited_sources:
+                s_title = html.escape(src.get("title") or f"Source {idx}")
+                s_url = html.escape(src.get("url") or "#")
+                s_domain = html.escape(extract_domain(src.get("url") or ""))
+                s_snippet = html.escape(src.get("snippet") or "")
+                s_tier = html.escape(str(src.get("tier") or "").upper())
+                s_tier_badge = f'<span class="source-tier-chip tier-{s_tier.lower()}">Niveau {s_tier}</span>' if s_tier else ""
+                sources_html_parts.append(
+                    f'<article id="source-{idx}" class="source-card explored-source">'
+                    f'<div class="source-card-top">'
+                    f'<span class="source-index">#{idx}</span>'
+                    f'<span class="source-domain">{s_domain}</span>'
+                    f'{s_tier_badge}'
+                    f'</div>'
+                    f'<h4 class="source-title-compact">'
+                    f'<a href="{s_url}" target="_blank" rel="noopener noreferrer">{s_title}</a>'
+                    f'</h4>'
+                    f'</article>'
+                )
+            sources_html_parts.append('</div></details>')
+
+        sources_html_parts.append('</section>')
     sources_html = "".join(sources_html_parts)
 
     escaped_title = html.escape(clean_title)
@@ -1041,6 +1136,55 @@ def generate_report_html(
       border-radius: 4px;
     }}
 
+    .source-tier-chip {{
+      display: inline-flex;
+      align-items: center;
+      padding: 1px 7px;
+      border-radius: 999px;
+      font-size: 0.70rem;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      background: rgba(99, 102, 241, 0.15);
+      color: #a5b4fc;
+      border: 1px solid rgba(99, 102, 241, 0.3);
+    }}
+    .source-tier-chip.tier-a {{
+      background: rgba(16, 185, 129, 0.15);
+      color: #34d399;
+      border-color: rgba(16, 185, 129, 0.3);
+    }}
+    .source-tier-chip.tier-b {{
+      background: rgba(59, 130, 246, 0.15);
+      color: #60a5fa;
+      border-color: rgba(59, 130, 246, 0.3);
+    }}
+    .source-tier-chip.tier-c {{
+      background: rgba(168, 85, 247, 0.15);
+      color: #c084fc;
+      border-color: rgba(168, 85, 247, 0.3);
+    }}
+    .source-tier-chip.tier-d {{
+      background: rgba(148, 163, 184, 0.15);
+      color: #cbd5e1;
+      border-color: rgba(148, 163, 184, 0.3);
+    }}
+    .source-tier-chip.tier-e {{
+      background: rgba(245, 158, 11, 0.15);
+      color: #fbbf24;
+      border-color: rgba(245, 158, 11, 0.3);
+    }}
+    .source-score-chip {{
+      display: inline-flex;
+      align-items: center;
+      padding: 1px 6px;
+      border-radius: 999px;
+      font-size: 0.68rem;
+      font-weight: 600;
+      background: rgba(15, 23, 42, 0.6);
+      color: #94a3b8;
+      border: 1px solid rgba(148, 163, 184, 0.25);
+    }}
+
     .source-title {{
       font-size: 0.92rem;
       font-weight: 600;
@@ -1054,6 +1198,60 @@ def generate_report_html(
     }}
 
     .source-title a:hover {{
+      color: var(--primary);
+    }}
+
+    /* Journal des sources explorées (tiroir repliable) */
+    .report-explored-drawer {{
+      margin-top: 36px;
+      padding: 16px 20px;
+      border-radius: 12px;
+      border: 1px dashed var(--border-color);
+      background: var(--bg-card-subtle);
+      transition: all 0.2s ease;
+    }}
+    .report-explored-drawer[open] {{
+      border-color: var(--border-accent);
+      background: var(--bg-card);
+    }}
+    .explored-drawer-summary {{
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      user-select: none;
+    }}
+    .explored-drawer-summary .drawer-title {{
+      font-size: 1.05rem;
+      font-weight: 700;
+      color: var(--text-heading);
+    }}
+    .explored-drawer-summary:hover .drawer-title {{
+      color: var(--primary);
+    }}
+    .explored-drawer-summary .drawer-desc {{
+      font-size: 0.84rem;
+      color: var(--text-dim);
+    }}
+    .explored-grid {{
+      margin-top: 20px;
+      opacity: 0.9;
+    }}
+    .source-card.explored-source {{
+      padding: 12px;
+      background: var(--bg-card-subtle);
+    }}
+    .source-title-compact {{
+      font-size: 0.85rem;
+      font-weight: 500;
+      line-height: 1.3;
+      margin: 4px 0 0;
+    }}
+    .source-title-compact a {{
+      color: var(--text-main);
+      text-decoration: none;
+    }}
+    .source-title-compact a:hover {{
       color: var(--primary);
     }}
 
@@ -1287,19 +1485,54 @@ def generate_report_html(
         padding: 1px 6px !important;
         font-size: 8pt !important;
       }}
+      .report-table-wrapper {{
+        break-inside: auto !important;
+        page-break-inside: auto !important;
+        overflow: visible !important;
+        margin: 14px 0 !important;
+      }}
       .report-table-wrapper table {{
         border-collapse: collapse !important;
         width: 100% !important;
-        break-inside: avoid;
-        page-break-inside: avoid;
+        table-layout: fixed !important;
+        word-break: break-word !important;
+        overflow-wrap: break-word !important;
+        font-size: 8pt !important;
+        line-height: 1.35 !important;
+      }}
+      .report-table-wrapper th, .report-table-wrapper td {{
+        padding: 5px 8px !important;
+        vertical-align: top !important;
+        border: 1px solid #cbd5e1 !important;
       }}
       .report-table-wrapper th {{
         background: #f1f5f9 !important;
         color: #0f172a !important;
-        border: 1px solid #cbd5e1 !important;
       }}
       .report-table-wrapper td {{
         border: 1px solid #e2e8f0 !important;
+      }}
+      .report-inline-figure {{
+        break-inside: auto !important;
+        page-break-inside: auto !important;
+        margin: 16px auto !important;
+        max-width: 100% !important;
+      }}
+      .report-figure-img-wrap {{
+        border: 1px solid #cbd5e1 !important;
+        box-shadow: none !important;
+        background: #ffffff !important;
+      }}
+      .report-inline-figure img {{
+        max-height: 760px !important;
+        height: auto !important;
+        width: auto !important;
+        max-width: 100% !important;
+        object-fit: contain !important;
+      }}
+      .report-inline-figure figcaption button,
+      .report-inline-figure figcaption a {{
+        display: none !important;
       }}
       .report-footer {{
         border-top: 1px solid #e2e8f0 !important;
@@ -1360,7 +1593,7 @@ def generate_report_html(
     <header class="report-hero">
       <div class="hero-badge-row">
         <span class="hero-badge">Rapport d'Investigation Approfondie</span>
-        <span class="hero-badge verified">✓ {len(sources)} sources analysées & croisées</span>
+        <span class="hero-badge verified">{len(cited_sources) if cited_sources else len(doc_sources)} sources citées dans l'analyse ({len(doc_sources)} explorées) · confiance par affirmation (voir registre)</span>
         <span class="hero-badge">Mode Publication Blog</span>
       </div>
 
@@ -1400,7 +1633,45 @@ def generate_report_html(
     </footer>
   </main>
 
+  <!-- Lightbox plein écran pour agrandir les images et infographies -->
+  <div id="html-img-lightbox" onclick="if(event.target===this)closeImageLightbox()" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(2,6,23,0.92);backdrop-filter:blur(8px);padding:24px;overflow:auto;align-items:center;justify-content:center;flex-direction:column;">
+    <div style="position:sticky;top:0;display:flex;align-items:center;justify-content:space-between;width:min(1200px,96vw);padding:10px 16px;margin-bottom:14px;border-radius:12px;background:rgba(15,23,42,0.9);border:1px solid rgba(148,163,184,0.25);color:#f8fafc;">
+      <span id="html-img-lightbox-caption" style="font-size:0.95rem;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:70%;">Aperçu haute résolution</span>
+      <div style="display:flex;gap:10px;align-items:center;">
+        <a id="html-img-lightbox-link" href="#" target="_blank" rel="noopener noreferrer" style="padding:6px 12px;border-radius:8px;background:rgba(99,102,241,0.2);color:#a5b4fc;text-decoration:none;font-size:0.84rem;font-weight:600;">↗ Ouvrir l'original</a>
+        <button type="button" onclick="closeImageLightbox()" style="padding:6px 12px;border-radius:8px;border:1px solid rgba(148,163,184,0.3);background:rgba(30,41,59,0.9);color:#f8fafc;cursor:pointer;font-size:0.84rem;font-weight:600;">✕ Fermer (Échap)</button>
+      </div>
+    </div>
+    <div style="max-width:min(1200px,96vw);text-align:center;">
+      <img id="html-img-lightbox-img" src="" alt="" style="max-width:100%;height:auto;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,0.65);background:#0f172a;" />
+    </div>
+  </div>
+
   <script>
+    function openImageLightbox(url, caption) {{
+      const modal = document.getElementById('html-img-lightbox');
+      const img = document.getElementById('html-img-lightbox-img');
+      const cap = document.getElementById('html-img-lightbox-caption');
+      const link = document.getElementById('html-img-lightbox-link');
+      if (!modal || !img) return;
+      img.src = url;
+      img.alt = caption || '';
+      if (cap) cap.textContent = caption || 'Aperçu plein écran';
+      if (link) link.href = url;
+      modal.style.display = 'flex';
+      document.body.style.overflow = 'hidden';
+    }}
+
+    function closeImageLightbox() {{
+      const modal = document.getElementById('html-img-lightbox');
+      if (modal) modal.style.display = 'none';
+      document.body.style.overflow = '';
+    }}
+
+    document.addEventListener('keydown', (e) => {{
+      if (e.key === 'Escape') closeImageLightbox();
+    }});
+
     function printPdf() {{
       window.print();
     }}

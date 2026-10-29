@@ -89,13 +89,14 @@ class Settings(BaseSettings):
     llm_max_tokens: int = 2048
     summary_temperature: float = 0.2
     summary_max_tokens: int = 900
-    deep_search_max_tokens: int = 12288
+    deep_search_max_tokens: int = 24576
     learn_mode_max_tokens: int = 16384
     summary_model: str = "openai/gpt-4o-mini"
     search_query_model: str = "mistralai/mistral-small-3.2-24b-instruct"
     web_search_decision_model: str = "google/gemini-3.5-flash-lite"
-    deep_search_plan_model: str = "anthropic/claude-fable-5.1"
+    deep_search_plan_model: str = "google/gemini-4-argon"
     deep_search_synthesis_model: str = "google/gemini-3.8-flash"
+    deep_search_audit_model: str = "openai/gpt-6-astra"
     blog_model: str = "google/gemini-3.5-flash-lite"
     image_prompt_model: str = "openai/gpt-6-luna"
     image_models: str = ""

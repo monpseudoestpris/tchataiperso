@@ -417,15 +417,32 @@ def markdown_to_html(md_text: str, sources: list[dict[str, Any]] | None = None) 
         # Code inline `code`
         escaped = re.sub(r"`([^`]+)`", r'<code class="report-inline-code">\1</code>', escaped)
 
+        # Images Markdown ![alt](url) — grandes, centrées, pleine largeur (lisibles pour schémas et infographies) et cliquables en Lightbox
+        escaped = re.sub(
+            r"!\[([^\]]*)\]\((https?://[^\s\)]+)\)",
+            r'<figure class="report-inline-figure" style="display:flex;flex-direction:column;align-items:center;margin:36px auto;max-width:100%;width:100%;">'
+            r'<div class="report-figure-img-wrap" style="display:block;max-width:min(900px,100%);width:100%;cursor:zoom-in;border-radius:14px;overflow:hidden;border:1px solid rgba(148,163,184,0.22);box-shadow:0 12px 32px rgba(15,23,42,0.28);text-align:center;background:transparent;">'
+            r'<img src="\2" alt="\1" loading="lazy" onclick="if(typeof openImageLightbox===\'function\')openImageLightbox(this.src, this.alt)" title="Cliquer pour afficher en haute résolution (Plein écran)" style="display:block;width:100%;max-width:100%;height:auto;margin:0 auto;border-radius:13px;" onerror="this.closest(\'.report-inline-figure\').style.display=\'none\'" />'
+            r'</div>'
+            r'<figcaption style="display:inline-flex;align-items:center;gap:10px;margin-top:12px;font-size:0.9rem;color:#94a3b8;font-style:italic;text-align:center;flex-wrap:wrap;justify-content:center;">'
+            r'<span>\1</span>'
+            r'<button type="button" onclick="if(typeof openImageLightbox===\'function\')openImageLightbox(\'\2\', \'\1\')" style="display:inline-flex;align-items:center;gap:4px;font-style:normal;font-size:0.75rem;font-weight:600;padding:3px 10px;border-radius:999px;background:rgba(99,102,241,0.18);color:#a5b4fc;border:1px solid rgba(99,102,241,0.35);cursor:pointer;">🔍 Plein écran</button>'
+            r'<a href="\2" target="_blank" rel="noopener noreferrer" style="display:inline-flex;align-items:center;gap:4px;font-style:normal;font-size:0.75rem;font-weight:500;padding:3px 10px;border-radius:999px;background:rgba(148,163,184,0.12);color:#cbd5e1;border:1px solid rgba(148,163,184,0.25);text-decoration:none;">↗ Ouvrir source</a>'
+            r'</figcaption>'
+            r'</figure>',
+            escaped,
+        )
+
         # Liens Markdown [text](url)
         escaped = re.sub(
-            r"\[([^\]]+)\]\((https?://[^\s\)]+)\)",
+            r"(?<!!)\[([^\]]+)\]\((https?://[^\s\)]+)\)",
             r'<a href="\2" target="_blank" rel="noopener noreferrer" class="report-external-link">\1 '
             r'<svg class="external-icon" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg></a>',
             escaped,
         )
 
-        # Citations de sources [1], [2], [1, 2]
+        # Citations de sources [1], [2], [1, 2] (sur sources documentaires uniquement)
+        doc_sources = [s for s in sources if s.get("media_type") != "image" and not s.get("img_src")]
         def cite_repl(match: re.Match) -> str:
             raw_nums = match.group(1)
             parts = re.split(r"[,;\s]+", raw_nums)
@@ -434,7 +451,7 @@ def markdown_to_html(md_text: str, sources: list[dict[str, Any]] | None = None) 
                 p = p.strip()
                 if p.isdigit():
                     num = int(p)
-                    if 1 <= num <= len(sources):
+                    if 1 <= num <= len(doc_sources):
                         pills.append(
                             f'<a href="#source-{num}" class="report-citation-pill" '
                             f'title="Voir le support didactique #{num}">[{num}]</a>'
@@ -740,8 +757,24 @@ def generate_learn_course_html(
     quiz_questions = parse_quiz(markdown_content, clean_topic)
 
     # Nettoyage du Markdown pour isoler les modules de cours didactiques
+    raw_doc_sources = [s for s in sources if s.get("media_type") != "image" and not s.get("img_src")]
+    doc_sources: list[dict[str, Any]] = []
+    seen_urls: set[str] = set()
+    seen_snippets: set[str] = set()
+    for s in raw_doc_sources:
+        u = str(s.get("url") or "").strip().rstrip("/")
+        snip = re.sub(r"\s+", " ", str(s.get("snippet") or "")).strip().lower()[:120]
+        if u and u in seen_urls:
+            continue
+        if snip and len(snip) > 20 and snip in seen_snippets:
+            continue
+        if u:
+            seen_urls.add(u)
+        if snip and len(snip) > 20:
+            seen_snippets.add(snip)
+        doc_sources.append(s)
     body_md = strip_raw_modules_for_body(markdown_content)
-    body_html, toc = markdown_to_html(body_md, sources)
+    body_html, toc = markdown_to_html(body_md, doc_sources)
 
     # Blocs interactifs
     flashcards_html = build_flashcards_html(flashcards)
@@ -766,36 +799,62 @@ def generate_learn_course_html(
     toc_html_parts.append('<div class="toc-interactive-divider"></div>')
     toc_html_parts.append('<a href="#flashcards-section" class="report-toc-link toc-interactive"><span class="toc-icon">📇</span><span>20 Flashcards de révision</span></a>')
     toc_html_parts.append('<a href="#quiz-section" class="report-toc-link toc-interactive"><span class="toc-icon">🎯</span><span>Quizz d\'auto-évaluation (20 questions)</span></a>')
-    if sources:
-        toc_html_parts.append('<a href="#bibliography-sources" class="report-toc-link toc-interactive"><span class="toc-icon">📚</span><span>Supports didactiques (' + str(len(sources)) + ')</span></a>')
+    if doc_sources:
+        toc_html_parts.append('<a href="#bibliography-sources" class="report-toc-link toc-interactive"><span class="toc-icon">📚</span><span>Supports didactiques (' + str(len(doc_sources)) + ')</span></a>')
     toc_html_parts.append('</nav></div>')
     toc_html = "".join(toc_html_parts)
 
-    # Construction de la section des sources / supports didactiques
+    # Détection des indices de sources citées dans le rapport Markdown
+    cited_nums: set[int] = set()
+    for m in re.finditer(r"\[(\d{1,3}(?:\s*[,;–-]\s*\d{1,3})*)\]", markdown_content):
+        for tok in re.split(r"[,;–-]", m.group(1)):
+            tok = tok.strip()
+            if tok.isdigit():
+                cited_nums.add(int(tok))
+
+    cited_sources = [
+        (idx, s) for idx, s in enumerate(doc_sources, start=1)
+        if idx in cited_nums
+    ]
+    uncited_sources = [
+        (idx, s) for idx, s in enumerate(doc_sources, start=1)
+        if idx not in cited_nums
+    ]
+
+    # Construction de la section des sources / supports didactiques documentaires
+    # RÈGLE D'OR P2 : Séparation claire entre Bibliographie didactique citée et Journal des supports explorés
     sources_html_parts = []
-    if sources:
+    if doc_sources:
+        primary_list = cited_sources if cited_sources else list(enumerate(doc_sources, start=1))
         sources_html_parts.append('<section id="bibliography-sources" class="report-sources-section">')
         sources_html_parts.append('<div class="report-sources-header">')
         sources_html_parts.append('<h2>')
-        sources_html_parts.append(f'<span class="sources-icon">📚</span> Supports didactiques et références du cours ({len(sources)})')
+        sources_html_parts.append(f'<span class="sources-icon">📚</span> Supports didactiques cités dans le cours ({len(primary_list)})')
         sources_html_parts.append('</h2>')
-        sources_html_parts.append(f'<p>Les concepts, exemples et bonnes pratiques de ce cours sont étayés par les documentations et publications recensées ci-dessous.</p>')
+        sources_html_parts.append(
+            f'<p>Ces {len(primary_list)} références constituent le socle didactique directement mobilisé et audité dans le cours ci-dessus.</p>'
+        )
         sources_html_parts.append('</div>')
         sources_html_parts.append('<div class="report-sources-grid">')
 
-        for idx, src in enumerate(sources, start=1):
+        for idx, src in primary_list:
             s_title = html.escape(src.get("title") or f"Support {idx}")
             s_url = html.escape(src.get("url") or "#")
             s_domain = html.escape(extract_domain(src.get("url") or ""))
             s_snippet = html.escape(src.get("snippet") or "")
             s_provider = html.escape(src.get("provider") or "web")
-            extra_class = " source-card-extra source-card-hidden" if idx > 12 else ""
+            s_tier = html.escape(str(src.get("tier") or "").upper())
+            s_tier_badge = f'<span class="source-tier-chip tier-{s_tier.lower()}">Niveau {s_tier}</span>' if s_tier else ""
+            s_qscore = src.get("quality_score")
+            s_score_badge = f'<span class="source-score-chip" title="Indice de qualité et fiabilité documentaires">{s_qscore}/100</span>' if s_qscore is not None else ""
 
             sources_html_parts.append(
-                f'<article id="source-{idx}" class="source-card{extra_class}">'
+                f'<article id="source-{idx}" class="source-card cited-source">'
                 f'<div class="source-card-top">'
                 f'<span class="source-index">#{idx}</span>'
                 f'<span class="source-domain">{s_domain}</span>'
+                f'{s_tier_badge}'
+                f'{s_score_badge}'
                 f'<span class="source-provider-badge">{s_provider}</span>'
                 f'</div>'
                 f'<h3 class="source-title">'
@@ -814,14 +873,36 @@ def generate_learn_course_html(
             )
 
         sources_html_parts.append('</div>')
-        if len(sources) > 12:
+
+        if cited_sources and uncited_sources:
+            sources_html_parts.append('<details class="report-explored-drawer">')
+            sources_html_parts.append('<summary class="explored-drawer-summary">')
             sources_html_parts.append(
-                f'<div class="sources-toggle-container">'
-                f'<button type="button" id="toggle-sources-btn" class="sources-toggle-btn" onclick="toggleAllSources()">'
-                f'<span>Afficher l\'ensemble des {len(sources)} supports didactiques (+{len(sources)-12})</span>'
-                f'</button>'
-                f'</div>'
+                f'<span class="drawer-title">📁 Journal des supports explorés ({len(uncited_sources)} supports complémentaires)</span>'
+                f'<span class="drawer-desc">Documents consultés lors de la phase de recherche pédagogique mais non cités directement (cliquer pour dérouler).</span>'
             )
+            sources_html_parts.append('</summary>')
+            sources_html_parts.append('<div class="report-sources-grid explored-grid">')
+            for idx, src in uncited_sources:
+                s_title = html.escape(src.get("title") or f"Support {idx}")
+                s_url = html.escape(src.get("url") or "#")
+                s_domain = html.escape(extract_domain(src.get("url") or ""))
+                s_tier = html.escape(str(src.get("tier") or "").upper())
+                s_tier_badge = f'<span class="source-tier-chip tier-{s_tier.lower()}">Niveau {s_tier}</span>' if s_tier else ""
+                sources_html_parts.append(
+                    f'<article id="source-{idx}" class="source-card explored-source">'
+                    f'<div class="source-card-top">'
+                    f'<span class="source-index">#{idx}</span>'
+                    f'<span class="source-domain">{s_domain}</span>'
+                    f'{s_tier_badge}'
+                    f'</div>'
+                    f'<h4 class="source-title-compact">'
+                    f'<a href="{s_url}" target="_blank" rel="noopener noreferrer">{s_title}</a>'
+                    f'</h4>'
+                    f'</article>'
+                )
+            sources_html_parts.append('</div></details>')
+
         sources_html_parts.append('</section>')
     sources_html = "".join(sources_html_parts)
 
@@ -1933,6 +2014,54 @@ def generate_learn_course_html(
       background: rgba(255, 255, 255, 0.05);
       color: var(--text-dim);
     }}
+    .source-tier-chip {{
+      display: inline-flex;
+      align-items: center;
+      padding: 1px 7px;
+      border-radius: 999px;
+      font-size: 0.70rem;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      background: rgba(99, 102, 241, 0.15);
+      color: #a5b4fc;
+      border: 1px solid rgba(99, 102, 241, 0.3);
+    }}
+    .source-tier-chip.tier-a {{
+      background: rgba(16, 185, 129, 0.15);
+      color: #34d399;
+      border-color: rgba(16, 185, 129, 0.3);
+    }}
+    .source-tier-chip.tier-b {{
+      background: rgba(59, 130, 246, 0.15);
+      color: #60a5fa;
+      border-color: rgba(59, 130, 246, 0.3);
+    }}
+    .source-tier-chip.tier-c {{
+      background: rgba(168, 85, 247, 0.15);
+      color: #c084fc;
+      border-color: rgba(168, 85, 247, 0.3);
+    }}
+    .source-tier-chip.tier-d {{
+      background: rgba(148, 163, 184, 0.15);
+      color: #cbd5e1;
+      border-color: rgba(148, 163, 184, 0.3);
+    }}
+    .source-tier-chip.tier-e {{
+      background: rgba(245, 158, 11, 0.15);
+      color: #fbbf24;
+      border-color: rgba(245, 158, 11, 0.3);
+    }}
+    .source-score-chip {{
+      display: inline-flex;
+      align-items: center;
+      padding: 1px 6px;
+      border-radius: 999px;
+      font-size: 0.68rem;
+      font-weight: 600;
+      background: rgba(15, 23, 42, 0.6);
+      color: #94a3b8;
+      border: 1px solid rgba(148, 163, 184, 0.25);
+    }}
 
     .source-title {{
       font-family: var(--font-sans);
@@ -2204,6 +2333,28 @@ def generate_learn_course_html(
         color: #f8fafc !important;
         background: transparent !important;
       }}
+      .report-inline-figure {{
+        break-inside: auto !important;
+        page-break-inside: auto !important;
+        margin: 16px auto !important;
+        max-width: 100% !important;
+      }}
+      .report-figure-img-wrap {{
+        border: 1px solid #cbd5e1 !important;
+        box-shadow: none !important;
+        background: #ffffff !important;
+      }}
+      .report-inline-figure img {{
+        max-height: 760px !important;
+        height: auto !important;
+        width: auto !important;
+        max-width: 100% !important;
+        object-fit: contain !important;
+      }}
+      .report-inline-figure figcaption button,
+      .report-inline-figure figcaption a {{
+        display: none !important;
+      }}
     }}
   </style>
 </head>
@@ -2304,12 +2455,49 @@ def generate_learn_course_html(
     <!-- Pied de page -->
     <footer class="report-footer">
       <span>Généré par cLAIr · Mode Apprendre (20 Flashcards & 20 Questions de Quizz)</span>
-      <span>{len(sources)} supports didactiques croisés</span>
+      <span>{len(sources)} supports didactiques collectés</span>
     </footer>
   </main>
 
+  <!-- Lightbox plein écran pour agrandir les images et infographies -->
+  <div id="html-img-lightbox" onclick="if(event.target===this)closeImageLightbox()" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(2,6,23,0.92);backdrop-filter:blur(8px);padding:24px;overflow:auto;align-items:center;justify-content:center;flex-direction:column;">
+    <div style="position:sticky;top:0;display:flex;align-items:center;justify-content:space-between;width:min(1200px,96vw);padding:10px 16px;margin-bottom:14px;border-radius:12px;background:rgba(15,23,42,0.9);border:1px solid rgba(148,163,184,0.25);color:#f8fafc;">
+      <span id="html-img-lightbox-caption" style="font-size:0.95rem;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:70%;">Aperçu haute résolution</span>
+      <div style="display:flex;gap:10px;align-items:center;">
+        <a id="html-img-lightbox-link" href="#" target="_blank" rel="noopener noreferrer" style="padding:6px 12px;border-radius:8px;background:rgba(99,102,241,20%);color:#a5b4fc;text-decoration:none;font-size:0.84rem;font-weight:600;">↗ Ouvrir l'original</a>
+        <button type="button" onclick="closeImageLightbox()" style="padding:6px 12px;border-radius:8px;border:1px solid rgba(148,163,184,0.3);background:rgba(30,41,59,0.9);color:#f8fafc;cursor:pointer;font-size:0.84rem;font-weight:600;">✕ Fermer (Échap)</button>
+      </div>
+    </div>
+    <div style="max-width:min(1200px,96vw);text-align:center;">
+      <img id="html-img-lightbox-img" src="" alt="" style="max-width:100%;height:auto;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,0.65);background:#0f172a;" />
+    </div>
+  </div>
+
   <!-- Script utilitaire intégré -->
   <script>
+    function openImageLightbox(url, caption) {{
+      const modal = document.getElementById('html-img-lightbox');
+      const img = document.getElementById('html-img-lightbox-img');
+      const cap = document.getElementById('html-img-lightbox-caption');
+      const link = document.getElementById('html-img-lightbox-link');
+      if (!modal || !img) return;
+      img.src = url;
+      img.alt = caption || '';
+      if (cap) cap.textContent = caption || 'Aperçu plein écran';
+      if (link) link.href = url;
+      modal.style.display = 'flex';
+      document.body.style.overflow = 'hidden';
+    }}
+
+    function closeImageLightbox() {{
+      const modal = document.getElementById('html-img-lightbox');
+      if (modal) modal.style.display = 'none';
+      document.body.style.overflow = '';
+    }}
+
+    document.addEventListener('keydown', (e) => {{
+      if (e.key === 'Escape') closeImageLightbox();
+    }});
     // Données interactives injectées
     const flashcardsData = {json.dumps(flashcards, ensure_ascii=False)};
     const quizData = {json.dumps(quiz_questions, ensure_ascii=False)};

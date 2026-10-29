@@ -1,0 +1,1917 @@
+specialties:
+  emploi_education:
+    name: Emploi & Éducation
+    domains:
+    - domain: dares.travail-emploi.gouv.fr
+      priority: A
+      is_primary: true
+      label: DARES (Ministère du Travail, France)
+    - domain: strategie-plan.gouv.fr
+      priority: A
+      is_primary: true
+      label: France Stratégie
+    - domain: france-strategie.fr
+      priority: A
+      is_primary: true
+      label: France Stratégie
+    - domain: francetravail.fr
+      priority: A
+      is_primary: true
+      label: France Travail
+    - domain: francetravail.org
+      priority: A
+      is_primary: true
+      label: France Travail
+    - domain: cereq.fr
+      priority: A
+      is_primary: true
+      label: Céreq (Centre d'études et de recherches sur les qualifications)
+    - domain: onisep.fr
+      priority: B
+      is_primary: true
+      label: Onisep
+    - domain: education.gouv.fr
+      priority: A
+      is_primary: true
+      label: Ministère de l'Éducation Nationale
+    - domain: depp.education.gouv.fr
+      priority: A
+      is_primary: true
+      label: DEPP (Direction de l'évaluation, de la prospective et de la performance)
+    - domain: enseignementsup-recherche.gouv.fr
+      priority: A
+      is_primary: true
+      label: Ministère de l'Enseignement Supérieur et de la Recherche
+    - domain: bls.gov
+      priority: A
+      is_primary: true
+      label: U.S. Bureau of Labor Statistics (BLS)
+    - domain: cedefop.europa.eu
+      priority: A
+      is_primary: true
+      label: Cedefop (European Centre for the Development of Vocational Training)
+    - domain: ilo.org
+      priority: A
+      is_primary: true
+      label: International Labour Organization (ILO / OIT)
+    - domain: nces.ed.gov
+      priority: A
+      is_primary: true
+      label: National Center for Education Statistics (NCES, USA)
+    - domain: oecd.org
+      priority: A
+      is_primary: true
+      label: OECD / OCDE (Education and Skills)
+    - domain: unesco.org
+      priority: A
+      is_primary: true
+      label: UNESCO Institute for Statistics
+    - domain: weforum.org
+      priority: B
+      is_primary: false
+      label: World Economic Forum (Future of Jobs)
+    - domain: apec.fr
+      priority: B
+      is_primary: true
+      label: APEC — études et marché de l’emploi des cadres
+    - domain: data.education.gouv.fr
+      priority: A
+      is_primary: true
+      label: Données ouvertes du ministère de l’Éducation
+    - domain: data.enseignementsup-recherche.gouv.fr
+      priority: A
+      is_primary: true
+      label: Open data enseignement supérieur et recherche
+    - domain: parcoursup.gouv.fr
+      priority: A
+      is_primary: true
+      label: Parcoursup — informations officielles
+    - domain: inserjeunes.education.gouv.fr
+      priority: A
+      is_primary: true
+      label: InserJeunes — insertion professionnelle
+    - domain: eurostat.ec.europa.eu
+      priority: A
+      is_primary: true
+      label: Eurostat — données emploi et éducation (ancien hôte)
+    - domain: ec.europa.eu
+      priority: B
+      is_primary: false
+      label: Commission européenne — statistiques, politiques et études
+    - domain: etudiant.gouv.fr
+      priority: A
+      is_primary: true
+      label: Portail officiel de la vie étudiante
+    - domain: orientation-pour-tous.fr
+      priority: B
+      is_primary: false
+      label: Orientation pour tous
+    - domain: francecompetences.fr
+      priority: A
+      is_primary: true
+      label: France compétences — certifications et emploi
+    - domain: cariforefoccitanie.fr
+      priority: B
+      is_primary: true
+      label: Carif-Oref Occitanie — formation et emploi régional
+  science_recherche:
+    name: Science & Recherche
+    domains:
+    - domain: pubmed.ncbi.nlm.nih.gov
+      priority: A
+      is_primary: false
+      label: PubMed / National Center for Biotechnology Information (NCBI)
+    - domain: arxiv.org
+      priority: A
+      is_primary: false
+      label: arXiv (Cornell University)
+    - domain: biorxiv.org
+      priority: A
+      is_primary: false
+      label: bioRxiv (Cold Spring Harbor Laboratory)
+    - domain: medrxiv.org
+      priority: A
+      is_primary: false
+      label: medRxiv (Health Sciences Preprints)
+    - domain: hal.science
+      priority: A
+      is_primary: false
+      label: HAL Archives Ouvertes (CNRS / France)
+    - domain: cochranelibrary.com
+      priority: A
+      is_primary: true
+      label: Cochrane Library (Systematic Reviews & Evidence-Based Medicine)
+    - domain: nature.com
+      priority: A
+      is_primary: true
+      label: Nature Portfolio
+    - domain: science.org
+      priority: A
+      is_primary: true
+      label: Science (AAAS)
+    - domain: cell.com
+      priority: A
+      is_primary: true
+      label: Cell Press
+    - domain: thelancet.com
+      priority: A
+      is_primary: true
+      label: The Lancet
+    - domain: nejm.org
+      priority: A
+      is_primary: true
+      label: The New England Journal of Medicine (NEJM)
+    - domain: jamanetwork.com
+      priority: A
+      is_primary: true
+      label: JAMA Network (Journal of the American Medical Association)
+    - domain: pnas.org
+      priority: A
+      is_primary: true
+      label: PNAS (National Academy of Sciences)
+    - domain: journals.plos.org
+      priority: A
+      is_primary: true
+      label: PLOS ONE / Public Library of Science
+    - domain: sciencedirect.com
+      priority: A
+      is_primary: false
+      label: ScienceDirect (Elsevier)
+    - domain: ieeexplore.ieee.org
+      priority: A
+      is_primary: true
+      label: IEEE Xplore Digital Library
+    - domain: ieee.org
+      priority: A
+      is_primary: true
+      label: IEEE
+    - domain: dl.acm.org
+      priority: A
+      is_primary: true
+      label: ACM Digital Library (Association for Computing Machinery)
+    - domain: springer.com
+      priority: B
+      is_primary: false
+      label: Springer Link
+    - domain: wiley.com
+      priority: B
+      is_primary: false
+      label: Wiley Online Library
+    - domain: openalex.org
+      priority: B
+      is_primary: false
+      label: OpenAlex — index bibliographique
+    - domain: crossref.org
+      priority: B
+      is_primary: false
+      label: Crossref — métadonnées et DOI
+    - domain: pubmedcentral.nih.gov
+      priority: B
+      is_primary: false
+      label: PubMed Central — textes intégraux (vérifier domaine courant)
+    - domain: pmc.ncbi.nlm.nih.gov
+      priority: B
+      is_primary: false
+      label: PMC — articles biomédicaux en texte intégral
+    - domain: clinicaltrials.gov
+      priority: A
+      is_primary: true
+      label: ClinicalTrials.gov — registres d’essais cliniques
+    - domain: osf.io
+      priority: B
+      is_primary: false
+      label: Open Science Framework — projets et prépublications
+    - domain: zenodo.org
+      priority: B
+      is_primary: false
+      label: Zenodo — dépôts de recherche
+    - domain: academic.oup.com
+      priority: B
+      is_primary: false
+      label: Oxford Academic — revues et ouvrages
+  economie_finances:
+    name: Économie & Finances
+    domains:
+    - domain: insee.fr
+      priority: A
+      is_primary: true
+      label: INSEE (France)
+    - domain: banque-france.fr
+      priority: A
+      is_primary: true
+      label: Banque de France
+    - domain: ecb.europa.eu
+      priority: A
+      is_primary: true
+      label: European Central Bank (ECB / BCE)
+    - domain: federalreserve.gov
+      priority: A
+      is_primary: true
+      label: U.S. Federal Reserve Board (Fed)
+    - domain: bankofengland.co.uk
+      priority: A
+      is_primary: true
+      label: Bank of England
+    - domain: bis.org
+      priority: A
+      is_primary: true
+      label: Bank for International Settlements (BIS / BRI)
+    - domain: oecd.org
+      priority: A
+      is_primary: true
+      label: OECD / OCDE (Economic Surveys & Data)
+    - domain: ec.europa.eu
+      priority: A
+      is_primary: false
+      label: Eurostat (via Commission européenne)
+    - domain: imf.org
+      priority: A
+      is_primary: true
+      label: International Monetary Fund (IMF / FMI)
+    - domain: worldbank.org
+      priority: A
+      is_primary: true
+      label: World Bank / Banque Mondiale
+    - domain: ccomptes.fr
+      priority: A
+      is_primary: true
+      label: Cour des Comptes (France)
+    - domain: bea.gov
+      priority: A
+      is_primary: true
+      label: U.S. Bureau of Economic Analysis (BEA)
+    - domain: nber.org
+      priority: A
+      is_primary: true
+      label: National Bureau of Economic Research (NBER, USA)
+    - domain: cepr.org
+      priority: B
+      is_primary: false
+      label: Centre for Economic Policy Research (CEPR)
+    - domain: piie.com
+      priority: B
+      is_primary: false
+      label: Peterson Institute for International Economics (PIIE)
+    - domain: bruegel.org
+      priority: B
+      is_primary: false
+      label: Bruegel (European Think Tank for Economic Policy)
+    - domain: ft.com
+      priority: C
+      is_primary: false
+      label: Financial Times
+    - domain: wsj.com
+      priority: C
+      is_primary: false
+      label: The Wall Street Journal
+    - domain: economist.com
+      priority: C
+      is_primary: false
+      label: The Economist
+    - domain: bloomberg.com
+      priority: C
+      is_primary: false
+      label: Bloomberg News
+    - domain: reuters.com
+      priority: C
+      is_primary: false
+      label: Reuters
+    - domain: lesechos.fr
+      priority: C
+      is_primary: false
+      label: Les Échos
+    - domain: data.worldbank.org
+      priority: A
+      is_primary: true
+      label: World Bank Open Data
+    - domain: data.oecd.org
+      priority: A
+      is_primary: true
+      label: OECD Data
+    - domain: budget.gouv.fr
+      priority: A
+      is_primary: true
+      label: Direction du Budget — documents budgétaires français
+    - domain: economie.gouv.fr
+      priority: A
+      is_primary: true
+      label: Ministère de l’Économie et des Finances
+    - domain: amf-france.org
+      priority: A
+      is_primary: true
+      label: Autorité des marchés financiers
+    - domain: acpr.banque-france.fr
+      priority: A
+      is_primary: true
+      label: ACPR — supervision bancaire et assurantielle
+    - domain: europarl.europa.eu
+      priority: A
+      is_primary: true
+      label: Parlement européen — documents budgétaires et économiques
+  droit_reglementation:
+    name: Droit & Réglementation
+    domains:
+    - domain: legifrance.gouv.fr
+      priority: A
+      is_primary: true
+      label: Légifrance (Service public de la diffusion du droit)
+    - domain: eur-lex.europa.eu
+      priority: A
+      is_primary: true
+      label: EUR-Lex (Droit de l'Union européenne)
+    - domain: service-public.fr
+      priority: A
+      is_primary: true
+      label: Service-Public.fr
+    - domain: cnil.fr
+      priority: A
+      is_primary: true
+      label: CNIL (Commission Nationale de l'Informatique et des Libertés)
+    - domain: curia.europa.eu
+      priority: A
+      is_primary: true
+      label: Cour de Justice de l'Union Européenne (CJUE)
+    - domain: supremecourt.gov
+      priority: A
+      is_primary: true
+      label: Supreme Court of the United States
+    - domain: congress.gov
+      priority: A
+      is_primary: true
+      label: Congress.gov (Library of Congress, USA)
+    - domain: echr.coe.int
+      priority: A
+      is_primary: true
+      label: European Court of Human Rights (ECHR / CEDH)
+    - domain: icj-cij.org
+      priority: A
+      is_primary: true
+      label: International Court of Justice (ICJ / CIJ)
+    - domain: un.org
+      priority: A
+      is_primary: true
+      label: United Nations (Treaties and Legal Affairs)
+    - domain: legislation.gov.uk
+      priority: A
+      is_primary: true
+      label: UK Legislation (The National Archives)
+    - domain: conseil-etat.fr
+      priority: A
+      is_primary: true
+      label: Conseil d’État — décisions et avis
+    - domain: courdecassation.fr
+      priority: A
+      is_primary: true
+      label: Cour de cassation — jurisprudence
+    - domain: conseil-constitutionnel.fr
+      priority: A
+      is_primary: true
+      label: Conseil constitutionnel — décisions
+    - domain: assemblee-nationale.fr
+      priority: A
+      is_primary: true
+      label: Assemblée nationale — textes et travaux
+    - domain: senat.fr
+      priority: A
+      is_primary: true
+      label: Sénat — textes et travaux
+    - domain: hudoc.echr.coe.int
+      priority: A
+      is_primary: true
+      label: HUDOC — jurisprudence CEDH
+    - domain: justice.fr
+      priority: A
+      is_primary: true
+      label: Portail officiel du ministère de la Justice
+  informatique_ia:
+    name: Informatique & IA
+    domains:
+    - domain: docs.python.org
+      priority: A
+      is_primary: true
+      label: Python Official Documentation
+    - domain: developer.mozilla.org
+      priority: A
+      is_primary: true
+      label: MDN Web Docs (Mozilla)
+    - domain: github.com
+      priority: A
+      is_primary: false
+      label: GitHub
+    - domain: docs.kernel.org
+      priority: A
+      is_primary: true
+      label: The Linux Kernel Documentation
+    - domain: ietf.org
+      priority: A
+      is_primary: true
+      label: Internet Engineering Task Force (IETF Standards & RFCs)
+    - domain: datatracker.ietf.org
+      priority: A
+      is_primary: true
+      label: IETF Datatracker RFCs
+    - domain: w3.org
+      priority: A
+      is_primary: true
+      label: World Wide Web Consortium (W3C Standards)
+    - domain: nvd.nist.gov
+      priority: A
+      is_primary: true
+      label: National Vulnerability Database (NIST NVD)
+    - domain: csrc.nist.gov
+      priority: A
+      is_primary: true
+      label: NIST Computer Security Resource Center
+    - domain: cve.org
+      priority: A
+      is_primary: true
+      label: CVE (Common Vulnerabilities and Exposures - MITRE)
+    - domain: owasp.org
+      priority: A
+      is_primary: true
+      label: Open Web Application Security Project (OWASP)
+    - domain: huggingface.co
+      priority: A
+      is_primary: false
+      label: Hugging Face (Papers, Datasets & Models)
+    - domain: paperswithcode.com
+      priority: A
+      is_primary: false
+      label: Papers with Code (Machine Learning Benchmark & Code)
+    - domain: pytorch.org
+      priority: A
+      is_primary: true
+      label: PyTorch (Official Documentation & Research)
+    - domain: tensorflow.org
+      priority: A
+      is_primary: true
+      label: TensorFlow (Official Documentation)
+    - domain: kubernetes.io
+      priority: A
+      is_primary: true
+      label: Kubernetes Documentation
+    - domain: rust-lang.org
+      priority: A
+      is_primary: true
+      label: Rust Programming Language Official Documentation
+    - domain: go.dev
+      priority: A
+      is_primary: true
+      label: Go Programming Language Documentation
+    - domain: docs.rs
+      priority: B
+      is_primary: false
+      label: docs.rs — documentation des crates Rust
+    - domain: doc.rust-lang.org
+      priority: A
+      is_primary: true
+      label: Documentation officielle Rust
+    - domain: docs.github.com
+      priority: A
+      is_primary: true
+      label: Documentation GitHub
+    - domain: learn.microsoft.com
+      priority: A
+      is_primary: true
+      label: Documentation Microsoft
+    - domain: docs.docker.com
+      priority: A
+      is_primary: true
+      label: Documentation Docker
+    - domain: react.dev
+      priority: A
+      is_primary: true
+      label: Documentation React
+    - domain: nextjs.org
+      priority: A
+      is_primary: true
+      label: Documentation Next.js
+    - domain: fastapi.tiangolo.com
+      priority: A
+      is_primary: true
+      label: Documentation FastAPI
+    - domain: postgresql.org
+      priority: A
+      is_primary: true
+      label: Documentation PostgreSQL
+    - domain: docs.pytorch.org
+      priority: A
+      is_primary: true
+      label: Documentation PyTorch
+    - domain: security.googleblog.com
+      priority: B
+      is_primary: true
+      label: Google Security Blog — annonces de sécurité
+    - domain: cert.ssi.gouv.fr
+      priority: A
+      is_primary: true
+      label: CERT-FR — alertes de cybersécurité
+    - domain: cyber.gouv.fr
+      priority: A
+      is_primary: true
+      label: ANSSI — guides et recommandations
+    - domain: cisa.gov
+      priority: A
+      is_primary: true
+      label: CISA — alertes et recommandations
+    - domain: exploit-db.com
+      priority: C
+      is_primary: false
+      label: Exploit Database — preuves de concept à contextualiser
+  sante_biomedical:
+    name: Santé & Biomédical
+    domains:
+    - domain: who.int
+      priority: A
+      is_primary: true
+      label: World Health Organization (WHO / OMS)
+    - domain: cdc.gov
+      priority: A
+      is_primary: true
+      label: U.S. Centers for Disease Control and Prevention (CDC)
+    - domain: fda.gov
+      priority: A
+      is_primary: true
+      label: U.S. Food and Drug Administration (FDA)
+    - domain: ema.europa.eu
+      priority: A
+      is_primary: true
+      label: European Medicines Agency (EMA)
+    - domain: has-sante.fr
+      priority: A
+      is_primary: true
+      label: Haute Autorité de Santé (HAS, France)
+    - domain: inserm.fr
+      priority: A
+      is_primary: true
+      label: INSERM (Institut national de la santé et de la recherche médicale)
+    - domain: ansm.sante.fr
+      priority: A
+      is_primary: true
+      label: ANSM (Agence nationale de sécurité du médicament, France)
+    - domain: ecdc.europa.eu
+      priority: A
+      is_primary: true
+      label: European Centre for Disease Prevention and Control (ECDC)
+    - domain: santepubliquefrance.fr
+      priority: A
+      is_primary: true
+      label: Santé publique France — épidémiologie et prévention
+    - domain: assurance-maladie.ameli.fr
+      priority: A
+      is_primary: true
+      label: Assurance Maladie — statistiques et études
+    - domain: ameli.fr
+      priority: A
+      is_primary: true
+      label: Assurance Maladie — informations assurés
+    - domain: drees.solidarites-sante.gouv.fr
+      priority: A
+      is_primary: true
+      label: DREES — statistiques sanitaires et sociales
+    - domain: cancer.fr
+      priority: A
+      is_primary: true
+      label: Institut national du cancer
+    - domain: nice.org.uk
+      priority: A
+      is_primary: true
+      label: NICE — recommandations cliniques
+    - domain: nhs.uk
+      priority: B
+      is_primary: false
+      label: NHS — information médicale grand public
+    - domain: clinicaltrials.gov
+      priority: A
+      is_primary: true
+      label: ClinicalTrials.gov — registres essais cliniques
+    - domain: orpha.net
+      priority: B
+      is_primary: true
+      label: Orphanet — maladies rares
+    - domain: escardio.org
+      priority: B
+      is_primary: true
+      label: European Society of Cardiology — recommandations
+  climat_energie_environnement:
+    name: Climat, Énergie & Environnement
+    domains:
+    - domain: ipcc.ch
+      priority: A
+      is_primary: true
+      label: Intergovernmental Panel on Climate Change (IPCC / GIEC)
+    - domain: iea.org
+      priority: A
+      is_primary: true
+      label: International Energy Agency (IEA / AIE)
+    - domain: irena.org
+      priority: A
+      is_primary: true
+      label: International Renewable Energy Agency (IRENA)
+    - domain: noaa.gov
+      priority: A
+      is_primary: true
+      label: National Oceanic and Atmospheric Administration (NOAA, USA)
+    - domain: climate.nasa.gov
+      priority: A
+      is_primary: true
+      label: NASA Global Climate Change
+    - domain: eea.europa.eu
+      priority: A
+      is_primary: true
+      label: European Environment Agency (EEA)
+    - domain: ademe.fr
+      priority: A
+      is_primary: true
+      label: ADEME (Agence de la transition écologique, France)
+    - domain: wmo.int
+      priority: A
+      is_primary: true
+      label: World Meteorological Organization (WMO / OMM)
+    - domain: meteofrance.com
+      priority: A
+      is_primary: true
+      label: Météo-France — données et prévisions
+    - domain: meteofrance.fr
+      priority: A
+      is_primary: true
+      label: Météo-France — établissement public
+    - domain: rte-france.com
+      priority: A
+      is_primary: true
+      label: RTE — bilan électrique et données réseau
+    - domain: odre.opendatasoft.com
+      priority: A
+      is_primary: true
+      label: Open Data Réseaux Énergies
+    - domain: cre.fr
+      priority: A
+      is_primary: true
+      label: Commission de régulation de l’énergie
+    - domain: ecologie.gouv.fr
+      priority: A
+      is_primary: true
+      label: Ministère de la Transition écologique
+    - domain: statistiques.developpement-durable.gouv.fr
+      priority: A
+      is_primary: true
+      label: SDES — statistiques environnementales
+    - domain: copernicus.eu
+      priority: A
+      is_primary: true
+      label: Copernicus — données d’observation de la Terre
+    - domain: climate.copernicus.eu
+      priority: A
+      is_primary: true
+      label: Copernicus Climate Change Service
+    - domain: globalcarbonproject.org
+      priority: B
+      is_primary: true
+      label: Global Carbon Project — bilans du carbone
+  apprendre:
+    name: Apprendre — de la maternelle à la formation continue
+    description: Sources pédagogiques par niveau, matière et type de ressource. Priorité du domaine indicative;
+      vérifier la page, le programme, la licence et le niveau.
+    domains:
+    - domain: eduscol.education.fr
+      priority: A
+      is_primary: true
+      label: Éduscol — programmes, attendus et accompagnement
+      levels:
+      - maternelle
+      - primaire
+      - college
+      - lycee
+      subjects:
+      - toutes
+      resource_type: programmes
+    - domain: education.gouv.fr
+      priority: A
+      is_primary: true
+      label: Ministère de l’Éducation nationale — programmes et examens
+      levels:
+      - maternelle
+      - primaire
+      - college
+      - lycee
+      subjects:
+      - toutes
+      resource_type: programmes
+    - domain: education.fr
+      priority: B
+      is_primary: false
+      label: Portail éducation — services institutionnels
+      levels:
+      - primaire
+      - college
+      - lycee
+      subjects:
+      - toutes
+      resource_type: ressources
+    - domain: primabord.eduscol.education.fr
+      priority: A
+      is_primary: true
+      label: Primàbord — ressources premier degré
+      levels:
+      - maternelle
+      - primaire
+      subjects:
+      - toutes
+      resource_type: ressources
+    - domain: sti.eduscol.education.fr
+      priority: A
+      is_primary: true
+      label: Éduscol STI — ressources sciences industrielles
+      levels:
+      - college
+      - lycee
+      - superieur
+      - professionnel
+      subjects:
+      - technologie
+      - sciences_industrielles
+      resource_type: cours
+    - domain: reseau-canope.fr
+      priority: B
+      is_primary: true
+      label: Réseau Canopé — ressources et formation des enseignants
+      levels:
+      - maternelle
+      - primaire
+      - college
+      - lycee
+      - enseignants
+      subjects:
+      - toutes
+      resource_type: pedagogie
+    - domain: lumni.fr
+      priority: B
+      is_primary: true
+      label: Lumni — vidéos et ressources éducatives
+      levels:
+      - primaire
+      - college
+      - lycee
+      subjects:
+      - toutes
+      resource_type: cours
+    - domain: cned.fr
+      priority: B
+      is_primary: true
+      label: CNED — enseignement à distance
+      levels:
+      - primaire
+      - college
+      - lycee
+      - adultes
+      subjects:
+      - toutes
+      resource_type: cours
+    - domain: onisep.fr
+      priority: A
+      is_primary: true
+      label: Onisep — diplômes, métiers et orientation
+      levels:
+      - college
+      - lycee
+      - superieur
+      - professionnel
+      subjects:
+      - orientation
+      resource_type: orientation
+    - domain: parcoursup.gouv.fr
+      priority: A
+      is_primary: true
+      label: Parcoursup — fiches des formations
+      levels:
+      - lycee
+      - superieur
+      subjects:
+      - orientation
+      resource_type: admissions
+    - domain: monmaster.gouv.fr
+      priority: A
+      is_primary: true
+      label: Mon Master — offre et admissions
+      levels:
+      - superieur
+      subjects:
+      - orientation
+      resource_type: admissions
+    - domain: francecompetences.fr
+      priority: A
+      is_primary: true
+      label: France compétences — certifications RNCP
+      levels:
+      - professionnel
+      - adultes
+      subjects:
+      - orientation
+      - metiers
+      resource_type: certifications
+    - domain: service-public.fr
+      priority: A
+      is_primary: true
+      label: Service-Public — droits liés à la formation
+      levels:
+      - professionnel
+      - adultes
+      subjects:
+      - orientation
+      resource_type: reglementation
+    - domain: chlorofil.fr
+      priority: A
+      is_primary: true
+      label: ChloroFil — enseignement agricole
+      levels:
+      - college
+      - lycee
+      - professionnel
+      subjects:
+      - agriculture
+      resource_type: programmes
+    - domain: educagri.fr
+      priority: B
+      is_primary: true
+      label: Educagri — enseignement agricole et formations
+      levels:
+      - lycee
+      - professionnel
+      - superieur
+      subjects:
+      - agriculture
+      resource_type: orientation
+    - domain: maths-et-tiques.fr
+      priority: B
+      is_primary: false
+      label: Maths et Tiques — cours et exercices
+      levels:
+      - college
+      - lycee
+      subjects:
+      - mathematiques
+      resource_type: cours
+    - domain: ses.ens-lyon.fr
+      priority: B
+      is_primary: true
+      label: SES ENS Lyon — dossiers pédagogiques et scientifiques
+      levels:
+      - lycee
+      - superieur
+      - enseignants
+      subjects:
+      - economie
+      - sociologie
+      resource_type: cours
+    - domain: geoconfluences.ens-lyon.fr
+      priority: B
+      is_primary: true
+      label: Géoconfluences — géographie ENS Lyon
+      levels:
+      - college
+      - lycee
+      - superieur
+      - enseignants
+      subjects:
+      - geographie
+      resource_type: cours
+    - domain: planet-terre.ens-lyon.fr
+      priority: B
+      is_primary: true
+      label: Planet-Terre — géosciences
+      levels:
+      - lycee
+      - superieur
+      - enseignants
+      subjects:
+      - svt
+      - geologie
+      resource_type: cours
+    - domain: planet-vie.ens.fr
+      priority: B
+      is_primary: true
+      label: Planet-Vie — biologie
+      levels:
+      - lycee
+      - superieur
+      - enseignants
+      subjects:
+      - svt
+      - biologie
+      resource_type: cours
+    - domain: culturemath.ens.fr
+      priority: B
+      is_primary: true
+      label: CultureMath — mathématiques
+      levels:
+      - lycee
+      - superieur
+      - enseignants
+      subjects:
+      - mathematiques
+      resource_type: cours
+    - domain: lelivrescolaire.fr
+      priority: A
+      is_primary: true
+      label: Le Livre Scolaire — manuels et cours conformes aux programmes
+      levels:
+      - college
+      - lycee
+      subjects:
+      - toutes
+      resource_type: manuels
+      notes: Manuels scolaires collaboratifs et conformes à l'Éducation Nationale
+    - domain: kartable.fr
+      priority: B
+      is_primary: true
+      label: Kartable — cours complets et fiches d'exercices structurées
+      levels:
+      - primaire
+      - college
+      - lycee
+      subjects:
+      - toutes
+      resource_type: exercices
+      notes: Fiches de cours et synthèses didactiques de référence pour le secondaire
+    - domain: schoolmouv.fr
+      priority: B
+      is_primary: true
+      label: SchoolMouv — cours didactiques et fiches de révision
+      levels:
+      - primaire
+      - college
+      - lycee
+      subjects:
+      - toutes
+      resource_type: cours
+      notes: Plateforme commerciale
+    - domain: annabac.com
+      priority: C
+      is_primary: false
+      label: Annabac — annales et révisions
+      levels:
+      - college
+      - lycee
+      subjects:
+      - toutes
+      resource_type: annales
+      notes: Contrôler la conformité aux programmes courants
+    - domain: afterclasse.fr
+      priority: C
+      is_primary: false
+      label: Afterclasse — fiches et quiz
+      levels:
+      - college
+      - lycee
+      subjects:
+      - toutes
+      resource_type: exercices
+    - domain: sujetdebac.fr
+      priority: C
+      is_primary: false
+      label: Sujets de bac et annales
+      levels:
+      - lycee
+      subjects:
+      - toutes
+      resource_type: annales
+      notes: Vérifier année et série
+    - domain: libretexts.org
+      priority: B
+      is_primary: false
+      label: LibreTexts — manuels ouverts
+      levels:
+      - lycee
+      - superieur
+      - adultes
+      subjects:
+      - sciences
+      - mathematiques
+      - humanites
+      resource_type: manuels
+    - domain: openstax.org
+      priority: B
+      is_primary: false
+      label: OpenStax — manuels universitaires ouverts
+      levels:
+      - lycee
+      - superieur
+      - adultes
+      subjects:
+      - sciences
+      - economie
+      - mathematiques
+      resource_type: manuels
+    - domain: oercommons.org
+      priority: B
+      is_primary: false
+      label: OER Commons — catalogue de ressources libres
+      levels:
+      - maternelle
+      - primaire
+      - college
+      - lycee
+      - superieur
+      - adultes
+      subjects:
+      - toutes
+      resource_type: agregateur
+      notes: La qualité varie selon les contributeurs
+    - domain: merlot.org
+      priority: B
+      is_primary: false
+      label: MERLOT — ressources pédagogiques évaluées
+      levels:
+      - superieur
+      - adultes
+      - enseignants
+      subjects:
+      - toutes
+      resource_type: agregateur
+    - domain: open.edu
+      priority: B
+      is_primary: true
+      label: OpenLearn / The Open University — cours ouverts
+      levels:
+      - lycee
+      - superieur
+      - adultes
+      subjects:
+      - toutes
+      resource_type: cours
+    - domain: ocw.mit.edu
+      priority: A
+      is_primary: true
+      label: MIT OpenCourseWare — cours MIT
+      levels:
+      - superieur
+      - adultes
+      subjects:
+      - sciences
+      - informatique
+      - ingenierie
+      - mathematiques
+      resource_type: cours
+    - domain: openlearning.mit.edu
+      priority: B
+      is_primary: true
+      label: MIT Open Learning
+      levels:
+      - superieur
+      - adultes
+      subjects:
+      - sciences
+      - informatique
+      - ingenierie
+      resource_type: cours
+    - domain: online.stanford.edu
+      priority: B
+      is_primary: true
+      label: Stanford Online — cours universitaires
+      levels:
+      - superieur
+      - adultes
+      subjects:
+      - toutes
+      resource_type: cours
+    - domain: oyc.yale.edu
+      priority: A
+      is_primary: true
+      label: Open Yale Courses — cours Yale
+      levels:
+      - superieur
+      - adultes
+      subjects:
+      - humanites
+      - sciences_sociales
+      - sciences
+      resource_type: cours
+    - domain: pll.harvard.edu
+      priority: B
+      is_primary: true
+      label: Harvard Professional and Lifelong Learning
+      levels:
+      - superieur
+      - adultes
+      subjects:
+      - toutes
+      resource_type: cours
+    - domain: saylor.org
+      priority: B
+      is_primary: false
+      label: Saylor Academy — cours ouverts
+      levels:
+      - lycee
+      - superieur
+      - adultes
+      subjects:
+      - toutes
+      resource_type: cours
+    - domain: nptel.ac.in
+      priority: B
+      is_primary: true
+      label: NPTEL — cours universitaires indiens
+      levels:
+      - superieur
+      - adultes
+      subjects:
+      - ingenierie
+      - sciences
+      - informatique
+      resource_type: cours
+    - domain: swayam.gov.in
+      priority: B
+      is_primary: true
+      label: SWAYAM — cours universitaires
+      levels:
+      - lycee
+      - superieur
+      - adultes
+      subjects:
+      - toutes
+      resource_type: cours
+    - domain: fun-mooc.fr
+      priority: B
+      is_primary: false
+      label: FUN MOOC — formations universitaires francophones
+      levels:
+      - superieur
+      - adultes
+      - professionnel
+      subjects:
+      - toutes
+      resource_type: mooc
+    - domain: coursera.org
+      priority: B
+      is_primary: false
+      label: Coursera — cours d’universités et entreprises
+      levels:
+      - lycee
+      - superieur
+      - adultes
+      - professionnel
+      subjects:
+      - toutes
+      resource_type: mooc
+      notes: Vérifier le fournisseur du cours et conditions d’accès
+    - domain: edx.org
+      priority: B
+      is_primary: false
+      label: edX — cours d’universités et institutions
+      levels:
+      - lycee
+      - superieur
+      - adultes
+      - professionnel
+      subjects:
+      - toutes
+      resource_type: mooc
+      notes: Vérifier l’établissement auteur et modalités d’accès
+    - domain: futurelearn.com
+      priority: B
+      is_primary: false
+      label: FutureLearn — cours universitaires
+      levels:
+      - superieur
+      - adultes
+      - professionnel
+      subjects:
+      - toutes
+      resource_type: mooc
+    - domain: openclassrooms.com
+      priority: B
+      is_primary: false
+      label: OpenClassrooms — cours et parcours professionnalisants
+      levels:
+      - lycee
+      - superieur
+      - adultes
+      - professionnel
+      subjects:
+      - informatique
+      - design
+      - gestion
+      - metiers
+      resource_type: cours
+      notes: Certaines formations sont payantes
+    - domain: udemy.com
+      priority: D
+      is_primary: false
+      label: Udemy — cours créés par des formateurs indépendants
+      levels:
+      - lycee
+      - superieur
+      - adultes
+      - professionnel
+      subjects:
+      - toutes
+      resource_type: marketplace
+      notes: Qualité variable; validation au niveau du cours
+    - domain: skillshare.com
+      priority: D
+      is_primary: false
+      label: Skillshare — cours créatifs
+      levels:
+      - adultes
+      - professionnel
+      subjects:
+      - design
+      - arts
+      - creativite
+      resource_type: marketplace
+      notes: Qualité variable
+    - domain: khanacademy.org
+      priority: B
+      is_primary: false
+      label: Khan Academy — parcours, exercices et vidéos
+      levels:
+      - primaire
+      - college
+      - lycee
+      - superieur
+      - adultes
+      subjects:
+      - mathematiques
+      - sciences
+      - economie
+      - informatique
+      resource_type: cours
+    - domain: fr.khanacademy.org
+      priority: B
+      is_primary: false
+      label: Khan Academy francophone
+      levels:
+      - primaire
+      - college
+      - lycee
+      subjects:
+      - mathematiques
+      - sciences
+      resource_type: cours
+    - domain: learningequality.org
+      priority: B
+      is_primary: false
+      label: Learning Equality / Kolibri — ressources hors ligne
+      levels:
+      - primaire
+      - college
+      - lycee
+      - adultes
+      subjects:
+      - toutes
+      resource_type: agregateur
+    - domain: ck12.org
+      priority: B
+      is_primary: false
+      label: CK-12 — sciences et maths adaptatives
+      levels:
+      - college
+      - lycee
+      subjects:
+      - mathematiques
+      - sciences
+      resource_type: cours
+    - domain: bbc.co.uk
+      priority: C
+      is_primary: false
+      label: BBC Bitesize — ressources scolaires britanniques
+      levels:
+      - primaire
+      - college
+      - lycee
+      subjects:
+      - toutes
+      resource_type: cours
+      notes: Prioriser les pages Bitesize
+    - domain: pbslearningmedia.org
+      priority: B
+      is_primary: false
+      label: PBS LearningMedia — contenus pédagogiques
+      levels:
+      - maternelle
+      - primaire
+      - college
+      - lycee
+      subjects:
+      - toutes
+      resource_type: cours
+    - domain: education.nationalgeographic.org
+      priority: B
+      is_primary: false
+      label: National Geographic Education
+      levels:
+      - primaire
+      - college
+      - lycee
+      subjects:
+      - geographie
+      - sciences
+      - environnement
+      resource_type: cours
+    - domain: science.nasa.gov
+      priority: A
+      is_primary: true
+      label: NASA Science — ressources scientifiques
+      levels:
+      - primaire
+      - college
+      - lycee
+      - superieur
+      subjects:
+      - astronomie
+      - physique
+      - sciences
+      resource_type: cours
+    - domain: phet.colorado.edu
+      priority: A
+      is_primary: true
+      label: PhET — simulations interactives de l’université du Colorado
+      levels:
+      - primaire
+      - college
+      - lycee
+      - superieur
+      subjects:
+      - physique
+      - chimie
+      - mathematiques
+      resource_type: simulateur
+    - domain: scratch.mit.edu
+      priority: B
+      is_primary: true
+      label: Scratch — programmation visuelle MIT
+      levels:
+      - primaire
+      - college
+      subjects:
+      - informatique
+      resource_type: exercices
+    - domain: code.org
+      priority: B
+      is_primary: false
+      label: Code.org — initiation informatique
+      levels:
+      - primaire
+      - college
+      - lycee
+      subjects:
+      - informatique
+      resource_type: cours
+    - domain: tv5monde.com
+      priority: B
+      is_primary: true
+      label: TV5MONDE — apprendre le français
+      levels:
+      - college
+      - lycee
+      - adultes
+      subjects:
+      - francais
+      - fle
+      resource_type: cours
+      notes: Privilégier la section Apprendre
+    - domain: rfi.fr
+      priority: B
+      is_primary: true
+      label: RFI — Savoirs et français facile
+      levels:
+      - college
+      - lycee
+      - adultes
+      subjects:
+      - francais
+      - fle
+      - actualites
+      resource_type: cours
+      notes: Privilégier français facile
+    - domain: britishcouncil.org
+      priority: B
+      is_primary: true
+      label: British Council — apprentissage anglais
+      levels:
+      - primaire
+      - college
+      - lycee
+      - adultes
+      subjects:
+      - anglais
+      resource_type: cours
+    - domain: learnenglish.britishcouncil.org
+      priority: B
+      is_primary: true
+      label: LearnEnglish — cours et exercices
+      levels:
+      - college
+      - lycee
+      - adultes
+      subjects:
+      - anglais
+      resource_type: exercices
+    - domain: cambridgeenglish.org
+      priority: B
+      is_primary: true
+      label: Cambridge English — ressources et niveaux CECR
+      levels:
+      - college
+      - lycee
+      - adultes
+      subjects:
+      - anglais
+      resource_type: cours
+    - domain: bbc.com
+      priority: C
+      is_primary: false
+      label: BBC — ressources anglais et culture
+      levels:
+      - college
+      - lycee
+      - adultes
+      subjects:
+      - anglais
+      resource_type: cours
+      notes: Limiter aux rubriques éducatives
+    - domain: dw.com
+      priority: B
+      is_primary: true
+      label: Deutsche Welle — apprentissage allemand
+      levels:
+      - college
+      - lycee
+      - adultes
+      subjects:
+      - allemand
+      resource_type: cours
+    - domain: cervantes.es
+      priority: B
+      is_primary: true
+      label: Instituto Cervantes — espagnol
+      levels:
+      - college
+      - lycee
+      - adultes
+      subjects:
+      - espagnol
+      resource_type: cours
+    - domain: duolingo.com
+      priority: C
+      is_primary: false
+      label: Duolingo — pratique linguistique
+      levels:
+      - primaire
+      - college
+      - lycee
+      - adultes
+      subjects:
+      - langues
+      resource_type: exercices
+      notes: Complément et non référence linguistique unique
+    - domain: languageguide.org
+      priority: C
+      is_primary: false
+      label: LanguageGuide — vocabulaire oral et visuel
+      levels:
+      - primaire
+      - college
+      - lycee
+      - adultes
+      subjects:
+      - langues
+      resource_type: exercices
+    - domain: imslp.org
+      priority: B
+      is_primary: false
+      label: IMSLP — partitions de musique classique
+      levels:
+      - college
+      - lycee
+      - superieur
+      - adultes
+      subjects:
+      - musique
+      resource_type: bibliotheque
+      notes: Vérifier statut des droits selon pays
+    - domain: metmuseum.org
+      priority: B
+      is_primary: true
+      label: The Met — ressources histoire de l’art
+      levels:
+      - college
+      - lycee
+      - superieur
+      - adultes
+      subjects:
+      - arts
+      - histoire
+      resource_type: bibliotheque
+    - domain: smarthistory.org
+      priority: B
+      is_primary: false
+      label: Smarthistory — histoire de l’art
+      levels:
+      - lycee
+      - superieur
+      - adultes
+      subjects:
+      - arts
+      - histoire
+      resource_type: cours
+    - domain: freecodecamp.org
+      priority: B
+      is_primary: false
+      label: freeCodeCamp — programmation pratique
+      levels:
+      - college
+      - lycee
+      - superieur
+      - adultes
+      - professionnel
+      subjects:
+      - informatique
+      resource_type: exercices
+    - domain: theodinproject.com
+      priority: B
+      is_primary: false
+      label: The Odin Project — développement Web
+      levels:
+      - lycee
+      - superieur
+      - adultes
+      - professionnel
+      subjects:
+      - informatique
+      resource_type: cours
+    - domain: developer.mozilla.org
+      priority: A
+      is_primary: true
+      label: MDN — apprentissage Web
+      levels:
+      - lycee
+      - superieur
+      - adultes
+      - professionnel
+      subjects:
+      - informatique
+      resource_type: documentation
+    - domain: docs.python.org
+      priority: A
+      is_primary: true
+      label: Python Documentation / Tutorial
+      levels:
+      - lycee
+      - superieur
+      - adultes
+      - professionnel
+      subjects:
+      - informatique
+      resource_type: documentation
+    - domain: cs50.harvard.edu
+      priority: A
+      is_primary: true
+      label: Harvard CS50 — initiation informatique
+      levels:
+      - lycee
+      - superieur
+      - adultes
+      subjects:
+      - informatique
+      resource_type: cours
+    - domain: exercism.org
+      priority: B
+      is_primary: false
+      label: Exercism — exercices et mentorat de programmation
+      levels:
+      - lycee
+      - superieur
+      - adultes
+      - professionnel
+      subjects:
+      - informatique
+      resource_type: exercices
+    - domain: w3schools.com
+      priority: C
+      is_primary: false
+      label: W3Schools — tutoriels Web
+      levels:
+      - college
+      - lycee
+      - adultes
+      subjects:
+      - informatique
+      resource_type: cours
+      notes: Vérifier avec documentation officielle
+    - domain: learn.microsoft.com
+      priority: A
+      is_primary: true
+      label: Microsoft Learn — documentation et parcours officiels
+      levels:
+      - lycee
+      - superieur
+      - adultes
+      - professionnel
+      subjects:
+      - informatique
+      - cloud
+      - cybersecurite
+      resource_type: documentation
+    - domain: skillsbuild.org
+      priority: B
+      is_primary: false
+      label: IBM SkillsBuild — compétences numériques
+      levels:
+      - lycee
+      - superieur
+      - adultes
+      - professionnel
+      subjects:
+      - informatique
+      - ia
+      - metiers
+      resource_type: cours
+    - domain: netacad.com
+      priority: B
+      is_primary: true
+      label: Cisco Networking Academy — réseaux et cybersécurité
+      levels:
+      - lycee
+      - superieur
+      - adultes
+      - professionnel
+      subjects:
+      - informatique
+      - reseaux
+      - cybersecurite
+      resource_type: cours
+    - domain: aws.amazon.com
+      priority: B
+      is_primary: true
+      label: AWS Training and Certification
+      levels:
+      - superieur
+      - adultes
+      - professionnel
+      subjects:
+      - cloud
+      - informatique
+      resource_type: cours
+      notes: Vérifier qu’il s’agit des pages de formation
+    - domain: afpa.fr
+      priority: B
+      is_primary: true
+      label: AFPA — formation professionnelle
+      levels:
+      - professionnel
+      - adultes
+      subjects:
+      - metiers
+      resource_type: formations
+    - domain: greta.fr
+      priority: B
+      is_primary: true
+      label: Réseau GRETA — formation continue
+      levels:
+      - professionnel
+      - adultes
+      subjects:
+      - metiers
+      resource_type: formations
+    - domain: moncompteformation.gouv.fr
+      priority: A
+      is_primary: true
+      label: Mon Compte Formation — catalogue et droits CPF
+      levels:
+      - professionnel
+      - adultes
+      subjects:
+      - metiers
+      resource_type: catalogue
+    - domain: francetravail.fr
+      priority: A
+      is_primary: true
+      label: France Travail — formation et emploi
+      levels:
+      - professionnel
+      - adultes
+      subjects:
+      - metiers
+      resource_type: catalogue
+    - domain: orientation-pour-tous.fr
+      priority: B
+      is_primary: false
+      label: Orientation pour tous — métiers et formation
+      levels:
+      - college
+      - lycee
+      - adultes
+      - professionnel
+      subjects:
+      - orientation
+      - metiers
+      resource_type: orientation
+    - domain: europass.europa.eu
+      priority: A
+      is_primary: true
+      label: Europass — compétences et parcours européens
+      levels:
+      - lycee
+      - superieur
+      - adultes
+      - professionnel
+      subjects:
+      - orientation
+      - langues
+      resource_type: orientation
+    - domain: gallica.bnf.fr
+      priority: A
+      is_primary: true
+      label: Gallica / BnF — documents patrimoniaux
+      levels:
+      - college
+      - lycee
+      - superieur
+      - adultes
+      subjects:
+      - francais
+      - histoire
+      - arts
+      resource_type: bibliotheque
+    - domain: persee.fr
+      priority: B
+      is_primary: false
+      label: Persée — publications scientifiques francophones
+      levels:
+      - lycee
+      - superieur
+      - adultes
+      subjects:
+      - sciences_humaines
+      - histoire
+      resource_type: bibliotheque
+    - domain: openedition.org
+      priority: B
+      is_primary: false
+      label: OpenEdition — revues et ouvrages de recherche
+      levels:
+      - superieur
+      - adultes
+      subjects:
+      - sciences_humaines
+      - histoire
+      resource_type: bibliotheque
+    - domain: projectgutenberg.org
+      priority: B
+      is_primary: false
+      label: Project Gutenberg — livres du domaine public
+      levels:
+      - college
+      - lycee
+      - superieur
+      - adultes
+      subjects:
+      - litterature
+      - langues
+      resource_type: bibliotheque
+      notes: Vérifier statut du droit d’auteur local
+    - domain: data.bnf.fr
+      priority: A
+      is_primary: true
+      label: BnF — notices d’auteurs et d’œuvres
+      levels:
+      - lycee
+      - superieur
+      - adultes
+      subjects:
+      - litterature
+      - histoire
+      resource_type: bibliotheque
+    - domain: educationendowmentfoundation.org.uk
+      priority: B
+      is_primary: true
+      label: EEF — synthèses de recherche sur l’enseignement
+      levels:
+      - enseignants
+      - adultes
+      subjects:
+      - pedagogie
+      resource_type: recherche
+    - domain: ies.ed.gov
+      priority: A
+      is_primary: true
+      label: Institute of Education Sciences — recherche et interventions
+      levels:
+      - enseignants
+      - superieur
+      - adultes
+      subjects:
+      - pedagogie
+      resource_type: recherche
+    - domain: artofproblemsolving.com
+      priority: B
+      is_primary: false
+      label: Art of Problem Solving — mathématiques avancées
+      levels:
+      - college
+      - lycee
+      subjects:
+      - mathematiques
+      resource_type: cours
+    - domain: brilliant.org
+      priority: C
+      is_primary: false
+      label: Brilliant — mathématiques et sciences interactives
+      levels:
+      - college
+      - lycee
+      - superieur
+      - adultes
+      subjects:
+      - mathematiques
+      - sciences
+      - informatique
+      resource_type: exercices
+      notes: Plateforme commerciale
+    - domain: mathigon.org
+      priority: B
+      is_primary: false
+      label: Mathigon — maths interactives
+      levels:
+      - primaire
+      - college
+      - lycee
+      subjects:
+      - mathematiques
+      resource_type: exercices
+    - domain: 3blue1brown.com
+      priority: B
+      is_primary: false
+      label: 3Blue1Brown — visualisation mathématique
+      levels:
+      - lycee
+      - superieur
+      - adultes
+      subjects:
+      - mathematiques
+      resource_type: cours
+    - domain: mathoverflow.net
+      priority: C
+      is_primary: false
+      label: MathOverflow — questions/réponses de recherche
+      levels:
+      - superieur
+      - adultes
+      subjects:
+      - mathematiques
+      resource_type: communaute
+      notes: Contrôler chaque réponse et ses démonstrations
+    - domain: math.stackexchange.com
+      priority: C
+      is_primary: false
+      label: Math Stack Exchange — mathématiques
+      levels:
+      - college
+      - lycee
+      - superieur
+      - adultes
+      subjects:
+      - mathematiques
+      resource_type: communaute
+      notes: Qualité dépend des réponses
