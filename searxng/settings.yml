@@ -1,6 +1,27 @@
-use_default_settings: true
+use_default_settings:
+  engines:
+    keep_only:
+      # Moteurs généralistes
+      - duckduckgo
+      - google
+      - qwant
+      - bing
+
+      # Recherche scientifique & académique
+      - arxiv
+      - openalex
+      - pubmed
+      - europepmc
+
+      # Informatique & Documentation technique
+      - mdn
+      - microsoft learn
+
+      # Actualités
+      - reuters
 
 search:
+  default_lang: auto
   formats:
     - html
     - json
@@ -8,104 +29,45 @@ search:
 server:
   limiter: false
 
+outgoing:
+  request_timeout: 4.0
+
 engines:
-  - name: 360search
+  - name: duckduckgo
     disabled: false
-  - name: abcnyheter
-    disabled: false
-  - name: andisearch
-    disabled: true
-  - name: ayo
-    disabled: false
-  - name: baidu
-    disabled: false
-  - name: bing
-    disabled: false
-  - name: boardreader
-    disabled: false
-  - name: bpb
-    disabled: false
-  - name: crowdview
-    disabled: false
-  - name: yep
-    disabled: false
-  - name: ddg definitions
-    disabled: false
-  - name: encyclosearch
-    disabled: false
-  - name: duckduckgo web
-    disabled: false
-  - name: tineye
-    disabled: false
-  - name: fastbot
-    disabled: true
-  - name: fireball
-    disabled: true
-  - name: fynd
-    disabled: false
-  - name: gabanza
-    disabled: true
-  - name: gmx
-    disabled: false
+    weight: 1.0
+
   - name: google
     disabled: false
-  - name: mozhi
-    disabled: false
-  - name: mwmbl
-    disabled: false
-  - name: openlibrary
-    disabled: false
-  - name: quark
-    disabled: false
+    weight: 1.0
+
   - name: qwant
     disabled: false
-  - name: searchmysite
-    disabled: true
-  - name: sogou
-    disabled: true
-  - name: privacywall
+    weight: 0.7
+
+  - name: bing
     disabled: false
-  - name: tagesschau
+    weight: 0.8
+
+  - name: arxiv
     disabled: false
-  - name: tusksearch
-    disabled: true
-  - name: yandex
+
+  - name: openalex
     disabled: false
-  - name: yahoo
+
+  - name: pubmed
     disabled: false
-  - name: wiby
+
+  - name: europepmc
     disabled: false
-  - name: wikibooks
+
+  - name: mdn
     disabled: false
-  - name: wikiquote
+
+  - name: microsoft learn
     disabled: false
-  - name: wikisource
+
+  - name: reuters
     disabled: false
-  - name: wikispecies
-    disabled: false
-  - name: wikiversity
-    disabled: false
-  - name: wikivoyage
-    disabled: false
-  - name: wolframalpha
-    disabled: true
-  - name: seznam
-    disabled: false
-  - name: naver
-    disabled: false
-  - name: yacy
-    disabled: false
-  - name: reloado
-    disabled: false
-  - name: resulthunter
-    disabled: true
-  - name: searchch
-    disabled: false
-  - name: vuhuv
-    disabled: false
-  - name: wikimini
-    disabled: false
-  - name: zapmeta
-    disabled: false
-  - name: brave
+
     disabled: true

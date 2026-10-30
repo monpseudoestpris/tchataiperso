@@ -411,10 +411,21 @@ def validate_claim_evidence(
     }
 
 
+def _canonical_claim_key(figures: list[str], cited_indices: list[int]) -> str:
+    """Clé canonique pour regrouper les répétitions d'un même fait ou chiffre appuyé sur la même source."""
+    figs_key = "-".join(sorted(str(f).replace(" ", "") for f in figures))
+    srcs_key = "-".join(sorted(str(i) for i in cited_indices))
+    return f"F:{figs_key}|S:{srcs_key}"
+
+
 def verify_report_figures(report_markdown: str, sources: list[dict[str, Any]]) -> dict[str, Any]:
-    """Contrôle chaque phrase contenant un chiffre précis ou une causalité forte et retourne les lignes de vérification ClaimEvidence."""
+    """Contrôle chaque phrase contenant un chiffre précis ou une causalité forte et retourne les lignes de vérification ClaimEvidence.
+    
+    Regroupe les occurrences répétées d'une même affirmation canonique (même chiffre, même source)
+    pour que la répétition 13 fois d'un même fait ne gonfle pas artificiellement le taux de validation.
+    """
     text_sources = [s for s in sources if s.get("media_type") != "image" and not s.get("img_src")]
-    rows: list[dict[str, Any]] = []
+    raw_rows: list[dict[str, Any]] = []
     for raw_line in report_markdown.splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#") or line.startswith(">") or set(line) <= set("-|: "):
@@ -423,8 +434,8 @@ def verify_report_figures(report_markdown: str, sources: list[dict[str, Any]]) -
             full_sent = sentence.strip()
             absolute = _ABSOLUTE_RE.search(sentence)
             if absolute:
-                rows.append({
-                    "claim": full_sent[:200],
+                raw_rows.append({
+                    "claim": full_sent[:140],
                     "full_sentence": full_sent,
                     "figures": [],
                     "sources": _cited_indexes(sentence),
@@ -439,8 +450,8 @@ def verify_report_figures(report_markdown: str, sources: list[dict[str, Any]]) -
                 continue
             cited = _cited_indexes(sentence)
             val_res = validate_claim_evidence(full_sent, cited, text_sources, figures)
-            rows.append({
-                "claim": full_sent[:200],
+            raw_rows.append({
+                "claim": full_sent[:140],
                 "full_sentence": full_sent,
                 "figures": figures,
                 "sources": [i for i in cited if 1 <= i <= len(text_sources)] or cited,
@@ -454,7 +465,32 @@ def verify_report_figures(report_markdown: str, sources: list[dict[str, Any]]) -
                 "entailment": val_res.get("entailment"),
                 "note": val_res["note"],
             })
-    stats = {"total": sum(1 for r in rows if r["figures"])}
+
+    # Regroupement canonique : décompte des faits distincts vs occurrences totales
+    canonical_map: dict[str, dict[str, Any]] = {}
+    canonical_rows: list[dict[str, Any]] = []
+    for r in raw_rows:
+        figs = r.get("figures", [])
+        srcs = r.get("sources", [])
+        if figs:
+            ckey = _canonical_claim_key(figs, srcs)
+            if ckey in canonical_map:
+                canonical_map[ckey]["occurrences"] += 1
+                continue
+            entry = dict(r)
+            entry["occurrences"] = 1
+            canonical_map[ckey] = entry
+            canonical_rows.append(entry)
+        else:
+            entry = dict(r)
+            entry["occurrences"] = 1
+            canonical_rows.append(entry)
+
+    # Statistiques basées sur les affirmations canoniques distinctes
+    stats = {
+        "total": sum(1 for r in canonical_rows if r["figures"]),
+        "total_occurrences": sum(r.get("occurrences", 1) for r in canonical_rows if r["figures"]),
+    }
     for key in (
         "retrouvé",
         "mention indicative nuancée",
@@ -464,8 +500,8 @@ def verify_report_figures(report_markdown: str, sources: list[dict[str, Any]]) -
         "formulation catégorique",
         "portée divergente",
     ):
-        stats[key] = sum(1 for r in rows if r["status"] == key)
-    return {"rows": rows, "stats": stats}
+        stats[key] = sum(1 for r in canonical_rows if r["status"] == key)
+    return {"rows": canonical_rows, "raw_rows_count": len(raw_rows), "stats": stats}
 
 
 def run_repair_loop(
@@ -611,17 +647,22 @@ def format_verification_markdown(
     lines.extend([
         " · ".join(parts_stat) + ".",
         "> Règle : aucun chiffre précis n'est un fait établi sans source pertinente, contenu effectivement consulté "
-        "(extrait) et périmètre statistique vérifié. Ce contrôle automatique ne valide jamais le périmètre : "
-        "« retrouvé » signifie seulement que le nombre figure dans la source.",
+        "(extrait) et périmètre statistique vérifié. Les affirmations équivalentes réutilisant le même chiffre sont "
+        "regroupées en faits canoniques distincts.",
         "",
-        "| Affirmation chiffrée | Source(s) | Statut | Confiance | Action ClaimEvidence |",
-        "|---|---|---|---|---|",
+        "| Affirmation chiffrée | Occurrences | Source(s) | Statut | Confiance | Action ClaimEvidence |",
+        "|---|:---:|---|---|---|---|",
     ])
     for r in ranked:
-        claim = r["claim"].replace("|", "\\|")
+        # Nettoyage Markdown : pas de barres non échappées, pas de retours chariot, coupure propre
+        raw_claim = (r.get("claim") or "").replace("\n", " ").replace("\r", " ").strip()
+        clean_claim = re.sub(r"\s+", " ", raw_claim).replace("|", "/")
+        if len(clean_claim) > 130:
+            clean_claim = clean_claim[:127] + "…"
+        occurrences = r.get("occurrences", 1)
         srcs = ", ".join(f"[{i}]" for i in r["sources"]) or "—"
         action = r.get("action", "remedy")
-        lines.append(f"| {claim} | {srcs} | {r['status']} | {r['confidence']} | {action} |")
+        lines.append(f"| {clean_claim} | {occurrences} | {srcs} | {r['status']} | {r['confidence']} | {action} |")
     if len(rows) > len(ranked):
         lines.append(f"\n*{len(rows) - len(ranked)} autres affirmations chiffrées non listées (statut « retrouvé » majoritairement).*")
     lines.append("")

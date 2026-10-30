@@ -387,6 +387,28 @@ def classify_source_tier(source: dict[str, Any], learn_mode: bool = False) -> st
     return "D"
 
 
+_CATALOG_OR_NAV_RE = re.compile(
+    r"\b(?:index\.php\?lvl=|lvl=publisher_see|catalogue|documentation\.|portail|annuaire|recherche\?|"
+    r"liste\s+des\s+publications|toutes\s+les\s+publications|notice\s+générale|a-propos|about-us|"
+    r"/taxonomy/|/category/|/tag/|/rubrique/)\b",
+    re.IGNORECASE,
+)
+
+
+def is_catalog_or_nav_page(source: dict[str, Any]) -> bool:
+    """Détecte les pages de catalogues documentaires, annuaires, index ou pages de métadonnées d'éditeurs
+    qui ne constituent pas le rapport statistique original lui-même."""
+    url = str(source.get("url") or "").lower()
+    title = str(source.get("title") or "").lower()
+    snippet = str(source.get("snippet") or "").lower()
+
+    if _CATALOG_OR_NAV_RE.search(url):
+        return True
+    if any(k in title for k in ("catalogue documentaire", "liste des publications", "annuaire des", "portail documentaire", "notice bibliographique")):
+        return True
+    return False
+
+
 def calculate_source_quality_score(
     source: dict[str, Any],
     question: str = "",
@@ -420,6 +442,11 @@ def calculate_source_quality_score(
     if is_primary_document(source) and primary_pt < 20.0:
         primary_pt = min(20.0, primary_pt + 3.0)
 
+    # Pénalité stricte au niveau du document : un domaine de confiance (Tier A) pointant vers
+    # un simple catalogue documentaire, une page d'accueil ou un index perd sa prime de source primaire
+    if is_catalog_or_nav_page(source):
+        primary_pt = max(6.0, primary_pt - 10.0)
+
     # 3. Qualité des preuves (chiffres, méthodologie, métriques) (20 pts max)
     snippet = str(source.get("snippet") or "")
     evidence_pt = 8.0
@@ -439,6 +466,8 @@ def calculate_source_quality_score(
 
     # 5. Indépendance et provenance (10 pts max)
     domain_pt = 8.0 if is_primary_domain(source) else 5.0
+    if is_catalog_or_nav_page(source):
+        domain_pt = max(2.0, domain_pt - 4.0)
 
     # 6. Accessibilité (5 pts max)
     access_pt = 5.0 if snippet and len(snippet) > 40 else 2.0

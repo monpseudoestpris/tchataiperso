@@ -43,7 +43,8 @@ def test_markdown_registry_lists_anomalies_first_and_states_rule():
     result = verify_report_figures("Taux 94 % [1][2]. Autre 77 %.", SOURCES)
     md = format_verification_markdown(result)
     assert md.startswith("## Registre de vérification factuelle")
-    assert md.index("non sourcé") < md.index("retrouvé |")
+    table_part = md[md.index("| Affirmation chiffrée"):]
+    assert table_part.index("non sourcé") < table_part.index("retrouvé")
     assert "périmètre" in md
     assert format_verification_markdown({"rows": [], "stats": {}}) == ""
 

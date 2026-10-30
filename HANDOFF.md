@@ -1,43 +1,37 @@
-# Relais — 30 octobre 2026 (Architecture V2 Evidence-First Finale : Chercheur-Analyste Multidisciplinaire & Rédaction Calibrée sur les Preuves)
+# Relais — 30 octobre 2026 (cLAIr DeepSearch V2 : Alignement Documentaire, Anti-Biais Monocentré & Affirmations Canoniques)
 
 ## 1. Project Overview
-cLAIr est une plateforme d'assistance IA avec recherche documentaire approfondie (DeepSearch) et mode d'apprentissage intensif (Mode Apprendre). Le pipeline opère désormais selon l'architecture **Evidence-First** sobre et rigoureuse : la recherche construit une base de preuves vérifiables (`EvidenceLedger`), sur laquelle raisonne un **Chercheur-Analyste Multidisciplinaire** unique (analyse interne structurée en 7 dimensions avec contradiction explicite), avant une rédaction unifiée et dense par l'Agent Écrivain (calibrée sur les preuves réelles de 1 500 à 3 000 mots sans délayage) et un contrôle qualité factuel indépendant (QualityGate Python déterministe + boucle de réparation 2 cycles + audit critique GPT-6 Astra).
+cLAIr est une plateforme d'assistance IA avec recherche documentaire approfondie (DeepSearch) et mode d'apprentissage intensif (Mode Apprendre). Le pipeline opère selon l'architecture **Evidence-First** : la recherche construit une base de preuves vérifiables (`EvidenceLedger`), sur laquelle raisonne un Chercheur-Analyste Multidisciplinaire unique avant une rédaction unifiée et un contrôle qualité factuel indépendant.
 
 ## 2. Current Objective
-Achever l'alignement méthodologique complet demandé :
-1. **Contrat du Chercheur-Analyste Multidisciplinaire ([`providers.py`](file:///home/chabert/Projets/tchataiperso/backend/app/providers.py))** :
-   - Fin des personas artificiels et des anecdotes de terrain inventées.
-   - Mandat méthodologique strict : analyser les preuves récupérées, confronter les explications alternatives, expliciter les contradictions documentaires, distinguer faits avérés / hypothèses / projections, quantifier uniquement si les données le permettent, reconnaître les limites et questions ouvertes.
-   - Sortie interne structurée en 7 clés YAML :
-     `established_facts`, `main_findings`, `competing_explanations`, `contradictions`, `uncertainties`, `actionable_recommendations`, `evidence_ids`.
-2. **Calibrage naturel de rédaction sur les preuves réelles ([`providers.py`](file:///home/chabert/Projets/tchataiperso/backend/app/providers.py))** :
-   - Suppression définitive des quotas artificiels de mots boursouflés dans `_DETAIL_LEVEL_SPECS` (calibrage de 200–450 mots utiles par section au lieu de 1 500–2 400 mots délayés).
-   - Consigne stricte à l'Agent Écrivain : densité maximale, zéro remplissage, texte dense de 1 500 à 3 000 mots au total pour l'ensemble du rapport.
-3. **Séparation étanche Chercheur-Analyste / Écrivain / Vérificateur Factuel** :
-   - L'analyste et le rédacteur ne certifient JAMAIS leur propre texte.
-   - Le vérificateur indépendant (Fact-Checker Astra + QualityGate Python déterministe) contrôle les affirmations en accédant directement aux sources d'origine et à l'Evidence Ledger, avec boucle de réparation (`run_repair_loop`).
+Corriger les 4 faiblesses documentaires identifiées par l'audit critique :
+1. **Planificateur d'investigation ancré dans les questions réelles** :
+   - Suppression du plan de dissertation scolaire passe-partout (« Genèse, mécanismes fondamentaux »).
+   - `default_report_outline` et `plan_report_outline` dans [`providers.py`](file:///home/chabert/Projets/tchataiperso/backend/app/providers.py) déduisent désormais les parties directement de la checklist d'investigation et imposent des titres ancrés dans les sous-questions concrètes (ex. métiers émergents IA, filières à éviter, tensions).
+   - Nettoyage des reliquats de mention « 3 experts » dans les mandats d'ouverture et de clôture.
+2. **Score de qualité au niveau du document (`SourceIntelligence`)** :
+   - Fonction `is_catalog_or_nav_page` dans [`source_filter.py`](file:///home/chabert/Projets/tchataiperso/backend/app/source_filter.py) : pénalisation directe des pages d'accueil, catalogues documentaires, listes de publications et index d'éditeurs (même sur un domaine Tier A comme l'Onisep) au profit de la publication originale.
+3. **Rupture des recherches monocentrées (`CoverageAuditor`)** :
+   - Détection des déséquilibres dans [`deep_search.py`](file:///home/chabert/Projets/tchataiperso/backend/app/deep_search.py) et [`learn_mode.py`](file:///home/chabert/Projets/tchataiperso/backend/app/learn_mode.py) : si un seul organisme ou domaine représente plus de 50% du corpus alors que des aspects restent ouverts, injection immédiate de requêtes diversifiées (`-site:<dominant>`).
+4. **Comptage des affirmations canoniques distinctes (`FactChecker`)** :
+   - Dans [`fact_verifier.py`](file:///home/chabert/Projets/tchataiperso/backend/app/fact_verifier.py), regroupement des occurrences réutilisant le même fait/chiffre en une seule affirmation canonique (`_canonical_claim_key`).
+   - La répétition 13 fois d'un même chiffre sur l'apprentissage ne gonfle plus le taux d'audit à 13 validations mais compte pour 1 fait validé avec 13 occurrences.
+   - Amélioration du formatage Markdown du tableau d'audit (échappement des `|`, coupure propre, colonne `Occurrences`).
 
 ## 3. Completed Work
-- `backend/app/evidence_ledger.py` : registre des preuves déterministes, typage, dédoublonnage et familles d'éditeurs.
-- `backend/app/research_planner.py` : planificateur de recherche par sous-questions et audit de couverture déterministe.
-- `backend/app/fact_verifier.py` : boucle de réparation chirurgicale multi-cycles (`run_repair_loop`) et QualityGate déterministe.
-- `backend/app/providers.py` :
-  - `_DETAIL_LEVEL_SPECS` recalibré sur des échelles sobres proportionnées aux preuves (1 500 à 3 000 mots max pour un grand rapport complet).
-  - `build_expert_analysis_messages` : contrat du Chercheur-Analyste Multidisciplinaire avec format de sortie YAML en 7 dimensions préservant la contradiction interne.
-  - `build_section_writer_messages` : intégration des 7 dimensions d'analyse et consigne d'écriture dense sans délayage ni quota arbitraire.
-  - `default_domain_experts`, `default_report_outline`, `plan_report_outline`, `format_report_outline_markdown` alignés sur l'analyste unique.
-- `backend/app/routers/messages.py` : exécution sobre d'un seul appel d'analyste par partie, injection de l'Evidence Ledger, transition directe vers l'Agent Écrivain et passage par `run_repair_loop`.
-- `backend/tests/` : l'intégralité des 314 tests backend réussis avec succès (`pytest backend/tests/`).
-- `frontend/` : `npm run typecheck` avec 0 erreur.
+- `backend/app/providers.py` : plan d'investigation ancré dans `aspect_checklist` et suppression des en-têtes d'experts obsolètes.
+- `backend/app/source_filter.py` : pénalisation documentaire de `is_catalog_or_nav_page` dans `calculate_source_quality_score`.
+- `backend/app/deep_search.py` & `backend/app/learn_mode.py` : détection du biais monocentré et diversification automatique des requêtes.
+- `backend/app/fact_verifier.py` : affirmations canoniques distinctes, suivi d'occurrences et tableau Markdown assaini.
+- `backend/tests/test_fact_verifier.py` : mise à jour des assertions pour le tableau d'audit canonique.
 
 ## 4. Verification
-- `PYTHONPATH=backend backend/.venv/bin/pytest backend/tests/` : **314 passed, 0 failures** (100% succès).
+- `PYTHONPATH=backend pytest backend/tests/` : **314 passed, 0 failures** (100% au vert).
 - `npm --prefix frontend run typecheck` : **0 erreur**.
-- Docker compose : `tchataiperso-clair-api-1` statut **healthy**.
+- Conteneurs Docker `clair-searxng` et `clair-api` : statut **healthy**.
 
 ## 5. Next Action
-Mission entièrement achevée. Le système opère de bout en bout selon l'algorithme cLAIr DeepSearch V2 — Evidence First :
-- Prêt pour la mise en production ou l'exécution d'investigations DeepSearch réelles avec l'expert unique et les contrôles qualité déterministes.
+Prêt pour lancer l'investigation sur la question d'orientation et les 3 thématiques de contrôle (scientifique, économique, juridique) afin d'évaluer la représentativité multi-domaines.
 
 ---
 

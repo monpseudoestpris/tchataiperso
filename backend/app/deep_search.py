@@ -525,6 +525,33 @@ def create_deep_search_graph(
         covered_count = sum(1 for c in aspect_checklist if c.get("status") == "covered")
         total_points = len(aspect_checklist)
 
+        # CoverageAuditor (Anti-Recherche Monocentrée) :
+        # Si une part disproportionnée des sources provient d'un seul organisme/domaine (ex: > 50% sur la DEPP)
+        # alors que plusieurs sous-questions ou aspects restent ouverts, forcer la diversification
+        from urllib.parse import urlparse
+        source_domains = [urlparse(s.get("url", "")).netloc.lower() for s in sources if s.get("url")]
+        domain_counts = {}
+        for d in source_domains:
+            domain_counts[d] = domain_counts.get(d, 0) + 1
+        
+        is_monocentered = False
+        top_domain = ""
+        if len(source_domains) >= 4:
+            top_domain, top_count = max(domain_counts.items(), key=lambda x: x[1])
+            if top_count / len(source_domains) >= 0.50:
+                is_monocentered = True
+        
+        if is_monocentered and not is_sufficient:
+            # Identifier les aspects non couverts par ce domaine dominant
+            uncovered_aspects = [c for c in aspect_checklist if c.get("status") != "covered"]
+            if uncovered_aspects:
+                divergent_aspect = uncovered_aspects[0].get("aspect") or uncovered_aspects[0].get("question", "")
+                diversified_query = f"{raw_query[:45]} {divergent_aspect[:35]} -site:{top_domain}"
+                if diversified_query not in executed_queries and diversified_query not in followup_queries:
+                    followup_queries.insert(0, diversified_query)
+                    if on_status:
+                        on_status(f"DeepSearch · CoverageAuditor : diversification des sources (rupture du biais monocentré sur {top_domain})…")
+
         # Primary Source Resolution : si des citations d'organismes officiels/scientifiques sont mentionnées
         # dans les notes d'articles secondaires, injecter une requête ciblée vers la publication originale
         primary_citations = extract_primary_source_citations(findings)

@@ -2472,60 +2472,93 @@ def default_report_outline(
             "parts": selected_content + [flashcards_module],
         }
 
+    # Si une checklist d'investigation initiale existe (aspect_checklist), déduire les grandes parties
+    # directement des questions réelles posées et des aspects concrets à instruire, évitant le plan générique.
+    if aspect_checklist and len(aspect_checklist) >= 2:
+        parts_from_checklist = []
+        for idx, item in enumerate(aspect_checklist[: spec["num_parts"]], start=1):
+            aspect_name = str(item.get("aspect") or f"Axe {idx}").strip()
+            item_q = str(item.get("question") or "").strip()
+            parts_from_checklist.append({
+                "id": f"S{idx}",
+                "heading": f"## {idx}. {aspect_name}",
+                "subparts": [
+                    f"### {idx}.1 Diagnostic factuel, métriques et données vérifiées",
+                    f"### {idx}.2 Analyse causale, comparaison et retours d'expérience",
+                    f"### {idx}.3 Limites documentaires, risques et arbitrages",
+                ],
+                "focus": (
+                    f"Traiter obligatoirement et prioritairement la question d'enquête : « {item_q} » "
+                    f"en mobilisant les données probantes et les sources primaires correspondantes."
+                ),
+            })
+        if len(parts_from_checklist) >= 2:
+            return {
+                "title": f"# Grand Rapport d'Investigation Approfondie : {clean}",
+                "executive_summary_guide": (
+                    f"Synthèse exécutive détaillée répondant directement à « {clean} », présentation de l'Expert Référent ({e1}), "
+                    "conclusions majeures chiffrées et arbitrage synthétique."
+                ),
+                "detail_level": spec["level"],
+                "detail_label": spec["label"],
+                "experts": experts,
+                "parts": parts_from_checklist,
+            }
+
     all_parts = [
         {
             "id": "S1",
-            "heading": "## 1. Cadre Général, Fondations Structurelles & Diagnostic",
+            "heading": "## 1. Cadre Général, Diagnostic & État des Lieux Chiffré",
             "subparts": [
-                "### 1.1 Genèse, mécanismes fondamentaux et dynamique structurelle",
-                "### 1.2 Réalité opérationnelle, acteurs clés et indicateurs chiffrés actuels",
-                "### 1.3 Contraintes institutionnelles et premiers arbitrages",
+                "### 1.1 Définitions, périmètre d'analyse et indicateurs statistiques officiels",
+                "### 1.2 Réalité opérationnelle, acteurs de référence et données actuelles",
+                "### 1.3 Contraintes structurelles et premiers constats",
             ],
-            "focus": "Poser le diagnostic complet avec chiffres officiels et cadre réglementaire.",
+            "focus": f"Poser le diagnostic répondant directement à « {clean} » avec chiffres officiels vérifiables.",
         },
         {
             "id": "S2",
-            "heading": "## 2. Analyse Approfondie des Voies Porteuses, Tensions & Leviers Majeurs",
+            "heading": "## 2. Analyse Approfondie des Voies Porteuses, Tensions & Opportunités",
             "subparts": [
-                "### 2.1 Fondements de la création de valeur et moteurs structurels",
-                "### 2.2 Analyse détaillée des secteurs en tension, métriques et rendements",
-                "### 2.3 Études de cas réels, conditions d'accès et soutenabilité",
+                "### 2.1 Moteurs de développement, secteurs en tension et compétences recherchées",
+                "### 2.2 Analyse comparative des débouchés, taux d'insertion et rémunérations",
+                "### 2.3 Études de cas, conditions réelles d'accès et trajectoires",
             ],
-            "focus": "Développer chaque piste porteuse avec statistiques précises et exemples nommés.",
+            "focus": "Développer chaque piste porteuse avec données chiffrées précises et sources primaires.",
         },
         {
             "id": "S3",
-            "heading": "## 3. Analyse Critique & Vision 360° : Limites, Risques, Impasses & Plan d'Action",
+            "heading": "## 3. Analyse Critique & Vision 360° : Filières Saturées, Risques & Pièges à Éviter",
             "subparts": [
-                "### 3.1 Déséquilibres structurels, limites théoriques et comparaisons",
-                "### 3.2 Voies saturées, pièges de terrain et recommandations opérationnelles",
-                "### 3.3 Risques systémiques et feuille de route par profil",
+                "### 3.1 Voies bouchées, formations à rentabilité contestée et surévaluation des promesses",
+                "### 3.2 Pièges récurrents, coûts réels et désillusions documentées",
+                "### 3.3 Risques technologiques, automatisation et soutenabilité à moyen terme",
             ],
-            "focus": "Confronter forces et faiblesses, détailler ce qu'il faut éviter et livrer un plan d'action.",
+            "focus": "Détailler précisément les voies risquées ou saturées et ce qu'il faut impérativement éviter.",
         },
         {
             "id": "S4",
-            "heading": "## 4. Grands Tableaux Comparatifs Multicritères & Benchmarks",
+            "heading": "## 4. Métiers Émergents, Impact Technologique & Projections Futures",
             "subparts": [
-                "### 4.1 Tableau comparatif maître et analyse des modèles",
-                "### 4.2 Benchmark chiffré des coûts, performances, rendements et délais réels",
-                "### 4.3 Matrice des risques, compromis (trade-offs) et enseignements clés",
+                "### 4.1 Nouveaux métiers et mutations induites par les ruptures (notamment IA)",
+                "### 4.2 Formations et compétences requises pour s'y positionner",
+                "### 4.3 Données prospectives, études d'offres et limites des projections",
             ],
-            "focus": "Fournir des tableaux Markdown riches et confronter l'interprétation chiffrée.",
+            "focus": "Analyser spécifiquement les métiers émergents avec l'IA et les filières adaptées.",
         },
         {
             "id": "S5",
-            "heading": "## 5. Stratégie Opérationnelle, Feuille de Route & Recommandations",
+            "heading": "## 5. Synthèse Stratégique, Arbitrages & Plan d'Action Personnalisé",
             "subparts": [
-                "### 5.1 Stratégie de fond et choix structurants",
-                "### 5.2 Plan d'action concret, exécution et leviers d'accélération",
-                "### 5.3 Gestion des risques et synthèse décisionnelle",
+                "### 5.1 Grille décisionnelle multicritères et choix structurants",
+                "### 5.2 Feuille de route concrète étape par étape",
+                "### 5.3 Recommandations pragmatiques et gestion des incertitudes",
             ],
-            "focus": "Donner un guide d'action immédiatement applicable avec recommandations concrètes.",
+            "focus": "Formuler des recommandations actionnables et un plan d'arbitrage répondant à chaque interrogation.",
         },
         {
             "id": "S6",
-            "heading": "## 6. Études de Cas Sectorielles Approfondies & Scénarios Prospectifs",
+            "heading": "## 6. Études de Cas Approfondies & Scénarios Prospectifs",
             "subparts": [
                 "### 6.1 Modélisation prospective à moyen/long terme et scénarios",
                 "### 6.2 Retours d'expérience chiffrés sur cas réels emblématiques",
@@ -2659,11 +2692,15 @@ async def plan_report_outline(
             "# RÔLE : AGENT PLANIFICATEUR D'ARCHITECTURE DE RAPPORT DEEPSEARCH (ÉTAPE 1/2)\n"
             "Tu es un Directeur d'Investigation et Architecte Éditorial. Ta mission est double :\n"
             "1. **Sélectionner l'EXPERT RÉFÉRENT GLOBAL DU DOMAINE** faisant autorité sur le sujet pour analyser avec rigueur les preuves disponibles.\n"
-            f"2. **Concevoir le PLAN DE LA SORTIE CALIBRÉ AU NIVEAU DE DÉTAIL {spec['level']}/10 ({spec['label']})** en exactement **{target_parts} grandes parties `##`** et sous-parties `###` thématiques fluides, denses et sans redondance.\n\n"
+            f"2. **Concevoir le PLAN D'INVESTIGATION CALIBRÉ AU NIVEAU DE DÉTAIL {spec['level']}/10 ({spec['label']})** en exactement **{target_parts} grandes parties `##`** et sous-parties `###` thématiques directes, denses et sans redondance.\n\n"
+            f"## RÈGLE ABSOLUE ANTI-PLAN GÉNÉRIQUE DE DISSERTATION :\n"
+            "- INTERDICTION FORMELLE d'utiliser des titres passe-partout scolaires ou désincarnés (ex. « Genèse, mécanismes fondamentaux », « Fondements de la création de valeur », « Grands tableaux comparatifs »).\n"
+            "- Chaque titre `heading` et sous-titre `subparts` DOIT nommer explicitement les sujets concrets, technologies, filières, entités ou arbitrages réels posés par l'utilisateur dans sa demande (ex. au lieu de « Secteurs porteurs », écrire « Métiers de l'IA, Informatique & Ingénierie : Filières d'accès et tensions réelles » ; au lieu de « Risques », écrire « Filières saturées & Formations à éviter : Diagnostics d'insertion et pièges »).\n"
+            "- Chaque sous-question posée explicitement par l'utilisateur dans sa question DOIT faire l'objet d'au moins une grande partie ou sous-partie dédiée, sous peine de rejet.\n\n"
             f"## EXIGENCES D'ARCHITECTURE DU PLAN ({target_parts} GRANDES PARTIES `##`) :\n"
-            "1. Chaque grande partie (`heading`) doit commencer par `## N. Titre explicite et analytique de la partie`.\n"
+            "1. Chaque grande partie (`heading`) doit commencer par `## N. Titre explicite et analytique ancré dans le sujet réel`.\n"
             "2. **Dans CHAQUE grande partie `##`**, structure 2 à 4 sous-parties `subparts` thématiques (`### N.1 ...`, `### N.2 ...`) qui organisent logiquement le propos sans redites.\n"
-            "3. Le plan doit couvrir 100% de la question initiale, tous les points de `aspect_checklist`, toutes les `intermediate_questions`, et intégrer la **vision panoramique à 360°** (tensions structurelles, filières saturées, benchmarks chiffrés, comparaisons internationales, recommandations concrètes).\n"
+            "3. Le plan doit couvrir 100% de la question initiale, tous les points de `aspect_checklist`, toutes les `intermediate_questions`, et intégrer la **vision panoramique à 360°** (tensions structurelles, filières saturées/à éviter, métiers émergents de l'IA, comparaisons chiffrées, recommandations concrètes).\n"
             f"4. Dans le champ `focus` de chaque partie, indique précisément à l'Agent Écrivain quelles données chiffrées, quelles études de cas et quelles sources traiter ({spec['words_per_part']} par partie).\n\n"
             "## FORMAT DE SORTIE (JSON STRICT UNIQUEMENT) :\n"
             "{\n"
@@ -3252,14 +3289,14 @@ def build_section_writer_messages(
         if learn_mode:
             intro_mandate = (
                 "### OUVERTURE DU COURS (AVANT LE MODULE 1) :\n"
-                "- Comme il s'agit de la **première partie (1/" + str(total_parts) + f")**, commence par rédiger une **Introduction Générale & Feuille de Route des 3 Experts** ({spec['intro_paragraphs']} présentant l'intérêt du sujet, les objectifs d'apprentissage et l'apport complémentaire des 3 experts : "
+                "- Comme il s'agit de la **première partie (1/" + str(total_parts) + f")**, commence par rédiger une **Introduction Générale & Objectifs Pédagogiques** ({spec['intro_paragraphs']} présentant l'intérêt du sujet, les compétences visées et la démarche de l'Expert Référent du domaine : "
                 f"{exec_guide}), puis enchaîne immédiatement avec `{heading}`.\n"
                 "- Ne répète PAS le titre H1 `# ...` ni le sommaire qui ont déjà été affichés juste au-dessus.\n\n"
             )
         else:
             intro_mandate = (
                 "### SYNTHÈSE EXÉCUTIVE D'OUVERTURE (AVANT LA PARTIE 1) :\n"
-                "- Comme il s'agit de la **première partie (1/" + str(total_parts) + f")**, commence par une section `## Synthèse Exécutive & Diagnostic Croisé des 3 Experts` ({spec['intro_paragraphs']} + points clés chiffrés répondant directement à la question : "
+                "- Comme il s'agit de la **première partie (1/" + str(total_parts) + f")**, commence par une section `## Synthèse Exécutive & Diagnostic de l'Expert Référent` ({spec['intro_paragraphs']} + points clés chiffrés répondant directement à la question : "
                 f"{exec_guide}), puis enchaîne immédiatement avec `{heading}`.\n"
                 "- Ne répète PAS le titre H1 `# ...` ni le sommaire qui ont déjà été affichés juste au-dessus.\n\n"
             )
@@ -3273,7 +3310,7 @@ def build_section_writer_messages(
         if learn_mode:
             outro_mandate = (
                 "\n### EXIGENCE ABSOLUE POUR CE DERNIER MODULE (FLASHCARDS & QUIZ INTERACTIFS) :\n"
-                "- Ce module clôture le cours. Après la synthèse d'ancrage mémoriel croisant les règles d'or des 3 experts, tu DOIS impérativement rédiger intégralement :\n"
+                "- Ce module clôture le cours. Après la synthèse d'ancrage mémoriel reprenant les règles d'or de l'Expert Référent, tu DOIS impérativement rédiger intégralement :\n"
                 "  1. Les **20 Flashcards** numérotées exactement `### Flashcard 1` jusqu'à `### Flashcard 20` (chacune avec `- **Recto :** ...` et `- **Verso :** ...`).\n"
                 "  2. Les **20 Questions de Quiz QCM** numérotées exactement `### Question 1` jusqu'à `### Question 20` (chacune avec `**Énoncé :** ...`, `- A) ...`, `- B) ...`, `- C) ...`, `- D) ...`, `- **Bonne réponse :** ...` et `- **Explication :** ...`).\n"
                 "  3. Termine par une courte section `## Sources & Supports de Cours Utilisés` listant les références `[1], [2]...`.\n"
@@ -3281,7 +3318,7 @@ def build_section_writer_messages(
         else:
             outro_mandate = (
                 "\n### CLÔTURE DU RAPPORT (DERNIÈRE PARTIE) :\n"
-                "- Comme il s'agit de la **dernière partie (" + str(total_parts) + "/" + str(total_parts) + ")**, après l'intervention des 3 experts dans leurs sous-parties respectives, termine par une section `## Synthèse Consensuelle des 3 Experts, Bilan des Points de Contrôle & Sources` qui réconcilie leurs points de vue, valide les questions intermédiaires et liste proprement les sources `[1], [2]...` citées.\n"
+                "- Comme il s'agit de la **dernière partie (" + str(total_parts) + "/" + str(total_parts) + ")**, après le traitement complet de cette partie, termine par une section `## Synthèse Stratégique, Bilan des Points de Contrôle & Sources` qui récapitule les arbitrages essentiels, valide les questions investiguées et liste proprement les sources `[1], [2]...` citées.\n"
             )
 
     already_written_block = ""
@@ -3826,26 +3863,60 @@ def _log_search_results(
     )
 
 
-async def _search_searxng(settings: Any, query: str, limit: int = 5) -> list[dict[str, str]]:
+def detect_specialized_search_engines(query: str) -> list[str]:
+    """Détecte les moteurs spécialisés SearXNG pertinents selon le domaine de la requête (Passe 2)."""
+    q_low = (query or "").lower()
+    engines: list[str] = []
+
+    # 1. Sciences dures, physique, mathématiques, informatique théorique, IA
+    if any(k in q_low for k in ["quantique", "physique", "théorème", "mathémati", "algorithme", "machine learning", "deep learning", "arxiv", "équation", "astrophysique", "relativité"]):
+        engines.extend(["arxiv", "openalex"])
+
+    # 2. Médecine, biologie, santé, clinique, pharmacologie
+    if any(k in q_low for k in ["médical", "santé", "pathologie", "syndrome", "maladie", "thérapie", "molécule", "clinique", "pharmac", "cellulaire", "cancer", "vaccin", "gène", "génétique"]):
+        engines.extend(["pubmed", "europepmc", "openalex"])
+
+    # 3. Programmation, développement, API, framework, documentation technique
+    if any(k in q_low for k in ["python", "typescript", "javascript", "rust", "golang", "c++", "css", "html", "react", "api", "framework", "sdk", "linux", "docker", "posix", "azure", "dotnet", "c#"]):
+        engines.extend(["mdn", "microsoft learn"])
+
+    # 4. Actualités internationales & économiques
+    if any(k in q_low for k in ["actualité", "news", "direct", "déclaration", "sommet", "reuters", "élection", "conflit", "guerre", "ministre", "gouvernement"]):
+        engines.extend(["reuters"])
+
+    # Déduplication tout en préservant l'ordre
+    seen = set()
+    return [e for e in engines if not (e in seen or seen.add(e))]
+
+
+async def _search_searxng(
+    settings: Any,
+    query: str,
+    limit: int = 5,
+    engines: list[str] | None = None,
+) -> list[dict[str, str]]:
     try:
+        params: dict[str, Any] = {"q": query, "format": "json"}
+        if engines:
+            params["engines"] = ",".join(engines)
         async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=False) as client:
             response = await client.get(
                 settings.searxng_url.rstrip("/") + "/search",
-                params={"q": query, "format": "json"},
+                params=params,
                 headers={"Accept": "application/json", "X-Forwarded-For": "127.0.0.1"},
             )
         _check_response(response, "SearXNG")
         payload = _json(response, "SearXNG")
         results = payload.get("results", [])
         sources = _web_sources(results, "content", "SearXNG", limit=limit)
-        engines = {
+        active_engines = {
             engine
             for result in results
             if isinstance(result, dict)
             for engine in result.get("engines", [])
             if isinstance(engine, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", engine)
         }
-        _log_search_results("SearXNG", query, sources, engines)
+        _log_search_results("SearXNG", query, sources, active_engines)
         return sources
     except ProviderError as exc:
         _logger.warning("Recherche web SearXNG en échec pour %r: %s", query[:1000], exc)
@@ -4094,8 +4165,17 @@ async def _search_duckduckgo(query: str) -> list[dict[str, str]]:
         raise ProviderError("Impossible de joindre DuckDuckGo Instant Answers.") from None
 
 
-async def search_web(settings: Any, query: str, limit: int = 5) -> list[dict[str, str]]:
-    """Prefer SearXNG, then Brave, and optionally relay to the limited official Instant Answers API."""
+async def search_web(
+    settings: Any,
+    query: str,
+    limit: int = 5,
+    engines: list[str] | None = None,
+) -> list[dict[str, str]]:
+    """Recherche web à deux passes cLAIr DeepSearch :
+    1. Passe 1 : Recherche générale ciblée (DuckDuckGo, Google, Qwant, Bing via SearXNG).
+    2. Passe 2 : Moteurs spécialisés selon le domaine (arXiv, OpenAlex, PubMed, EuropePMC, MDN, Microsoft Learn, Reuters).
+    3. Secours : repli vers Brave Search API ou recherche ouverte si résultats insuffisants.
+    """
     if getattr(settings, "demo_mode", False):
         raise ProviderError("La recherche web externe est désactivée en mode démonstration.")
     searxng_url = getattr(settings, "searxng_url", "").strip()
@@ -4105,9 +4185,23 @@ async def search_web(settings: Any, query: str, limit: int = 5) -> list[dict[str
     prior_error: ProviderError | None = None
     cause = "Brave Search n'est pas configuré."
 
+    # Détection automatique de moteurs spécialisés si non spécifiés
+    target_engines = engines or detect_specialized_search_engines(query)
+
     if searxng_url:
         try:
-            sources = await _search_searxng(settings, query, limit=limit)
+            # Passe 1 : recherche sur les moteurs généraux (ou spécialisés si spécifiés)
+            sources = await _search_searxng(settings, query, limit=limit, engines=engines)
+            
+            # Passe 2 : si des moteurs spécialisés sont détectés et que le volume reste inférieur au limit, compléter
+            if target_engines and not engines and len(sources) < limit:
+                try:
+                    spec_sources = await _search_searxng(settings, query, limit=limit, engines=target_engines)
+                    if spec_sources:
+                        sources = merge_web_sources(sources, spec_sources, limit=limit)
+                except Exception as exc:
+                    _logger.debug("Passe spécialisée SearXNG non bloquante: %s", exc)
+
             if sources or (not brave_configured and not allow_duckduckgo):
                 return sources
             if brave_configured:
