@@ -18,6 +18,16 @@ from ..serializers import (IMAGE_ASPECT_RATIOS, MAX_GENERATED_IMAGES,
 router = APIRouter(tags=["images"])
 
 
+@router.get("/api/images/models")
+def list_image_models(
+    force_refresh: bool = False,
+    settings: Settings = Depends(get_settings),
+):
+    if settings.demo_mode:
+        return []
+    return settings.get_image_models(force_refresh=force_refresh)
+
+
 @router.get("/api/images")
 def list_generated_images(
     user: User = Depends(current_user),

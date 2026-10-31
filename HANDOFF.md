@@ -1,51 +1,39 @@
 # Relais — 31 octobre 2026
 
 ## 1. Project Overview
-cLAIr : application d'apprentissage et de révision didactique, conversation IA avancée, backend FastAPI/SQLAlchemy/Python, frontend Next.js 16/React/TypeScript.
+cLAIr : application d'apprentissage et de révision didactique, conversation IA avancée, Studio Image et multimédia, backend FastAPI/SQLAlchemy/Python, frontend Next.js 16/React/TypeScript.
 
 ## 2. Current Objective
-Suppression intégrale des questions méta-méthodologiques ("Quel est le piège à éviter avec...", "Quelle démarche adopter...", etc.) et garantie d'une génération de questions, flashcards et quizz portant à 100% sur le contenu concret du cours fourni (définitions, théorèmes, formules LaTeX, calculs de coordonnées, relation de Chasles, colinéarité).
+Garantir la présence prioritaire permanente d'Ideogram v2 dans la modale de sélection de modèle du Studio Image (`ImageModelModal`), avec son onglet dédié, son positionnement en tête de liste et sa compatibilité immédiate avec les modèles OpenRouter.
 
 ## 3. Completed Work
-- **Identification de la cause racine** :
-  1. Les modèles LLM écrivant des formules LaTeX dans des réponses JSON omettaient le doublement de l'antislash (ex: `\vec`, `\sqrt`, `\alpha`). `json.loads` standard levait alors `JSONDecodeError: Invalid \escape`, provoquant silencieusement un repli vers `fallback_study_material`.
-  2. L'ancien `fallback_study_material` contenait des templates statiques de méthodologie générale ("Piège fréquent : Quel est le piège ou l'erreur courante à éviter avec : [sujet] ?", "Méthodologie", "Règle d'or"), qui se retrouvaient affichés aux élèves.
-  3. L'ancien prompt LLM suggérait des axes méta ("Méthode", "Piège à éviter") au lieu d'interdire les questions de méthodologie.
-- **Résolution & Améliorations (`backend/app/providers.py`)** :
-  - **Désensibilisation et réparation JSON des antislashs LaTeX** : `re.sub(r"(?<!\\)\\(?![\\\"/])", r"\\\\", candidate)` répare automatiquement toute notation LaTeX non échappée sans altérer les séquences JSON valides (`\"`, `\\`).
-  - **Refonte intégrale de `fallback_study_material`** :
-    - Élimination complète de tous les templates de méthodologie générique.
-    - Analyseur syntaxique multi-passes extrayant les définitions numérotées/puces, termes en gras au sein des phrases, sections du cours, formules mathématiques et règles de calcul directement depuis le texte.
-    - Génération de questions factuelles et disciplinaires ciblées ("Que désigne ou définit précisément...", "Concernant [Concept], qu'énonce le cours ?", etc.).
-    - Filtre de sécurité `_is_methodology_study_item` éliminant tout énoncé méta résiduel.
-  - **Durcissement des Prompts LLM (`generate_study_material`)** :
-    - Interdiction formelle et explicite de toute question méta, de démarche d'étude ou d'attitude de l'élève.
-    - Consigne stricte : 100% des questions doivent porter exclusivement sur le cours (notions, formules, théorèmes, règles, exemples).
-    - Obligation de notations LaTeX KaTeX entre dollars simples `$ ... $`.
-    - Catégories exclusivement disciplinaires ('Définition', 'Formule', 'Théorème', 'Propriété', 'Calcul', 'Règle', 'Application').
-    - Remplacement de tout élément méta détecté dans le retour LLM par une unité de cours vérifiée.
-- **Tests & Vérifications** :
-  - `backend/tests/test_study_material.py` : test de régression ajouté `test_study_material_no_generic_methodology_on_vectors_course` (5/5 passés).
-  - Suite complète backend : **391 tests passés** avec succès.
-  - Test en direct sur le conteneur `tchataiperso-clair-api` avec la conversation réelle sur les vecteurs : 10 cartes générées avec succès par le modèle IA, 100% axées sur le cours de vecteurs (caractéristiques, égalité, Chasles, colinéarité, coordonnées, parallélisme).
+- **Positionnement prioritaire d'Ideogram v2 (`backend/app/config.py`)** :
+  - `ideogram` est désormais injecté en tête de liste de manière inconditionnelle avec `_rank = -1` et `is_top = True`.
+  - Maintien des ratios d'aspect spécifiques à Ideogram (1x1, 16x9, 9x16, 4x3, 3x4, 3x2, 2x3, 10x16, 16x10, 1x3, 3x1).
+- **Interface & Modale (`frontend/components/image-model-modal.tsx`)** :
+  - Onglet dédié `Ideogram v2` placé parmi les premiers onglets de sélection rapide.
+  - Tri prioritaire dans `sortedModels` garantissant qu'Ideogram reste en tête de liste tant sur l'onglet `Tous` que sur `⭐ Top Collection`.
+  - Onglet par défaut initialisé sur `Tous` pour que l'utilisateur visualise immédiatement l'ensemble des modèles d'image disponibles dès l'ouverture.
+- **Tests & Recompilation** :
+  - Tests unitaires et d'intégration validés (391 tests passés).
+  - Compilation Next.js validée sans avertissement ni erreur TypeScript.
+  - Conteneurs `clair-api` et `clair-web` recompilés et opérationnels sur [http://localhost:3001](http://localhost:3001).
 
 ## 4. Key Decisions
-- **Réparation transparente des échappements LaTeX dans les flux JSON** : permet au LLM d'utiliser naturellement les délimiteurs mathématiques LaTeX sans faire échouer le parsing JSON.
-- **Ancrage textuel strict** : le fallback comme le prompt privilégient toujours les concepts concrets extraits du cours.
+- **Inclusion inconditionnelle d'Ideogram** : Permet à l'utilisateur de sélectionner et d'utiliser Ideogram v2 à tout moment dans le Studio Image, en complément de tous les modèles d'images dynamiques d'OpenRouter.
 
 ## 5. Modified Files
-- `backend/app/providers.py` : réparation JSON LaTeX, prompts durcis sans méthodologie, nouvelle extraction de cours et suppression des templates méta.
-- `backend/tests/test_study_material.py` : ajout de tests de non-régression validant l'absence de questions méta et la présence de contenu disciplinaire.
-- `HANDOFF.md` : mise à jour de la documentation d'étape.
+- `backend/app/config.py` : injection permanente prioritaire d'Ideogram v2.
+- `frontend/components/image-model-modal.tsx` : onglet dédié, tri prioritaire et affichage par défaut complet.
+- `HANDOFF.md` : journalisation de la mise à jour.
 
 ## 6. Verification
-- `PYTHONPATH=backend backend/.venv/bin/pytest backend/tests/test_study_material.py` : 5 passés.
-- `PYTHONPATH=backend backend/.venv/bin/pytest backend/tests` : 391 passés.
-- `docker compose build clair-api && docker compose up -d clair-api` : conteneur reconstruit et opérationnel (`healthy`).
-- Test d'exécution réelle sur la conversation des vecteurs niveau seconde : 10 cartes de cours pures obtenues.
+- `curl -s "http://127.0.0.1:8001/api/images/models" | jq '.[0]'` : renvoie bien `ideogram` en position 0 avec `_rank: -1` et `is_top: true`.
+- `npm run build --prefix frontend` : compilation réussie.
+- `docker compose ps` : conteneurs `clair-api` et `clair-web` opérationnels et sains.
 
 ## 7. Known Issues and Risks
 - Aucun problème connu.
 
 ## 8. Next Action
-Prêt pour test utilisateur dans le navigateur sur [http://localhost:3001](http://localhost:3001).
+Prêt pour test utilisateur dans le Studio Image sur [http://localhost:3001](http://localhost:3001).

@@ -868,6 +868,15 @@ def test_multi_model_image_generation_with_openrouter(tmp_path, monkeypatch):
         assert config["features"]["image_generation"] is True
         assert any(m["id"] == "google/gemini-3-pro-image" for m in config["image_models"])
 
+        # Dedicated dynamic image models endpoint
+        models_resp = client.get("/api/images/models")
+        assert models_resp.status_code == 200
+        models_list = models_resp.json()
+        assert any(m["id"] == "google/gemini-3-pro-image" for m in models_list)
+        gemini_model = next(m for m in models_list if m["id"] == "google/gemini-3-pro-image")
+        assert "pricing_text" in gemini_model
+        assert "description" in gemini_model
+
         # Attempting ideogram without ideogram key raises 503
         bad = client.post("/api/images", json={"prompt": "Un chat", "model": "ideogram"})
         assert bad.status_code == 503

@@ -18,7 +18,16 @@ export type Model = {
   provider?: string;
   reasoning?: boolean;
 };
-export type ImageModel = { id: string; name: string; provider: "ideogram" | "openrouter" };
+export type ImageModel = {
+  id: string;
+  name: string;
+  provider: "ideogram" | "openrouter";
+  pricing_text?: string;
+  description?: string;
+  supported_aspect_ratios?: string[];
+  supported_resolutions?: string[];
+  is_top?: boolean;
+};
 export type Config = {
   models: Model[];
   default_model: string;

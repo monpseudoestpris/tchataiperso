@@ -2,10 +2,11 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
-  Ban, Check, CircleAlert, Copy, Download, Expand, ExternalLink, ImagePlus,
-  LoaderCircle, Minimize2, RotateCcw, SlidersHorizontal, Sparkles, Trash2, WandSparkles, X,
+  Ban, Check, CircleAlert, Coins, Copy, Download, Expand, ExternalLink, ImagePlus,
+  LoaderCircle, Minimize2, RefreshCw, RotateCcw, SlidersHorizontal, Sparkles, Trash2, WandSparkles, X,
 } from "lucide-react";
-import { api, errorMessage, type Config, type GeneratedImage } from "@/lib/api";
+import { api, errorMessage, type Config, type GeneratedImage, type ImageModel } from "@/lib/api";
+import { ImageModelModal } from "@/components/image-model-modal";
 
 const ASPECT_RATIOS = [
   { value: "1:1", label: "1:1", hint: "Carré" },
@@ -269,6 +270,7 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
   const [zoomed, setZoomed] = useState(false);
   const [styleKeywords, setStyleKeywords] = useState("");
   const [negativePrompt, setNegativePrompt] = useState("");
+  const [showModelModal, setShowModelModal] = useState(false);
   const promptRef = useRef<HTMLTextAreaElement>(null);
 
   function toggleNegativePrompt(tag: string) {
@@ -310,23 +312,50 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
     (config?.models?.some(m => m.id === "openai/gpt-6-luna") ? "openai/gpt-6-luna" : config?.default_model || "openai/gpt-6-luna");
   const [improveModel, setImproveModel] = useState<string>(preferredModel);
 
+  const [dynamicImageModels, setDynamicImageModels] = useState<ImageModel[]>([]);
+  const [loadingModels, setLoadingModels] = useState(false);
+
   const availableImageModels =
-    config?.image_models && config.image_models.length > 0
-      ? config.image_models
-      : [{ id: "ideogram", name: "Ideogram v2 (Sélection auto)", provider: "ideogram" as const }];
+    dynamicImageModels.length > 0
+      ? dynamicImageModels
+      : (config?.image_models && config.image_models.length > 0
+          ? config.image_models
+          : [{ id: "ideogram", name: "Ideogram v2 (Sélection auto)", provider: "ideogram" as const }]);
 
   const initialGenModel = config?.default_image_model || availableImageModels[0]?.id || "ideogram";
   const [generationModel, setGenerationModel] = useState<string>(initialGenModel);
 
+  async function loadModels(force = false) {
+    setLoadingModels(true);
+    try {
+      const list = await api<ImageModel[]>(`/images/models${force ? "?force_refresh=true" : ""}`);
+      if (Array.isArray(list) && list.length > 0) {
+        setDynamicImageModels(list);
+      }
+    } catch {
+      // Keep existing list
+    } finally {
+      setLoadingModels(false);
+    }
+  }
+
+  useEffect(() => {
+    void loadModels(false);
+  }, []);
+
   useEffect(() => {
     if (config?.default_image_model && availableImageModels.some(m => m.id === config.default_image_model)) {
-      setGenerationModel(config.default_image_model);
+      if (!generationModel || !availableImageModels.some(m => m.id === generationModel)) {
+        setGenerationModel(config.default_image_model);
+      }
     } else if (availableImageModels.length > 0 && !availableImageModels.some(m => m.id === generationModel)) {
       setGenerationModel(availableImageModels[0].id);
     }
-  }, [config?.default_image_model, config?.image_models]);
+  }, [config?.default_image_model, availableImageModels, generationModel]);
 
   const selectedGenModel = availableImageModels.find(m => m.id === generationModel) || availableImageModels[0];
+  const topModels = availableImageModels.filter(m => m.is_top);
+  const otherModels = availableImageModels.filter(m => !m.is_top);
 
   useEffect(() => {
     if (config?.image_prompt_model) {
@@ -673,24 +702,6 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
                   {busy === "improve" ? <LoaderCircle className="spin" size={15} /> : <WandSparkles size={15} />}
                   <span>{busy === "improve" ? "Amélioration en cours…" : "Améliorer le prompt"}</span>
                 </button>
-                {config?.models && config.models.length > 0 && (
-                  <div className="image-model-selector-wrapper" title="Modèle d'IA utilisé pour enrichir le prompt">
-                    <Sparkles size={12} className="image-model-icon" />
-                    <select
-                      className="image-model-select"
-                      value={improveModel}
-                      onChange={e => setImproveModel(e.target.value)}
-                      disabled={!!busy}
-                      aria-label="Modèle IA d'amélioration de prompt"
-                    >
-                      {config.models.map(m => (
-                        <option key={m.id} value={m.id}>
-                          {m.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )}
                 {previousPrompt !== null && (
                   <button
                     type="button"
@@ -748,25 +759,85 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
 
               <div className="image-model-gen-section">
                 <div className="image-model-gen-header">
-                  <span className="image-section-label">Modèle de génération d’image</span>
-                  <span className="image-model-provider-badge">
-                    {selectedGenModel?.provider === "ideogram" ? "Ideogram API" : "OpenRouter API"}
-                  </span>
-                </div>
-                <div className="image-model-gen-select-wrapper">
-                  <select
-                    className="image-model-gen-select"
-                    value={generationModel}
-                    onChange={e => setGenerationModel(e.target.value)}
-                    disabled={!!busy}
-                    aria-label="Modèle de génération d’image"
+                  <div className="image-model-gen-title-group">
+                    <span className="image-section-label">Modèle de génération & vision</span>
+                    <span className="image-model-count-badge">
+                      {availableImageModels.length} modèle{availableImageModels.length > 1 ? "s" : ""}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    className="image-models-refresh-btn"
+                    onClick={() => void loadModels(true)}
+                    disabled={loadingModels || !!busy}
+                    title="Actualiser en direct les modèles et tarifs depuis OpenRouter"
                   >
-                    {availableImageModels.map(m => (
-                      <option key={m.id} value={m.id}>
-                        {m.name}
-                      </option>
-                    ))}
-                  </select>
+                    <RefreshCw size={11} className={loadingModels ? "spin" : ""} />
+                    <span>{loadingModels ? "Actualisation…" : "Actualiser"}</span>
+                  </button>
+                </div>
+
+                <div
+                  className="image-model-trigger-card"
+                  onClick={() => setShowModelModal(true)}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={e => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      setShowModelModal(true);
+                    }
+                  }}
+                  title="Cliquer pour ouvrir la modale de sélection de modèle d'image et de vision"
+                >
+                  <div className="image-model-trigger-top">
+                    <div className="image-model-trigger-ident">
+                      <div className="image-model-trigger-icon">
+                        <Sparkles size={16} />
+                      </div>
+                      <div className="image-model-trigger-title-group">
+                        <strong className="image-model-trigger-name">{selectedGenModel?.name}</strong>
+                        {selectedGenModel?.is_top && (
+                          <span className="image-model-top-badge" title="Top Collection OpenRouter">
+                            <Sparkles size={10} />
+                            <span>Top Collection</span>
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      className="image-model-change-btn"
+                      onClick={e => {
+                        e.stopPropagation();
+                        setShowModelModal(true);
+                      }}
+                    >
+                      <span>Changer</span>
+                      <SlidersHorizontal size={12} />
+                    </button>
+                  </div>
+
+                  {selectedGenModel?.description && (
+                    <p className="image-model-trigger-desc">{selectedGenModel.description}</p>
+                  )}
+
+                  <div className="image-model-trigger-pills">
+                    {selectedGenModel?.pricing_text && (
+                      <div className="image-model-pricing-pill" title="Tarif du modèle">
+                        <Coins size={12} />
+                        <span>Tarif : <strong>{selectedGenModel.pricing_text}</strong></span>
+                      </div>
+                    )}
+                    {selectedGenModel?.supported_resolutions && selectedGenModel.supported_resolutions.length > 0 && (
+                      <div className="image-model-meta-pill" title="Résolutions maximales">
+                        <span>Max : {selectedGenModel.supported_resolutions[selectedGenModel.supported_resolutions.length - 1]}</span>
+                      </div>
+                    )}
+                    <div className="image-model-meta-pill" title="Fournisseur API">
+                      <span>{selectedGenModel?.provider === "ideogram" ? "Ideogram v2" : "OpenRouter API"}</span>
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -951,6 +1022,16 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
           </div>
         </div>
       </section>
+
+      {showModelModal && (
+        <ImageModelModal
+          currentModel={generationModel}
+          models={availableImageModels}
+          onSelectModel={id => setGenerationModel(id)}
+          onClose={() => setShowModelModal(false)}
+          onRefreshModels={() => loadModels(true)}
+        />
+      )}
     </div>
   );
 }

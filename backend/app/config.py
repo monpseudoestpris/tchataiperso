@@ -12,17 +12,167 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 _REPO_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 
 
-DEFAULT_IMAGE_MODELS: list[dict[str, str]] = [
-    {"id": "ideogram", "name": "Ideogram v2 (Sélection auto)", "provider": "ideogram"},
-    {"id": "google/gemini-3-pro-image", "name": "Google Gemini 3 Pro Image (Imagen 3)", "provider": "openrouter"},
-    {"id": "google/gemini-3.1-flash-image", "name": "Google Gemini 3.1 Flash Image", "provider": "openrouter"},
-    {"id": "google/gemini-2.5-flash-image", "name": "Google Gemini 2.5 Flash Image", "provider": "openrouter"},
-    {"id": "black-forest-labs/flux-3-image", "name": "FLUX 3 Image (Black Forest Labs)", "provider": "openrouter"},
-    {"id": "black-forest-labs/flux-3-image-klein", "name": "FLUX 3 Image Klein (Rapide)", "provider": "openrouter"},
-    {"id": "openai/gpt-image-2.5-sunburst", "name": "OpenAI GPT Image 2.5 Sunburst", "provider": "openrouter"},
-    {"id": "openai/gpt-image-2.5-flare", "name": "OpenAI GPT Image 2.5 Flare", "provider": "openrouter"},
-    {"id": "bytedance-seed/seedream-5-0-flash", "name": "ByteDance Seedream 5.0 Flash", "provider": "openrouter"},
-    {"id": "recraft/recraft-v4.1-flash", "name": "Recraft v4.1 Flash (Design & Vector)", "provider": "openrouter"},
+DEFAULT_IMAGE_MODELS: list[dict[str, Any]] = [
+    {
+        "id": "ideogram",
+        "name": "Ideogram v2 (Sélection auto)",
+        "provider": "ideogram",
+        "pricing_text": "Ideogram API",
+        "description": "Rendu typographique et artistique d'excellence, maîtrise inégalée du texte au cœur des images.",
+        "supported_aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"],
+        "supported_resolutions": ["1K", "2K"],
+        "is_top": True,
+    },
+    {
+        "id": "google/gemini-3.1-flash-image",
+        "name": "Google: Nano Banana 2 (Gemini 3.1 Flash Image)",
+        "provider": "openrouter",
+        "pricing_text": "$0.50/M in · $60/M out",
+        "description": "Modèle phare de Google alliant qualité Pro et vitesse Flash. Compréhension contextuelle poussée et retouches itératives.",
+        "supported_aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "21:9"],
+        "supported_resolutions": ["512", "1K", "2K", "4K"],
+        "is_top": True,
+    },
+    {
+        "id": "openai/gpt-image-2.5-sunburst",
+        "name": "OpenAI: GPT Image 2.5 Sunburst",
+        "provider": "openrouter",
+        "pricing_text": "$8/M in · $30/M out",
+        "description": "Précision artistique et fidélité de composition maximale pour créations graphiques exigeantes via l'Images API.",
+        "supported_aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "21:9"],
+        "supported_resolutions": ["1K", "2K", "4K"],
+        "is_top": True,
+    },
+    {
+        "id": "google/gemini-nano-banana-2.1",
+        "name": "Google: Nano Banana 2.1",
+        "provider": "openrouter",
+        "pricing_text": "$1.50/M in · $30/M out",
+        "description": "Teintes de peau photoréalistes, éclairage et textures détaillés, fidélité factuelle et édition multi-passes.",
+        "supported_aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "21:9"],
+        "supported_resolutions": ["1K", "2K", "4K"],
+        "is_top": True,
+    },
+    {
+        "id": "bytedance-seed/seedream-5-0-flash",
+        "name": "ByteDance Seed: Seedream 5.0 Flash",
+        "provider": "openrouter",
+        "pricing_text": "$0.018/img",
+        "description": "Génération ultra-rapide et économique à faible latence, idéale pour la production visuelle continue.",
+        "supported_aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "21:9"],
+        "supported_resolutions": ["1K", "2K"],
+        "is_top": True,
+    },
+    {
+        "id": "meta/muse-image",
+        "name": "Meta: Muse Image",
+        "provider": "openrouter",
+        "pricing_text": "$0.01/img",
+        "description": "Modèle agentique avec chaîne de pensée avant rendu, recherche web intégrée et cohérence de style.",
+        "supported_aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4"],
+        "supported_resolutions": ["1K", "2K"],
+        "is_top": True,
+    },
+    {
+        "id": "google/gemini-2.5-flash-image",
+        "name": "Google: Nano Banana (Gemini 2.5 Flash Image)",
+        "provider": "openrouter",
+        "pricing_text": "$0.30/M in · $30/M out",
+        "description": "Génération et retouche d'image polyvalente avec forte compréhension du contexte textuel.",
+        "supported_aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"],
+        "supported_resolutions": ["1K"],
+        "is_top": True,
+    },
+    {
+        "id": "google/gemini-3.1-flash-lite-image",
+        "name": "Google: Nano Banana 2 Lite (Gemini 3.1 Flash Lite Image)",
+        "provider": "openrouter",
+        "pricing_text": "$0.25/M in · $30/M out",
+        "description": "Le modèle image le plus rapide et économique de Google (génération en ~4s), idéal pour l'exploration visuelle.",
+        "supported_aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "21:9"],
+        "supported_resolutions": ["1K"],
+        "is_top": True,
+    },
+    {
+        "id": "openai/gpt-image-2.5-flare",
+        "name": "OpenAI: GPT Image 2.5 Flare",
+        "provider": "openrouter",
+        "pricing_text": "$8/M in · $30/M out",
+        "description": "Palier haute vitesse de la gamme GPT Image 2.5, adapté au prototypage rapide et à l'illustration quotidienne.",
+        "supported_aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "21:9"],
+        "supported_resolutions": ["1K", "2K"],
+        "is_top": True,
+    },
+    {
+        "id": "openai/gpt-image-2",
+        "name": "OpenAI: GPT Image 2",
+        "provider": "openrouter",
+        "pricing_text": "$8/M in · $30/M out",
+        "description": "Génération d'images haute fidélité d'OpenAI via l'Images API.",
+        "supported_aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"],
+        "supported_resolutions": ["1K", "2K"],
+        "is_top": True,
+    },
+    {
+        "id": "tencent/hy-image-v3.5-preview",
+        "name": "Tencent: Hy Image 3.5 Preview",
+        "provider": "openrouter",
+        "pricing_text": "$1.60/M out",
+        "description": "Composition fidèle au prompt, cohérence du sujet et rendu bilingue jusqu'en 4K.",
+        "supported_aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"],
+        "supported_resolutions": ["1K", "1.5K", "2K", "4K"],
+        "is_top": True,
+    },
+    {
+        "id": "openai/gpt-5.4-image-2",
+        "name": "OpenAI: GPT-5.4 Image 2",
+        "provider": "openrouter",
+        "pricing_text": "$8/M in · $30/M out",
+        "description": "Combine le raisonnement multimodal poussé de GPT-5.4 avec la génération visuelle haute définition.",
+        "supported_aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "21:9"],
+        "supported_resolutions": ["1K", "2K"],
+        "is_top": True,
+    },
+    {
+        "id": "google/gemini-3-pro-image",
+        "name": "Google: Nano Banana Pro (Gemini 3 Pro Image)",
+        "provider": "openrouter",
+        "pricing_text": "$2/M in · $120/M out",
+        "description": "Modèle le plus avancé de Google sur base Gemini 3 Pro. Rendu de texte long, haute fidélité visuelle et sorties 4K.",
+        "supported_aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "21:9"],
+        "supported_resolutions": ["1K", "2K", "4K"],
+        "is_top": True,
+    },
+    {
+        "id": "black-forest-labs/flux-3-image-klein",
+        "name": "Black Forest Labs: FLUX 3 Image Klein",
+        "provider": "openrouter",
+        "pricing_text": "$0.008-$0.036/img",
+        "description": "FLUX 3 ultra-rapide et abordable, excellent équilibre de photoréalisme et esthétique moderne.",
+        "supported_aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "21:9"],
+        "supported_resolutions": ["768", "1K", "1.5K", "2K", "4K"],
+        "is_top": False,
+    },
+    {
+        "id": "black-forest-labs/flux-3-image",
+        "name": "Black Forest Labs: FLUX 3 Image",
+        "provider": "openrouter",
+        "pricing_text": "$0.041-$0.607/img",
+        "description": "Rendu visuel d'exception, éclairages cinématiques et fidélité de composition du studio Black Forest Labs.",
+        "supported_aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "21:9"],
+        "supported_resolutions": ["768", "1K", "1.5K", "2K", "4K"],
+        "is_top": False,
+    },
+    {
+        "id": "recraft/recraft-v4.1-flash",
+        "name": "Recraft: Recraft V4.1 Flash",
+        "provider": "openrouter",
+        "pricing_text": "$0.007/img",
+        "description": "Spécialisé en design vectoriel, logos, icônes, illustrations et typographie nette.",
+        "supported_aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4"],
+        "supported_resolutions": ["1K", "2K"],
+        "is_top": False,
+    },
 ]
 
 
@@ -252,34 +402,81 @@ class Settings(BaseSettings):
     def models(self) -> list[dict]:
         return self.get_models(force_refresh=False)
 
-    @property
-    def available_image_models(self) -> list[dict[str, Any]]:
+    def get_image_models(self, force_refresh: bool = False) -> list[dict[str, Any]]:
         self.refresh_from_env_file()
         if self.demo_mode:
             return []
         has_ideogram = self.enabled(self.ideogram_api_key)
         has_openrouter = self.enabled(self.llm_api_key)
-        candidates = DEFAULT_IMAGE_MODELS
+
+        # Check explicit custom override in env first
         if self.image_models.strip():
             try:
                 parsed = json.loads(self.image_models)
                 if isinstance(parsed, list) and parsed:
-                    candidates = parsed
+                    filtered = []
+                    for item in parsed:
+                        prov = item.get("provider", "openrouter")
+                        if prov == "ideogram" and not has_ideogram:
+                            continue
+                        if prov == "openrouter" and not has_openrouter:
+                            continue
+                        filtered.append({
+                            "id": str(item["id"]),
+                            "name": str(item.get("name", item["id"])),
+                            "provider": prov,
+                            "pricing_text": str(item.get("pricing_text", "Tarif standard")),
+                            "description": str(item.get("description", "")),
+                            "supported_aspect_ratios": item.get("supported_aspect_ratios", []),
+                            "supported_resolutions": item.get("supported_resolutions", []),
+                            "is_top": bool(item.get("is_top", False)),
+                        })
+                    return filtered
             except Exception:
                 pass
-        filtered: list[dict[str, Any]] = []
-        for item in candidates:
-            provider = item.get("provider", "openrouter")
-            if provider == "ideogram" and not has_ideogram:
+
+        results: list[dict[str, Any]] = []
+
+        # 1. Ideogram toujours inclus en tête de liste pour être sélectionnable
+        results.append({
+            "id": "ideogram",
+            "name": "Ideogram v2 (Sélection auto)",
+            "provider": "ideogram",
+            "pricing_text": "Ideogram API",
+            "description": "Rendu typographique et artistique d'excellence, maîtrise inégalée du texte au cœur des images.",
+            "supported_aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "10:16", "16:10", "1:3", "3:1"],
+            "supported_resolutions": ["1K", "2K"],
+            "is_top": True,
+            "_rank": -1,
+        })
+
+        # 2. Dynamic OpenRouter image models if enabled
+        if has_openrouter:
+            from .openrouter import fetch_openrouter_image_models
+            key = _clean_api_key(self.llm_api_key)
+            dynamic = fetch_openrouter_image_models(
+                api_key=key,
+                base_url=self.llm_base_url,
+                force_refresh=force_refresh,
+            )
+            if dynamic:
+                results.extend(dynamic)
+                return results
+
+        # 3. Fallback to default catalog if dynamic fetch is empty or offline
+        for item in DEFAULT_IMAGE_MODELS:
+            prov = item.get("provider", "openrouter")
+            if prov == "ideogram":
                 continue
-            if provider == "openrouter" and not has_openrouter:
+            if prov == "openrouter" and not has_openrouter:
                 continue
-            filtered.append({
-                "id": str(item["id"]),
-                "name": str(item.get("name", item["id"])),
-                "provider": provider,
-            })
-        return filtered
+            results.append(item)
+
+        return results
+
+    @property
+    def available_image_models(self) -> list[dict[str, Any]]:
+        return self.get_image_models(force_refresh=False)
 
     @property
     def effective_default_image_model(self) -> str:
