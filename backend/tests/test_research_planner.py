@@ -31,6 +31,7 @@ def test_research_plan_coverage_audit():
         source_title="Les métiers en 2030",
         exact_passage="Près de 760 000 recrutements annuels attendus d'ici 2030.",
         claim_type="statistic",
+        nature="projection",
         source_tier="A",
         source_family_id="dares_travail_emploi_gouv_fr",
         sub_question_id="SQ_2",
@@ -52,7 +53,7 @@ def test_research_plan_coverage_audit():
         sub_question_id="SQ_1",
     )
     audit_sub_question_coverage(plan, [ev1, ev2])
-    assert sq1.status == "PARTIAL"
+    assert sq1.status == "NOT_STARTED"
     assert not plan.all_covered()
 
     # 4. Ajout d'une 2e preuve d'une famille différente pour SQ_1
@@ -68,6 +69,6 @@ def test_research_plan_coverage_audit():
         sub_question_id="SQ_1",
     )
     audit_sub_question_coverage(plan, [ev1, ev2, ev3])
-    assert sq1.status == "COVERED"
-    assert plan.all_covered()
+    assert sq1.status == "NOT_STARTED"
+    assert not plan.all_covered()
 

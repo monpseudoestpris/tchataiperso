@@ -111,6 +111,8 @@ When delegating, spawn or route tasks to these specialized profiles:
 - If tests cannot be run, explain precisely why and give the verification steps.
 - Do not bypass failing tests, disable checks, or loosen types just to make a change pass.
 - Distinguish pre-existing failures from failures introduced by the change.
+- when an issue is raised, always explain what the issue was and how you handlet it
+- make code safe, it has to be safe against attacks and crashes
 
 ## Environment Files — Hard Safety Boundary
 - NEVER open, read, print, inspect, search inside, parse, copy, or modify any real environment file: `.env`, `.env.local`, `.env.development`, `.env.production`, `.env.test`, `.env.*.local`, or equivalent files containing runtime configuration or secrets. This rule applies even for debugging, tests, migrations, or setup work.

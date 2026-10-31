@@ -2,19 +2,25 @@
 
 Règle appliquée : aucun chiffre précis n'est présenté comme établi sans (1) une citation `[n]`,
 (2) un chiffre effectivement retrouvé dans le contenu disponible de la source citée.
-Le périmètre statistique (population, année, définition) ne peut pas être contrôlé automatiquement :
-tout chiffre « retrouvé » reste donc au mieux de confiance moyenne, sauf recoupement par 2 sources distinctes.
+La présence numérique ne valide pas le périmètre statistique ni le sens complet.
+Un verdict sémantique distinct et un passage exact sont nécessaires pour cela.
 """
 from __future__ import annotations
 
 import re
+from hashlib import sha256
 from typing import Any
 
-_CITATION_RE = re.compile(r"\[(\d{1,3}(?:\s*[,;–-]\s*\d{1,3})*)\]")
+from .source_registry import CITATION_RE, citation_numbers, has_source_url, is_document
+from .markdown_tables import clean_verification_claim
+from .report_claims import apply_claim_edits, iter_claim_spans
+from .claim_semantics import apply_semantic_reviews
+
+_CITATION_RE = CITATION_RE
 # Nombre précis : pourcentage, montant, décimal, ou entier d'au moins 2 chiffres suivi d'une unité courante.
 _FIGURE_RE = re.compile(
     r"(?<![\w.])(\d{1,3}(?:[\s\u00a0\u202f]\d{3})+|\d+)(?:[.,](\d+))?"
-    r"(?=\s*(?:%|€|k€|m€|md€|\$|milliards?|millions?|mille|ans|mois|postes?|emplois?|recrutements?|salaires?|euros?|points?|pts|kw|gw|mw|ms|go|to)\b|\s*%|\s*€|[.,]\d|\s+[àa]\s+\d)",
+    r"(?=\s*(?:%|€|k€|m€|md€|\$|milliards?|millions?|mille|ans|mois|postes?|emplois?|recrutements?|salaires?|euros?|points?|pts|kw|gw|mw|ms|go|to)\b|\s*%|\s*€|\s+[àa]\s+\d)",
     re.IGNORECASE,
 )
 _YEAR_RE = re.compile(r"^(?:19|20)\d{2}$")
@@ -23,7 +29,7 @@ _ABSOLUTE_RE = re.compile(
     r"vulnérabilité\s+(?:à\s+l'|à\s+la\s+)?(?:ia|ai)\s*:?\s*nulle|\b100\s?%\s+(?:de\s+)?(?:garanti|certain|sûr|efficace|fiable)|"
     r"\b(?:garanti(?:e|s|es)?\s+(?:à\s+100|sans\s+exception)|aucun\s+risque|zéro\s+risque|risque\s+nul|infaillible|"
     r"sans\s+aucun\s+effet\s+secondaire|rendement\s+garanti|inviolable|preuve\s+irréfutable|corrélation\s+parfaite|"
-    r"certitude\s+absolue|filtre\s+(?:automatisé\s+)?binaire|sélection\s+binaire|emploi\s+garanti|insertion\s+garantie|"
+    r"(?:quasi\s+)?irréversibles?|immunis[ée]s?(?:es)?\s+(?:contre|face\s+à)\s+(?:l[’']\s*)?(?:ia|intelligence)|certitude\s+absolue|filtre\s+(?:automatisé\s+)?binaire|sélection\s+binaire|emploi\s+garanti|insertion\s+garantie|"
     r"garantit\s+un\s+accès\s+privilégié|garantit\s+(?:un\s+|l')accès|deux\s+seuls\s+leviers|seuls?\s+leviers?|"
     r"par\s+nature\s+non\s+automatisables?|non\s+automatisables?|plein\s+emploi\s+structurel|immunité\s+totale)\b",
     re.IGNORECASE,
@@ -67,28 +73,33 @@ _ABSOLUTE_REPLACEMENTS: tuple[tuple[re.Pattern, str], ...] = (
 )
 
 
-def remedy_unverified_claims(report_markdown: str, verification_result: dict[str, Any] | None = None) -> str:
+def _repair_claims(report_markdown: str, verification_result: dict[str, Any] | None = None) -> tuple[str, list[dict[str, Any]]]:
     """Corrige préventivement les affirmations catégoriques et remédie aux affirmations non soutenues avant publication."""
-    text = report_markdown
-    # 1. Remplacement des expressions catégoriques
-    for pattern, replacement in _ABSOLUTE_REPLACEMENTS:
-        text = pattern.sub(replacement, text)
+    rows = (verification_result or {}).get("raw_rows", (verification_result or {}).get("rows", []))
+    if not verification_result:
+        rows = list(iter_claim_spans(report_markdown))
+    edits = []
+    for row in rows:
+        sentence = row.get("full_sentence", "")
+        if "span_start" not in row:
+            continue
+        replacement = sentence
+        if row.get("action") == "rewrite_or_research" and (row.get("figures") or row.get("status") == "non étayé"):
+            replacement = "Donnée non établie" if row.get("table_cell") else ""
+        else:
+            for pattern, value in _ABSOLUTE_REPLACEMENTS:
+                replacement = pattern.sub(value, replacement)
+            if replacement == sentence and _ABSOLUTE_RE.search(sentence):
+                replacement = "Donnée non établie" if row.get("table_cell") else ""
+        if replacement != sentence:
+            edits.append({**row, "replacement": replacement})
+    edits = list({(edit["span_start"], edit["span_end"]): edit for edit in edits}.values())
+    return apply_claim_edits(report_markdown, edits)
 
-    # 2. Si un résultat de vérification est fourni, atténuer les affirmations chiffrées non sourcées ou non retrouvées
-    if verification_result:
-        rows = verification_result.get("rows") or []
-        for r in rows:
-            status = r.get("status")
-            full_sentence = r.get("full_sentence") or r.get("claim", "").strip()
-            # Si le statut est non sourcé ou non retrouvé et que la phrase n'a pas encore de mise en garde
-            if status in ("non sourcé", "non retrouvé", "portée divergente") and full_sentence and len(full_sentence) > 15:
-                if "indicatif" not in full_sentence and "estimation" not in full_sentence and "consolidé" not in full_sentence:
-                    # Remplacement exact sur la phrase complète pour ne jamais couper au milieu d'un mot ou d'un tableau
-                    if full_sentence in text:
-                        nuanced = full_sentence.rstrip(".!?") + " *(ordre de grandeur indicatif non consolidé dans les sources)*."
-                        text = text.replace(full_sentence, nuanced, 1)
 
-    return text
+def remedy_unverified_claims(report_markdown: str, verification_result: dict[str, Any] | None = None) -> str:
+    """Repair only verified claim spans; preserve the surrounding Markdown."""
+    return _repair_claims(report_markdown, verification_result)[0]
 
 
 def _normalise_number(integer: str, decimals: str | None) -> str:
@@ -105,7 +116,8 @@ def _normalise_text(text: str) -> str:
 
 def _source_text(source: dict[str, Any]) -> str:
     """Contenu consultable d'une source : titre, extrait et éventuel contenu complet."""
-    parts = [source.get(key) for key in ("title", "snippet", "content", "extract", "text")]
+    parts = [source.get("original_title", source.get("title")), source.get("original_snippet", source.get("snippet"))]
+    parts.extend(source.get(key) for key in ("content", "extract", "text"))
     return " ".join(str(p) for p in parts if p)
 
 
@@ -115,7 +127,7 @@ def _extract_figures(sentence: str) -> list[str]:
     figures: list[str] = []
     for match in _FIGURE_RE.finditer(scrubbed):
         value = _normalise_number(match.group(1), match.group(2))
-        if _YEAR_RE.match(value) or (len(value) < 2 and "." not in value):
+        if _YEAR_RE.match(value):
             continue
         if value not in figures:
             figures.append(value)
@@ -123,47 +135,14 @@ def _extract_figures(sentence: str) -> list[str]:
 
 
 def _cited_indexes(sentence: str) -> list[int]:
-    indexes: list[int] = []
-    for group in _CITATION_RE.findall(sentence):
-        for token in re.split(r"[,;–-]", group):
-            token = token.strip()
-            if token.isdigit() and int(token) not in indexes:
-                indexes.append(int(token))
-    return indexes
+    return list(dict.fromkeys(n for group in _CITATION_RE.findall(sentence) for n in citation_numbers(group)))
 
 
 def _figure_matches_text(figure: str, norm_src_text: str, raw_src_text: str) -> bool:
-    """Vérifie si un chiffre est présent de manière exacte ou approximative (ordre de grandeur / projection).
-    
-    Gère la normalisation sémantique des données :
-    - Équivalence exacte (ex. '89' == '89', '760000' == '760000')
-    - Tolérance d'arrondi usuel pour les projections (ex. 760 000 arrondi en 800 000 postes, 89 % en 90 %)
-    """
-    if figure in norm_src_text:
-        return True
-    try:
-        val = float(figure)
-        # Extraction de tous les nombres du texte source brut
-        found_tokens = re.findall(r"(?<![\w.])(\d[\d\s\u00a0\u202f]*(?:[.,]\d+)?)", raw_src_text)
-        for tok in found_tokens:
-            cleaned = re.sub(r"[\s\u00a0\u202f]", "", tok).replace(",", ".")
-            if not cleaned:
-                continue
-            try:
-                clean_num = float(cleaned)
-            except ValueError:
-                continue
-            if abs(clean_num - val) < 1e-4:
-                return True
-            # Tolérance d'arrondi pour les grands volumes (> 10 000 : jusqu'à 8 % d'arrondi)
-            if val >= 10000 and abs(clean_num - val) / val <= 0.08:
-                return True
-            # Tolérance d'arrondi pour les pourcentages (ex: 89 % -> ~90 %)
-            if 1 <= val <= 100 and abs(clean_num - val) <= 1.5:
-                return True
-    except Exception:
-        pass
-    return False
+    """Compare les tokens numériques exacts après normalisation des séparateurs."""
+    # Exact numeric tokens only: 7.6 must not match 7.4, nor 94 match 194.
+    tokens = re.findall(r"(?<![\w.])(\d{1,3}(?:[ \u00a0\u202f]\d{3})+|\d+)(?:[.,](\d+))?", raw_src_text)
+    return any(_normalise_number(integer, decimals or None) == figure for integer, decimals in tokens)
 
 
 # Paires de périmètres incompatibles multi-domaines :
@@ -236,42 +215,13 @@ def validate_claim_evidence(
     text_sources: list[dict[str, Any]],
     figures: list[str],
 ) -> dict[str, Any]:
-    """ClaimEvidenceValidator : évalue l'adéquation de preuve entre une affirmation et ses sources citées (NLI / Entailment).
+    """Contrôle formel des valeurs et des incompatibilités de périmètre connues.
     
     Vérifie l'existence de la source, la cohérence de sa portée (scope), la présence exacte ou normalisée des données
     et prescrit l'action corrective appropriée (retain, nuance, rewrite_or_research).
     """
-    valid = [i for i in cited_indices if 1 <= i <= len(text_sources)]
-    lower_sent = sentence.lower()
-    is_explicitly_indicative = any(
-        kw in lower_sent
-        for kw in (
-            "ordre de grandeur indicatif",
-            "non consolidé",
-            "non consolidée",
-            "estimation indicative",
-            "données indicatives",
-            "à titre indicatif",
-            "fourchette indicative",
-            "barème indicatif",
-            "estimations non consolidées",
-        )
-    )
-
+    valid = [i for i in cited_indices if 1 <= i <= len(text_sources) and has_source_url(text_sources[i - 1])]
     if not cited_indices:
-        if is_explicitly_indicative:
-            return {
-                "evidence_url": None,
-                "exact_passage": None,
-                "domain_category": None,
-                "relevance": "indicative_caveat",
-                "entailment": "caveat_acknowledged",
-                "confidence": "indicative",
-                "action": "retained_with_caveat",
-                "status": "mention indicative nuancée",
-                "normalized_status": "SUPPORTED_WITH_CAVEAT",
-                "note": "Mention indicative signalée au lecteur ; non présentée comme un fait consolidé.",
-            }
         return {
             "evidence_url": None,
             "exact_passage": None,
@@ -284,20 +234,7 @@ def validate_claim_evidence(
             "normalized_status": "UNSUPPORTED",
             "note": "Aucune citation : ne pas tenir pour un fait établi.",
         }
-    if not valid:
-        if is_explicitly_indicative:
-            return {
-                "evidence_url": None,
-                "exact_passage": None,
-                "domain_category": None,
-                "relevance": "indicative_caveat",
-                "entailment": "caveat_acknowledged",
-                "confidence": "indicative",
-                "action": "retained_with_caveat",
-                "status": "mention indicative nuancée",
-                "normalized_status": "SUPPORTED_WITH_CAVEAT",
-                "note": "Mention indicative signalée au lecteur ; référence externe non répertoriée.",
-            }
+    if len(valid) != len(cited_indices):
         return {
             "evidence_url": None,
             "exact_passage": None,
@@ -338,7 +275,7 @@ def validate_claim_evidence(
             elif src_text:
                 passages.append(src_text[:160].strip())
 
-    primary_src = text_sources[valid[0] - 1]
+    primary_src = text_sources[(supporting_indices[0] if supporting_indices else valid[0]) - 1]
     primary_url = primary_src.get("url")
 
     if has_scope_mismatch:
@@ -355,18 +292,19 @@ def validate_claim_evidence(
             "note": "Portée divergente : le périmètre, la population ou l'objet de la source citée ne correspond pas à l'affirmation avancée.",
         }
 
-    if len(supporting_indices) >= 2:
+    supporting_domains = {str(text_sources[i - 1].get("url", "")).split("/")[2].removeprefix("www.") for i in supporting_indices}
+    if len(supporting_domains) >= 2:
         return {
             "evidence_url": primary_url,
             "exact_passage": passages[0] if passages else None,
             "domain_category": primary_src.get("tier"),
             "relevance": "sufficient",
             "entailment": "supported",
-            "confidence": "élevée",
-            "action": "retain",
+            "confidence": "moyenne",
+            "action": "semantic_review",
             "status": "retrouvé",
-            "normalized_status": "SUPPORTED",
-            "note": "Chiffre et données corroborés par au moins 2 sources distinctes.",
+            "normalized_status": "NUMERIC_MATCH_ONLY",
+            "note": "Valeur présente dans plusieurs documents ; soutien sémantique non encore vérifié.",
         }
 
     if supporting_indices:
@@ -377,24 +315,10 @@ def validate_claim_evidence(
             "relevance": "sufficient",
             "entailment": "partially_supported",
             "confidence": "moyenne",
-            "action": "nuance",
+            "action": "semantic_review",
             "status": "retrouvé",
-            "normalized_status": "SUPPORTED_WITH_CAVEAT",
-            "note": "Chiffre présent dans la source citée ; vérifier le périmètre statistique.",
-        }
-
-    if is_explicitly_indicative:
-        return {
-            "evidence_url": primary_url,
-            "exact_passage": None,
-            "domain_category": primary_src.get("tier"),
-            "relevance": "indicative_caveat",
-            "entailment": "caveat_acknowledged",
-            "confidence": "indicative",
-            "action": "retained_with_caveat",
-            "status": "mention indicative nuancée",
-            "normalized_status": "SUPPORTED_WITH_CAVEAT",
-            "note": "Ordre de grandeur indicatif explicité au lecteur ; non consolidé dans la source citée.",
+            "normalized_status": "NUMERIC_MATCH_ONLY",
+            "note": "Valeur présente ; soutien de l'affirmation complète non encore vérifié.",
         }
 
     return {
@@ -411,11 +335,12 @@ def validate_claim_evidence(
     }
 
 
-def _canonical_claim_key(figures: list[str], cited_indices: list[int]) -> str:
+def _canonical_claim_key(figures: list[str], cited_indices: list[int], sentence: str = "") -> str:
     """Clé canonique pour regrouper les répétitions d'un même fait ou chiffre appuyé sur la même source."""
     figs_key = "-".join(sorted(str(f).replace(" ", "") for f in figures))
     srcs_key = "-".join(sorted(str(i) for i in cited_indices))
-    return f"F:{figs_key}|S:{srcs_key}"
+    words = re.sub(r"[^\w%€]+", " ", _CITATION_RE.sub("", sentence).lower()).strip()
+    return f"F:{figs_key}|S:{srcs_key}|T:{words}"
 
 
 def verify_report_figures(report_markdown: str, sources: list[dict[str, Any]]) -> dict[str, Any]:
@@ -424,48 +349,53 @@ def verify_report_figures(report_markdown: str, sources: list[dict[str, Any]]) -
     Regroupe les occurrences répétées d'une même affirmation canonique (même chiffre, même source)
     pour que la répétition 13 fois d'un même fait ne gonfle pas artificiellement le taux de validation.
     """
-    text_sources = [s for s in sources if s.get("media_type") != "image" and not s.get("img_src")]
+    text_sources = [s for s in sources if is_document(s)]
     raw_rows: list[dict[str, Any]] = []
-    for raw_line in report_markdown.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or line.startswith(">") or set(line) <= set("-|: "):
-            continue
-        for sentence in re.split(r"(?<=[.!?])\s+", line):
-            full_sent = sentence.strip()
-            absolute = _ABSOLUTE_RE.search(sentence)
-            if absolute:
-                raw_rows.append({
-                    "claim": full_sent[:140],
-                    "full_sentence": full_sent,
-                    "figures": [],
-                    "sources": _cited_indexes(sentence),
-                    "status": "formulation catégorique",
-                    "normalized_status": "CONTRADICTED",
-                    "confidence": "faible",
-                    "action": "rewrite_or_research",
-                    "note": f"« {absolute.group(0)} » : une projection ou un processus complexe ne se présente pas comme une certitude absolue.",
-                })
-            figures = _extract_figures(sentence)
-            if not figures:
-                continue
-            cited = _cited_indexes(sentence)
-            val_res = validate_claim_evidence(full_sent, cited, text_sources, figures)
+    for span in iter_claim_spans(report_markdown):
+        full_sent = span["full_sentence"]
+        absolute = _ABSOLUTE_RE.search(full_sent)
+        if absolute:
             raw_rows.append({
+                **span,
                 "claim": full_sent[:140],
                 "full_sentence": full_sent,
-                "figures": figures,
-                "sources": [i for i in cited if 1 <= i <= len(text_sources)] or cited,
-                "status": val_res["status"],
-                "normalized_status": val_res.get("normalized_status", "UNSUPPORTED"),
-                "confidence": val_res["confidence"],
-                "action": val_res["action"],
-                "evidence_url": val_res.get("evidence_url"),
-                "exact_passage": val_res.get("exact_passage"),
-                "relevance": val_res.get("relevance"),
-                "entailment": val_res.get("entailment"),
-                "note": val_res["note"],
+                "figures": [],
+                "sources": _cited_indexes(full_sent),
+                "status": "formulation catégorique",
+                "normalized_status": "CONTRADICTED",
+                "confidence": "faible",
+                "action": "rewrite_or_research",
+                "note": f"« {absolute.group(0)} » : une projection ou un processus complexe ne se présente pas comme une certitude absolue.",
             })
-
+        figures = _extract_figures(full_sent)
+        cited = _cited_indexes(full_sent)
+        if not figures and not cited:
+            continue
+        if figures:
+            val_res = validate_claim_evidence(full_sent, cited, text_sources, figures)
+        else:
+            val_res = {
+                "status": "à vérifier", "normalized_status": "NOT_CHECKED", "confidence": "faible",
+                "action": "semantic_review", "note": "Affirmation citée à vérifier sur un passage exact.",
+            }
+            if any(not 1 <= index <= len(text_sources) for index in cited):
+                val_res.update(status="source inexistante", action="rewrite_or_research")
+        raw_rows.append({
+            **span,
+            "claim": full_sent[:140],
+            "full_sentence": full_sent,
+            "figures": figures,
+            "sources": [i for i in cited if 1 <= i <= len(text_sources)] or cited,
+            "status": val_res["status"],
+            "normalized_status": val_res.get("normalized_status", "UNSUPPORTED"),
+            "confidence": val_res["confidence"],
+            "action": val_res["action"],
+            "evidence_url": val_res.get("evidence_url"),
+            "exact_passage": val_res.get("exact_passage"),
+            "relevance": val_res.get("relevance"),
+            "entailment": val_res.get("entailment"),
+            "note": val_res["note"],
+        })
     # Regroupement canonique : décompte des faits distincts vs occurrences totales
     canonical_map: dict[str, dict[str, Any]] = {}
     canonical_rows: list[dict[str, Any]] = []
@@ -473,7 +403,7 @@ def verify_report_figures(report_markdown: str, sources: list[dict[str, Any]]) -
         figs = r.get("figures", [])
         srcs = r.get("sources", [])
         if figs:
-            ckey = _canonical_claim_key(figs, srcs)
+            ckey = _canonical_claim_key(figs, srcs, r["full_sentence"])
             if ckey in canonical_map:
                 canonical_map[ckey]["occurrences"] += 1
                 continue
@@ -501,13 +431,18 @@ def verify_report_figures(report_markdown: str, sources: list[dict[str, Any]]) -
         "portée divergente",
     ):
         stats[key] = sum(1 for r in canonical_rows if r["status"] == key)
-    return {"rows": canonical_rows, "raw_rows_count": len(raw_rows), "stats": stats}
+    for row in canonical_rows:
+        row["claim_id"] = "CL_" + sha256(row["full_sentence"].encode()).hexdigest()[:16]
+    stats["semantic_pending"] = len(canonical_rows)
+    stats["semantic_supported"] = 0
+    return {"rows": canonical_rows, "raw_rows": raw_rows, "raw_rows_count": len(raw_rows), "stats": stats}
 
 
 def run_repair_loop(
     report_markdown: str,
     sources: list[dict[str, Any]],
     max_cycles: int = 2,
+    semantic_reviews: list[dict[str, Any]] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Boucle de réparation ciblée multi-cycles (Claim Validator + Repair Loop V2).
     
@@ -519,15 +454,28 @@ def run_repair_loop(
     """
     text = report_markdown
     result = verify_report_figures(text, sources)
+    removed = 0
+    repair_log = []
     for _ in range(max_cycles):
+        if semantic_reviews:
+            apply_semantic_reviews(result, [s for s in sources if is_document(s)], semantic_reviews)
         rows = result.get("rows") or []
         unverified_count = sum(
-            1 for r in rows if r.get("status") in ("non sourcé", "non retrouvé", "portée divergente", "formulation catégorique")
+            1 for r in rows if r.get("status") in ("non sourcé", "non retrouvé", "source inexistante", "portée divergente", "formulation catégorique", "non étayé")
         )
         if unverified_count == 0:
             break
-        text = remedy_unverified_claims(text, result)
+        previous = text
+        text, applied = _repair_claims(text, result)
+        if text == previous:
+            break
+        removed += sum(edit["replacement"] in ("", "Donnée non établie") for edit in applied)
+        repair_log.extend({"claim_id": edit["claim_id"], "span_start": edit["span_start"], "span_end": edit["span_end"], "before": edit["full_sentence"], "after": edit["replacement"]} for edit in applied)
         result = verify_report_figures(text, sources)
+    if semantic_reviews:
+        apply_semantic_reviews(result, [s for s in sources if is_document(s)], semantic_reviews)
+    result["stats"]["removed"] = removed
+    result["repair_log"] = repair_log
     return text, result
 
 
@@ -552,25 +500,34 @@ def compute_validation_status(
     portee_divergente = stats.get("portée divergente", 0)
     indicatif = stats.get("mention indicative nuancée", 0)
 
-    unverified = non_retrouve + non_source + portee_divergente
+    unverified = non_retrouve + non_source + portee_divergente + stats.get("non étayé", 0)
     applied_count = (audit_review or {}).get("applied_count", 0)
     decision_hint = str((audit_review or {}).get("decision") or "").lower()
+    if decision_hint in ("requires_revision", "révision_requise", "révision requise", "rejeté"):
+        return "REQUIRES_REVISION", "🔴 Révision requise (relecture critique défavorable)"
+
+    if unverified or categorique:
+        anomalies = unverified + categorique
+        if anomalies > max(2, int(total * 0.25)):
+            return "REQUIRES_REVISION", f"🔴 Révision requise ({anomalies} affirmations non étayées)"
+        return "PUBLISH_WITH_LIMITATIONS", f"🟡 Vérifications incomplètes ({anomalies} anomalies résiduelles)"
+    if decision_hint in ("non_effectué", "indisponible") or (audit_review or {}).get("performed") is False:
+        return "PUBLISH_WITH_LIMITATIONS", "🟡 Validation complète non réalisée — Relecture LLM indisponible"
+    if stats.get("coverage_missing", 0):
+        return "PUBLISH_WITH_LIMITATIONS", "🟡 Couverture documentaire incomplète — validation complète non réalisée"
+    if stats.get("semantic_pending", 0):
+        return "PUBLISH_WITH_LIMITATIONS", "🟡 Validation sémantique incomplète (présence des valeurs contrôlée séparément)"
+    if decision_hint == "validé_avec_réserves":
+        return "PUBLISH_WITH_LIMITATIONS", "🟡 Validation avec réserves"
 
     # Condition stricte pour la validation intégrale : 0 affirmation non vérifiée, 0 catégorique
     if unverified == 0 and categorique == 0 and total > 0 and (retrouve + indicatif) == total:
-        if indicatif > 0 or applied_count > 0 or decision_hint in ("remanié", "remanie"):
-            count_label = indicatif or applied_count or 1
-            return "PUBLISH_WITH_LIMITATIONS", f"🔵 Remanié & Sécurisé ({count_label} affirmation{'s' if count_label > 1 else ''} corrigée{'s' if count_label > 1 else ''} avant publication)"
-        return "PASSED", "🟢 Validé (Conformité documentaire intégrale)"
+        if stats.get("removed", 0) or indicatif > 0 or applied_count > 0 or decision_hint in ("remanié", "remanie"):
+            count_label = stats.get("removed", 0) or indicatif or applied_count or 1
+            return "PUBLISH_WITH_LIMITATIONS", f"🔵 Rapport remanié ({count_label} affirmation{'s' if count_label > 1 else ''} corrigée{'s' if count_label > 1 else ''} avant publication)"
+        return "PASSED", "🟢 Contrôles documentaires effectués sur les affirmations examinées"
 
-    # S'il reste des affirmations non retrouvées ou sans source
-    if unverified > 0 or categorique > 0:
-        anomalies_count = unverified + categorique
-        if anomalies_count <= max(2, int(total * 0.25)):
-            return "PUBLISH_WITH_LIMITATIONS", f"🟡 Validé avec réserves ({anomalies_count} affirmation{'s' if anomalies_count > 1 else ''} non consolidée{'s' if anomalies_count > 1 else ''})"
-        return "REQUIRES_REVISION", f"🔴 Révision requise ({anomalies_count} affirmation{'s' if anomalies_count > 1 else ''} sans validation documentaire)"
-
-    return "PUBLISH_WITH_LIMITATIONS", "🟡 Validé avec réserves (Périmètre documentaire à vérifier)"
+    return "PUBLISH_WITH_LIMITATIONS", "🟡 Validation complète non réalisée (périmètre documentaire à vérifier)"
 
 
 def format_verification_markdown(
@@ -593,8 +550,13 @@ def format_verification_markdown(
     }
     ranked = sorted(rows, key=lambda r: order.get(r["status"], 6))[:_MAX_ROWS]
     parts_stat = [
-        f"> **{stats.get('retrouvé', 0)}/{stats.get('total', 0)}** affirmations chiffrées retrouvées dans les sources citées",
+        f"> **{stats.get('retrouvé', 0)}/{stats.get('total', 0)}** affirmations chiffrées retrouvées dans les sources citées (présence numérique uniquement)",
     ]
+    parts_stat.append(f"**{stats.get('semantic_supported', 0)}** affirmations étayées après examen sémantique")
+    if stats.get("semantic_pending", 0):
+        parts_stat.append(f"**{stats['semantic_pending']}** affirmations restant à vérifier sémantiquement")
+    if (audit_review or {}).get("applied_count"):
+        parts_stat.append(f"**{audit_review['applied_count']}** réécritures ciblées effectivement appliquées")
     if stats.get("mention indicative nuancée"):
         parts_stat.append(f"**{stats.get('mention indicative nuancée', 0)}** ordres de grandeur indicatifs nuancés")
     if stats.get("non retrouvé"):
@@ -602,9 +564,9 @@ def format_verification_markdown(
     if stats.get("non sourcé", 0) + stats.get("source inexistante", 0):
         parts_stat.append(f"**{stats.get('non sourcé', 0) + stats.get('source inexistante', 0)}** sans source valide")
     if stats.get("formulation catégorique"):
-        parts_stat.append(f"**{stats.get('formulation catégorique', 0)}** formulations catégoriques assainies")
+        parts_stat.append(f"**{stats.get('formulation catégorique', 0)}** formulations catégoriques à réviser")
     if stats.get("portée divergente"):
-        parts_stat.append(f"**{stats.get('portée divergente', 0)}** portée(s) divergente(s) rectifiée(s)")
+        parts_stat.append(f"**{stats.get('portée divergente', 0)}** portée(s) divergente(s) à réviser")
 
     title = (
         "## Registre de vérification factuelle & Arbitrage critique"
@@ -623,14 +585,16 @@ def format_verification_markdown(
         # RÈGLE D'OR P0 : Le badge de décision est STRICTEMENT calculé à partir de la vérité terrain Python
         _verdict_code, decision_badge = compute_validation_status(stats, audit_review)
 
+        unavailable = audit_review.get("performed") is False or audit_review.get("decision") in ("non_effectué", "indisponible")
+        reviewer_heading = "Contrôle déterministe effectué" if unavailable else f"Relecture critique · {auditor_label}"
         lines.extend([
-            f"> ### 🛡️ Validation Critique · {auditor_label} : {decision_badge}",
+            f"> ### 🛡️ {reviewer_heading} : {decision_badge}",
             f"> **Arbitrage factuel :** {audit_review.get('critique', 'Relecture critique effectuée.')}",
         ])
         verified_facts = audit_review.get("verified_facts") or []
         if isinstance(verified_facts, list) and verified_facts:
             lines.append(">")
-            lines.append("> **Faits majeurs corroborés par les sources :**")
+            lines.append("> **Observations de la relecture :**")
             for f in verified_facts[:4]:
                 lines.append(f"> - {f}")
         warnings = audit_review.get("warnings") or []
@@ -656,7 +620,7 @@ def format_verification_markdown(
     for r in ranked:
         # Nettoyage Markdown : pas de barres non échappées, pas de retours chariot, coupure propre
         raw_claim = (r.get("claim") or "").replace("\n", " ").replace("\r", " ").strip()
-        clean_claim = re.sub(r"\s+", " ", raw_claim).replace("|", "/")
+        clean_claim = clean_verification_claim(raw_claim).replace("|", r"\|")
         if len(clean_claim) > 130:
             clean_claim = clean_claim[:127] + "…"
         occurrences = r.get("occurrences", 1)

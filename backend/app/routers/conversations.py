@@ -6,6 +6,7 @@ from sqlalchemy.orm import sessionmaker
 
 from .. import providers
 from ..chat_export_html import generate_chat_export_html
+from ..presentation_html import generate_chat_presentation_html
 from ..config import Settings
 from ..deps import check_model, current_user, get_conversation, get_sessions, get_settings, get_upload_dir
 from ..models import Conversation, User, now
@@ -288,6 +289,58 @@ def get_conversation_html(
             media_type="text/html; charset=utf-8",
             headers=headers,
         )
+
+
+@router.get("/api/conversations/{conversation_id}/slides")
+async def get_conversation_slides(
+    conversation_id: str,
+    download: bool = False,
+    user: User = Depends(current_user),
+    settings: Settings = Depends(get_settings),
+    sessions: sessionmaker = Depends(get_sessions),
+):
+    with sessions() as db:
+        conv = get_conversation(db, conversation_id, user.id)
+        messages_data = [
+            {
+                "role": m.role,
+                "content": m.content,
+                "created_at_str": m.created_at.strftime("%d/%m/%Y %H:%M") if m.created_at else "",
+                "sources": m.sources or [],
+            }
+            for m in conv.messages
+        ]
+        title = conv.title or "Présentation de la discussion cLAIr"
+        topic = conv.title
+        model = conv.model
+        created_at_str = conv.created_at.strftime("%d/%m/%Y") if conv.created_at else None
+        summary = conv.summary or ""
+
+    html_doc = await generate_chat_presentation_html(
+        settings=settings,
+        title=title,
+        messages=messages_data,
+        scope="conversation",
+        topic=topic,
+        model=model,
+        created_at_str=created_at_str,
+        summary=summary,
+    )
+    headers = {
+        "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+        "Pragma": "no-cache",
+        "Expires": "0",
+    }
+    if download:
+        clean_ascii = unicodedata.normalize("NFKD", title).encode("ascii", "ignore").decode("ascii")
+        clean_filename = re.sub(r"[^a-zA-Z0-9_\-]", "_", clean_ascii).strip("_")[:40] or "discussion-slides"
+        headers["Content-Disposition"] = f'attachment; filename="{clean_filename}.html"'
+
+    return Response(
+        content=html_doc,
+        media_type="text/html; charset=utf-8",
+        headers=headers,
+    )
 
 
 @router.post("/api/conversations/{conversation_id}/study", response_model=StudyMaterialResponse)

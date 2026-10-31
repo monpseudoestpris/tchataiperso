@@ -284,20 +284,21 @@ def test_two_step_outline_planner_and_section_writer():
     ds_outline = providers.default_report_outline("Quelles études faire et quels bacs privilégier ?", learn_mode=False)
     assert len(ds_outline["parts"]) >= 5
     assert len(ds_outline["experts"]) == 1
-    # Chaque partie a ses sous-parties thématiques
-    assert len(ds_outline["parts"][0]["subparts"]) == 3
+    # Les sous-parties restent ancrées dans la demande.
+    assert "études faire" in ds_outline["parts"][0]["subparts"][0]
 
     ds_md = providers.format_report_outline_markdown(ds_outline, learn_mode=False)
     assert "Expert Référent Global du Domaine" in ds_md
     assert "Architecture & Plan Détaillé du Dossier (Généré par l'Agent Planificateur)" in ds_md
-    assert "1. Cadre Général" in ds_md
+    assert "études faire et quels bacs privilégier" in ds_md
+    assert "Cadre Général" not in ds_md
 
     learn_outline = providers.default_report_outline("Apprendre l'architecture Rust", learn_mode=True)
     assert len(learn_outline["parts"]) >= 7
     assert len(learn_outline["experts"]) == 1
     assert "Flashcard" in learn_outline["parts"][-1]["heading"]
 
-    # Test Step 2 section writer message builder for each sequential part with the 3 experts
+    # Test Step 2 section writer message builder with the single reference expert
     base_ctx = [
         {"role": "system", "content": "Système Mode DeepSearch"},
         {"role": "user", "content": "Question initiale"},

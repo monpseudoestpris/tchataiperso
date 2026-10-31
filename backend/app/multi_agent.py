@@ -557,7 +557,7 @@ async def generate_ai_persona(settings: Settings, name_or_concept: str, model: s
                     "model": target_model,
                     "messages": messages,
                     "stream": False,
-                    "temperature": 0.4,
+                    "temperature": 0.1,
                     "max_tokens": 800,
                 },
             )

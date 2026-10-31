@@ -1,7 +1,7 @@
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
@@ -23,6 +23,7 @@ router = APIRouter(tags=["attachments"])
 async def upload(
     request: Request,
     file: UploadFile = File(...),
+    mode: str = Form("auto"),
     user: User = Depends(current_user),
     settings: Settings = Depends(get_settings),
     sessions: sessionmaker = Depends(get_sessions),
@@ -38,7 +39,7 @@ async def upload(
         raise HTTPException(422, "Fichier vide")
     filename = Path((file.filename or "document").replace("\\", "/")).name[:255]
     try:
-        mime, extracted, extraction = await extract_document(settings, content, filename)
+        mime, extracted, extraction = await extract_document(settings, content, filename, mode=mode)
     except providers.ProviderError as exc:
         raise HTTPException(502, str(exc)) from exc
     if mime.startswith("image/") and len(content) > 8 * 1024 * 1024:

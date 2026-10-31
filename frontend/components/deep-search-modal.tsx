@@ -18,6 +18,7 @@ import {
   LoaderCircle,
   Maximize2,
   Plus,
+  Presentation,
   RefreshCw,
   Search,
   Sparkles,
@@ -35,9 +36,7 @@ import {
   planDeepSearch,
   type DeepSearchReport,
   type Model,
-  type StageModelsConfig,
 } from "@/lib/api";
-import { StageModelsModal, STAGES_DEFINITIONS } from "@/components/stage-models-modal";
 
 type DeepSearchModalProps = {
   isOpen: boolean;
@@ -46,68 +45,47 @@ type DeepSearchModalProps = {
   initialTab?: "plan" | "reports";
   initialReportId?: string | null;
   models?: Model[];
-  stageModels?: StageModelsConfig;
-  onChangeStageModels?: (cfg: StageModelsConfig) => void;
   onRefreshModels?: () => Promise<void>;
   onClose: () => void;
-  onLaunch?: (queries: string[], detailLevel?: number, stageModels?: StageModelsConfig) => void | Promise<void>;
+  onLaunch?: (
+    queries: string[],
+    detailLevel?: number,
+    selectedModel?: string,
+    interactionId?: string,
+    planFeedback?: string,
+  ) => void | Promise<void>;
 };
 
-const DEEPSEARCH_DETAIL_LEVELS: Record<
-  number,
-  { label: string; badge: string; desc: string }
-> = {
-  1: {
-    label: "Synthèse flash très courte",
-    badge: "Flash · 2 parties",
-    desc: "1 paragraphe court par expert · ~400 mots au total · 2 vagues de recherche",
+export const DEEP_RESEARCH_ENGINES = [
+  {
+    id: "perplexity/sonar-deep-research",
+    label: "Sonar Deep Research",
+    providerBadge: "Perplexity · OpenRouter",
+    badge: "Exhaustif · Multi-passes",
+    desc: "Investigation web multi-passes approfondie, analyse d'expert et confrontation des sources primaires.",
   },
-  2: {
-    label: "Synthèse exécutive concise",
-    badge: "Concis · 3 parties",
-    desc: "1 paragraphe synthétique par expert · ~800 mots au total · 2 vagues de recherche",
+  {
+    id: "perplexity/sonar-pro-search",
+    label: "Sonar Pro Search",
+    providerBadge: "Perplexity · OpenRouter",
+    badge: "Pro · Rapide & Agile",
+    desc: "Recherche proactive rapide, agile et sourcée avec citations directes pour synthèses ciblées.",
   },
-  3: {
-    label: "Résumé structuré",
-    badge: "Résumé · 3 parties",
-    desc: "1 à 2 paragraphes par expert · ~1 200 mots au total · 3 vagues de recherche",
+  {
+    id: "google/deep-research-preview-04-2026",
+    label: "Google Gemini Deep Research",
+    providerBadge: "Google Gemini API",
+    badge: "Agent Google · Interactions API",
+    desc: "Agent autonome d'investigation de Google Gemini (requiert GOOGLE_API_KEY).",
   },
-  4: {
-    label: "Aperçu analytique",
-    badge: "Analytique · 4 parties",
-    desc: "2 paragraphes par expert · ~2 000 mots au total · 4 vagues de recherche",
+  {
+    id: "google/deep-research-max-preview-04-2026",
+    label: "Google Gemini Deep Research Max",
+    providerBadge: "Google Gemini API",
+    badge: "Max · Exhaustivité Maximale",
+    desc: "Version maximale ultra-exhaustive de Google Deep Research pour investigations complexes massives.",
   },
-  5: {
-    label: "Dossier standard équilibré",
-    badge: "Standard · 4 parties",
-    desc: "2 à 3 paragraphes par expert · ~2 800 mots au total · 5 vagues de recherche",
-  },
-  6: {
-    label: "Analyse détaillée",
-    badge: "Détaillé · 5 parties",
-    desc: "3 paragraphes denses par expert · ~4 200 mots au total · 6 vagues de recherche",
-  },
-  7: {
-    label: "Étude approfondie",
-    badge: "Approfondi · 5 parties",
-    desc: "3 à 4 paragraphes denses par expert · ~5 200 mots au total · 7 vagues de recherche",
-  },
-  8: {
-    label: "Grand rapport complet (Recommandé)",
-    badge: "Complet · 5 parties",
-    desc: "4 à 5 paragraphes denses par expert · ~6 500 mots au total · 8 vagues de recherche",
-  },
-  9: {
-    label: "Traité exhaustif très détaillé",
-    badge: "Exhaustif · 6 parties",
-    desc: "5 à 6 paragraphes très développés par expert · ~9 500 mots · 9 vagues de recherche",
-  },
-  10: {
-    label: "Encyclopédique & Ultra-détaillé",
-    badge: "Maximum · 7 parties",
-    desc: "6 à 8 paragraphes exhaustifs par expert (x5+) · ~14 000+ mots · 10 vagues de recherche",
-  },
-};
+];
 
 function formatReportDate(dateStr: string): string {
   try {
@@ -136,46 +114,44 @@ export function DeepSearchModal({
   initialTab = "plan",
   initialReportId = null,
   models = [],
-  stageModels: initialStageModels,
-  onChangeStageModels,
   onRefreshModels,
   onClose,
   onLaunch,
 }: DeepSearchModalProps) {
   const [activeTab, setActiveTab] = useState<"plan" | "reports">(initialTab);
   const [outputFormat, setOutputFormat] = useState<"html" | "pdf">("html");
-  const [detailLevel, setDetailLevel] = useState<number>(8);
-  const [stageModels, setStageModels] = useState<StageModelsConfig>(() => {
-    if (initialStageModels) return initialStageModels;
-    try {
-      const stored = localStorage.getItem("clair_stage_models_deep_search");
-      if (stored) return JSON.parse(stored);
-    } catch {}
-    return {
-      plan_model: "google/gemini-4-argon",
-      search_model: "google/gemini-3.8-flash",
-      expert_model: "google/gemini-3.8-flash",
-      synthesis_model: "google/gemini-3.8-flash",
-      audit_model: "openai/gpt-6-astra",
-    };
-  });
-  const [stageModelsModalOpen, setStageModelsModalOpen] = useState(false);
-
-  const handleUpdateStageModels = (newCfg: StageModelsConfig) => {
-    setStageModels(newCfg);
-    try {
-      localStorage.setItem("clair_stage_models_deep_search", JSON.stringify(newCfg));
-    } catch {}
-    if (onChangeStageModels) onChangeStageModels(newCfg);
-  };
+  const [selectedEngineModel, setSelectedEngineModel] = useState<string>("perplexity/sonar-deep-research");
   
-  // Plan state
-  const [queries, setQueries] = useState<string[]>([]);
-  const [loadingPlan, setLoadingPlan] = useState(false);
+  // Question state
+  const [targetQuery, setTargetQuery] = useState(question.trim());
   const [isLaunching, setIsLaunching] = useState(false);
   const [planError, setPlanError] = useState<string | null>(null);
-  const inputRefs = useRef<(HTMLTextAreaElement | HTMLInputElement | null)[]>([]);
   const overlayMouseDownRef = useRef<EventTarget | null>(null);
+
+  // Google Deep Research Collaborative Planning state
+  const isGoogleModel = selectedEngineModel.toLowerCase().includes("google");
+  const [collaborativePlan, setCollaborativePlan] = useState<string>("");
+  const [interactionId, setInteractionId] = useState<string | null>(null);
+  const [loadingGooglePlan, setLoadingGooglePlan] = useState<boolean>(false);
+  const [showPlanReview, setShowPlanReview] = useState<boolean>(false);
+
+  // Reset plan review if user changes engine
+  useEffect(() => {
+    if (!isGoogleModel) {
+      setShowPlanReview(false);
+      setCollaborativePlan("");
+      setInteractionId(null);
+    }
+  }, [isGoogleModel]);
+
+  // Auto-fetch collaborative plan when Google engine is selected
+  useEffect(() => {
+    if (!isOpen || activeTab !== "plan" || !isGoogleModel) return;
+    const cleanQ = targetQuery.trim() || question.trim();
+    if (cleanQ && !collaborativePlan && !loadingGooglePlan && !planError) {
+      void handleRequestGooglePlan();
+    }
+  }, [isOpen, activeTab, isGoogleModel, selectedEngineModel, targetQuery, question, collaborativePlan, loadingGooglePlan, planError]);
 
   // Reports state
   const [reports, setReports] = useState<DeepSearchReport[]>([]);
@@ -187,57 +163,23 @@ export function DeepSearchModal({
   const [copiedReport, setCopiedReport] = useState(false);
   const [reportToDelete, setReportToDelete] = useState<DeepSearchReport | null>(null);
 
-  // Sync tab and report id if props change
+  // Sync question when prop changes
+  useEffect(() => {
+    setTargetQuery(question.trim());
+  }, [question]);
+
   useEffect(() => {
     if (initialReportId) {
-      setActiveTab("reports");
       setSelectedReportId(initialReportId);
-    } else if (initialTab) {
+      setActiveTab("reports");
+    }
+  }, [initialReportId]);
+
+  useEffect(() => {
+    if (initialTab) {
       setActiveTab(initialTab);
     }
-  }, [initialTab, initialReportId]);
-
-  // Load plan when opening in plan mode
-  useEffect(() => {
-    if (!isOpen || activeTab !== "plan" || !question.trim()) return;
-
-    let cancelled = false;
-    async function loadPlan() {
-      setLoadingPlan(true);
-      setPlanError(null);
-      try {
-        const generated = await planDeepSearch(conversationId, question, stageModels);
-        if (!cancelled) {
-          const list = generated.length ? generated : [question.trim()];
-          setQueries(list);
-          setTimeout(() => {
-            inputRefs.current[0]?.focus();
-          }, 80);
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setPlanError(
-            err instanceof Error
-              ? err.message
-              : "Impossible de générer le plan de recherche. Vous pouvez définir vos requêtes manuellement.",
-          );
-          setQueries([question.trim()]);
-          setTimeout(() => {
-            inputRefs.current[0]?.focus();
-          }, 80);
-        }
-      } finally {
-        if (!cancelled) {
-          setLoadingPlan(false);
-        }
-      }
-    }
-
-    void loadPlan();
-    return () => {
-      cancelled = true;
-    };
-  }, [isOpen, activeTab, question, conversationId]);
+  }, [initialTab]);
 
   // Load reports list when switching to reports tab
   useEffect(() => {
@@ -311,65 +253,49 @@ export function DeepSearchModal({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen, activeTab, queries, activeReport, reportToDelete]);
-
-  // Auto-resize all theme textareas so the full text is always visible without internal scrollbar truncation
-  useEffect(() => {
-    inputRefs.current.forEach((el) => {
-      if (el instanceof HTMLTextAreaElement) {
-        el.style.height = "auto";
-        el.style.height = `${Math.max(44, el.scrollHeight)}px`;
-      }
-    });
-  }, [queries, loadingPlan, activeTab, isOpen]);
+  }, [isOpen, activeTab, targetQuery, activeReport, reportToDelete]);
 
   if (!isOpen) return null;
 
-  // Plan actions
-  function handleQueryChange(index: number, value: string) {
-    setQueries((prev) => {
-      const copy = [...prev];
-      copy[index] = value;
-      return copy;
-    });
-  }
-
-  function handleRemoveQuery(index: number) {
-    setQueries((prev) => prev.filter((_, i) => i !== index));
-  }
-
-  function handleAddQuery() {
-    setQueries((prev) => [...prev, ""]);
-    setTimeout(() => {
-      const last = inputRefs.current[queries.length];
-      last?.focus();
-    }, 50);
-  }
-
-  async function handleRegeneratePlan() {
-    if (loadingPlan || !question.trim()) return;
-    setLoadingPlan(true);
+  async function handleRequestGooglePlan(refineWithPrevious = false) {
+    const cleanQ = targetQuery.trim() || question.trim();
+    if (!cleanQ || loadingGooglePlan) return;
+    setLoadingGooglePlan(true);
     setPlanError(null);
+    setShowPlanReview(true);
     try {
-      const generated = await planDeepSearch(conversationId, question);
-      setQueries(generated.length ? generated : [question.trim()]);
+      const prevId = refineWithPrevious && interactionId ? interactionId : undefined;
+      const res = await planDeepSearch(conversationId, cleanQ, undefined, selectedEngineModel, prevId);
+      if (res.plan_text) {
+        setCollaborativePlan(res.plan_text);
+        if (res.interaction_id) setInteractionId(res.interaction_id);
+      }
     } catch (err) {
       setPlanError(
-        err instanceof Error ? err.message : "Erreur lors de la régénération du plan.",
+        err instanceof Error ? err.message : "Impossible d'obtenir la proposition de plan de Google Deep Research.",
       );
     } finally {
-      setLoadingPlan(false);
+      setLoadingGooglePlan(false);
     }
   }
 
   async function handleConfirmPlan() {
     if (!onLaunch || isLaunching) return;
-    const cleaned = queries.map((q) => q.trim()).filter(Boolean);
-    const finalQueries = cleaned.length ? cleaned : [question.trim()];
+    const cleanQ = targetQuery.trim() || question.trim();
+    if (!cleanQ) return;
+
+    // Si Google Deep Research est sélectionné et qu'aucun plan n'est encore généré, on le génère d'abord pour validation !
+    if (isGoogleModel && (!showPlanReview || !collaborativePlan)) {
+      await handleRequestGooglePlan();
+      return;
+    }
+
     setIsLaunching(true);
     setPlanError(null);
     try {
-      await onLaunch(finalQueries, detailLevel, stageModels);
+      const activeInteractionId = isGoogleModel && showPlanReview && interactionId ? interactionId : undefined;
+      const activeFeedback = isGoogleModel && showPlanReview && collaborativePlan ? collaborativePlan : undefined;
+      await onLaunch([cleanQ], undefined, selectedEngineModel, activeInteractionId, activeFeedback);
       onClose();
     } catch (err) {
       setPlanError(
@@ -401,7 +327,6 @@ export function DeepSearchModal({
     setTimeout(() => setCopiedReport(false), 2000);
   }
 
-  const validQueriesCount = queries.filter((q) => q.trim().length > 0).length;
   const filteredReports = reports.filter((r) => {
     if (!reportsSearch.trim()) return true;
     const s = reportsSearch.toLowerCase();
@@ -442,7 +367,7 @@ export function DeepSearchModal({
                 <span className="deepsearch-modal-pill">
                   {activeReport
                     ? `Mode Lecture Blog · ${activeReport.sources_count} sources`
-                    : "3 Experts par partie · Rédaction en 2 étapes"}
+                    : "Perplexity Sonar Deep Research"}
                 </span>
               </div>
               <p>
@@ -450,25 +375,12 @@ export function DeepSearchModal({
                   ? `Question initiale : « ${activeReport.topic} »`
                   : activeTab === "reports"
                   ? "Consultez, lisez en mode blog et exportez vos grands rapports d'investigation sauvegardés."
-                  : "Découpage initial sans limite par Gemini Argon, validations multilingues, puis sortie en 2 temps : Planificateur + Écrivain développant chaque partie sous la perspective de 3 experts du domaine."}
+                  : "Investigation autonome approfondie par Perplexity Sonar Deep Research avec recherche web multi-sources et citations vérifiées en temps réel."}
               </p>
             </div>
           </div>
 
           <div className="deepsearch-modal-header-right">
-            {/* Configure Stage Models Button */}
-            {!activeReport && (
-              <button
-                type="button"
-                onClick={() => setStageModelsModalOpen(true)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-xl border border-primary/30 bg-primary/10 text-primary hover:bg-primary/20 transition-colors shadow-sm"
-                title="Configurer les modèles IA utilisés pour chacune des 5 étapes du pipeline DeepSearch"
-              >
-                <Sparkles size={13} />
-                <span>Modèles des étapes</span>
-              </button>
-            )}
-
             {/* Tab switchers if not reading a specific report */}
             {!activeReport && (
               <div className="deepsearch-tabs-pills" role="tablist">
@@ -512,25 +424,214 @@ export function DeepSearchModal({
         {/* ===================== TAB 1: PLAN VIEW ===================== */}
         {activeTab === "plan" && !activeReport && (
           <>
-            {/* Plan Body (Scrollable area containing target summary, format selector and full themes list) */}
+            {/* Plan Body */}
             <div className="deepsearch-modal-body">
-              {/* Question prompt summary */}
-              <div className="deepsearch-modal-target-box deepsearch-modal-target-box-inline">
-                <div className="deepsearch-modal-target-label">
-                  <Sparkles size={13} />
-                  <span>Découpage initial en points à aborder & Validations intermédiaires</span>
+              {/* Question principale */}
+              <div className="output-format-card" role="group" aria-label="Question d'investigation">
+                <span className="output-format-label">
+                  <Sparkles size={14} />
+                  <span>Question ou sujet de la recherche approfondie :</span>
+                </span>
+                <textarea
+                  rows={3}
+                  className="deepsearch-modal-query-input deepsearch-module-textarea"
+                  style={{
+                    width: "100%",
+                    marginTop: "8px",
+                    padding: "12px",
+                    borderRadius: "10px",
+                    resize: "vertical",
+                    fontSize: "13px",
+                    lineHeight: "1.5",
+                  }}
+                  value={targetQuery}
+                  onChange={(e) => setTargetQuery(e.target.value)}
+                  placeholder="Précisez votre question ou sujet d'investigation…"
+                  disabled={isLaunching}
+                />
+              </div>
+
+              {/* Sélecteur de moteur d'investigation */}
+              <div className="output-format-card" role="group" aria-label="Moteur d'investigation">
+                <span className="output-format-label">
+                  <Compass size={14} />
+                  <span>Moteur de recherche autonome :</span>
+                </span>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "10px", marginTop: "8px" }}>
+                  {DEEP_RESEARCH_ENGINES.map((engine) => {
+                    const isSelected = selectedEngineModel === engine.id;
+                    return (
+                      <button
+                        key={engine.id}
+                        type="button"
+                        onClick={() => setSelectedEngineModel(engine.id)}
+                        className={`output-format-option ${isSelected ? "is-selected" : ""}`}
+                        style={{
+                          textAlign: "left",
+                          padding: "12px 14px",
+                          borderRadius: "10px",
+                          border: isSelected ? "1.5px solid var(--accent-primary, #6366f1)" : "1px solid var(--border-color, #334155)",
+                          background: isSelected ? "rgba(99, 102, 241, 0.12)" : "rgba(30, 41, 59, 0.4)",
+                          cursor: "pointer",
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: "4px",
+                        }}
+                      >
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" }}>
+                          <span style={{ fontWeight: 600, fontSize: "13px", color: isSelected ? "var(--accent-primary, #818cf8)" : "inherit" }}>
+                            {engine.label}
+                          </span>
+                          <span style={{ fontSize: "10px", padding: "2px 6px", borderRadius: "6px", background: "rgba(148, 163, 184, 0.15)", color: "#94a3b8" }}>
+                            {engine.badge}
+                          </span>
+                        </div>
+                        <small style={{ fontSize: "11px", color: "var(--text-muted, #94a3b8)", lineHeight: "1.4" }}>
+                          {engine.desc}
+                        </small>
+                      </button>
+                    );
+                  })}
                 </div>
-                <div className="deepsearch-modal-target-text">
-                  « {question.trim() || "Aucune question définie"} »
-                </div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginTop: "8px", fontSize: "11px" }}>
-                  <span className="deepsearch-modal-pill" title="Quels sont les composants, versions et standards impliqués ?">1. Axe Entités / Définitions</span>
-                  <span className="deepsearch-modal-pill" title="Quel est l'état de l'art actuel et les changements récents ?">2. Axe Temporel</span>
-                  <span className="deepsearch-modal-pill" title="Quels sont les mécanismes internes, architectures et métriques objectives ?">3. Axe Technique & Causal</span>
-                  <span className="deepsearch-modal-pill" title="Quels sont les goulots d'étranglement, limitations, failles ou avis opposés ?">4. Axe Contradictoire</span>
-                  <span className="deepsearch-modal-pill" title="Quelles sont les spécifications d'environnement ou conditions aux limites ?">5. Axe Périmètre & Contraintes</span>
-                  <span className="deepsearch-modal-pill" title="Exploration à 360° (ex. filières bouchées vs en tension), toutes langues & questions de contrôle">6. Vision 360° & Toutes langues</span>
-                </div>
+
+                {/* Option Google Deep Research : Collaborative Planning natif */}
+                {isGoogleModel && (
+                  <div style={{ marginTop: "12px", display: "flex", flexDirection: "column", gap: "8px" }}>
+                    {loadingGooglePlan ? (
+                      <div
+                        style={{
+                          padding: "14px 16px",
+                          borderRadius: "10px",
+                          border: "1px solid rgba(99, 102, 241, 0.4)",
+                          background: "rgba(99, 102, 241, 0.08)",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "10px",
+                          fontSize: "12px",
+                          color: "var(--accent-primary, #818cf8)",
+                        }}
+                      >
+                        <LoaderCircle size={18} className="spin" />
+                        <div>
+                          <strong>Élaboration du plan en temps réel…</strong>
+                          <p style={{ margin: "2px 0 0 0", fontSize: "11px", color: "var(--text-muted, #94a3b8)" }}>
+                            Consultation de Google Gemini Deep Research pour établir les axes d'investigation.
+                          </p>
+                        </div>
+                      </div>
+                    ) : planError ? (
+                      <div
+                        style={{
+                          padding: "12px 14px",
+                          borderRadius: "10px",
+                          border: "1px solid rgba(239, 68, 68, 0.4)",
+                          background: "rgba(239, 68, 68, 0.1)",
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          gap: "10px",
+                          fontSize: "12px",
+                          color: "#f87171",
+                        }}
+                      >
+                        <span>{planError}</span>
+                        <button
+                          type="button"
+                          onClick={() => void handleRequestGooglePlan()}
+                          style={{
+                            background: "rgba(239, 68, 68, 0.2)",
+                            border: "1px solid rgba(239, 68, 68, 0.4)",
+                            color: "#fca5a5",
+                            borderRadius: "6px",
+                            padding: "4px 8px",
+                            fontSize: "11px",
+                            cursor: "pointer",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          Réessayer
+                        </button>
+                      </div>
+                    ) : collaborativePlan ? (
+                      <div
+                        style={{
+                          padding: "12px",
+                          borderRadius: "10px",
+                          border: "1.5px solid rgba(99, 102, 241, 0.4)",
+                          background: "rgba(15, 23, 42, 0.65)",
+                        }}
+                      >
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                          <span style={{ fontSize: "12px", fontWeight: 600, color: "var(--accent-primary, #818cf8)", display: "flex", alignItems: "center", gap: "6px" }}>
+                            <Sparkles size={13} />
+                            <span>📋 Plan d'investigation Google Gemini — À valider :</span>
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => void handleRequestGooglePlan(true)}
+                            disabled={loadingGooglePlan || isLaunching}
+                            style={{
+                              background: "none",
+                              border: "none",
+                              color: "var(--text-muted, #94a3b8)",
+                              cursor: "pointer",
+                              fontSize: "11px",
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "4px",
+                            }}
+                            title="Demander une nouvelle proposition de plan"
+                          >
+                            <RefreshCw size={11} />
+                            <span>Régénérer</span>
+                          </button>
+                        </div>
+                        <p style={{ fontSize: "11px", color: "var(--text-muted, #94a3b8)", margin: "0 0 8px 0" }}>
+                          Vous pouvez affiner, réordonner ou compléter les axes ci-dessous. Le modèle suivra scrupuleusement ces directives.
+                        </p>
+                        <textarea
+                          rows={6}
+                          className="deepsearch-modal-query-input deepsearch-module-textarea"
+                          style={{
+                            width: "100%",
+                            padding: "10px 12px",
+                            borderRadius: "8px",
+                            resize: "vertical",
+                            fontSize: "12px",
+                            lineHeight: "1.5",
+                          }}
+                          value={collaborativePlan}
+                          onChange={(e) => setCollaborativePlan(e.target.value)}
+                          disabled={isLaunching}
+                        />
+                      </div>
+                    ) : (
+                      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                        <button
+                          type="button"
+                          onClick={() => void handleRequestGooglePlan()}
+                          disabled={loadingGooglePlan || isLaunching || !targetQuery.trim()}
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: "6px",
+                            padding: "7px 13px",
+                            borderRadius: "8px",
+                            fontSize: "12px",
+                            background: "rgba(99, 102, 241, 0.12)",
+                            border: "1px solid rgba(99, 102, 241, 0.35)",
+                            color: "var(--accent-primary, #818cf8)",
+                            cursor: "pointer",
+                            fontWeight: 500,
+                          }}
+                        >
+                          <Sparkles size={14} />
+                          <span>📋 Générer le plan d'investigation (Collaborative Planning)</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Sélecteur de format de sortie (Beau site HTML ou Beau PDF) */}
@@ -563,199 +664,14 @@ export function DeepSearchModal({
                 </div>
               </div>
 
-              {/* Curseur de niveau de détail (1 à 10 : de Synthèse courte à Ultra détaillé) */}
-              <div className="detail-level-slider-card" role="group" aria-label="Niveau de détail de la réponse">
-                <div className="detail-level-slider-header">
-                  <div className="detail-level-slider-title">
-                    <Sparkles size={13} />
-                    <span>Niveau de détail souhaité :</span>
-                    <strong className="detail-level-active-name">
-                      Niveau {detailLevel}/10 — {DEEPSEARCH_DETAIL_LEVELS[detailLevel]?.label}
-                    </strong>
-                  </div>
-                  <span className="detail-level-badge">
-                    {DEEPSEARCH_DETAIL_LEVELS[detailLevel]?.badge}
-                  </span>
-                </div>
-                <div className="detail-level-slider-control">
-                  <span
-                    className="detail-level-pole"
-                    onClick={() => !isLaunching && setDetailLevel(1)}
-                    title="Régler sur 1 : Synthèse très courte"
-                  >
-                    1 · Synthèse courte
-                  </span>
-                  <div className="detail-level-range-wrap">
-                    <input
-                      type="range"
-                      min={1}
-                      max={10}
-                      step={1}
-                      value={detailLevel}
-                      disabled={isLaunching}
-                      onChange={(e) => setDetailLevel(Number(e.target.value))}
-                      className="detail-level-range-input"
-                      aria-label="Curseur du niveau de détail de 1 à 10"
-                    />
-                    <div className="detail-level-ticks" aria-hidden="true">
-                      {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((lvl) => (
-                        <button
-                          key={lvl}
-                          type="button"
-                          disabled={isLaunching}
-                          className={`detail-level-tick ${detailLevel === lvl ? "is-active" : ""} ${detailLevel >= lvl ? "is-filled" : ""}`}
-                          onClick={() => setDetailLevel(lvl)}
-                          title={`Niveau ${lvl}/10 — ${DEEPSEARCH_DETAIL_LEVELS[lvl]?.label}`}
-                        >
-                          {lvl}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  <span
-                    className="detail-level-pole detail-level-pole-right"
-                    onClick={() => !isLaunching && setDetailLevel(10)}
-                    title="Régler sur 10 : Ultra détaillé"
-                  >
-                    10 · Ultra détaillé
-                  </span>
-                </div>
-                <div className="detail-level-slider-desc">
-                  {DEEPSEARCH_DETAIL_LEVELS[detailLevel]?.desc}
-                </div>
-
-                {/* Pipeline Stages Mini-Summary Bar */}
-                <div className="mt-2.5 pt-2 border-t border-surface-border/50 flex flex-wrap items-center justify-between gap-2 text-xs">
-                  <div className="flex flex-wrap items-center gap-1.5 text-text-muted">
-                    <span className="font-medium text-text-secondary">Pipeline IA :</span>
-                    <span className="px-1.5 py-0.5 rounded bg-surface-subtle font-mono text-[11px] border border-surface-border" title="Étape 1 · Planification">
-                      Plan: {stageModels.plan_model?.split("/").pop() || "Gemini Argon"}
-                    </span>
-                    <span className="text-text-muted/60">→</span>
-                    <span className="px-1.5 py-0.5 rounded bg-surface-subtle font-mono text-[11px] border border-surface-border" title="Étape 2 · Recherche & Approfondissement">
-                      Search: {stageModels.search_model?.split("/").pop() || "Gemini Flash"}
-                    </span>
-                    <span className="text-text-muted/60">→</span>
-                    <span className="px-1.5 py-0.5 rounded bg-surface-subtle font-mono text-[11px] border border-surface-border" title="Étape 3 · Collège des 3 Experts">
-                      3 Experts: {stageModels.expert_model?.split("/").pop() || "Gemini Flash"}
-                    </span>
-                    <span className="text-text-muted/60">→</span>
-                    <span className="px-1.5 py-0.5 rounded bg-surface-subtle font-mono text-[11px] border border-surface-border" title="Étape 4 · Rédaction Finale">
-                      Synthèse: {stageModels.synthesis_model?.split("/").pop() || "Gemini Flash"}
-                    </span>
-                    <span className="text-text-muted/60">→</span>
-                    <span className="px-1.5 py-0.5 rounded bg-surface-subtle font-mono text-[11px] border border-surface-border" title="Étape 5 · Relecture Critique Astra & Validation">
-                      Audit: {stageModels.audit_model?.split("/").pop() || "GPT-6 Astra"}
-                    </span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setStageModelsModalOpen(true)}
-                    className="text-primary hover:underline font-medium text-[11px] shrink-0"
-                  >
-                    Personnaliser les 5 étapes →
-                  </button>
-                </div>
-              </div>
-
-              <div className="deepsearch-modal-body-top">
-                <div className="deepsearch-modal-plan-header-block">
-                  <div className="deepsearch-modal-plan-title">
-                    <ListFilter size={15} />
-                    <span>Thèmes & angles planifiés (Gemini Argon · sans limite)</span>
-                    <span className="deepsearch-modal-count-badge">{validQueriesCount}</span>
-                  </div>
-                  <span className="deepsearch-modal-plan-subtitle">
-                    Vision 360° (ex. filières en tension ET filières bouchées) · Sortie en 2 temps (Agent Planificateur puis Agent Écrivain partie par partie)
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  className="deepsearch-modal-regenerate-btn"
-                  onClick={handleRegeneratePlan}
-                  disabled={loadingPlan}
-                  title="Demander à l'IA de recalculer de nouveaux angles de recherche"
-                >
-                  {loadingPlan ? (
-                    <LoaderCircle size={13} className="spin" />
-                  ) : (
-                    <WandSparkles size={13} />
-                  )}
-                  <span>Régénérer le plan</span>
-                </button>
-              </div>
-
               {planError && <div className="deepsearch-modal-error-banner">{planError}</div>}
-
-              {loadingPlan ? (
-                <div className="deepsearch-modal-loading-state">
-                  <LoaderCircle size={28} className="spin" />
-                  <p>Décomposition stratégique et formulation des pistes multilingues…</p>
-                  <span>Identification des entités clés, points aveugles et documentation de référence</span>
-                </div>
-              ) : (
-                <div className="deepsearch-modal-queries-list">
-                  {queries.map((query, index) => (
-                    <div key={index} className="deepsearch-modal-query-row deepsearch-theme-card">
-                      <span className="deepsearch-modal-query-num" aria-hidden="true">
-                        {index + 1}
-                      </span>
-                      <textarea
-                        ref={(el) => {
-                          inputRefs.current[index] = el;
-                          if (el) {
-                            el.style.height = "auto";
-                            el.style.height = `${Math.max(44, el.scrollHeight)}px`;
-                          }
-                        }}
-                        rows={1}
-                        className="deepsearch-modal-query-input deepsearch-module-textarea deepsearch-theme-full-textarea"
-                        value={query}
-                        placeholder="Ex: 1. Définition et délimitation conceptuelle : analyser les principes clés et enjeux..."
-                        onChange={(e) => {
-                          handleQueryChange(index, e.target.value);
-                          e.target.style.height = "auto";
-                          e.target.style.height = `${Math.max(44, e.target.scrollHeight)}px`;
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" && !e.shiftKey) {
-                            e.preventDefault();
-                            void handleConfirmPlan();
-                          }
-                        }}
-                        disabled={isLaunching}
-                      />
-                      <button
-                        type="button"
-                        className="deepsearch-modal-query-delete-btn"
-                        onClick={() => handleRemoveQuery(index)}
-                        disabled={isLaunching}
-                        title="Supprimer cette thématique"
-                        aria-label={`Supprimer la thématique ${index + 1}`}
-                      >
-                        <Trash2 size={15} />
-                      </button>
-                    </div>
-                  ))}
-
-                  <button
-                    type="button"
-                    className="deepsearch-modal-add-btn"
-                    onClick={handleAddQuery}
-                    disabled={isLaunching}
-                  >
-                    <Plus size={15} />
-                    <span>Ajouter un angle ou une thématique de recherche</span>
-                  </button>
-                </div>
-              )}
             </div>
 
             {/* Footer */}
             <div className="deepsearch-modal-footer">
               <div className="deepsearch-modal-footer-hint">
                 <CornerDownLeft size={13} />
-                <span>Appuyez sur Entrée ou validez pour démarrer la recherche</span>
+                <span>Appuyez sur Entrée ou validez pour démarrer la recherche autonome</span>
               </div>
               <div className="deepsearch-modal-footer-actions">
                 <button
@@ -770,9 +686,9 @@ export function DeepSearchModal({
                   type="button"
                   className="deepsearch-modal-launch-btn"
                   onClick={() => void handleConfirmPlan()}
-                  disabled={loadingPlan || isLaunching || validQueriesCount === 0 || !onLaunch}
+                  disabled={isLaunching || !targetQuery.trim() || !onLaunch}
                 >
-                  {isLaunching ? (
+                  {isLaunching || loadingGooglePlan ? (
                     <LoaderCircle size={16} className="spin" />
                   ) : (
                     <Compass size={16} />
@@ -780,7 +696,13 @@ export function DeepSearchModal({
                   <span>
                     {isLaunching
                       ? "Lancement en cours…"
-                      : `Lancer DeepSearch (${validQueriesCount} ${validQueriesCount > 1 ? "requêtes" : "requête"})`}
+                      : loadingGooglePlan
+                      ? "Établissement du plan Google…"
+                      : isGoogleModel && (!showPlanReview || !collaborativePlan)
+                      ? "📋 Établir le plan d'investigation"
+                      : isGoogleModel && showPlanReview
+                      ? "Valider le plan & Lancer l'investigation"
+                      : "Lancer l'investigation approfondie"}
                   </span>
                 </button>
               </div>
@@ -892,6 +814,18 @@ export function DeepSearchModal({
                           <FileText size={13} />
                         </a>
                         <a
+                          href={`/api/deep-search/reports/${report.id}/slides`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="deepsearch-report-action-icon-btn slides-btn"
+                          title="Présentation type PowerPoint (diaporama interactif 16:9)"
+                          onClick={(e) => {
+                            e.currentTarget.href = `/api/deep-search/reports/${report.id}/slides?t=${Date.now()}`;
+                          }}
+                        >
+                          <Presentation size={13} />
+                        </a>
+                        <a
                           href={`/api/deep-search/reports/${report.id}/html?download=1`}
                           className="deepsearch-report-action-icon-btn"
                           title="Télécharger le fichier .html autonome"
@@ -967,6 +901,20 @@ export function DeepSearchModal({
                 </a>
 
                 <a
+                  href={`/api/deep-search/reports/${activeReport.id}/slides`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="deepsearch-reader-tool-btn deepsearch-slides-tool-btn"
+                  title="Présentation type PowerPoint de ce rapport (diaporama 16:9)"
+                  onClick={(e) => {
+                    e.currentTarget.href = `/api/deep-search/reports/${activeReport.id}/slides?t=${Date.now()}`;
+                  }}
+                >
+                  <Presentation size={13} />
+                  <span>Présentation PPT</span>
+                </a>
+
+                <a
                   href={`/api/deep-search/reports/${activeReport.id}/html?download=1`}
                   className="deepsearch-reader-tool-btn"
                   title="Télécharger le fichier .html complet"
@@ -1030,6 +978,7 @@ export function DeepSearchModal({
                 {/* Article Content Rendered */}
                 <article className="deepsearch-reader-prose markdown">
                   <ReactMarkdown
+                    urlTransform={url => url}
                     remarkPlugins={[remarkGfm]}
                     rehypePlugins={[rehypeKatex]}
                     components={{
@@ -1158,18 +1107,6 @@ export function DeepSearchModal({
           </div>
         )}
       </div>
-
-      {stageModelsModalOpen && (
-        <StageModelsModal
-          isOpen={stageModelsModalOpen}
-          modeTitle="DeepSearch"
-          config={stageModels}
-          models={models}
-          onChangeConfig={handleUpdateStageModels}
-          onClose={() => setStageModelsModalOpen(false)}
-          onRefreshModels={onRefreshModels}
-        />
-      )}
     </div>
   );
 }

@@ -12,12 +12,16 @@ from __future__ import annotations
 import html
 import re
 import unicodedata
+from copy import deepcopy
 from typing import Any
 
+from .source_registry import CITATION_RE, citation_numbers, is_document
+from .markdown_tables import VERIFICATION_TABLE_CSS
 from .deep_search_html import (
     estimate_reading_time_minutes,
     extract_domain,
     markdown_to_html,
+    evidence_to_html,
     slugify,
 )
 
@@ -43,17 +47,46 @@ def generate_chat_export_html(
     total_words = sum(len(re.findall(r"\w+", m.get("content", ""))) for m in messages)
     reading_time = max(1, round(total_words / 200))
     date_display = html.escape(created_at_str or "Date récente")
-    model_display = html.escape(model or "Assistant cLAIr")
+    effective_model = model
+    for msg in messages:
+        if msg.get("role") == "assistant" and msg.get("model"):
+            effective_model = msg["model"]
+            break
+    model_display = html.escape(effective_model or "Assistant cLAIr")
 
-    # Consolidation des sources
+    # Work on copies: export must not mutate persisted message content or sources.
+    messages = deepcopy(messages)
     all_sources: list[dict[str, Any]] = []
-    seen_urls: set[str] = set()
-    for m in messages:
-        for s in m.get("sources") or []:
-            url = s.get("url", "")
+    all_images: list[dict[str, Any]] = []
+    seen_urls: dict[str, int] = {}
+    for message in messages:
+        local_sources = [source for source in (message.get("sources") or []) if is_document(source)]
+        all_images.extend(source for source in (message.get("sources") or []) if not is_document(source))
+        mapping = {}
+        for local_index, source in enumerate(local_sources, 1):
+            url = source.get("url", "")
             if url and url not in seen_urls:
-                seen_urls.add(url)
-                all_sources.append(s)
+                all_sources.append(source)
+                seen_urls[url] = len(all_sources)
+            elif not url:
+                all_sources.append(source)
+                seen_urls[f"src-{len(all_sources)}"] = len(all_sources)
+            mapping[local_index] = seen_urls.get(url, len(all_sources))
+        if scope != "turn":
+            norm_content = re.sub(r"\[cite:\s*([^\]]+)\]", r"[\1]", message.get("content", ""), flags=re.IGNORECASE)
+            def remap(match: re.Match) -> str:
+                return "".join(
+                    f"[{mapping[n]}]" if n in mapping else f"[{n}]"
+                    for n in citation_numbers(match[1])
+                )
+            message["content"] = CITATION_RE.sub(remap, norm_content)
+            message["sources"] = all_sources
+        if "🔴 Révision requise" in message.get("content", ""):
+            message["content"] = (
+                "## Révision documentaire requise\n\n"
+                "Le texte de ce rapport est retiré de l'export faute de validation documentaire. Relancez la recherche."
+            )
+    all_sources.extend(all_images)
 
     # Construction du corps principal selon le scope
     if is_turn_scope:
@@ -68,6 +101,7 @@ def generate_chat_export_html(
 
         user_content = user_msg.get("content", "").strip() if user_msg else (topic or "Question non spécifiée")
         asst_content = asst_msg.get("content", "").strip() if asst_msg else ""
+        asst_content = re.sub(r"\[cite:\s*([^\]]+)\]", r"[\1]", asst_content, flags=re.IGNORECASE)
         asst_sources = asst_msg.get("sources", []) if asst_msg else []
         
         user_date = html.escape(user_msg.get("created_at_str", "") if user_msg else "")
@@ -226,17 +260,7 @@ def generate_chat_export_html(
         """
 
     # Section Sources bibliographiques documentaires (dédoublonnées et séparées des illustrations)
-    seen_doc_urls: set[str] = set()
-    doc_sources: list[dict[str, Any]] = []
-    for s in active_sources:
-        if s.get("media_type") == "image" or s.get("img_src"):
-            continue
-        u = str(s.get("url") or "").strip().rstrip("/")
-        if u and u in seen_doc_urls:
-            continue
-        if u:
-            seen_doc_urls.add(u)
-        doc_sources.append(s)
+    doc_sources = [s for s in active_sources if is_document(s)]
 
     seen_img_urls: set[str] = set()
     img_sources: list[dict[str, Any]] = []
@@ -285,6 +309,7 @@ def generate_chat_export_html(
                 f'</a>'
                 f'</h3>'
                 + (f'<p class="source-snippet">« {s_snippet} »</p>' if s_snippet else '')
+                + evidence_to_html(src)
                 + f'<div class="source-card-bottom">'
                 f'<a href="{s_url}" target="_blank" rel="noopener noreferrer" class="source-direct-link">Consulter la ressource &rarr;</a>'
                 f'</div>'
@@ -776,6 +801,7 @@ def generate_chat_export_html(
     }}
 
     /* Tableaux */
+    {VERIFICATION_TABLE_CSS}
     .report-table-wrapper {{
       overflow-x: auto;
       margin: 18px 0;

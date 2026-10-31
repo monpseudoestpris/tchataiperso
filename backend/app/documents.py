@@ -141,11 +141,44 @@ def normalize_vision_image(content: bytes) -> bytes:
             return output.getvalue()
 
 
-async def extract_document(settings: Settings, content: bytes, filename: str) -> tuple[str, str, dict | None]:
+async def extract_document(settings: Settings, content: bytes, filename: str, mode: str = "auto") -> tuple[str, str, dict | None]:
     mime, text = await asyncio.to_thread(inspect_document, content, filename)
     visual = mime == "application/pdf" or mime.startswith("image/")
     if mime.startswith("image/") and len(content) > 8 * 1024 * 1024:
         raise HTTPException(413, "Les images sont limitées à 8 Mo pour la vision")
+
+    # Mode Vision explicite : analyse visuelle détaillée par le modèle de vision
+    if mode in ("vision", "image"):
+        if not visual:
+            raise HTTPException(422, "L'analyse visuelle détaillée s'applique uniquement aux images (PNG, JPEG, WebP) et aux PDF.")
+        if settings.demo_mode:
+            description = f"Description visuelle détaillée simulée pour {filename}."
+            extraction = DocumentExtraction(
+                model="demo-vision",
+                pages=[ExtractedPage(index=0, markdown=description, vision_description=description, method="vision")],
+                warnings=[],
+            )
+            return mime, description, extraction.model_dump()
+        if not settings.vision_model:
+            raise HTTPException(422, "Configurez VISION_MODEL pour analyser les images avec le modèle de vision.")
+        try:
+            if mime == "application/pdf":
+                image = await asyncio.to_thread(render_pdf_page, content, 0)
+                image_mime = "image/png"
+            else:
+                image = await asyncio.to_thread(normalize_vision_image, content)
+                image_mime = "image/jpeg"
+            async with asyncio.timeout(300):
+                description = await providers.describe_image(settings, image, image_mime)
+            extraction = DocumentExtraction(
+                model=settings.vision_model,
+                pages=[ExtractedPage(index=0, markdown=description, vision_description=description, method="vision")],
+                warnings=[],
+            )
+            return mime, description, extraction.model_dump()
+        except TimeoutError:
+            raise providers.ProviderError("L'analyse visuelle a dépassé le délai autorisé de 5 minutes.") from None
+
     if not visual or settings.demo_mode:
         if mime == "application/pdf" and not text.strip():
             raise HTTPException(422, "Configurez MISTRAL_API_KEY et désactivez DEMO_MODE pour analyser ce PDF sans texte.")

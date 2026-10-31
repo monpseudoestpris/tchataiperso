@@ -14,6 +14,9 @@ import unicodedata
 from typing import Any
 from urllib.parse import urlsplit
 
+from .source_registry import CITATION_RE, citation_numbers, has_source_url, is_document
+from .markdown_tables import VERIFICATION_TABLE_CSS, clean_verification_claim, is_verification_table, split_table_row
+
 
 def slugify(text: str) -> str:
     """Produit un slug ASCII propre pour les ancres HTML."""
@@ -33,9 +36,24 @@ def extract_domain(url: str) -> str:
     """Extrait le nom d'hôte propre d'une URL."""
     try:
         host = urlsplit(url).netloc
+        if host == "vertexaisearch.cloud.google.com":
+            return "Google Grounding (Source certifiée)"
         return host.replace("www.", "") if host else url
     except Exception:
         return url
+
+
+def evidence_to_html(source: dict[str, Any]) -> str:
+    """Expose stored verbatim passages without asking a model to reconstruct them."""
+    passages = source.get("evidence") or []
+    if not passages:
+        return ""
+    quotes = "".join(
+        f'<blockquote data-evidence-id="{html.escape(str(item.get("evidence_id", "")))}">'
+        f'{html.escape(str(item.get("exact_passage", "")))}</blockquote>'
+        for item in passages
+    )
+    return f'<details><summary>Passages documentaires ({len(passages)})</summary>{quotes}</details>'
 
 
 def markdown_to_html(md_text: str, sources: list[dict[str, Any]] | None = None) -> tuple[str, list[dict[str, str]]]:
@@ -44,6 +62,15 @@ def markdown_to_html(md_text: str, sources: list[dict[str, Any]] | None = None) 
     en extrayant la table des matières (TOC) et en liant les citations [1], [2] aux sources.
     """
     sources = sources or []
+    # Recoller les balises d'images scindées par un saut de ligne ou des espaces : ![alt]\n(src) -> ![alt](src)
+    md_text = re.sub(
+        r'!\[([^\]]*)\]\s*\n\s*\(\s*((?:https?://|data:image/)[^)]+)\s*\)',
+        r'![\1](\2)',
+        md_text,
+    )
+    # Normaliser d'éventuelles citations Google [cite: 1, 2] -> [1, 2]
+    md_text = re.sub(r"\[cite:\s*([^\]]+)\]", r"[\1]", md_text, flags=re.IGNORECASE)
+
     lines = md_text.split("\n")
     toc: list[dict[str, str]] = []
     html_lines: list[str] = []
@@ -66,18 +93,25 @@ def markdown_to_html(md_text: str, sources: list[dict[str, Any]] | None = None) 
     def close_table():
         nonlocal in_table, table_headers, table_rows
         if in_table:
-            t_html = ['<div class="report-table-wrapper"><table class="report-table">']
+            verification = is_verification_table(table_headers)
+            table_class = "report-table report-verification-table" if verification else "report-table"
+            t_html = [f'<div class="report-table-wrapper"><table class="{table_class}">']
             if table_headers:
                 t_html.append("<thead><tr>")
                 for th in table_headers:
-                    t_html.append(f"<th>{inline_formatting(th)}</th>")
+                    cell_class = ' class="report-metadata-cell"' if verification and th.casefold() in ("statut", "confiance", "action claimevidence") else ""
+                    t_html.append(f"<th{cell_class}>{inline_formatting(th)}</th>")
                 t_html.append("</tr></thead>")
             if table_rows:
                 t_html.append("<tbody>")
                 for row in table_rows:
                     t_html.append("<tr>")
-                    for td in row:
-                        t_html.append(f"<td>{inline_formatting(td)}</td>")
+                    for index, td in enumerate(row):
+                        header = table_headers[index].casefold() if index < len(table_headers) else ""
+                        cell_class = ' class="report-metadata-cell"' if verification and header in ("statut", "confiance", "action claimevidence") else ""
+                        if verification and index == 0:
+                            td = clean_verification_claim(td)
+                        t_html.append(f"<td{cell_class}>{inline_formatting(td)}</td>")
                     t_html.append("</tr>")
                 t_html.append("</tbody>")
             t_html.append("</table></div>")
@@ -101,19 +135,31 @@ def markdown_to_html(md_text: str, sources: list[dict[str, Any]] | None = None) 
         escaped = re.sub(r"\*([^*]+)\*", r"<em>\1</em>", escaped)
         escaped = re.sub(r"(?<!\w)_([^_]+)_(?!\w)", r"<em>\1</em>", escaped)
 
-        # Images ![alt](url) — grandes, centrées, pleine largeur (lisibles pour schémas et infographies) et cliquables en Lightbox
+        # Images ![alt](url) — supporte https:// et data:image/ (graphiques base64 générés en deep research)
+        def replace_image(match: re.Match) -> str:
+            alt = match.group(1) or "Graphique Deep Research"
+            src = match.group(2).strip()
+            is_data_uri = src.startswith("data:image/")
+            open_source_link = (
+                "" if is_data_uri else
+                f'<a href="{src}" target="_blank" rel="noopener noreferrer" style="display:inline-flex;align-items:center;gap:4px;font-style:normal;font-size:0.75rem;font-weight:500;padding:3px 10px;border-radius:999px;background:rgba(148,163,184,0.12);color:#cbd5e1;border:1px solid rgba(148,163,184,0.25);text-decoration:none;">↗ Ouvrir source</a>'
+            )
+            return (
+                f'<figure class="report-inline-figure" style="display:flex;flex-direction:column;align-items:center;margin:36px auto;max-width:100%;width:100%;">'
+                f'<div class="report-figure-img-wrap" style="display:block;max-width:min(900px,100%);width:100%;cursor:zoom-in;border-radius:14px;overflow:hidden;border:1px solid rgba(148,163,184,0.22);box-shadow:0 12px 32px rgba(15,23,42,0.28);text-align:center;background:transparent;">'
+                f'<img src="{src}" alt="{alt}" loading="lazy" onclick="if(typeof openImageLightbox===\'function\')openImageLightbox(this.src, this.alt)" title="Cliquer pour afficher en haute résolution (Plein écran)" style="display:block;width:100%;max-width:100%;height:auto;margin:0 auto;border-radius:13px;" onerror="this.closest(\'.report-inline-figure\').style.display=\'none\'" />'
+                f'</div>'
+                f'<figcaption style="display:inline-flex;align-items:center;gap:10px;margin-top:12px;font-size:0.9rem;color:#94a3b8;font-style:italic;text-align:center;flex-wrap:wrap;justify-content:center;">'
+                f'<span>{alt}</span>'
+                f'<button type="button" onclick="if(typeof openImageLightbox===\'function\')openImageLightbox(this.closest(\'.report-inline-figure\').querySelector(\'img\').src, \'{alt}\')" style="display:inline-flex;align-items:center;gap:4px;font-style:normal;font-size:0.75rem;font-weight:600;padding:3px 10px;border-radius:999px;background:rgba(99,102,241,0.18);color:#a5b4fc;border:1px solid rgba(99,102,241,0.35);cursor:pointer;">🔍 Plein écran</button>'
+                f'{open_source_link}'
+                f'</figcaption>'
+                f'</figure>'
+            )
+
         escaped = re.sub(
-            r'!\[([^\]]*)\]\((https?://[^)\s]+)\)',
-            r'<figure class="report-inline-figure" style="display:flex;flex-direction:column;align-items:center;margin:36px auto;max-width:100%;width:100%;">'
-            r'<div class="report-figure-img-wrap" style="display:block;max-width:min(900px,100%);width:100%;cursor:zoom-in;border-radius:14px;overflow:hidden;border:1px solid rgba(148,163,184,0.22);box-shadow:0 12px 32px rgba(15,23,42,0.28);text-align:center;background:transparent;">'
-            r'<img src="\2" alt="\1" loading="lazy" onclick="if(typeof openImageLightbox===\'function\')openImageLightbox(this.src, this.alt)" title="Cliquer pour afficher en haute résolution (Plein écran)" style="display:block;width:100%;max-width:100%;height:auto;margin:0 auto;border-radius:13px;" onerror="this.closest(\'.report-inline-figure\').style.display=\'none\'" />'
-            r'</div>'
-            r'<figcaption style="display:inline-flex;align-items:center;gap:10px;margin-top:12px;font-size:0.9rem;color:#94a3b8;font-style:italic;text-align:center;flex-wrap:wrap;justify-content:center;">'
-            r'<span>\1</span>'
-            r'<button type="button" onclick="if(typeof openImageLightbox===\'function\')openImageLightbox(\'\2\', \'\1\')" style="display:inline-flex;align-items:center;gap:4px;font-style:normal;font-size:0.75rem;font-weight:600;padding:3px 10px;border-radius:999px;background:rgba(99,102,241,0.18);color:#a5b4fc;border:1px solid rgba(99,102,241,0.35);cursor:pointer;">🔍 Plein écran</button>'
-            r'<a href="\2" target="_blank" rel="noopener noreferrer" style="display:inline-flex;align-items:center;gap:4px;font-style:normal;font-size:0.75rem;font-weight:500;padding:3px 10px;border-radius:999px;background:rgba(148,163,184,0.12);color:#cbd5e1;border:1px solid rgba(148,163,184,0.25);text-decoration:none;">↗ Ouvrir source</a>'
-            r'</figcaption>'
-            r'</figure>',
+            r'!\[([^\]]*)\]\(((?:https?://|data:image/)[^)]+)\)',
+            replace_image,
             escaped,
         )
 
@@ -125,32 +171,19 @@ def markdown_to_html(md_text: str, sources: list[dict[str, Any]] | None = None) 
         )
 
         # Citations de sources [1], [2], [1, 2], [1-3] (sur sources documentaires uniquement)
-        doc_sources = [s for s in sources if s.get("media_type") != "image" and not s.get("img_src")]
+        doc_sources = [s for s in sources if is_document(s)]
         def replace_citations(match: re.Match) -> str:
-            raw_nums = match.group(1)
-            # Découper par virgule ou espace
-            parts = re.split(r"[,;\s]+", raw_nums.strip())
             badges = []
-            for p in parts:
-                if "-" in p:
-                    subparts = p.split("-")
-                    if len(subparts) == 2 and subparts[0].isdigit() and subparts[1].isdigit():
-                        badges.append(
-                            f'<a href="#source-{subparts[0]}" class="report-cite-chip" title="Sources {p}">{p}</a>'
-                        )
-                        continue
-                if p.isdigit():
-                    num = int(p)
-                    source_title = ""
-                    if doc_sources and 1 <= num <= len(doc_sources):
-                        source_title = html.escape(doc_sources[num - 1].get("title") or "")
-                    tip = f' title="Source {num} : {source_title}"' if source_title else f' title="Voir source {num}"'
-                    badges.append(f'<a href="#source-{num}" class="report-cite-chip"{tip}>[{num}]</a>')
-                else:
-                    return match.group(0)
-            return " ".join(badges)
+            numbers = citation_numbers(match.group(1))
+            for num in numbers:
+                if not (1 <= num <= len(doc_sources)) or not has_source_url(doc_sources[num - 1]):
+                    badges.append(f'<span class="report-cite-unavailable" title="Référence absente du registre">[{num}] référence indisponible</span>')
+                    continue
+                source_title = html.escape(doc_sources[num - 1].get("title") or "")
+                badges.append(f'<a href="#source-{num}" class="report-cite-chip" title="Source {num} : {source_title}">[{num}]</a>')
+            return " ".join(badges) if numbers else match[0]
 
-        escaped = re.sub(r"\[(\d+(?:[,\s-]+\d+)*)\]", replace_citations, escaped)
+        escaped = CITATION_RE.sub(replace_citations, escaped)
 
         return escaped
 
@@ -238,11 +271,11 @@ def markdown_to_html(md_text: str, sources: list[dict[str, Any]] | None = None) 
                 next_stripped = lines[i + 1].strip()
                 if re.match(r"^\|(?:\s*:?-+:?\s*\|)+$", next_stripped):
                     in_table = True
-                    table_headers = [cell.strip() for cell in stripped.strip("|").split("|")]
+                    table_headers = split_table_row(stripped)
                     i += 2  # Sauter l'en-tête et le séparateur
                     continue
             if in_table:
-                row_cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+                row_cells = split_table_row(stripped)
                 table_rows.append(row_cells)
                 i += 1
                 continue
@@ -287,8 +320,12 @@ def markdown_to_html(md_text: str, sources: list[dict[str, Any]] | None = None) 
         # Fin de liste si la ligne courante n'est pas un élément de liste
         close_list()
 
-        # Paragraphe standard
-        html_lines.append(f'<p class="report-paragraph">{inline_formatting(stripped)}</p>')
+        # Paragraphe standard (ou figure d'image isolée)
+        formatted_p = inline_formatting(stripped)
+        if formatted_p.startswith('<figure class="report-inline-figure"'):
+            html_lines.append(formatted_p)
+        else:
+            html_lines.append(f'<p class="report-paragraph">{formatted_p}</p>')
         i += 1
 
     close_list()
@@ -317,23 +354,15 @@ def generate_report_html(
 ) -> str:
     """Génère un document HTML complet, autonome et haut de gamme pour le rapport DeepSearch."""
     sources = sources or []
-    # Distinction stricte entre sources documentaires textuelles et illustrations web, avec déduplication stricte par URL canonique et par snippet
-    raw_doc_sources = [s for s in sources if s.get("media_type") != "image" and not s.get("img_src")]
-    doc_sources: list[dict[str, Any]] = []
-    seen_urls: set[str] = set()
-    seen_snippets: set[str] = set()
-    for s in raw_doc_sources:
-        u = str(s.get("url") or "").strip().rstrip("/")
-        snip = re.sub(r"\s+", " ", str(s.get("snippet") or "")).strip().lower()[:120]
-        if u and u in seen_urls:
-            continue
-        if snip and len(snip) > 20 and snip in seen_snippets:
-            continue
-        if u:
-            seen_urls.add(u)
-        if snip and len(snip) > 20:
-            seen_snippets.add(snip)
-        doc_sources.append(s)
+    # Citation numbers already refer to this order. Post-generation deduplication
+    # would silently attach claims to different documents.
+    doc_sources = [s for s in sources if is_document(s)]
+    if "🔴 Révision requise" in markdown_content or (CITATION_RE.search(markdown_content) and not doc_sources):
+        markdown_content = (
+            "## Révision documentaire requise\n\n"
+            "Ce rapport ne dispose pas d'une validation documentaire suffisante. "
+            "Le texte non validé est retiré de l'export ; relancez la recherche."
+        )
     reading_time = estimate_reading_time_minutes(markdown_content)
     body_html, toc = markdown_to_html(markdown_content, doc_sources)
     clean_title = title.strip() or "Rapport d'analyse approfondie DeepSearch"
@@ -360,11 +389,8 @@ def generate_report_html(
 
     # Détection des indices de sources citées dans le rapport Markdown
     cited_nums: set[int] = set()
-    for m in re.finditer(r"\[(\d{1,3}(?:\s*[,;–-]\s*\d{1,3})*)\]", markdown_content):
-        for tok in re.split(r"[,;–-]", m.group(1)):
-            tok = tok.strip()
-            if tok.isdigit():
-                cited_nums.add(int(tok))
+    for m in CITATION_RE.finditer(markdown_content):
+        cited_nums.update(citation_numbers(m.group(1)))
 
     cited_sources = [
         (idx, s) for idx, s in enumerate(doc_sources, start=1)
@@ -383,11 +409,12 @@ def generate_report_html(
         sources_html_parts.append('<section id="bibliography-sources" class="report-sources-section">')
         sources_html_parts.append('<div class="report-sources-header">')
         sources_html_parts.append('<h2>')
-        sources_html_parts.append(f'<span class="sources-icon">📚</span> Bibliographie effective citée dans l’analyse ({len(primary_list)})')
+        bibliography_label = "Bibliographie effective citée dans l’analyse" if cited_sources else "Documents collectés (non cités dans le texte)"
+        sources_html_parts.append(f'<span class="sources-icon">📚</span> {bibliography_label} ({len(primary_list)})')
         sources_html_parts.append('</h2>')
         sources_html_parts.append(
-            f'<p>Ces {len(primary_list)} références constituent le socle probatoire directement mobilisé par les experts '
-            f'et vérifié par le validateur factuel dans le corps du texte ci-dessus.</p>'
+            '<p>Liens vers les documents collectés. Le registre factuel précise les vérifications '
+            'effectuées et leurs limites.</p>'
         )
         sources_html_parts.append('</div>')
         sources_html_parts.append('<div class="report-sources-grid">')
@@ -420,6 +447,7 @@ def generate_report_html(
             )
             if s_snippet:
                 sources_html_parts.append(f'<p class="source-snippet">« {s_snippet} »</p>')
+            sources_html_parts.append(evidence_to_html(src))
             sources_html_parts.append(
                 f'<div class="source-card-bottom">'
                 f'<a href="{s_url}" target="_blank" rel="noopener noreferrer" class="source-direct-link">Consulter la page source originale &rarr;</a>'
@@ -1007,6 +1035,7 @@ def generate_report_html(
     }}
 
     /* Tables */
+    {VERIFICATION_TABLE_CSS}
     .report-table-wrapper {{
       margin: 28px 0;
       overflow-x: auto;
@@ -1593,7 +1622,7 @@ def generate_report_html(
     <header class="report-hero">
       <div class="hero-badge-row">
         <span class="hero-badge">Rapport d'Investigation Approfondie</span>
-        <span class="hero-badge verified">{len(cited_sources) if cited_sources else len(doc_sources)} sources citées dans l'analyse ({len(doc_sources)} explorées) · confiance par affirmation (voir registre)</span>
+        <span class="hero-badge verified">{len(cited_sources)} sources citées dans l'analyse ({len(doc_sources)} explorées) · confiance par affirmation (voir registre)</span>
         <span class="hero-badge">Mode Publication Blog</span>
       </div>
 

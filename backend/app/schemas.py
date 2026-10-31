@@ -260,6 +260,8 @@ class SendMessage(BaseModel):
     learn_mode_queries: list[str] | None = Field(default=None)
     detail_level: int | None = Field(default=None, ge=1, le=10)
     stage_models: StageModelsConfig | None = None
+    interaction_id: str | None = Field(default=None, max_length=500)
+    plan_feedback: str | None = Field(default=None, max_length=20000)
 
     @field_validator("attachment_ids")
     @classmethod
@@ -287,19 +289,27 @@ class SendMessage(BaseModel):
 class PlanDeepSearch(BaseModel):
     content: str = Field(min_length=1, max_length=20000)
     stage_models: StageModelsConfig | None = None
+    model: str | None = None
+    interaction_id: str | None = None
 
 
 class DeepSearchPlanResponse(BaseModel):
-    queries: list[str]
+    queries: list[str] = Field(default_factory=list)
+    plan_text: str | None = None
+    interaction_id: str | None = None
 
 
 class PlanLearnMode(BaseModel):
     content: str = Field(min_length=1, max_length=20000)
     stage_models: StageModelsConfig | None = None
+    model: str | None = None
+    interaction_id: str | None = None
 
 
 class LearnModePlanResponse(BaseModel):
-    queries: list[str]
+    queries: list[str] = Field(default_factory=list)
+    plan_text: str | None = None
+    interaction_id: str | None = None
 
 
 class CreateMemory(BaseModel):

@@ -714,6 +714,62 @@ def test_textless_image_requires_dedicated_vision_and_failed_upload_is_clean(tmp
             assert list((tmp_path / "uploads").iterdir()) == []
 
 
+def test_explicit_vision_and_ocr_modes(tmp_path, monkeypatch):
+    settings = Settings(_env_file=None, app_data_dir=tmp_path, mistral_api_key="fake", llm_api_key="fake",
+                        vision_model="dedicated/vision")
+    content = io.BytesIO()
+    Image.new("RGB", (20, 30), "blue").save(content, format="PNG")
+
+    ocr_calls = 0
+    vision_calls = 0
+
+    async def ocr(_settings, data, mime, page_count):
+        nonlocal ocr_calls
+        ocr_calls += 1
+        return DocumentExtraction(model="mistral-ocr-4-1", pages=[ExtractedPage(index=0, markdown="Texte lu par OCR")])
+
+    async def describe(_settings, data, mime):
+        nonlocal vision_calls
+        vision_calls += 1
+        return "Image bleue détaillée."
+
+    monkeypatch.setattr(providers, "extract_ocr", ocr)
+    monkeypatch.setattr(providers, "describe_image", describe)
+
+    with authenticated_client(settings) as client:
+        # Test mode vision direct : appelle describe_image directement sans passer par OCR
+        resp_vision = client.post(
+            "/api/attachments",
+            data={"mode": "vision"},
+            files={"file": ("photo.png", content.getvalue(), "image/png")},
+        )
+        assert resp_vision.status_code == 201
+        att_vision = resp_vision.json()
+        assert att_vision["analysis_mode"] == "vision"
+        assert att_vision["extracted_chars"] > 0
+        assert vision_calls == 1
+        assert ocr_calls == 0
+
+        # Test mode ocr direct
+        resp_ocr = client.post(
+            "/api/attachments",
+            data={"mode": "ocr"},
+            files={"file": ("scan.png", content.getvalue(), "image/png")},
+        )
+        assert resp_ocr.status_code == 201
+        att_ocr = resp_ocr.json()
+        assert att_ocr["analysis_mode"] == "ocr"
+        assert ocr_calls == 1
+
+        # Test mode vision rejeté sur fichier non image
+        resp_bad = client.post(
+            "/api/attachments",
+            data={"mode": "vision"},
+            files={"file": ("doc.txt", b"Du texte", "text/plain")},
+        )
+        assert resp_bad.status_code == 422
+
+
 def test_oversize_image_is_rejected_before_ocr(client, settings, monkeypatch):
     settings.demo_mode = False
     settings.mistral_api_key = SecretStr("fake")
@@ -923,7 +979,7 @@ def test_five_images_rejected_explicitly(client):
 
 def test_deep_search_executes_multi_wave_searxng_and_global_synthesis(tmp_path, monkeypatch):
     settings = Settings(_env_file=None, app_data_dir=tmp_path, database_url=f"sqlite:///{tmp_path}/data.db", demo_mode=False, llm_api_key="secret",
-                        searxng_url="http://clair-searxng:8080", auto_web_search=False)
+                        searxng_url="http://clair-searxng:8080", auto_web_search=False, deep_search_engine="pipeline")
     searched_queries = []
     captured_context = {}
 
@@ -1041,9 +1097,98 @@ def test_deep_search_executes_multi_wave_searxng_and_global_synthesis(tmp_path, 
         assert client.get(f"/api/deep-search/reports/{report_id}").status_code == 404
 
 
+@pytest.mark.parametrize("section_writer", [False, True])
+@pytest.mark.parametrize("invalid_reference", [False, True])
+def test_research_evidence_survives_generation_storage_and_export(tmp_path, monkeypatch, section_writer, invalid_reference):
+    from app.routers import messages as message_routes
+
+    settings = Settings(_env_file=None, app_data_dir=tmp_path, database_url=f"sqlite:///{tmp_path}/data.db",
+                        demo_mode=False, llm_api_key="fake", auto_web_search=False, searxng_url="",
+                        brave_api_key="fake-search", llm_base_url="https://llm.example/v1")
+    document = {"title": "Enquête insertion", "url": "https://example.org/enquete",
+                "snippet": "L'insertion des diplômés de la promotion 2024 atteint 94 % à 12 mois."}
+
+    async def research(**kwargs):
+        from app.research_activity import research_activity
+        yield research_activity("results", "Résultat documentaire", query="insertion", sources=[document])
+        yield {"type": "done", "sources": [document], "findings": []}
+
+    async def stream(_settings, context, model, **kwargs):
+        yield "L'insertion atteint 94 % à 12 mois [EV_0001].\n\n"
+        if invalid_reference:
+            yield "Une conclusion invérifiable [99].\n\n"
+
+    async def outline(**kwargs):
+        return {"title": "# Enquête ciblée", "experts": [{"title": "Analyste", "perspective": "Preuves"}],
+                "parts": [{"heading": "## Insertion des diplômés", "subparts": [], "focus": "Preuves disponibles"}]}
+
+    async def audit(**kwargs):
+        assert "[EV_" not in kwargs["report_markdown"]
+        assert kwargs["sources"][0]["evidence"][0]["evidence_id"] == "EV_0001"
+        return {"decision": "validé", "remedied_markdown": kwargs["report_markdown"]}
+
+    monkeypatch.setattr(message_routes, "execute_deep_search", research)
+    monkeypatch.setattr(providers, "stream_chat", stream)
+    monkeypatch.setattr(providers, "review_report_with_auditor", audit)
+    if section_writer:
+        monkeypatch.setattr(providers, "plan_report_outline", outline)
+    with authenticated_client(settings) as client:
+        item = conversation(client)
+        response = client.post(f"/api/conversations/{item}/messages", json={"content": "Insertion des diplômés", "deep_search": True, "model": settings.default_model})
+        assert response.status_code == 200, response.text
+        result = events(response)
+        assert result[-1][0] == "done", result
+        activity = next(data for kind, data in result if kind == "research_activity")
+        assert activity["sources"][0]["url"] == document["url"]
+        assert "snippet" not in activity["sources"][0]
+        message = result[-1][1]["message"]
+        if invalid_reference:
+            assert "n'a pas été publié" in message["content"]
+            assert "conclusion invérifiable" not in response.text
+        else:
+            assert "94 %" in message["content"] and "[EV_" not in message["content"]
+        streamed_text = "".join(data["text"] for kind, data in result if kind == "delta")
+        assert streamed_text == message["content"]
+        assert message["sources"][0]["source_id"].startswith("SRC_")
+        assert message["sources"][0]["evidence"][0]["source_url"] == document["url"]
+        report_id = result[-1][1]["deep_search_report_id"]
+        report_html = client.get(f"/api/deep-search/reports/{report_id}/html").text
+        chat_html = client.get(f"/api/messages/{message['id']}/html").text
+        for exported in (report_html, chat_html):
+            assert 'id="source-1"' in exported
+            assert 'href="https://example.org/enquete"' in exported
+            assert 'data-evidence-id="EV_0001"' in exported
+
+
+def test_research_refuses_to_write_when_curation_returns_no_documents(tmp_path, monkeypatch):
+    from app.routers import messages as message_routes
+
+    settings = Settings(_env_file=None, app_data_dir=tmp_path, database_url=f"sqlite:///{tmp_path}/data.db",
+                        demo_mode=False, llm_api_key="fake", auto_web_search=False, searxng_url="",
+                        brave_api_key="fake-search", llm_base_url="https://llm.example/v1")
+
+    async def research(**kwargs):
+        yield {"type": "done", "sources": [], "findings": ["Note sans document justificatif."]}
+
+    async def stream(*args, **kwargs):
+        pytest.fail("A report without a document corpus must not reach the writer")
+        yield ""
+
+    monkeypatch.setattr(message_routes, "execute_deep_search", research)
+    monkeypatch.setattr(providers, "stream_chat", stream)
+    with authenticated_client(settings) as client:
+        item = conversation(client)
+        response = client.post(f"/api/conversations/{item}/messages", json={"content": "Question", "deep_search": True, "model": settings.default_model})
+        assert response.status_code == 200, response.text
+        result = events(response)
+        assert result[-1][0] == "error"
+        assert "Aucune source documentaire" in result[-1][1]["message"]
+        assert client.get("/api/deep-search/reports").json() == []
+
+
 def test_deep_search_plan_endpoints_and_custom_queries(tmp_path, monkeypatch):
     settings = Settings(_env_file=None, app_data_dir=tmp_path, database_url=f"sqlite:///{tmp_path}/data.db", demo_mode=False, llm_api_key="secret",
-                        searxng_url="http://clair-searxng:8080", auto_web_search=False)
+                        searxng_url="http://clair-searxng:8080", auto_web_search=False, deep_search_engine="pipeline")
 
     async def fake_plan(_settings, query, summary, recent_turns, max_queries=8):
         return ["piste plan 1", "piste plan 2", "piste plan 3"]
@@ -1187,3 +1332,167 @@ def test_auto_title_keywords_theme_and_search_by_keywords_and_theme(tmp_path, mo
         assert patched["keywords"] == ["python", "docker", "production"]
 
 
+def test_deep_search_sonar_delegation_flow(tmp_path, monkeypatch):
+    settings = Settings(
+        _env_file=None,
+        app_data_dir=tmp_path,
+        database_url=f"sqlite:///{tmp_path}/data.db",
+        demo_mode=False,
+        llm_api_key="secret-key",
+        deep_search_engine="sonar",
+        deep_search_model="perplexity/sonar-deep-research",
+        auto_web_search=False,
+    )
+
+    doc_url = "https://dares.travail-emploi.gouv.fr/metiers-2030"
+
+    async def fake_stream_sonar(settings, query, **kwargs):
+        yield {"type": "status", "message": "DeepSearch · Recherche web multi-sources via Perplexity Sonar Deep Research…"}
+        yield {"type": "ping"}
+        yield {"type": "research_activity", "activity": {
+            "kind": "query", "message": f"Recherche : {query}", "timestamp": "2026-10-30T12:00:00Z",
+        }}
+        yield {"type": "delta", "text": "# Enquête Métiers 2030\n\nLes projections de la Dares montrent 50 000 postes [1].\n\n### Sources\n[1] https://dares.travail-emploi.gouv.fr/metiers-2030"}
+        yield {
+            "type": "done",
+            "content": "# Enquête Métiers 2030\n\nLes projections de la Dares montrent 50 000 postes [1].\n\n### Sources\n[1] https://dares.travail-emploi.gouv.fr/metiers-2030",
+            "sources": [{
+                "title": "Dares — Métiers 2030",
+                "url": doc_url,
+                "snippet": "Projections officielles de recrutement.",
+                "tier": "A",
+                "source_id": "SRC_0001",
+                "doc_id": "source-1",
+                "evidence": [{"evidence_id": "EV_0001", "verbatim": "50 000 postes", "source_url": doc_url}],
+            }],
+            "citations": [doc_url],
+        }
+
+    monkeypatch.setattr(providers, "stream_sonar_deep_research", fake_stream_sonar)
+
+    with authenticated_client(settings) as client:
+        item = conversation(client)
+        response = client.post(
+            f"/api/conversations/{item}/messages",
+            json={"content": "Quels métiers recruteront en 2030 ?", "deep_search": True},
+        )
+        assert response.status_code == 200, response.text
+        stream_events = events(response)
+        assert stream_events[-1][0] == "done"
+
+        # Check SSE events
+        kinds = [name for name, _ in stream_events]
+        assert "status" in kinds
+        assert "delta" in kinds
+        assert "research_activity" in kinds
+
+        done_payload = stream_events[-1][1]
+        report_id = done_payload.get("deep_search_report_id")
+        assert report_id is not None
+
+        # Verify saved message
+        saved_msg = done_payload["message"]
+        assert "Enquête Métiers 2030" in saved_msg["content"]
+        assert len(saved_msg["sources"]) == 1
+        assert saved_msg["sources"][0]["url"] == doc_url
+
+        # Verify DeepSearchReport
+        rep_resp = client.get(f"/api/deep-search/reports/{report_id}")
+        assert rep_resp.status_code == 200
+        rep_data = rep_resp.json()
+        assert rep_data["id"] == report_id
+        assert "métiers" in rep_data["topic"].lower()
+        assert len(rep_data["sources"]) == 1
+        assert "<!DOCTYPE html>" in rep_data["html_content"]
+        assert "source-1" in rep_data["html_content"]
+
+
+def test_deep_search_google_delegation_flow(settings, monkeypatch):
+    settings.deep_search_engine = "sonar"
+    doc_url = "https://education.gouv.fr/etude-insertion"
+
+    async def fake_stream_google(*args, **kwargs):
+        yield {"type": "status", "message": "Google Deep Research en cours…"}
+        yield {"type": "delta", "text": "# Synthèse Google Deep Research\n\nConstat étayé [1]."}
+        yield {
+            "type": "done",
+            "content": "# Synthèse Google Deep Research\n\nConstat étayé [1].",
+            "sources": [{
+                "title": "Étude Insertion",
+                "url": doc_url,
+                "snippet": "Rapport annuel",
+                "tier": "A",
+                "source_id": "SRC_0001",
+                "doc_id": "source-1",
+                "evidence": [{"evidence_id": "EV_0001", "verbatim": "Constat étayé", "source_url": doc_url}],
+            }],
+            "citations": [doc_url],
+        }
+
+    from app.routers import messages as messages_router
+    monkeypatch.setattr(messages_router, "stream_google_deep_research", fake_stream_google)
+
+    with authenticated_client(settings) as client:
+        item = conversation(client)
+        response = client.post(
+            f"/api/conversations/{item}/messages",
+            json={
+                "content": "Quelles formations privilégier ?",
+                "deep_search": True,
+                "model": "google/deep-research-preview-04-2026",
+            },
+        )
+        assert response.status_code == 200, response.text
+        stream_events = events(response)
+        assert stream_events[-1][0] == "done"
+        done_payload = stream_events[-1][1]
+        assert done_payload.get("deep_search_report_id") is not None
+        saved_msg = done_payload["message"]
+        assert "Google Deep Research" in saved_msg["content"]
+        assert saved_msg["sources"][0]["url"] == doc_url
+
+
+def test_learn_mode_sonar_delegation_flow(settings, monkeypatch):
+    settings.deep_search_engine = "sonar"
+    doc_url = "https://univ.example/cours-ia"
+
+    async def fake_stream_sonar(*args, **kwargs):
+        assert kwargs.get("learn_mode") is True
+        assert kwargs.get("model") == "perplexity/sonar-pro-search"
+        yield {"type": "status", "message": "Cours Sonar Pro en préparation…"}
+        yield {"type": "delta", "text": "# Cours Magistral : IA Moderne\n\nNotions fondamentales [1]."}
+        yield {
+            "type": "done",
+            "content": "# Cours Magistral : IA Moderne\n\nNotions fondamentales [1].",
+            "sources": [{
+                "title": "Support Universitaire",
+                "url": doc_url,
+                "snippet": "Bases de l'IA",
+                "tier": "A",
+                "source_id": "SRC_0001",
+                "doc_id": "source-1",
+                "evidence": [{"evidence_id": "EV_0001", "verbatim": "Notions fondamentales", "source_url": doc_url}],
+            }],
+            "citations": [doc_url],
+        }
+
+    monkeypatch.setattr(providers, "stream_sonar_deep_research", fake_stream_sonar)
+
+    with authenticated_client(settings) as client:
+        item = conversation(client)
+        response = client.post(
+            f"/api/conversations/{item}/messages",
+            json={
+                "content": "Apprendre le Machine Learning",
+                "learn_mode": True,
+                "model": "perplexity/sonar-pro-search",
+            },
+        )
+        assert response.status_code == 200, response.text
+        stream_events = events(response)
+        assert stream_events[-1][0] == "done"
+        done_payload = stream_events[-1][1]
+        assert done_payload.get("learn_report_id") is not None
+        saved_msg = done_payload["message"]
+        assert "Cours Magistral" in saved_msg["content"]
+        assert saved_msg["sources"][0]["url"] == doc_url

@@ -22,6 +22,8 @@ from pydantic import BaseModel, Field
 
 from . import providers
 from .source_filter import curate_sources, filter_findings_by_sources, is_junk_source
+from .research_activity import research_activity
+from .research_planner import coverage_query, verify_aspect_coverage
 
 _logger = logging.getLogger("clair.deep_search")
 
@@ -148,6 +150,7 @@ class CompiledStateGraph:
                 else:
                     state[key] = value  # type: ignore[literal-required]
 
+            _logger.info("Research provenance node=%s sources=%d findings=%d", current_node, len(state.get("sources", [])), len(state.get("findings", [])))
             yield (current_node, output)
 
             # Résolution de la transition suivante
@@ -180,6 +183,7 @@ _DATE_RE = re.compile(
 )
 from .source_filter import (
     PRIMARY_DOMAINS,
+    classify_source_tier,
     curate_sources,
     enrich_top_sources_content,
     extract_primary_source_citations,
@@ -273,6 +277,7 @@ def create_deep_search_graph(
     on_status: Callable[[str], None] | None = None,
     plan_model: str | None = None,
     search_model: str | None = None,
+    on_activity: Callable[[dict[str, Any]], None] | None = None,
 ) -> CompiledStateGraph:
     """Construit et assemble le graphe d'agent DeepSearch complet avec validations intermédiaires."""
 
@@ -363,14 +368,20 @@ def create_deep_search_graph(
             nonlocal completed_count
             engine_query = providers.theme_to_search_query(sub_query, topic=topic)
             async with sem:
+                if on_activity:
+                    on_activity(research_activity("query", "Recherche lancée", query=engine_query))
                 try:
                     res = await search_fn(engine_query, 10)
+                    if on_activity:
+                        on_activity(research_activity("results", f"{len(res)} résultats reçus", query=engine_query, sources=res))
                     completed_count += 1
                     if on_status:
                         label = "Approfondissement multilingue" if is_followup else "Exploration"
                         on_status(f"DeepSearch · {label} ({completed_count}/{total_queries}) : « {sub_query[:60]} »…")
                     return sub_query, res, None
                 except providers.ProviderError as exc:
+                    if on_activity:
+                        on_activity(research_activity("results", "Recherche indisponible pour cette requête", query=engine_query, sources=[]))
                     completed_count += 1
                     _logger.warning("Requête DeepSearch en échec (%r): %s", sub_query, exc)
                     return sub_query, [], exc
@@ -390,6 +401,7 @@ def create_deep_search_graph(
                         continue
                     item_copy = dict(raw_item)
                     item_copy["snippet"] = _clean_source_snippet(item_copy.get("snippet", ""))
+                    item_copy["tier"] = classify_source_tier(item_copy)
                     cleaned_batch.append(item_copy)
                 cleaned_batch.sort(key=_authority_score, reverse=True)
 
@@ -442,7 +454,8 @@ def create_deep_search_graph(
         ):
             for item in aspect_checklist:
                 if item.get("status") == "pending":
-                    item["status"] = "covered"
+                    item["status"] = "partial" if sources else "missing"
+                    item["note"] = "Budget de recherche épuisé ; couverture non validée."
             return {
                 "is_sufficient": True,
                 "queries": [],
@@ -514,13 +527,13 @@ def create_deep_search_graph(
                 for lang in eval_res.get("searched_languages", []):
                     if lang not in searched_languages:
                         searched_languages.append(lang)
-                is_sufficient = bool(eval_res.get("is_sufficient", False)) or len(followup_queries) == 0 or (
+                is_sufficient = bool(eval_res.get("is_sufficient", False)) or (
                     max_sources is not None and len(sources) >= max_sources
                 )
         except providers.ProviderError as exc:
             _logger.warning("Validation / Approfondissement DeepSearch ignoré: %s", exc)
             followup_queries = []
-            is_sufficient = True
+            is_sufficient = False
 
         covered_count = sum(1 for c in aspect_checklist if c.get("status") == "covered")
         total_points = len(aspect_checklist)
@@ -567,11 +580,11 @@ def create_deep_search_graph(
         if not custom_followup_override and not followup_queries and not is_sufficient:
             from .evidence_ledger import extract_deterministic_evidence_from_sources
             ledger = extract_deterministic_evidence_from_sources(sources)
-            uncovered = [c for c in aspect_checklist if c.get("status") in ("pending", "partial", "NOT_STARTED")]
+            uncovered = [c for c in aspect_checklist if c.get("status") in ("pending", "partial", "missing", "NOT_STARTED")]
             if uncovered:
                 target_aspect = uncovered[0].get("aspect") or uncovered[0].get("question", "")
                 if target_aspect:
-                    target_query = f"{raw_query[:50]} {target_aspect[:40]} données statistiques officielles"
+                    target_query = coverage_query(uncovered[0])
                     if target_query not in executed_queries:
                         followup_queries.append(target_query)
 
@@ -593,7 +606,7 @@ def create_deep_search_graph(
                 + (
                     f" · Relance de {len(followup_queries)} recherches ({', '.join(searched_languages[:5])})…"
                     if followup_queries
-                    else " · Tous les aspects de la question sont validés !"
+                    else (" · Couverture documentaire validée." if covered_count == total_points else " · Recherche arrêtée avec des lacunes documentaires.")
                 )
             )
             on_status(status_detail)
@@ -684,10 +697,10 @@ async def execute_deep_search(
     search_model: str | None = None,
 ) -> AsyncGenerator[dict[str, Any], None]:
     """Exécute l'agent DeepSearch complet en émettant des événements SSE de statut."""
-    status_queue: asyncio.Queue[str] = asyncio.Queue()
+    status_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
 
     def on_status(message: str) -> None:
-        status_queue.put_nowait(message)
+        status_queue.put_nowait({"type": "status", "message": message})
 
     graph = create_deep_search_graph(
         settings=settings,
@@ -697,6 +710,7 @@ async def execute_deep_search(
         on_status=on_status,
         plan_model=plan_model,
         search_model=search_model,
+        on_activity=status_queue.put_nowait,
     )
 
     safe_max_iterations = min(max(1, max_iterations), HARD_MAX_ITERATIONS)
@@ -747,7 +761,7 @@ async def execute_deep_search(
     while not graph_task.done():
         try:
             status_msg = await asyncio.wait_for(status_queue.get(), timeout=0.5)
-            yield {"type": "status", "message": status_msg}
+            yield status_msg
             last_yield_time = asyncio.get_event_loop().time()
         except asyncio.TimeoutError:
             now_time = asyncio.get_event_loop().time()
@@ -758,7 +772,7 @@ async def execute_deep_search(
     # Vider les messages restants dans la file
     while not status_queue.empty():
         status_msg = status_queue.get_nowait()
-        yield {"type": "status", "message": status_msg}
+        yield status_msg
 
     # Lever les erreurs éventuelles survenues dans le graphe
     await graph_task
@@ -770,6 +784,12 @@ async def execute_deep_search(
         final_sources, filter_stats = await curate_sources(
             settings, query, final_sources, use_llm_judge=providers.plan_deep_search_queries is _DEFAULT_PLAN_QUERIES,
         )
+        if providers.plan_deep_search_queries is _DEFAULT_PLAN_QUERIES:
+            final_checklist = verify_aspect_coverage(final_checklist, final_sources)
+            final_findings = [note for note in final_findings if not note.startswith("[BILAN FINAL DES POINTS À ABORDER]")]
+            covered = sum(item.get("status") == "covered" for item in final_checklist)
+            final_findings.append(f"[BILAN FINAL DES POINTS À ABORDER] {covered}/{len(final_checklist)} sous-questions disposent de preuves directes après filtrage. Les autres conclusions restent non établies.")
+        _logger.info("Research provenance stage=curation input=%d kept=%d", filter_stats["initial"], len(final_sources))
         final_findings = filter_findings_by_sources(final_findings, final_sources)
         yield {
             "type": "status",
@@ -779,7 +799,27 @@ async def execute_deep_search(
             ),
         }
         yield {"type": "status", "message": "DeepSearch · Lecture approfondie du contenu textuel des sources candidates…"}
-        await enrich_top_sources_content(settings, final_sources, limit=10)
+        yield research_activity("selection", "Documents retenus après filtrage", sources=final_sources, state="selected")
+
+        def on_source_read(source: dict[str, Any], success: bool) -> None:
+            state = "read" if success else "unavailable"
+            message = "Contenu de la page récupéré" if success else "Lecture complète indisponible ; extrait de recherche conservé"
+            status_queue.put_nowait(research_activity("page", message, sources=[source], state=state))
+
+        reading_task = asyncio.create_task(enrich_top_sources_content(settings, final_sources, limit=10, on_source_read=on_source_read))
+        try:
+            while not reading_task.done():
+                try:
+                    yield await asyncio.wait_for(status_queue.get(), timeout=0.5)
+                except asyncio.TimeoutError:
+                    yield {"type": "ping"}
+            await reading_task
+            while not status_queue.empty():
+                yield status_queue.get_nowait()
+        finally:
+            if not reading_task.done():
+                reading_task.cancel()
+                await asyncio.gather(reading_task, return_exceptions=True)
 
     yield {
         "type": "done",

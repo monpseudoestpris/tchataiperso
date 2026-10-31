@@ -14,7 +14,7 @@ import asyncio
 import logging
 from pathlib import Path
 import re
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 
 try:
@@ -564,7 +564,7 @@ async def curate_sources(
     stats["judged"] = len(scores)
 
     if scores:
-        scored = [(scores.get(i, 0), i, s) for i, s in enumerate(candidates)]
+        scored = [(scores.get(i, _lexical_relevance_fallback(s, question)), i, s) for i, s in enumerate(candidates)]
         kept = [t for t in scored if t[0] >= KEEP_MIN_SCORE]
         if len(kept) < 8:  # repli : compléter avec les sources tangentielles (score 1) pour ne pas vider le rapport
             kept += sorted((t for t in scored if t[0] == 1), key=lambda t: t[1])[: 8 - len(kept)]
@@ -596,7 +596,7 @@ async def curate_sources(
     return result + images, stats
 
 
-async def enrich_top_sources_content(settings: Any, sources: list[dict[str, Any]], limit: int = 10) -> None:
+async def enrich_top_sources_content(settings: Any, sources: list[dict[str, Any]], limit: int = 10, on_source_read: Callable[[dict[str, Any], bool], None] | None = None) -> None:
     """Récupère le contenu textuel complet des meilleures sources candidates (top A/B/C)
     pour que le rédacteur et le vérificateur factuel disposent des données réelles et non de simples snippets.
     Applicable à DeepSearch ET au Mode Apprendre.
@@ -621,6 +621,7 @@ async def enrich_top_sources_content(settings: Any, sources: list[dict[str, Any]
         url = str(src.get("url") or "").strip()
         if not url.startswith("http"):
             return
+        success = False
         async with sem:
             try:
                 res = await asyncio.wait_for(
@@ -634,8 +635,11 @@ async def enrich_top_sources_content(settings: Any, sources: list[dict[str, Any]
 
                 if extracted_text and len(extracted_text.strip()) > 100:
                     src["content"] = extracted_text.strip()[:8000]
+                    success = True
             except Exception:
                 pass
+            if on_source_read:
+                on_source_read(src, success)
 
     await asyncio.gather(*[_fetch(s) for s in candidates], return_exceptions=True)
 

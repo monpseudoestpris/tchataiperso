@@ -433,8 +433,8 @@ async def test_deep_search_mid_course_validation_and_intermediate_questions(monk
     assert len(searched_queries) == 4
     assert any("全固体電池" in q for q in searched_queries)
     assert any("Festkörperbatterie" in q for q in searched_queries)
-    # Checklist statuses all covered at the end
-    assert all(c["status"] == "covered" for c in final_result["aspect_checklist"])
+    # A model-only verdict without mapped proof cannot survive final curation.
+    assert all(c["status"] != "covered" for c in final_result["aspect_checklist"])
     # Intermediate questions tracked and returned
     assert len(final_result["intermediate_questions"]) >= 2
     assert any("MPa" in q for q in final_result["intermediate_questions"])
@@ -458,6 +458,7 @@ def test_deep_search_two_step_planner_and_section_writer_sse(tmp_path, monkeypat
         demo_mode=False,
         llm_api_key="test-key",
         searxng_url="http://searxng.local",
+        deep_search_engine="pipeline",
     )
     app = create_app(settings)
     origin = settings.origins[0]

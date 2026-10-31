@@ -133,11 +133,13 @@ def test_deep_search_context_expands_sources_and_injects_synthesis_instructions(
         sources, False, deep_search=True,
     )
     assert "Mode DeepSearch" in context[0]["content"]
-    assert "DÉVELOPPEMENT ×5" in context[0]["content"]
-    assert "4 000 à 8 000 mots" in context[0]["content"]
+    assert "questions réelles" in context[0]["content"]
+    assert "3 experts" not in context[0]["content"].lower()
+    assert "8 000 mots" not in context[0]["content"]
+    assert "sans quota de remplissage" in context[0]["content"]
     assert "Traduis systématiquement" in context[0]["content"]
     reference_block = context[1]["content"]
-    assert "RAPPEL D'EXHAUSTIVITÉ DEEPSEARCH" in reference_block
+    assert "Traite toutes les questions" in reference_block
     assert "Requête : piste 1" in reference_block
     assert "EXTRAIT_100" in reference_block
     assert sum(len(message["content"]) for message in context) <= settings.max_context_chars

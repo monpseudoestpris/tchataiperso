@@ -10,6 +10,44 @@ from __future__ import annotations
 import re
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
+import unicodedata
+from .claim_semantics import specific_topics_match
+
+
+def expected_evidence_types(question: str) -> set[str]:
+    text = unicodedata.normalize("NFKD", question.lower()).encode("ascii", "ignore").decode()
+    types = set()
+    if re.search(r"avenir|futur|emergen|prospect|project|prevision|recruter|20[3-9]\d", text):
+        types.add("projection")
+    if re.search(r"emploi|insertion|recrut|debouche|marche du travail|metiers|etudes.*avenir", text):
+        types.add("employment_data")
+    if re.search(r"reglement|jurid|grade|certification|conditions? d.acces|norme", text):
+        types.add("regulatory_norm")
+    return types
+
+
+def evidence_answers_question(evidence: Any, question: str, expected: set[str]) -> bool:
+    """Reject topical guides when the question requires measured outcomes or forecasts."""
+    passage = getattr(evidence, "exact_passage", "")
+    if not specific_topics_match(question, passage):
+        return False
+    flat = unicodedata.normalize("NFKD", passage.lower()).encode("ascii", "ignore").decode()
+    if "projection" in expected and getattr(evidence, "nature", "") != "projection":
+        return False
+    if "employment_data" in expected and (
+        getattr(evidence, "claim_type", "") not in ("statistic", "scientific_finding")
+        or not re.search(r"emplo|insertion|recrut|offres|hiring|employment|vacanc|jobs", flat)
+    ):
+        return False
+    if "regulatory_norm" in expected and getattr(evidence, "claim_type", "") != "regulatory_norm":
+        return False
+    def terms(text: str) -> set[str]:
+        flat = unicodedata.normalize("NFKD", text.lower()).encode("ascii", "ignore").decode()
+        return {word[:6] for word in re.findall(r"[a-z]{5,}", flat)} - {
+            "quelle", "quelles", "quels", "choisi", "donnee", "preuve", "source", "avenir", "etudes",
+        }
+    overlap = terms(question) & terms(passage)
+    return bool(overlap) and (len(overlap) >= 2 or bool(expected))
 
 SubQuestionStatus = Literal[
     "NOT_STARTED",      # Recherche non encore initiée
@@ -94,13 +132,11 @@ def audit_sub_question_coverage(
     - BUDGET_EXHAUSTED : limite de requêtes atteinte, signalement explicite des limites
     """
     for sq in plan.sub_questions:
+        expected = expected_evidence_types(sq.question + " " + " ".join(sq.expected_evidence))
         matching_evs = [
             ev for ev in evidence_items
-            if getattr(ev, "sub_question_id", "") == sq.id
-            or (hasattr(ev, "exact_passage") and any(
-                w.lower() in ev.exact_passage.lower()
-                for w in re.findall(r"\w{5,}", sq.question)
-            ))
+            if evidence_answers_question(ev, sq.question, expected)
+            and (not getattr(ev, "sub_question_id", "") or getattr(ev, "sub_question_id", "") == sq.id)
         ]
 
         sq.evidence_ids = [getattr(ev, "evidence_id", "") for ev in matching_evs if getattr(ev, "evidence_id", "")]
@@ -119,7 +155,12 @@ def audit_sub_question_coverage(
             # Plusieurs preuves : vérifier si proviennent d'au moins 2 familles de sources distinctes
             families = {getattr(ev, "source_family_id", "") for ev in matching_evs if getattr(ev, "source_family_id", "")}
             # Détection de divergence de chiffres pour CONFLICTING
-            values = [getattr(ev, "normalized_value", None) for ev in matching_evs if getattr(ev, "normalized_value", None) is not None]
+            comparable = {}
+            for ev in matching_evs:
+                key = (getattr(ev, "normalized_metric", None), getattr(ev, "normalized_unit", None), getattr(ev, "period_or_year", None))
+                if all(key) and getattr(ev, "normalized_value", None) is not None:
+                    comparable.setdefault(key, []).append(ev.normalized_value)
+            values = next((group for group in comparable.values() if len(group) >= 2), [])
             has_major_divergence = False
             if len(values) >= 2:
                 min_v, max_v = min(values), max(values)
@@ -128,10 +169,67 @@ def audit_sub_question_coverage(
 
             if has_major_divergence:
                 sq.status = "CONFLICTING"
-            elif len(families) >= 2 or any(getattr(ev, "source_tier", "") in ("A", "B") for ev in matching_evs):
+            elif any(getattr(ev, "source_tier", "") in ("A", "B") for ev in matching_evs) or (not expected and len(families) >= 2):
                 sq.status = "COVERED"
             else:
                 sq.status = "PARTIAL"
 
     return plan
+
+
+def verify_aspect_coverage(checklist: list[dict[str, Any]], sources: list[dict[str, Any]], assessments: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    """Require an explicit question/evidence mapping plus a matching proof type."""
+    from .evidence_ledger import extract_deterministic_evidence_from_sources
+    ledger = extract_deterministic_evidence_from_sources(sources)
+    judgments = {str(item.get("id")): item for item in (assessments or []) if isinstance(item, dict)}
+    output = []
+    for original in checklist:
+        item = dict(original)
+        judgment = judgments.get(str(item.get("id")), item)
+        question = str(item.get("question") or item.get("aspect") or "")
+        expected = expected_evidence_types(question)
+        candidates = []
+        ids = judgment.get("evidence_ids") or []
+        stored = judgment.get("coverage_evidence") or []
+        for evidence in ledger.list_all():
+            mapped = evidence.evidence_id in ids if assessments is not None else any(
+                proof.get("source_url") == evidence.source_url and proof.get("exact_passage") == evidence.exact_passage
+                for proof in stored if isinstance(proof, dict)
+            )
+            if mapped and evidence_answers_question(evidence, question, expected):
+                candidates.append(evidence)
+        sq = SubQuestion(str(item.get("id")), str(item.get("aspect")), question, [])
+        audit_sub_question_coverage(ResearchPlan(question, [sq]), candidates)
+        covered = judgment.get("status") == "covered" and sq.status == "COVERED"
+        item["status"] = "covered" if covered else ("partial" if candidates else "missing")
+        item["coverage_evidence"] = [{"source_url": ev.source_url, "exact_passage": ev.exact_passage} for ev in candidates]
+        item["expected_evidence"] = sorted(expected)
+        if not covered:
+            item["note"] = "Preuves directes insuffisantes pour cette sous-question" + (" : " + ", ".join(sorted(expected)) if expected else "")
+        output.append(item)
+    return output
+
+
+def coverage_query(item: dict[str, Any]) -> str:
+    question = str(item.get("question") or item.get("aspect") or "").strip()
+    expected = expected_evidence_types(question)
+    suffix = "étude originale source primaire"
+    if "employment_data" in expected:
+        suffix += " statistiques emploi insertion recrutement"
+    if "projection" in expected:
+        suffix += " projections prospectives"
+    if "regulatory_norm" in expected:
+        suffix += " texte officiel réglementation"
+    return f"{question[:220]} {suffix}".strip()
+
+
+def format_coverage_limits(checklist: list[dict[str, Any]]) -> str:
+    missing = [item for item in checklist if item.get("status") != "covered"]
+    if not missing:
+        return ""
+    lines = ["## Limites de couverture documentaire", "", "Les sous-questions suivantes ne disposent pas de preuves directes suffisantes :", ""]
+    for item in missing:
+        label = str(item.get("question") or item.get("aspect") or "Sous-question").replace("\n", " ")
+        lines.append(f"- **{label}** — conclusion non établie dans le corpus collecté.")
+    return "\n".join(lines) + "\n"
 

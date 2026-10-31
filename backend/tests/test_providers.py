@@ -1326,6 +1326,44 @@ def test_detail_level_spec_and_outline_scaling():
     assert "450 à 700 mots" in msgs_ultra[-1]["content"]
 
 
+def test_outline_parser_accepts_single_expert_instead_of_falling_back(settings, transport):
+    def handler(request):
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps({
+            "title": "Plan spécifique",
+            "experts": [{"title": "Analyste test", "perspective": "Preuves"}],
+            "parts": [
+                {"heading": "## Coût des électrolyseurs", "subparts": []},
+                {"heading": "## Rendement des membranes", "subparts": []},
+            ],
+        })}}]})
+    transport(handler)
+    result = asyncio.run(providers.plan_report_outline(settings, "Hydrogène", []))
+    assert result["title"] == "# Plan spécifique"
+    assert len(result["experts"]) == 1
+    assert result["experts"][0]["title"] == "Analyste test"
+    assert "Coût des électrolyseurs" in result["parts"][0]["heading"]
+
+
+def test_explicit_questions_survive_low_detail_outline_without_truncation():
+    question = "Quels bacs choisir ? Quelles formations éviter ? Quels métiers IA émergent ? Quelles preuves de demande future ?"
+    result = providers.default_report_outline(question, detail_level=1)
+    rendered = str(result["parts"])
+    for expected in ("bacs choisir", "formations éviter", "métiers IA", "demande future"):
+        assert expected in rendered
+    checklist = providers.default_deep_search_aspect_checklist(question)
+    assert len(checklist) == 4
+
+
+def test_generic_generated_outline_is_rejected(settings, transport):
+    def handler(request):
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps({
+            "parts": [{"heading": "Cadre Général", "subparts": []}, {"heading": "Grands tableaux comparatifs", "subparts": []}]
+        })}}]})
+    transport(handler)
+    result = asyncio.run(providers.plan_report_outline(settings, "Quels bacs choisir ? Quels métiers IA ?", []))
+    assert "bacs choisir" in str(result["parts"])
+    assert "métiers IA" in str(result["parts"])
+
 
 
 
@@ -1347,7 +1385,8 @@ def test_review_report_with_auditor_demo_mode(settings):
     report = "Le salaire garanti de 75 000 € est systématique dès la sortie."
     sources = [{"title": "DARES", "url": "https://dares.fr", "snippet": "Étude prospective"}]
     res = asyncio.run(providers.review_report_with_auditor(settings, "quelles perspectives ?", report, sources))
-    assert res["decision"] == "validé"
+    assert res["decision"] == "non_effectué"
+    assert res["verified_facts"] == []
     assert res["remedied_markdown"] == report
     assert res["applied_count"] == 0
 
@@ -1383,4 +1422,236 @@ def test_review_report_with_auditor_applies_remedies_and_sets_remanie(settings, 
     assert "Le salaire garanti de 75 000 €" not in res["remedied_markdown"]
     assert "Le salaire moyen indicatif est estimé" in res["remedied_markdown"]
     assert len(res["verified_facts"]) == 1
+
+
+def test_auditor_timeout_uses_fallback_and_names_the_model_that_actually_ran(settings, transport):
+    requested = []
+
+    def handler(request):
+        model = json.loads(request.content)["model"]
+        requested.append(model)
+        if len(requested) == 1:
+            raise httpx.ReadTimeout("Timeout", request=request)
+        return httpx.Response(200, json={"choices": [{"message": {"content": '{"decision":"validé","claim_reviews":[]}'}}]})
+
+    transport(handler)
+    result = asyncio.run(providers.review_report_with_auditor(settings, "Question", "Corps du rapport.", []))
+    assert result["performed"] is True
+    assert result["auditor_model"] == settings.deep_search_synthesis_model
+    assert len(requested) == 2
+
+
+def test_auditor_unavailable_does_not_attribute_a_review_to_astra(settings, transport):
+    transport(lambda request: httpx.Response(503, text="Unavailable"))
+    result = asyncio.run(providers.review_report_with_auditor(settings, "Question", "Corps du rapport.", []))
+    assert result["performed"] is False
+    assert result["auditor_model"] is None
+    assert result["claim_reviews"] == []
+    assert result["decision"] == "non_effectué"
+
+
+def test_auditor_repairs_only_the_located_claim_and_preserves_equal_heading_text(settings, transport):
+    from app.report_claims import iter_claim_spans
+
+    text = "# Même phrase.\n\nMême phrase.\n\nAutre paragraphe intact."
+    claim = next(iter_claim_spans(text))
+    payload = {"decision": "remanié", "remedies": [{"claim_id": claim["claim_id"], "target": "Même phrase.", "replacement": "Phrase nuancée."}]}
+    transport(lambda request: httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(payload)}}]}))
+    result = asyncio.run(providers.review_report_with_auditor(settings, "Question", text, []))
+    assert result["remedied_markdown"] == "# Même phrase.\n\nPhrase nuancée.\n\nAutre paragraphe intact."
+    assert result["applied_count"] == 1
+    assert result["applied_repairs"][0]["after"] == "Phrase nuancée."
+
+
+@pytest.mark.parametrize("include_evidence", [False, True])
+def test_coverage_requires_relevant_evidence_ids_even_when_model_says_complete(settings, transport, include_evidence):
+    question = "Quels métiers recruteront d'ici 2030 ?"
+    sources = [{"title": "Projection des recrutements", "url": "https://example.org/projection", "tier": "A",
+                "snippet": "Près de 760 000 recrutements annuels sont projetés d'ici 2030."}]
+
+    def handler(request):
+        payload = json.loads(request.content)
+        context = json.loads(payload["messages"][1]["content"])
+        assert context["evidence_ledger"][0]["evidence_id"] == "EV_0001"
+        response = {"is_sufficient": True, "followup_queries": [], "aspect_statuses": [{
+            "id": "P1", "status": "covered", "evidence_ids": ["EV_0001"] if include_evidence else [],
+        }]}
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(response)}}]})
+
+    transport(handler)
+    result = asyncio.run(providers.validate_and_followup_deep_search(
+        settings, question, [{"id": "P1", "question": question, "aspect": "Recrutements", "status": "pending"}], [], sources,
+    ))
+    assert result["is_sufficient"] is include_evidence
+    assert (result["aspect_checklist"][0]["status"] == "covered") is include_evidence
+    if not include_evidence:
+        assert "emploi" in result["followup_queries"][0]
+
+
+def test_extract_sources_from_research_payload_and_markdown():
+    text = (
+        "# Synthèse sur l'emploi\n\n"
+        "Selon le Ministère [1], l'apprentissage compte 1 020 400 apprentis.\n"
+        "D'après les projections [2], 50 000 postes d'ingénieurs en IA émergeront.\n\n"
+        "### Sources\n"
+        "[1] [Note DEPP n° 26-35](https://education.gouv.fr/note-depp)\n"
+        "[2] https://dares.travail-emploi.gouv.fr/metiers-2030\n"
+    )
+    sources = providers.extract_sources_from_research(
+        text,
+        payload_citations=["https://education.gouv.fr/note-depp", "https://dares.travail-emploi.gouv.fr/metiers-2030"],
+    )
+    assert len(sources) == 2
+    assert sources[0]["doc_id"] == "source-1"
+    assert sources[0]["url"] == "https://education.gouv.fr/note-depp"
+    assert sources[0]["title"] == "Note DEPP n° 26-35"
+    assert sources[0]["evidence"][0]["source_url"] == "https://education.gouv.fr/note-depp"
+
+    assert sources[1]["doc_id"] == "source-2"
+    assert sources[1]["url"] == "https://dares.travail-emploi.gouv.fr/metiers-2030"
+    assert "dares" in sources[1]["title"].lower()
+
+
+def test_extract_sources_from_research_without_literal_urls():
+    text = (
+        "Selon les projections macroéconomiques [1] :\n"
+        "Pour l'Union européenne, le CEDEFOP [2] anticipe une polarisation.\n\n"
+        "## Références et sources documentaires primaires\n"
+        "1. **Dares & France Stratégie**, *Les Métiers en 2030 : quelles perspectives de recrutement par métier d'ici 2030 ?*, Ministère du Travail.\n"
+        "2. **CEDEFOP (Centre européen pour le développement de la formation professionnelle)**, *Skills forecast: trends and challenges to 2035*.\n"
+    )
+    sources = providers.extract_sources_from_research(text)
+    assert len(sources) == 2
+    assert sources[0]["doc_id"] == "source-1"
+    assert "Dares & France Stratégie" in sources[0]["title"]
+    assert sources[0]["url"].startswith("http")
+    assert sources[1]["doc_id"] == "source-2"
+    assert "CEDEFOP" in sources[1]["title"]
+    assert sources[1]["url"].startswith("http")
+
+
+def test_stream_sonar_deep_research_demo_mode(settings):
+    settings.demo_mode = True
+    events_list = []
+
+    async def run():
+        async for event in providers.stream_sonar_deep_research(
+            settings=settings,
+            query="Orientation et métiers de l'IA",
+        ):
+            events_list.append(event)
+
+    asyncio.run(run())
+    assert any(e["type"] == "status" for e in events_list)
+    assert any(e["type"] == "research_activity" for e in events_list)
+    deltas = "".join(e["text"] for e in events_list if e["type"] == "delta")
+    assert "Rapport d'investigation" in deltas
+    assert "[1]" in deltas
+    done = next(e for e in events_list if e["type"] == "done")
+    assert len(done["sources"]) == 2
+    assert done["sources"][0]["doc_id"] == "source-1"
+
+
+def test_stream_sonar_deep_research_streaming_chunks_and_citations(settings, transport):
+    settings.demo_mode = False
+    events_list = []
+
+    stream_payload = (
+        'data: {"id":"gen-1","choices":[{"delta":{"content":"# Rapport Sonar\\n\\nFaits [1]."}}]}\n\n'
+        'data: {"id":"gen-2","choices":[{"delta":{"content":"\\n\\n### Sources\\n[1] https://example.org/source-1"}}],"citations":["https://example.org/source-1"]}\n\n'
+        'data: [DONE]\n\n'
+    ).encode("utf-8")
+
+    def handler(request):
+        assert request.url.path == "/v1/chat/completions"
+        req_json = json.loads(request.content)
+        assert req_json["model"] == "perplexity/sonar-deep-research"
+        assert req_json["stream"] is True
+        return httpx.Response(200, headers={"Content-Type": "text/event-stream"}, content=stream_payload)
+
+    transport(handler)
+
+    async def run():
+        async for event in providers.stream_sonar_deep_research(
+            settings=settings,
+            query="Quelle orientation choisir ?",
+            model="perplexity/sonar-deep-research",
+        ):
+            events_list.append(event)
+
+    asyncio.run(run())
+    deltas = "".join(e["text"] for e in events_list if e["type"] == "delta")
+    assert "# Rapport Sonar" in deltas
+    assert "[1]" in deltas
+    done = next(e for e in events_list if e["type"] == "done")
+    assert len(done["sources"]) == 1
+    assert done["sources"][0]["url"] == "https://example.org/source-1"
+    assert done["sources"][0]["doc_id"] == "source-1"
+
+
+def test_stream_sonar_deep_research_auto_continuation_on_length_limit(settings, transport):
+    settings.demo_mode = False
+    events_list = []
+    request_count = 0
+
+    first_payload = (
+        'data: {"id":"gen-1","choices":[{"delta":{"content":"# Partie 1\\nTexte initial incomplet "},"finish_reason":"length"}]}\n\n'
+        'data: [DONE]\n\n'
+    ).encode("utf-8")
+
+    second_payload = (
+        'data: {"id":"gen-2","choices":[{"delta":{"content":"suite et fin du rapport [1].\\n\\n### Références\\n1. [Source 1](https://example.org/source-auto)"},"finish_reason":"stop"}],"citations":["https://example.org/source-auto"]}\n\n'
+        'data: [DONE]\n\n'
+    ).encode("utf-8")
+
+    def handler(request):
+        nonlocal request_count
+        request_count += 1
+        assert request.url.path == "/v1/chat/completions"
+        if request_count == 1:
+            return httpx.Response(200, headers={"Content-Type": "text/event-stream"}, content=first_payload)
+        return httpx.Response(200, headers={"Content-Type": "text/event-stream"}, content=second_payload)
+
+    transport(handler)
+
+    async def run():
+        async for event in providers.stream_sonar_deep_research(
+            settings=settings,
+            query="Question longue avec risque de troncature",
+            model="perplexity/sonar-deep-research",
+        ):
+            events_list.append(event)
+
+    asyncio.run(run())
+
+    assert request_count == 2, "La continuation automatique doit avoir effectué un second appel"
+    deltas = "".join(e["text"] for e in events_list if e["type"] == "delta")
+    assert "# Partie 1\nTexte initial incomplet suite et fin du rapport [1]." in deltas
+    status_messages = [e["message"] for e in events_list if e["type"] == "status"]
+    assert any("Prolongement et complétion" in m for m in status_messages)
+    done = next(e for e in events_list if e["type"] == "done")
+    assert len(done["sources"]) >= 1
+    assert any("https://example.org/source-auto" in s["url"] for s in done["sources"])
+
+
+def test_stream_delta_with_thought_and_splitter():
+    # 1. Extraction reasoning_content / thought
+    data_reasoning = '{"choices":[{"delta":{"reasoning_content":"Je calcule la dérivée...","content":""}}]}'
+    content, thought, done = providers._stream_delta_with_thought(data_reasoning)
+    assert content == ""
+    assert thought == "Je calcule la dérivée..."
+    assert not done
+
+    # 2. Tag splitter avec balises morcelées
+    splitter = providers.ThinkTagSplitter()
+    c1, t1 = splitter.process("Voici <th")
+    assert c1 == "Voici " and t1 == ""
+    c2, t2 = splitter.process("ink>ma réflexion ")
+    assert c2 == "" and t2 == "ma réflexion "
+    c3, t3 = splitter.process("profonde</th")
+    assert c3 == "" and t3 == "profonde"
+    c4, t4 = splitter.process("ink>et la réponse finale.")
+    assert c4 == "et la réponse finale." and t4 == ""
+    fin_c, fin_t = splitter.finalize()
+    assert fin_c == "" and fin_t == ""
 

@@ -76,34 +76,38 @@ class Settings(BaseSettings):
     eod_historical_data_key: SecretStr = SecretStr("")
     eleven_labs_key: SecretStr = SecretStr("")
     eleven_labs_model_id: str = "eleven_text_to_sound_v2"
+    google_api_key: SecretStr = SecretStr("")
     cors_origins: str = "http://localhost:3001,http://127.0.0.1:3001"
     session_cookie_name: str = "tchat_session"
     session_cookie_secure: bool = False
     session_days: int = 14
     invitation_days: int = 2
-    max_upload_mb: int = 20
+    max_upload_mb: int = 40
     max_context_chars: int = 60000
     summary_every_messages: int = 12
     max_summary_chars: int = 6000
-    llm_temperature: float = 0.7
+    llm_temperature: float = 0.2
     llm_max_tokens: int = 2048
-    summary_temperature: float = 0.2
+    summary_temperature: float = 0.1
     summary_max_tokens: int = 900
-    deep_search_max_tokens: int = 24576
-    learn_mode_max_tokens: int = 16384
+    deep_search_max_tokens: int = 131072
+    learn_mode_max_tokens: int = 98304
     summary_model: str = "openai/gpt-4o-mini"
     search_query_model: str = "mistralai/mistral-small-3.2-24b-instruct"
     web_search_decision_model: str = "google/gemini-3.5-flash-lite"
     deep_search_plan_model: str = "google/gemini-4-argon"
     deep_search_synthesis_model: str = "google/gemini-3.8-flash"
     deep_search_audit_model: str = "openai/gpt-6-astra"
+    deep_search_engine: str = "sonar"
+    deep_search_model: str = "perplexity/sonar-deep-research"
     blog_model: str = "google/gemini-3.5-flash-lite"
+    presentation_model: str = "google/gemini-2.5-flash-lite"
     image_prompt_model: str = "openai/gpt-6-luna"
     image_models: str = ""
     default_image_model: str = "ideogram"
     auto_web_search: bool = True
 
-    @field_validator("llm_api_key", "brave_api_key", "mistral_api_key", "ideogram_api_key", "eod_historical_data_key", "eleven_labs_key", mode="before")
+    @field_validator("llm_api_key", "brave_api_key", "mistral_api_key", "ideogram_api_key", "eod_historical_data_key", "eleven_labs_key", "google_api_key", mode="before")
     @classmethod
     def sanitize_secret_keys(cls, value):
         if isinstance(value, SecretStr):
@@ -170,11 +174,11 @@ class Settings(BaseSettings):
     @field_validator("llm_max_tokens", "summary_max_tokens", "deep_search_max_tokens", "learn_mode_max_tokens")
     @classmethod
     def valid_max_tokens(cls, value: int) -> int:
-        if not 1 <= value <= 100000:
-            raise ValueError("Le nombre maximal de tokens doit être compris entre 1 et 100000")
+        if not 1 <= value <= 200000:
+            raise ValueError("Le nombre maximal de tokens doit être compris entre 1 et 200000")
         return value
 
-    @field_validator("summary_model", "search_query_model", "web_search_decision_model", "deep_search_plan_model")
+    @field_validator("summary_model", "search_query_model", "web_search_decision_model", "deep_search_plan_model", "presentation_model")
     @classmethod
     def valid_auxiliary_model(cls, value: str) -> str:
         value = value.strip()
@@ -310,7 +314,7 @@ class Settings(BaseSettings):
             return
         self._env_mtime_ns = mtime_ns
         parsed = dotenv_values(env_path)
-        secret_fields = ("llm_api_key", "brave_api_key", "mistral_api_key", "ideogram_api_key", "eod_historical_data_key", "eleven_labs_key")
+        secret_fields = ("llm_api_key", "brave_api_key", "mistral_api_key", "ideogram_api_key", "eod_historical_data_key", "eleven_labs_key", "google_api_key")
         for field_name in secret_fields:
             if field_name in self._explicit_fields:
                 continue
@@ -318,11 +322,13 @@ class Settings(BaseSettings):
             raw_val = parsed.get(env_name)
             if field_name == "eleven_labs_key" and raw_val is None:
                 raw_val = parsed.get("ELEVENLABS_API_KEY") or parsed.get("ELEVEN_LABS_API_KEY")
+            elif field_name == "google_api_key" and raw_val is None:
+                raw_val = parsed.get("GOOGLE_API_KEY") or parsed.get("GEMINI_API_KEY")
             if raw_val is not None:
                 cleaned = _clean_api_key(raw_val)
                 if cleaned or force is False:
                     setattr(self, field_name, SecretStr(cleaned))
-        str_fields = ("llm_base_url", "ocr_model", "vision_model", "default_model", "llm_models", "summary_model", "search_query_model", "web_search_decision_model", "deep_search_plan_model", "deep_search_synthesis_model", "blog_model", "image_prompt_model", "image_models", "default_image_model")
+        str_fields = ("llm_base_url", "ocr_model", "vision_model", "default_model", "llm_models", "summary_model", "search_query_model", "web_search_decision_model", "deep_search_plan_model", "deep_search_synthesis_model", "deep_search_engine", "deep_search_model", "blog_model", "presentation_model", "image_prompt_model", "image_models", "default_image_model")
         for field_name in str_fields:
             if field_name in self._explicit_fields:
                 continue

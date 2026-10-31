@@ -32,6 +32,8 @@ services:
       APP_DATA_DIR: /app/data
       # L'environnement du shell est prioritaire sur .env (clés cloud injectées).
       LLM_API_KEY: ${LLM_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       SEARXNG_URL: http://clair-searxng:8080
       BRAVE_API_KEY: ${BRAVE_API_KEY:-}
       MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
@@ -40,8 +42,10 @@ services:
       ELEVEN_LABS_KEY: ${ELEVEN_LABS_KEY:-}
       BLOG_MODEL: ${BLOG_MODEL:-google/gemini-3.5-flash-lite}
       IMAGE_PROMPT_MODEL: ${IMAGE_PROMPT_MODEL:-openai/gpt-6-luna}
-      DEEP_SEARCH_MAX_TOKENS: ${DEEP_SEARCH_MAX_TOKENS:-12288}
-      LEARN_MODE_MAX_TOKENS: ${LEARN_MODE_MAX_TOKENS:-16384}
+      DEEP_SEARCH_MAX_TOKENS: ${DEEP_SEARCH_MAX_TOKENS:-131072}
+      LEARN_MODE_MAX_TOKENS: ${LEARN_MODE_MAX_TOKENS:-98304}
+      LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.2}
+      SUMMARY_TEMPERATURE: ${SUMMARY_TEMPERATURE:-0.1}
       DEEP_SEARCH_PLAN_MODEL: ${DEEP_SEARCH_PLAN_MODEL:-anthropic/claude-fable-5.1}
       DEEP_SEARCH_SYNTHESIS_MODEL: ${DEEP_SEARCH_SYNTHESIS_MODEL:-google/gemini-3.8-flash}
       WEB_SEARCH_DECISION_MODEL: ${WEB_SEARCH_DECISION_MODEL:-google/gemini-3.5-flash-lite}

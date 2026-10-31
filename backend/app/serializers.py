@@ -52,6 +52,18 @@ def attachment_json(item: Attachment) -> dict:
                       "provider", "source_label", "eod_bars", "financial_stats")
             if item.extraction.get(k) is not None
         }
+    analysis_mode = "local"
+    if isinstance(item.extraction, dict):
+        pages = item.extraction.get("pages") or []
+        first_page = pages[0] if pages else {}
+        if first_page.get("method") == "vision" or "vision" in str(item.extraction.get("model", "")).lower():
+            analysis_mode = "vision"
+        elif first_page.get("method") in ("ocr", "mistral-ocr") or "ocr" in str(item.extraction.get("model", "")).lower():
+            analysis_mode = "ocr"
+        elif item.extraction.get("model") in ("yahoo-finance", "eod-historical-data"):
+            analysis_mode = "finance"
+    elif item.mime_type.startswith("image/"):
+        analysis_mode = "vision"
     return {
         "id": item.id,
         "filename": item.filename,
@@ -64,6 +76,7 @@ def attachment_json(item: Attachment) -> dict:
         "page_count": len(item.extraction["pages"]) if item.extraction and "pages" in item.extraction else 0,
         "source_url": url_source,
         "finance_meta": finance_meta,
+        "analysis_mode": analysis_mode,
     }
 
 

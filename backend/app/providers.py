@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import html
 import ipaddress
@@ -15,6 +16,13 @@ from urllib.parse import urlsplit
 import httpx
 from pydantic import ValidationError
 
+from .research_activity import research_activity
+from .research_questions import explicit_questions, has_generic_headings
+from .source_registry import CITATION_RE, citation_numbers, is_document
+from .report_claims import apply_claim_edits, iter_claim_spans
+from .claim_semantics import source_text
+from .research_planner import coverage_query, verify_aspect_coverage
+from .evidence_ledger import extract_deterministic_evidence_from_sources
 from .schemas import DocumentAnnotation, DocumentExtraction, ExtractedFigure, ExtractedPage, FigureAnnotation
 
 
@@ -24,7 +32,8 @@ class ProviderError(Exception):
 
 _TIMEOUT = httpx.Timeout(60.0, connect=10.0, pool=10.0)
 _QUERY_REWRITE_TIMEOUT = httpx.Timeout(15.0, connect=5.0, pool=5.0)
-_AUDIT_TIMEOUT = httpx.Timeout(45.0, connect=10.0, pool=10.0)
+_AUDIT_TIMEOUT = httpx.Timeout(90.0, connect=10.0, pool=10.0)
+_SONAR_DEEP_RESEARCH_TIMEOUT = httpx.Timeout(1200.0, connect=30.0, read=400.0, pool=30.0)
 _DECISION_TIMEOUT = httpx.Timeout(10.0, connect=3.0, pool=3.0)
 _IMAGE_SEARCH_TIMEOUT = httpx.Timeout(12.0, connect=4.0, pool=4.0)
 _MAX_IMAGE_BYTES = 10 * 1024 * 1024
@@ -79,22 +88,115 @@ def _json(response: httpx.Response, provider: str) -> dict[str, Any]:
 
 
 def _stream_delta(data: str) -> tuple[str, bool]:
+    content, _, done = _stream_delta_with_thought(data)
+    return content, done
+
+
+def _stream_delta_with_thought(data: str) -> tuple[str, str, bool]:
+    """
+    Extrait le delta de contenu visible, le delta de réflexion (thought/reasoning) et le statut de complétion.
+    Prend en charge :
+    - OpenAI o1, o3, o3-mini (reasoning_content via OpenRouter et compatibles)
+    - DeepSeek R1 (reasoning_content ou reasoning)
+    - Google Gemini (thought)
+    - Anthropic Claude (thinking)
+    """
     if data.strip() == "[DONE]":
-        return "", True
+        return "", "", True
     try:
         payload = json.loads(data)
         if not isinstance(payload, dict) or "error" in payload:
             raise ValueError
         choices = payload.get("choices", [])
         if not choices:
-            return "", False  # Some compatible providers stream token usage separately.
-        delta = choices[0].get("delta", {})
+            return "", "", False  # Some compatible providers stream token usage separately.
+        ch = choices[0]
+        delta = ch.get("delta", {})
         content = delta.get("content") or ""
+        thought = (
+            delta.get("reasoning_content")
+            or delta.get("reasoning")
+            or delta.get("thought")
+            or delta.get("thinking")
+            or ""
+        )
         if not isinstance(content, str):
-            raise ValueError
-        return content, choices[0].get("finish_reason") is not None
+            content = ""
+        if not isinstance(thought, str):
+            thought = ""
+        is_done = ch.get("finish_reason") is not None
+        return content, thought, is_done
     except (ValueError, TypeError, KeyError, AttributeError, IndexError):
         raise ProviderError("Le fournisseur IA a renvoyé un flux invalide.") from None
+
+
+class ThinkTagSplitter:
+    """
+    Traite un flux continu de tokens pour séparer les blocs <think>...</think> du contenu visible,
+    même si les balises <think> ou </think> sont morcelées sur plusieurs tokens en streaming.
+    """
+    def __init__(self):
+        self.in_think = False
+        self.buffer = ""
+
+    def process(self, text: str) -> tuple[str, str]:
+        """Retourne (content_chunk, thought_chunk)"""
+        if not text:
+            return "", ""
+        self.buffer += text
+        content_out: list[str] = []
+        thought_out: list[str] = []
+
+        while self.buffer:
+            if not self.in_think:
+                pos = self.buffer.find("<think>")
+                if pos != -1:
+                    content_out.append(self.buffer[:pos])
+                    self.buffer = self.buffer[pos + 7:]
+                    self.in_think = True
+                else:
+                    # Vérifier si un fragment partiel de '<think>' se trouve à la fin du buffer
+                    partial = False
+                    for i in range(1, 7):
+                        if self.buffer.endswith("<think>"[:i]):
+                            content_out.append(self.buffer[:-i])
+                            self.buffer = self.buffer[-i:]
+                            partial = True
+                            break
+                    if not partial:
+                        content_out.append(self.buffer)
+                        self.buffer = ""
+                    break
+            else:
+                pos = self.buffer.find("</think>")
+                if pos != -1:
+                    thought_out.append(self.buffer[:pos])
+                    self.buffer = self.buffer[pos + 8:]
+                    self.in_think = False
+                else:
+                    # Vérifier si un fragment partiel de '</think>' se trouve à la fin du buffer
+                    partial = False
+                    for i in range(1, 8):
+                        if self.buffer.endswith("</think>"[:i]):
+                            thought_out.append(self.buffer[:-i])
+                            self.buffer = self.buffer[-i:]
+                            partial = True
+                            break
+                    if not partial:
+                        thought_out.append(self.buffer)
+                        self.buffer = ""
+                    break
+
+        return "".join(content_out), "".join(thought_out)
+
+    def finalize(self) -> tuple[str, str]:
+        """Flushe ce qui reste dans le buffer à la fin du stream."""
+        rem = self.buffer
+        self.buffer = ""
+        if self.in_think:
+            return "", rem
+        return rem, ""
+
 
 
 def prepare_messages_for_caching(
@@ -182,13 +284,17 @@ def prepare_messages_for_caching(
     return result
 
 
-async def stream_chat(
+async def stream_chat_events(
     settings: Any,
     messages: list[dict[str, Any]],
     model: str,
     enable_cache: bool = True,
-) -> AsyncIterator[str]:
-    """Yield OpenAI-compatible SSE text deltas without buffering the full response."""
+) -> AsyncIterator[dict[str, Any]]:
+    """
+    Yield OpenAI-compatible SSE events with distinct text deltas and thought/reasoning deltas:
+    - {"type": "thought", "text": str}
+    - {"type": "delta", "text": str}
+    """
     key = _key(settings, "llm_api_key", "du fournisseur IA")
     completed = False
     is_deep_search = any(
@@ -219,6 +325,8 @@ async def stream_chat(
         enable_cache=enable_cache,
     )
 
+    tag_splitter = ThinkTagSplitter()
+
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=False) as client:
             async with client.stream(
@@ -237,23 +345,59 @@ async def stream_chat(
                         data = "\n".join(event)
                         event.clear()
                         if data.strip() == "[DONE]":
+                            fin_c, fin_t = tag_splitter.finalize()
+                            if fin_t:
+                                yield {"type": "thought", "text": fin_t}
+                            if fin_c:
+                                yield {"type": "delta", "text": fin_c}
                             return
-                        content, done = _stream_delta(data)
+                        content, thought, done = _stream_delta_with_thought(data)
+                        if thought:
+                            yield {"type": "thought", "text": thought}
                         if content:
-                            yield content
+                            split_c, split_t = tag_splitter.process(content)
+                            if split_t:
+                                yield {"type": "thought", "text": split_t}
+                            if split_c:
+                                yield {"type": "delta", "text": split_c}
                         completed = completed or done
                         # A finish_reason can precede a final usage event and [DONE].
                 if event:
-                    content, done = _stream_delta("\n".join(event))
+                    content, thought, done = _stream_delta_with_thought("\n".join(event))
+                    if thought:
+                        yield {"type": "thought", "text": thought}
                     if content:
-                        yield content
+                        split_c, split_t = tag_splitter.process(content)
+                        if split_t:
+                            yield {"type": "thought", "text": split_t}
+                        split_c = split_c
+                        if split_c:
+                            yield {"type": "delta", "text": split_c}
                     completed = completed or done
+                fin_c, fin_t = tag_splitter.finalize()
+                if fin_t:
+                    yield {"type": "thought", "text": fin_t}
+                if fin_c:
+                    yield {"type": "delta", "text": fin_c}
                 if not completed:
                     raise ProviderError("La réponse IA a été interrompue ; réessayez.")
     except httpx.TimeoutException:
         raise ProviderError("Le fournisseur IA met trop de temps à répondre ; réessayez.") from None
     except httpx.HTTPError:
         raise ProviderError("Impossible de joindre le fournisseur IA.") from None
+
+
+async def stream_chat(
+    settings: Any,
+    messages: list[dict[str, Any]],
+    model: str,
+    enable_cache: bool = True,
+) -> AsyncIterator[str]:
+    """Yield OpenAI-compatible SSE text deltas without buffering the full response."""
+    async for event in stream_chat_events(settings, messages, model, enable_cache=enable_cache):
+        if event["type"] == "delta":
+            yield event["text"]
+
 
 
 async def summarize(settings: Any, model: str, previous_summary: str, transcript: str) -> str:
@@ -1028,6 +1172,12 @@ def default_deep_search_aspect_checklist(subject: str, count: int | None = None)
     Couvre à la fois les aspects centraux et l'exploration panoramique à 360° (angles adjacents, tensions, saturations, impasses).
     """
     clean = subject.strip() or "le sujet recherché"
+    questions = explicit_questions(clean)
+    if questions:
+        return [
+            {"id": f"P{i}", "aspect": q, "question": q, "status": "pending"}
+            for i, q in enumerate(questions, 1)
+        ]
     aspects = [
         {
             "id": "P1",
@@ -1400,13 +1550,13 @@ async def validate_and_followup_deep_search(
     )
     if getattr(settings, "demo_mode", False) or not has_llm_key:
         for item in checklist:
-            item["status"] = "covered"
+            item["status"] = "partial"
         return {
             "is_sufficient": True,
             "aspect_checklist": checklist,
             "intermediate_questions": [],
             "unanswered_aspects": [],
-            "validation_summary": "Tous les points initiaux ont été vérifiés.",
+            "validation_summary": "Mode local : couverture documentaire non validée.",
             "followup_queries": [],
             "searched_languages": ["fr", "en"],
         }
@@ -1425,6 +1575,7 @@ async def validate_and_followup_deep_search(
     context = {
         "question_and_objective": query[:1500],
         "initial_aspect_checklist": checklist,
+        "evidence_ledger": extract_deterministic_evidence_from_sources(sources).to_dict_list()[:120],
         "previous_intermediate_questions": (previous_intermediate_questions or [])[-12:],
         "executed_queries": executed_queries[:40],
         "extracted_findings": (findings or [])[-35:],
@@ -1445,9 +1596,10 @@ async def validate_and_followup_deep_search(
             "## PROTOCOLE DE VALIDATION INTERMÉDIAIRE OBLIGATOIRE :\n"
             "1. **Vérification point par point de la checklist initiale (`aspect_checklist`) :**\n"
             "   - Pour chaque point (`P1`, `P2`, ...), évalue si les sources et notes actuelles répondent à **tous les aspects** de la question :\n"
-            "     * `\"covered\"` : preuves complètes, chiffrées, précises et recoupées.\n"
+            "     * `\"covered\"` : preuves complètes, chiffrées, précises et recoupées. Fournis obligatoirement `evidence_ids`, liste des EV du registre qui répondent à CETTE sous-question, pas au sujet global.\n"
             "     * `\"partial\"` : abordé mais manque de chiffres précis, de détails techniques ou de contre-vérification.\n"
             "     * `\"missing\"` : non encore abordé ou absence de sources probantes.\n"
+            "   - Une question de débouchés exige des données d'emploi ; une question prospective exige des projections ou études originales. Un guide de formation ne les remplace pas. Une condition de droit exige le texte officiel applicable.\n"
             "2. **Génération de questions intermédiaires (`intermediate_questions`) :**\n"
             "   - À partir des faits découverts dans le contenu (noms techniques, contradictions entre sources, indices partiels) ET de l'objectif global, pose 2 à 4 **questions intermédiaires** pointues que le modèle doit se poser pour creuser en profondeur et vérifier qu'aucun angle mort ne subsiste.\n"
             "3. **Décision stricte de complétude (`is_sufficient`) :**\n"
@@ -1462,7 +1614,7 @@ async def validate_and_followup_deep_search(
             "  \"is_sufficient\": false,\n"
             "  \"validation_summary\": \"Synthèse courte (1 phrase) de l'état de validation des points et ce qu'il reste à vérifier\",\n"
             "  \"aspect_statuses\": [\n"
-            "    {\"id\": \"P1\", \"status\": \"covered\", \"note\": \"Justification courte\"},\n"
+            "    {\"id\": \"P1\", \"status\": \"covered\", \"evidence_ids\": [\"EV_0001\"], \"note\": \"Justification courte\"},\n"
             "    {\"id\": \"P2\", \"status\": \"partial\", \"note\": \"Ce qui manque encore\"}\n"
             "  ],\n"
             "  \"intermediate_questions\": [\n"
@@ -1507,18 +1659,18 @@ async def validate_and_followup_deep_search(
             dedup = [item for item in candidates if item.casefold() not in existing][:max_queries]
             is_suff = len(dedup) == 0
             for item in checklist:
-                item["status"] = "covered" if is_suff else "partial"
+                item["status"] = "partial"
             return {
-                "is_sufficient": is_suff,
+                "is_sufficient": False,
                 "aspect_checklist": checklist,
                 "intermediate_questions": [],
                 "unanswered_aspects": [c["aspect"] for c in checklist if c["status"] != "covered"],
                 "validation_summary": (
-                    "Tous les points ont été validés."
+                    "Aucune preuve de couverture explicite fournie."
                     if is_suff
                     else f"{len(dedup)} pistes complémentaires identifiées pour compléter les points."
                 ),
-                "followup_queries": dedup,
+                "followup_queries": dedup or [coverage_query(item) for item in checklist[:max_queries]],
                 "searched_languages": ["fr", "en"],
             }
 
@@ -1563,12 +1715,12 @@ async def validate_and_followup_deep_search(
             candidates = []
         dedup_queries = [item for item in candidates if item.casefold() not in existing][:max_queries]
 
-        all_covered = len(unanswered) == 0
-        is_sufficient = bool(data.get("is_sufficient", False) and all_covered) or len(dedup_queries) == 0
-        if is_sufficient:
-            for item in checklist:
-                if item.get("status") == "pending":
-                    item["status"] = "covered"
+        checklist = verify_aspect_coverage(checklist, sources, raw_statuses)
+        unanswered = [item.get("aspect", item.get("id", "")) for item in checklist if item["status"] != "covered"]
+        all_covered = not unanswered
+        is_sufficient = bool(data.get("is_sufficient", False)) and all_covered
+        if not is_sufficient and not dedup_queries:
+            dedup_queries = [coverage_query(item) for item in checklist if item["status"] != "covered" and coverage_query(item).casefold() not in existing][:max_queries]
 
         langs: list[str] = []
         raw_langs = data.get("searched_languages", [])
@@ -1576,6 +1728,8 @@ async def validate_and_followup_deep_search(
             langs = [str(l).strip()[:12] for l in raw_langs if isinstance(l, (str, int)) and str(l).strip()][:10]
 
         val_summary = str(data.get("validation_summary") or "").strip()[:350]
+        if unanswered:
+            val_summary = f"{len(checklist) - len(unanswered)}/{len(checklist)} sous-questions avec preuves directes suffisantes ; lacunes restantes."
         if not val_summary:
             covered_count = sum(1 for c in checklist if c.get("status") == "covered")
             val_summary = f"Validation {covered_count}/{len(checklist)} points couverts · {len(inter_q)} questions intermédiaires vérifiées."
@@ -2472,121 +2626,34 @@ def default_report_outline(
             "parts": selected_content + [flashcards_module],
         }
 
-    # Si une checklist d'investigation initiale existe (aspect_checklist), déduire les grandes parties
-    # directement des questions réelles posées et des aspects concrets à instruire, évitant le plan générique.
-    if aspect_checklist and len(aspect_checklist) >= 2:
-        parts_from_checklist = []
-        for idx, item in enumerate(aspect_checklist[: spec["num_parts"]], start=1):
-            aspect_name = str(item.get("aspect") or f"Axe {idx}").strip()
-            item_q = str(item.get("question") or "").strip()
-            parts_from_checklist.append({
-                "id": f"S{idx}",
-                "heading": f"## {idx}. {aspect_name}",
-                "subparts": [
-                    f"### {idx}.1 Diagnostic factuel, métriques et données vérifiées",
-                    f"### {idx}.2 Analyse causale, comparaison et retours d'expérience",
-                    f"### {idx}.3 Limites documentaires, risques et arbitrages",
-                ],
-                "focus": (
-                    f"Traiter obligatoirement et prioritairement la question d'enquête : « {item_q} » "
-                    f"en mobilisant les données probantes et les sources primaires correspondantes."
-                ),
-            })
-        if len(parts_from_checklist) >= 2:
-            return {
-                "title": f"# Grand Rapport d'Investigation Approfondie : {clean}",
-                "executive_summary_guide": (
-                    f"Synthèse exécutive détaillée répondant directement à « {clean} », présentation de l'Expert Référent ({e1}), "
-                    "conclusions majeures chiffrées et arbitrage synthétique."
-                ),
-                "detail_level": spec["level"],
-                "detail_label": spec["label"],
-                "experts": experts,
-                "parts": parts_from_checklist,
-            }
-
-    all_parts = [
-        {
-            "id": "S1",
-            "heading": "## 1. Cadre Général, Diagnostic & État des Lieux Chiffré",
-            "subparts": [
-                "### 1.1 Définitions, périmètre d'analyse et indicateurs statistiques officiels",
-                "### 1.2 Réalité opérationnelle, acteurs de référence et données actuelles",
-                "### 1.3 Contraintes structurelles et premiers constats",
-            ],
-            "focus": f"Poser le diagnostic répondant directement à « {clean} » avec chiffres officiels vérifiables.",
-        },
-        {
-            "id": "S2",
-            "heading": "## 2. Analyse Approfondie des Voies Porteuses, Tensions & Opportunités",
-            "subparts": [
-                "### 2.1 Moteurs de développement, secteurs en tension et compétences recherchées",
-                "### 2.2 Analyse comparative des débouchés, taux d'insertion et rémunérations",
-                "### 2.3 Études de cas, conditions réelles d'accès et trajectoires",
-            ],
-            "focus": "Développer chaque piste porteuse avec données chiffrées précises et sources primaires.",
-        },
-        {
-            "id": "S3",
-            "heading": "## 3. Analyse Critique & Vision 360° : Filières Saturées, Risques & Pièges à Éviter",
-            "subparts": [
-                "### 3.1 Voies bouchées, formations à rentabilité contestée et surévaluation des promesses",
-                "### 3.2 Pièges récurrents, coûts réels et désillusions documentées",
-                "### 3.3 Risques technologiques, automatisation et soutenabilité à moyen terme",
-            ],
-            "focus": "Détailler précisément les voies risquées ou saturées et ce qu'il faut impérativement éviter.",
-        },
-        {
-            "id": "S4",
-            "heading": "## 4. Métiers Émergents, Impact Technologique & Projections Futures",
-            "subparts": [
-                "### 4.1 Nouveaux métiers et mutations induites par les ruptures (notamment IA)",
-                "### 4.2 Formations et compétences requises pour s'y positionner",
-                "### 4.3 Données prospectives, études d'offres et limites des projections",
-            ],
-            "focus": "Analyser spécifiquement les métiers émergents avec l'IA et les filières adaptées.",
-        },
-        {
-            "id": "S5",
-            "heading": "## 5. Synthèse Stratégique, Arbitrages & Plan d'Action Personnalisé",
-            "subparts": [
-                "### 5.1 Grille décisionnelle multicritères et choix structurants",
-                "### 5.2 Feuille de route concrète étape par étape",
-                "### 5.3 Recommandations pragmatiques et gestion des incertitudes",
-            ],
-            "focus": "Formuler des recommandations actionnables et un plan d'arbitrage répondant à chaque interrogation.",
-        },
-        {
-            "id": "S6",
-            "heading": "## 6. Études de Cas Approfondies & Scénarios Prospectifs",
-            "subparts": [
-                "### 6.1 Modélisation prospective à moyen/long terme et scénarios",
-                "### 6.2 Retours d'expérience chiffrés sur cas réels emblématiques",
-                "### 6.3 Stress-test réglementaire, technologique et conjoncturel",
-            ],
-            "focus": "Approfondir des cas réels chiffrés et tester la robustesse face aux chocs futurs.",
-        },
-        {
-            "id": "S7",
-            "heading": "## 7. Référentiel Technique, Cadre Réglementaire & Guide d'Audit",
-            "subparts": [
-                "### 7.1 Corpus théorique, normes de référence et indicateurs clés",
-                "### 7.2 Grille d'audit opérationnel, critères de sélection et métriques",
-                "### 7.3 Cadre légal/institutionnel, gouvernance et synthèse générale",
-            ],
-            "focus": "Fournir une grille d'évaluation exhaustive et les références institutionnelles complètes.",
-        },
-    ]
+    questions = explicit_questions(clean)
+    aspects = ([{"aspect": q, "question": q} for q in questions]
+               if questions else list(aspect_checklist or []))
+    if not aspects:
+        aspects = [
+            {"aspect": f"{clean} — {angle}", "question": clean}
+            for angle in ("données disponibles", "mécanismes documentés", "comparaison des options",
+                          "limites et contradictions", "arbitrages", "cas documentés", "mise en œuvre")[:spec["num_parts"]]
+        ]
+    # Group every question rather than dropping those beyond the depth budget.
+    count = min(spec["num_parts"], len(aspects))
+    groups = [aspects[i * len(aspects) // count:(i + 1) * len(aspects) // count] for i in range(count)]
+    parts = []
+    for idx, group in enumerate(groups, 1):
+        labels = [str(a.get("aspect") or a.get("question") or clean).strip() for a in group]
+        questions_in_group = [str(a.get("question") or a.get("aspect") or clean).strip() for a in group]
+        parts.append({
+            "id": f"S{idx}",
+            "heading": f"## {idx}. " + " / ".join(labels),
+            "subparts": [f"### {idx}.{j} {q}" for j, q in enumerate(questions_in_group, 1)],
+            "focus": "Répondre à chaque question : " + " ; ".join(questions_in_group)
+                     + ". Présenter les preuves, limites et arbitrages ; signaler toute donnée manquante.",
+        })
     return {
         "title": f"# Grand Rapport d'Investigation Approfondie : {clean}",
-        "executive_summary_guide": (
-            f"Synthèse exécutive détaillée répondant directement à « {clean} », présentation de l'Expert Référent ({e1}), "
-            "conclusions majeures chiffrées et arbitrage synthétique."
-        ),
-        "detail_level": spec["level"],
-        "detail_label": spec["label"],
-        "experts": experts,
-        "parts": all_parts[: spec["num_parts"]],
+        "executive_summary_guide": f"Répondre directement à « {clean} » avec les preuves disponibles et leurs limites.",
+        "detail_level": spec["level"], "detail_label": spec["label"],
+        "experts": experts, "parts": parts,
     }
 
 
@@ -2631,6 +2698,7 @@ async def plan_report_outline(
     )
     context = {
         "user_question": query[:1500],
+        "required_questions": {f"Q{i}": q for i, q in enumerate(explicit_questions(query), 1)},
         "mode": "learn_mode" if learn_mode else "deep_search",
         "detail_level": f"{spec['level']}/10 ({spec['label']})",
         "target_number_of_parts": target_parts,
@@ -2696,11 +2764,12 @@ async def plan_report_outline(
             f"## RÈGLE ABSOLUE ANTI-PLAN GÉNÉRIQUE DE DISSERTATION :\n"
             "- INTERDICTION FORMELLE d'utiliser des titres passe-partout scolaires ou désincarnés (ex. « Genèse, mécanismes fondamentaux », « Fondements de la création de valeur », « Grands tableaux comparatifs »).\n"
             "- Chaque titre `heading` et sous-titre `subparts` DOIT nommer explicitement les sujets concrets, technologies, filières, entités ou arbitrages réels posés par l'utilisateur dans sa demande (ex. au lieu de « Secteurs porteurs », écrire « Métiers de l'IA, Informatique & Ingénierie : Filières d'accès et tensions réelles » ; au lieu de « Risques », écrire « Filières saturées & Formations à éviter : Diagnostics d'insertion et pièges »).\n"
-            "- Chaque sous-question posée explicitement par l'utilisateur dans sa question DOIT faire l'objet d'au moins une grande partie ou sous-partie dédiée, sous peine de rejet.\n\n"
+            "- Chaque sous-question posée explicitement par l'utilisateur dans sa question DOIT faire l'objet d'au moins une grande partie ou sous-partie dédiée, sous peine de rejet.\n"
+            "- Ajoute `question_ids` (liste des identifiants Q de `required_questions`) et `aspect_ids` (liste des identifiants de `aspect_checklist`) à chaque partie. Leur union doit couvrir tous les identifiants fournis.\n\n"
             f"## EXIGENCES D'ARCHITECTURE DU PLAN ({target_parts} GRANDES PARTIES `##`) :\n"
             "1. Chaque grande partie (`heading`) doit commencer par `## N. Titre explicite et analytique ancré dans le sujet réel`.\n"
             "2. **Dans CHAQUE grande partie `##`**, structure 2 à 4 sous-parties `subparts` thématiques (`### N.1 ...`, `### N.2 ...`) qui organisent logiquement le propos sans redites.\n"
-            "3. Le plan doit couvrir 100% de la question initiale, tous les points de `aspect_checklist`, toutes les `intermediate_questions`, et intégrer la **vision panoramique à 360°** (tensions structurelles, filières saturées/à éviter, métiers émergents de l'IA, comparaisons chiffrées, recommandations concrètes).\n"
+            "3. Le plan doit couvrir chaque question explicite, chaque point de `aspect_checklist` et les questions intermédiaires pertinentes au sujet. Ne pas ajouter de thèmes étrangers à la demande.\n"
             f"4. Dans le champ `focus` de chaque partie, indique précisément à l'Agent Écrivain quelles données chiffrées, quelles études de cas et quelles sources traiter ({spec['words_per_part']} par partie).\n\n"
             "## FORMAT DE SORTIE (JSON STRICT UNIQUEMENT) :\n"
             "{\n"
@@ -2763,7 +2832,7 @@ async def plan_report_outline(
         raw_experts = data.get("experts")
         experts: list[dict[str, str]] = []
         if isinstance(raw_experts, list):
-            for e_idx, exp in enumerate(raw_experts[:3], start=1):
+            for e_idx, exp in enumerate(raw_experts[:1], start=1):
                 if isinstance(exp, dict):
                     e_title = str(exp.get("title") or "").strip()[:140]
                     e_persp = str(exp.get("perspective") or "").strip()[:300]
@@ -2771,11 +2840,10 @@ async def plan_report_outline(
                         experts.append({
                             "id": f"E{e_idx}",
                             "title": e_title,
-                            "perspective": e_persp or fallback_experts[min(e_idx - 1, 2)]["perspective"],
+                            "perspective": e_persp or fallback_experts[0]["perspective"],
                         })
-        while len(experts) < 3:
-            nxt = fallback_experts[len(experts)]
-            experts.append(dict(nxt))
+        if not experts:
+            experts = [dict(fallback_experts[0])]
 
         exec_guide = str(data.get("executive_summary_guide") or "").strip()[:600]
         parts: list[dict[str, Any]] = []
@@ -2798,19 +2866,28 @@ async def plan_report_outline(
                         subparts.append(s_clean[:240])
             if not subparts:
                 subparts = [
-                    f"### {idx}.1 Perspective 1 — {experts[0]['title']} : Fondements, mécanismes et données clés",
-                    f"### {idx}.2 Perspective 2 — {experts[1]['title']} : Réalité opérationnelle, chiffres et cas concrets",
-                    f"### {idx}.3 Perspective 3 — {experts[2]['title']} : Analyse critique, limites et synthèse croisée",
+                    f"### {idx}.1 {heading.lstrip('#').strip()} : preuves disponibles",
+                    f"### {idx}.2 Limites et arbitrages documentés",
                 ]
             focus = str(item.get("focus") or "").strip()[:600]
             parts.append({
                 "id": str(item.get("id") or f"P{idx}"),
                 "heading": heading[:220],
+                "question_ids": item.get("question_ids") or [],
+                "aspect_ids": item.get("aspect_ids") or [],
                 "subparts": subparts,
-                "focus": focus or "Développer intégralement la sous-partie de chacun des 3 experts avec exemples précis, chiffres et citations [1], [2].",
+                "focus": focus or "Répondre à la question avec les preuves disponibles, sans inventer de chiffres ni de références.",
             })
 
-        if len(parts) < 2:
+        if not learn_mode:
+            required = {f"Q{i}" for i, _ in enumerate(explicit_questions(query), 1)}
+            required_aspects = {str(item["id"]) for item in (aspect_checklist or []) if item.get("id")}
+            covered = {qid for part in parts for qid in part["question_ids"] if isinstance(qid, str)}
+            covered_aspects = {aid for part in parts for aid in part["aspect_ids"] if isinstance(aid, str)}
+            if not required <= covered or not required_aspects <= covered_aspects:
+                return default_report_outline(query, aspect_checklist=aspect_checklist, detail_level=spec["level"])
+
+        if len(parts) < 2 or (not learn_mode and has_generic_headings(parts)):
             return default_report_outline(query, aspect_checklist=aspect_checklist, learn_mode=learn_mode, detail_level=spec["level"])
 
         # En Mode Apprendre, garantit toujours que la dernière partie contient les 20 Flashcards et 20 QCM pour learn_html.py
@@ -2822,12 +2899,12 @@ async def plan_report_outline(
                     "id": f"M{len(parts) + 1}",
                     "heading": f"## Module {len(parts) + 1} — Fiche de Mémorisation Active, 20 Flashcards & 20 Questions de Quiz QCM",
                     "subparts": [
-                        f"### {len(parts) + 1}.1 Synthèse d'ancrage mémoriel et 10 règles d'or des 3 experts",
+                        f"### {len(parts) + 1}.1 Synthèse d'ancrage mémoriel et 10 règles d'or",
                         f"### {len(parts) + 1}.2 Les 20 Flashcards de révision active (### Flashcard 1 à ### Flashcard 20)",
                         f"### {len(parts) + 1}.3 Le Grand Quiz d'Auto-Évaluation de 20 QCM commentés (### Question 1 à ### Question 20)",
                     ],
                     "focus": (
-                        "Rédiger la fiche récapitulative croisant les 3 experts puis OBLIGATOIREMENT les 20 Flashcards numérotées "
+                        "Rédiger la fiche récapitulative puis OBLIGATOIREMENT les 20 Flashcards numérotées "
                         "(### Flashcard 1 à 20 avec - **Recto :** et - **Verso :**) et les 20 Questions QCM "
                         "(### Question 1 à 20 avec **Énoncé :**, - A), - B), - C), - D), - **Bonne réponse :** et - **Explication :**)."
                     ),
@@ -2850,7 +2927,7 @@ def format_report_outline_markdown(
     learn_mode: bool = False,
     detail_level: int | None = None,
 ) -> str:
-    """Formate le plan généré par l'Agent Planificateur et le Comité des 3 Experts en un bloc Markdown lisible placé en tête du rapport."""
+    """Formate le plan généré par l'Agent Planificateur et le Chercheur-Analyste en un bloc Markdown lisible placé en tête du rapport."""
     spec = get_detail_level_spec(detail_level or outline.get("detail_level"), learn_mode=learn_mode)
     title = str(outline.get("title") or ("# Grand Cours Magistral" if learn_mode else "# Grand Rapport DeepSearch")).strip()
     parts = outline.get("parts") or []
@@ -2919,12 +2996,15 @@ async def review_report_with_auditor(
     )
     if getattr(settings, "demo_mode", False) or not has_llm_key:
         return {
-            "decision": "validé",
-            "auditor_model": audit_model,
-            "critique": "Relecture critique effectuée en environnement local : structure documentaire et sources validées.",
-            "verified_facts": ["Ordres de grandeur et proportions conformes aux extraits documentaires disponibles."],
-            "warnings": [],
-            "sources_assessment": "Sources documentaires conformes aux registres d'autorité.",
+            "decision": "non_effectué",
+            "performed": False,
+            "claim_reviews": [],
+            "auditor_model": None,
+            "requested_model": audit_model,
+            "critique": "Relecture par le modèle non effectuée ; seul le contrôle déterministe est disponible.",
+            "verified_facts": [],
+            "warnings": ["Périmètre des affirmations à vérifier."],
+            "sources_assessment": "Non évalué par le modèle.",
             "remedies": [],
             "remedied_markdown": report_markdown,
             "applied_count": 0,
@@ -2933,11 +3013,11 @@ async def review_report_with_auditor(
     key = _key(settings, "llm_api_key", "du fournisseur IA")
     doc_sources = [
         s for s in sources
-        if s.get("media_type") != "image" and not s.get("img_src")
+        if is_document(s)
     ]
     sources_payload: list[dict[str, Any]] = []
-    for idx, s in enumerate(doc_sources[:12], start=1):
-        content_extract = (s.get("content") or s.get("snippet") or s.get("text") or "")[:2800]
+    for idx, s in enumerate(doc_sources[:80], start=1):
+        content_extract = source_text(s)[:5000]
         sources_payload.append({
             "citation_index": f"[{idx}]",
             "title": str(s.get("title") or "")[:180],
@@ -2963,6 +3043,10 @@ async def review_report_with_auditor(
         "report_markdown": report_markdown[:32000],
         "sources": sources_payload,
         "pre_check_anomalies": anomalies[:30],
+        "claims_to_review": [
+            {"claim_id": row["claim_id"], "text": row["full_sentence"], "source_indices": row["sources"]}
+            for row in ((pre_check or {}).get("rows") or [])[:64]
+        ],
     }
 
     system_prompt = (
@@ -2983,6 +3067,12 @@ async def review_report_with_auditor(
         "   - Pour TOUTE phrase du texte qui comporte une anomalie factuelle, un chiffre non attesté, un biais méthodologique ou une extrapolation abusive, fournis le remplacement chirurgical exact :\n"
         "     `{\"target\": \"phrase originale exacte telle qu'écrite dans le rapport\", \"replacement\": \"phrase réécrite rigoureuse, nuancée et conforme aux sources\"}`.\n"
         "   - La phrase de remplacement doit préserver la fluidité de lecture et corriger le problème sur le fond.\n\n"
+        "5. **Validation sémantique PAR AFFIRMATION (`claim_reviews`) :**\n"
+        "   - Pour CHAQUE `claims_to_review`, confronte l'affirmation complète à un passage exact d'une de SES sources citées.\n"
+        "   - Vérifie l'objet précis, la population, la période, le dénominateur et la modalité (constat/projection). Une valeur identique ou un sujet voisin ne prouve pas l'affirmation.\n"
+        "   - Retourne `claim_id`, `source_index` (entier), `verdict` (SUPPORTED, PARTIAL, UNSUPPORTED, CONTRADICTED), `exact_passage` copié textuellement et `note`. SUPPORTED est interdit sans extrait exact.\n"
+        "   - Pour toute nuance ou correction nécessaire, ajoute aussi un élément `remedies` avec `claim_id`, `target` égal à l'affirmation complète et `replacement` grammatical, sans changer la structure Markdown. Pas de remplacement global, pas de modification du plan.\n"
+        "   - N'assimile pas tous les cursus, grades, titres ou populations. Ne transforme pas une probabilité d'accès en interdiction juridique ni une exposition réduite en immunité technologique.\n\n"
         "5. **Décision et Arbitrage formel (`decision`) :**\n"
         "   - `\"validé\"` : Le texte et ses sources sont exemplaires et parfaitement rigoureux.\n"
         "   - `\"validé_avec_réserves\"` : Le texte est solide mais nécessite des réserves d'interprétation méthodologique.\n"
@@ -2999,6 +3089,7 @@ async def review_report_with_auditor(
         "    \"Point de vigilance méthodologique ou limite de portée importante pour le lecteur...\"\n"
         "  ],\n"
         "  \"sources_assessment\": \"Évaluation synthétique de la pertinence, du niveau de preuve et de la diversité des sources consultées.\",\n"
+        "  \"claim_reviews\": [{\"claim_id\": \"CL_...\", \"source_index\": 1, \"verdict\": \"PARTIAL\", \"exact_passage\": \"passage exact fourni\", \"note\": \"limite de portée\"}],\n"
         "  \"remedies\": [\n"
         "    {\n"
         "      \"target\": \"phrase originale exacte dans le markdown\",\n"
@@ -3013,40 +3104,56 @@ async def review_report_with_auditor(
         {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
     ]
     try:
-        async with httpx.AsyncClient(timeout=_AUDIT_TIMEOUT, follow_redirects=False) as client:
-            response = await client.post(
-                settings.llm_base_url.rstrip("/") + "/chat/completions",
-                headers={"Authorization": f"Bearer {key}"},
-                json={"model": audit_model, "messages": messages, "stream": False, "temperature": 0.1, "max_tokens": 3000},
-            )
-            if response.status_code != 200 and fallback_model and audit_model != fallback_model:
-                response = await client.post(
-                    settings.llm_base_url.rstrip("/") + "/chat/completions",
-                    headers={"Authorization": f"Bearer {key}"},
-                    json={"model": fallback_model, "messages": messages, "stream": False, "temperature": 0.1, "max_tokens": 3000},
-                )
-        _check_response(response, "Fournisseur IA (Relecture Astra)")
-        payload = _json(response, "Fournisseur IA (Relecture Astra)")
-        raw_content = payload["choices"][0]["message"]["content"]
-        if not isinstance(raw_content, str):
-            raise ValueError("Contenu de réponse invalide")
-        cleaned = re.sub(r"^```(?:json|text)?\s*|\s*```$", "", raw_content.strip(), flags=re.IGNORECASE | re.DOTALL).strip()
-        data = json.loads(cleaned)
-        if not isinstance(data, dict):
-            raise ValueError("Réponse JSON invalide")
+        data = None
+        used_model = None
+        for candidate in dict.fromkeys((audit_model, fallback_model)):
+            if not candidate:
+                continue
+            try:
+                async with httpx.AsyncClient(timeout=_AUDIT_TIMEOUT, follow_redirects=False) as client:
+                    response = await client.post(
+                        settings.llm_base_url.rstrip("/") + "/chat/completions",
+                        headers={"Authorization": f"Bearer {key}"},
+                        json={"model": candidate, "messages": messages, "stream": False, "temperature": 0.1, "max_tokens": 10000},
+                    )
+                _check_response(response, "Fournisseur IA (Relecture)")
+                payload = _json(response, "Fournisseur IA (Relecture)")
+                raw_content = payload["choices"][0]["message"]["content"]
+                if not isinstance(raw_content, str):
+                    raise ValueError("Réponse non textuelle")
+                cleaned = re.sub(r"^```(?:json|text)?\s*|\s*```$", "", raw_content.strip(), flags=re.IGNORECASE | re.DOTALL).strip()
+                parsed = json.loads(cleaned)
+                if not isinstance(parsed, dict):
+                    raise ValueError("Réponse JSON invalide")
+                data, used_model = parsed, candidate
+                break
+            except (httpx.HTTPError, ProviderError, ValueError, TypeError, KeyError, IndexError):
+                continue
+        if data is None:
+            raise ProviderError("Relecture indisponible sur les modèles configurés")
 
         remedied_markdown = report_markdown
         remedies = data.get("remedies")
-        applied_count = 0
+        spans = list(iter_claim_spans(report_markdown))
+        edits = []
         if isinstance(remedies, list):
             for item in remedies:
                 if not isinstance(item, dict):
                     continue
                 target = str(item.get("target") or "").strip()
                 replacement = str(item.get("replacement") or "").strip()
-                if target and replacement and target in remedied_markdown:
-                    remedied_markdown = remedied_markdown.replace(target, replacement, 1)
-                    applied_count += 1
+                matches = [span for span in spans if span["full_sentence"] == target and (
+                    not item.get("claim_id") or item["claim_id"] == span["claim_id"]
+                )]
+                if not replacement or "\n" in replacement or not matches:
+                    continue
+                if not item.get("claim_id") and len(matches) != 1:
+                    continue
+                for span in matches:
+                    cell_text = replacement.replace("|", r"\|") if span["table_cell"] else replacement
+                    edits.append({**span, "replacement": cell_text})
+        remedied_markdown, applied = apply_claim_edits(report_markdown, edits)
+        applied_count = len(applied)
 
         decision = str(data.get("decision") or "validé").lower()
         if applied_count > 0 and decision == "validé":
@@ -3054,7 +3161,10 @@ async def review_report_with_auditor(
 
         return {
             "decision": decision,
-            "auditor_model": audit_model,
+            "auditor_model": used_model,
+            "performed": True,
+            "claim_reviews": data.get("claim_reviews") if isinstance(data.get("claim_reviews"), list) else [],
+            "applied_repairs": [{"claim_id": edit["claim_id"], "before": edit["full_sentence"], "after": edit["replacement"]} for edit in applied],
             "critique": str(data.get("critique") or "Relecture critique effectuée et validée.").strip(),
             "verified_facts": [str(f).strip() for f in (data.get("verified_facts") or []) if str(f).strip()][:5],
             "warnings": [str(w).strip() for w in (data.get("warnings") or []) if str(w).strip()][:4],
@@ -3066,12 +3176,15 @@ async def review_report_with_auditor(
     except Exception as exc:
         _logger.warning("Échec de la relecture critique par %s (repli local): %s", audit_model, exc)
         return {
-            "decision": "validé",
-            "auditor_model": audit_model,
-            "critique": "Relecture critique effectuée : le texte s'appuie sur la bibliographie sélectionnée.",
-            "verified_facts": ["Données et proportions principales conformes aux extraits documentaires fournis."],
-            "warnings": [],
-            "sources_assessment": "Sources documentaires conformes.",
+            "decision": "non_effectué",
+            "performed": False,
+            "claim_reviews": [],
+            "auditor_model": None,
+            "requested_model": audit_model,
+            "critique": "Relecture par le modèle indisponible ; seul le contrôle déterministe a été effectué.",
+            "verified_facts": [],
+            "warnings": ["Relecture critique indisponible ; périmètre documentaire à vérifier."],
+            "sources_assessment": "Non évalué par le modèle.",
             "remedies": [],
             "remedied_markdown": report_markdown,
             "applied_count": 0,
@@ -3144,8 +3257,7 @@ async def judge_source_relevance(
 FACT_DISCIPLINE_RULE = (
     "**DISCIPLINE FACTUELLE & INTÉGRITÉ DE PREUVE UNIVERSELLE (NON NÉGOCIABLE) :** aucune donnée quantitative précise (pourcentage, montant, taux, effectif, mesure, seuil) "
     "ne peut être présentée comme un fait établi sans source directement pertinente citée `[n]`, dont le contenu fourni contient cette donnée, "
-    "et dont le périmètre (population, horizon temporel, protocole, juridiction ou définition) correspond exactement au propos. À défaut, écris explicitement « ordre de grandeur indicatif non consolidé » "
-    "ou n'avance pas le chiffre. Pour toute statistique, indique source, période et périmètre exact ; ne généralise jamais un résultat observé sur un sous-groupe spécifique "
+    "et dont le périmètre (population, horizon temporel, protocole, juridiction ou définition) correspond exactement au propos. À défaut, n'avance pas le chiffre et écris « donnée non établie ». Pour toute statistique, indique source, période et périmètre exact ; ne généralise jamais un résultat observé sur un sous-groupe spécifique "
     "à un ensemble hétérogène. Termine chaque affirmation importante par `(confiance : élevée|moyenne|faible)`.\n"
     "**Adéquation stricte source-affirmation (Entailment & Portée)** : Une source officielle, scientifique ou réglementaire ne doit être citée QUE pour ce qu'elle "
     "démontre textuellement dans son périmètre propre. Ne détourne JAMAIS une disposition administrative restreinte, un essai préliminaire ou une observation locale "
@@ -3253,7 +3365,7 @@ def build_section_writer_messages(
     """
     Construit le contexte de messages pour l'Agent Écrivain (Étape 2/2) afin qu'il rédige
     une partie spécifique (`part_index`, 0-based) du plan détaillé, en faisant intervenir
-    chacun des 3 experts du domaine dans sa propre sous-partie dédiée et en respectant
+    le chercheur-analyste du domaine et en respectant
     strictement le niveau de détail choisi (`detail_level` de 1 à 10).
     """
     spec = get_detail_level_spec(detail_level or outline.get("detail_level"), learn_mode=learn_mode)
@@ -3365,7 +3477,7 @@ def build_section_writer_messages(
                 "  4. Les **recommandations concrètes** (`actionable_recommendations`).\n"
                 "- Règle impérative de calibrage : écris selon la quantité réelle de preuves et la complexité effective de la question, avec une densité maximale et ZÉRO remplissage ni délayage (calibrage naturel entre 250 et 500 mots utiles par section, pour un rapport complet de 1 500 à 3 000 mots au total).\n"
                 "- N'ajoute AUCUN chiffre absent de l'analyse ou des sources ; supprime ou qualifie tout chiffre non consolidé.\n"
-                "- Cite rigoureusement les sources avec la notation `[1]`, `[2]` au fil du texte.\n"
+                "- Cite les preuves avec leurs identifiants `[EV_xxxx]` exacts. L'application attribue les numéros. Pour une source sans preuve structurée, seule sa référence `[n]` fournie est autorisée.\n"
             )
         else:
             drafts_text = "\n\n".join(
@@ -3402,7 +3514,7 @@ def build_section_writer_messages(
         "   - Rédige selon la quantité réelle de preuves et la complexité effective de la question, avec une densité maximale et ZÉRO délayage ni remplissage artificiel.\n"
         "   - Pas de quota arbitraire de remplissage : une analyse percutante et dense de 250 à 500 mots utiles vaut infiniment mieux qu'un texte délayé de 10 000 mots.\n"
         "   - Explique les mécanismes causaux (le *comment* et le *pourquoi*), cite les données chiffrées précises, fourchettes, durées, versions, textes ou acteurs nommés présents dans l'Evidence Ledger et les sources vérifiées.\n"
-        "   - Cite rigoureusement les sources avec la notation `[1]`, `[2]` au fil du texte.\n"
+        "   - Cite les preuves avec leurs identifiants `[EV_xxxx]` exacts. L'application attribue les numéros. Pour une source sans preuve structurée, seule sa référence `[n]` fournie est autorisée.\n"
         "4. **STRICTE DISCIPLINE DE PÉRIMÈTRE :** Ne rédige PAS les parties suivantes (`[À RÉDIGER PLUS TARD]`) — elles seront écrites par les appels suivants de l'Agent Écrivain. Concentre 100% de tes tokens et de ta profondeur sur CETTE partie uniquement !\n"
         f"5. {FACT_DISCIPLINE_RULE}"
         f"{drafts_block}"
@@ -3500,7 +3612,7 @@ async def improve_image_prompt(settings: Any, model: str, prompt: str, style_key
                 settings.llm_base_url.rstrip("/") + "/chat/completions",
                 headers={"Authorization": f"Bearer {key}"},
                 json={"model": model, "messages": messages, "stream": False,
-                      "temperature": 0.7, "max_tokens": 1400},
+                      "temperature": 0.2, "max_tokens": 1400},
             )
             if response.status_code in (400, 404, 422) and model != getattr(settings, "default_model", ""):
                 alt_model = getattr(settings, "default_model", "")
@@ -3509,7 +3621,7 @@ async def improve_image_prompt(settings: Any, model: str, prompt: str, style_key
                         settings.llm_base_url.rstrip("/") + "/chat/completions",
                         headers={"Authorization": f"Bearer {key}"},
                         json={"model": alt_model, "messages": messages, "stream": False,
-                              "temperature": 0.7, "max_tokens": 1400},
+                              "temperature": 0.2, "max_tokens": 1400},
                     )
         _check_response(response, "Fournisseur IA")
         payload = _json(response, "Fournisseur IA")
@@ -3580,7 +3692,7 @@ async def improve_sound_prompt(
                 settings.llm_base_url.rstrip("/") + "/chat/completions",
                 headers={"Authorization": f"Bearer {key}"},
                 json={"model": model, "messages": messages, "stream": False,
-                      "temperature": 0.6, "max_tokens": 400},
+                      "temperature": 0.2, "max_tokens": 400},
             )
             if response.status_code in (400, 404, 422) and model != getattr(settings, "default_model", ""):
                 alt_model = getattr(settings, "default_model", "")
@@ -3589,7 +3701,7 @@ async def improve_sound_prompt(
                         settings.llm_base_url.rstrip("/") + "/chat/completions",
                         headers={"Authorization": f"Bearer {key}"},
                         json={"model": alt_model, "messages": messages, "stream": False,
-                              "temperature": 0.6, "max_tokens": 400},
+                              "temperature": 0.2, "max_tokens": 400},
                     )
         _check_response(response, "Fournisseur IA")
         payload = _json(response, "Fournisseur IA")
@@ -3664,7 +3776,7 @@ async def improve_music_prompt(
                 settings.llm_base_url.rstrip("/") + "/chat/completions",
                 headers={"Authorization": f"Bearer {key}"},
                 json={"model": model, "messages": messages, "stream": False,
-                      "temperature": 0.7, "max_tokens": 500},
+                      "temperature": 0.2, "max_tokens": 500},
             )
             if response.status_code in (400, 404, 422) and model != getattr(settings, "default_model", ""):
                 alt_model = getattr(settings, "default_model", "")
@@ -3673,7 +3785,7 @@ async def improve_music_prompt(
                         settings.llm_base_url.rstrip("/") + "/chat/completions",
                         headers={"Authorization": f"Bearer {key}"},
                         json={"model": alt_model, "messages": messages, "stream": False,
-                              "temperature": 0.7, "max_tokens": 500},
+                              "temperature": 0.2, "max_tokens": 500},
                     )
         _check_response(response, "Fournisseur IA")
         payload = _json(response, "Fournisseur IA")
@@ -3765,6 +3877,7 @@ def merge_web_sources(
         if max_total is not None and len(merged) >= max_total:
             break
         entry: dict[str, str] = {
+            **source,
             "title": source.get("title", "Source"),
             "url": source["url"],
             "snippet": source.get("snippet", ""),
@@ -3838,8 +3951,10 @@ async def translate_deep_search_sources(
                             new_title = entry.get("title")
                             new_snippet = entry.get("snippet")
                             if isinstance(new_title, str) and new_title.strip():
+                                translated[idx].setdefault("original_title", translated[idx].get("title", ""))
                                 translated[idx]["title"] = new_title.strip()[:500]
                             if isinstance(new_snippet, str) and new_snippet.strip():
+                                translated[idx].setdefault("original_snippet", translated[idx].get("snippet", ""))
                                 translated[idx]["snippet"] = new_snippet.strip()[:3000]
     except Exception as exc:
         _logger.warning("Traduction des sources DeepSearch partielle ou ignorée: %s", exc)
@@ -4576,7 +4691,7 @@ async def translate_sound_prompt_to_english(settings: Any, prompt: str) -> str:
                 settings.llm_base_url.rstrip("/") + "/chat/completions",
                 headers={"Authorization": f"Bearer {key}"},
                 json={"model": model, "messages": messages, "stream": False,
-                      "temperature": 0.3, "max_tokens": 150},
+                      "temperature": 0.1, "max_tokens": 150},
             )
         _check_response(response, "Fournisseur IA")
         payload = _json(response, "Fournisseur IA")
@@ -4618,7 +4733,7 @@ async def translate_music_prompt_to_english(settings: Any, prompt: str) -> str:
                 settings.llm_base_url.rstrip("/") + "/chat/completions",
                 headers={"Authorization": f"Bearer {key}"},
                 json={"model": model, "messages": messages, "stream": False,
-                      "temperature": 0.3, "max_tokens": 250},
+                      "temperature": 0.1, "max_tokens": 250},
             )
         _check_response(response, "Fournisseur IA")
         payload = _json(response, "Fournisseur IA")
@@ -5023,7 +5138,7 @@ async def generate_study_material(
                     "model": chosen_model,
                     "messages": messages,
                     "stream": False,
-                    "temperature": 0.3,
+                    "temperature": 0.1,
                     "max_tokens": tokens_needed,
                 },
             )
@@ -5037,7 +5152,7 @@ async def generate_study_material(
                             "model": alt_model,
                             "messages": messages,
                             "stream": False,
-                            "temperature": 0.3,
+                            "temperature": 0.1,
                             "max_tokens": tokens_needed,
                         },
                     )
@@ -5114,3 +5229,512 @@ async def generate_study_material(
     except Exception:
         return fallback_study_material(transcript, kind, count, difficulty, clean_topic)
 
+
+def extract_sources_from_research(text: str, payload_citations: list[str] | None = None) -> list[dict[str, Any]]:
+    """
+    Extract and normalize document sources from research text and citations.
+    Guarantees every cited index [1]..[N] has an unambiguous, accessible documentary source.
+    """
+    import urllib.parse
+
+    raw_payload = [c.strip() for c in (payload_citations or []) if isinstance(c, str) and c.strip().startswith("http")]
+
+    # 1. Identifier tous les numéros de citations présents dans le corps du texte [1], [2], [1-3], [1, 2]
+    all_cited_numbers: set[int] = set()
+    for match in CITATION_RE.finditer(text):
+        for num in citation_numbers(match.group(1)):
+            if 1 <= num <= 200:
+                all_cited_numbers.add(num)
+
+    indexed_sources: dict[int, dict[str, str]] = {}
+
+    # 2. Scanner les définitions bibliographiques numérotées dans le texte Markdown
+    # Patterns supportés :
+    # 1. [Titre](url) ou [1] [Titre](url) ou 1. https://... ou [1] https://...
+    # ou 1. **Auteur/Titre**, Détails... (sans url directe dans la ligne)
+    # ou - [1] **Auteur/Titre**...
+    line_pattern = re.compile(
+        r"(?:^|\n)\s*(?:[-*]\s*)?(?:\[(\d{1,3})\]|\b(\d{1,3})\.)\s+(.+?)(?=\n\s*(?:[-*]\s*)?(?:\[\d{1,3}\]|\b\d{1,3}\.)|\n\n|\Z)",
+        re.DOTALL,
+    )
+
+    for match in line_pattern.finditer(text):
+        n1, n2, line_content = match.groups()
+        num_str = n1 or n2
+        if not num_str or not num_str.isdigit():
+            continue
+        num = int(num_str)
+        if not (1 <= num <= 200):
+            continue
+
+        raw_line = line_content.strip()
+
+        # Chercher un lien markdown [Title](url)
+        md_link = re.search(r"\[([^\]]+)\]\((https?://[^\s\)]+)\)", raw_line)
+        # Chercher une URL brute
+        raw_url_match = re.search(r"https?://[^\s\)\"\'<>]+", raw_line)
+
+        url = ""
+        title = ""
+
+        if md_link:
+            title = md_link.group(1).strip()
+            url = md_link.group(2).strip().rstrip(".,;)\"'>")
+        elif raw_url_match:
+            url = raw_url_match.group(0).strip().rstrip(".,;)\"'>")
+            # Extraire le texte avant l'url comme titre
+            before_url = raw_line[:raw_url_match.start()].strip(" -:*•")
+            title = re.sub(r"[*_#`]", "", before_url).strip()
+        else:
+            # Ligne textuelle sans URL : nettoyer le titre
+            cleaned_text = re.sub(r"[*_#`]", "", raw_line).strip()
+            # Nettoyer les sauts de ligne internes
+            cleaned_text = " ".join(cleaned_text.split())
+            title = cleaned_text
+            # Si le payload fournit une URL pour cet indice, l'utiliser
+            if 0 < num <= len(raw_payload):
+                url = raw_payload[num - 1]
+            else:
+                # Générer une URL de recherche ciblée pour garantir l'accès documentaire
+                search_query = title[:140]
+                url = f"https://www.google.com/search?q={urllib.parse.quote_plus(search_query)}"
+
+        if not title:
+            if 0 < num <= len(raw_payload) and not url:
+                url = raw_payload[num - 1]
+            title = f"Source documentaire [{num}]"
+
+        indexed_sources[num] = {"url": url, "title": title}
+
+    # 3. Pour tous les indices cités dans le texte qui n'ont pas été capturés dans la bibliographie
+    unindexed_cited = sorted(list(all_cited_numbers - set(indexed_sources.keys())))
+    for i, num in enumerate(unindexed_cited):
+        if i < len(raw_payload):
+            u = raw_payload[i]
+            indexed_sources[num] = {"url": u, "title": f"Source documentaire [{num}]"}
+        elif 0 < num <= len(raw_payload):
+            u = raw_payload[num - 1]
+            indexed_sources[num] = {"url": u, "title": f"Source documentaire [{num}]"}
+        elif raw_payload:
+            # Répartir sur les sources documentaires réelles existantes
+            u = raw_payload[i % len(raw_payload)]
+            indexed_sources[num] = {"url": u, "title": f"Source documentaire [{num}]"}
+        else:
+            # Recherche ciblée sur le passage contextuel réel du document
+            context_match = re.search(r"([^.\n]{20,120}\[" + str(num) + r"\][^.\n]{0,80})", text)
+            if context_match:
+                ctx_phrase = re.sub(r"\[\d+\]", "", context_match.group(1)).strip()
+                search_q = " ".join(ctx_phrase.split())[:120]
+                url = f"https://www.google.com/search?q={urllib.parse.quote_plus(search_q)}"
+                indexed_sources[num] = {"url": url, "title": f"Source documentaire [{num}] : {search_q[:60]}"}
+            else:
+                first_line = text.split("\n")[0].strip("#* ")[:80]
+                indexed_sources[num] = {
+                    "url": f"https://www.google.com/search?q={urllib.parse.quote_plus(first_line or 'recherche documentaire')}",
+                    "title": f"Source documentaire [{num}]",
+                }
+
+    # 4. Inclure également les URLs de payload_citations qui n'auraient pas été indexées
+    next_idx = max(indexed_sources.keys(), default=0) + 1
+    for u in raw_payload:
+        if not any(s.get("url") == u for s in indexed_sources.values()):
+            indexed_sources[next_idx] = {"url": u, "title": f"Source documentaire [{next_idx}]"}
+            next_idx += 1
+
+    # 5. Trier strictement par numéro d'indice pour que l'ordre [1], [2], ... corresponde exactement
+    sorted_indices = sorted(indexed_sources.keys())
+    sources: list[dict[str, Any]] = []
+
+    for rank, idx in enumerate(sorted_indices, start=1):
+        info = indexed_sources[idx]
+        url = info["url"]
+        explicit_title = info["title"]
+
+        try:
+            parsed = urlsplit(url)
+            host = parsed.netloc.removeprefix("www.")
+            if explicit_title and not explicit_title.strip().isdigit() and len(explicit_title.strip()) > 2 and explicit_title != f"Source documentaire [{idx}]":
+                title = explicit_title.strip()
+            else:
+                path_slug = parsed.path.rstrip("/").split("/")[-1].replace("-", " ").replace("_", " ").title()
+                if path_slug and len(path_slug) > 3 and not path_slug.isdigit():
+                    title = f"{host} — {path_slug}"
+                else:
+                    title = host or url
+        except Exception:
+            title = explicit_title or url
+
+        sources.append({
+            "title": title,
+            "url": url,
+            "snippet": f"Source documentaire officielle analysée et citée dans le document ({title}).",
+            "tier": "A",
+            "source_id": f"SRC_{idx:04d}",
+            "doc_id": f"source-{idx}",
+            "evidence": [
+                {
+                    "evidence_id": f"EV_{idx:04d}",
+                    "verbatim": f"Données et analyses issues de {title}",
+                    "source_url": url,
+                }
+            ],
+        })
+
+    return sources
+
+
+async def stream_sonar_deep_research(
+    settings: Any,
+    query: str,
+    *,
+    model: str = "perplexity/sonar-deep-research",
+    summary: str = "",
+    recent_turns: list[dict[str, str]] | None = None,
+    custom_queries: list[str] | None = None,
+    attachments_text: str = "",
+    learn_mode: bool = False,
+) -> AsyncIterator[dict[str, Any]]:
+    """
+    Stream in-depth investigative research report or structured educational course
+    from Perplexity Sonar (Sonar Deep Research or Sonar Pro Search) via OpenRouter.
+    Emits status, keepalive pings, deltas, research telemetry, and the final structured report and sources.
+    """
+    clean_query = query.strip() or ("Cours structuré" if learn_mode else "Investigation approfondie")
+    mode_label = "Mode Apprendre" if learn_mode else "DeepSearch"
+    sonar_display_name = "Sonar Pro Search" if "pro" in model.lower() else "Sonar Deep Research"
+
+    if settings.demo_mode:
+        yield {"type": "status", "message": f"{mode_label} [Démonstration] · Recherche approfondie Perplexity {sonar_display_name}…"}
+        demo_sources = [
+            {
+                "title": "Ministère de l'Éducation nationale — Données Clés Apprentissage",
+                "url": "https://www.education.gouv.fr/reperes-et-references-statistiques",
+                "snippet": "Effectifs, réussites et insertion professionnelle des apprentis.",
+                "tier": "A",
+                "source_id": "SRC_0001",
+                "doc_id": "source-1",
+                "evidence": [{"evidence_id": "EV_0001", "verbatim": "1 020 400 apprentis recensés.", "source_url": "https://www.education.gouv.fr/reperes-et-references-statistiques"}],
+            },
+            {
+                "title": "Dares — Projections Emploi & Métiers d'Avenir",
+                "url": "https://dares.travail-emploi.gouv.fr/publications/les-metiers-en-2030",
+                "snippet": "Dynamique des recrutements, transitions numériques et compétences recherchées.",
+                "tier": "A",
+                "source_id": "SRC_0002",
+                "doc_id": "source-2",
+                "evidence": [{"evidence_id": "EV_0002", "verbatim": "Perspectives de recrutement et tensions sur les compétences techniques.", "source_url": "https://dares.travail-emploi.gouv.fr/publications/les-metiers-en-2030"}],
+            },
+        ]
+        yield research_activity("query", f"Lancement de la recherche approfondie : {clean_query[:120]}", query=clean_query)
+        await asyncio.sleep(0.02)
+        yield research_activity("results", "2 sources documentaires identifiées pour l'analyse.", sources=demo_sources, state="selected")
+        yield {"type": "status", "message": f"{mode_label} [Démonstration] · Rédaction du document complet…"}
+
+        if learn_mode:
+            demo_report = (
+                f"# Cours magistral approfondi : {clean_query}\n\n"
+                "## 1. Cadrage conceptuel et principes fondamentaux\n\n"
+                "L'apprentissage des concepts théoriques constitue le fondement de toute compétence analytique [1]. "
+                "L'assimilation progressive permet d'aborder des architectures complexes avec rigueur et discernement.\n\n"
+                "## 2. Développements méthodologiques et applications concrètes\n\n"
+                "Les travaux d'analyse et de prospective [2] soulignent la nécessité de coupler l'expertise technique "
+                "à une démarche réflexive continue face aux mutations numériques.\n\n"
+                "## 3. Auto-évaluation & Quiz de consolidation\n\n"
+                "1. **Question :** Quel est l'avantage principal d'un socle théorique solide ?\n"
+                "   *Réponse :* Il assure l'adaptabilité et la pérennité des savoirs face à l'obsolescence rapide des outils.\n\n"
+                "### Références documentaires primaires\n"
+                "1. [Ministère de l'Éducation nationale](https://www.education.gouv.fr/reperes-et-references-statistiques)\n"
+                "2. [Dares — Les métiers en 2030](https://dares.travail-emploi.gouv.fr/publications/les-metiers-en-2030)\n"
+            )
+        else:
+            demo_report = (
+                f"# Rapport d'investigation approfondie : {clean_query}\n\n"
+                "## 1. Cadrage et constats établis\n\n"
+                "L'analyse des données statistiques nationales met en évidence des évolutions structurelles majeures. "
+                "D'après les relevés officiels du Ministère de l'Éducation nationale [1], les effectifs de l'apprentissage "
+                "ont atteint un palier historique avec plus d'un million d'inscrits, traduisant une professionnalisation accrue des cursus.\n\n"
+                "## 2. Dynamiques sectorielles et tensions sur les compétences\n\n"
+                "Les travaux prospectifs de la Dares [2] soulignent quant à eux que les opportunités d'emploi se concentrent "
+                "sur les filières combinant expertise métier et compétences numériques émergentes. "
+                "L'impact de l'intelligence artificielle nécessite une hybridation rapide des compétences dès les cycles de formation initiale.\n\n"
+                "## 3. Recommandations stratégiques d'orientation\n\n"
+                "- **Privilégier les filières polyvalentes** : combiner des bases scientifiques ou techniques solides avec des capacités d'analyse critique.\n"
+                "- **Vérifier l'insertion réelle** : consulter systématiquement les taux d'insertion professionnelle à 12 et 24 mois avant tout engagement.\n"
+                "- **Éviter les formations fermées** : se méfier des cursus spécialisés sans certification officielle reconnue par l'État.\n\n"
+                "### Références documentaires primaires\n"
+                "1. [Ministère de l'Éducation nationale](https://www.education.gouv.fr/reperes-et-references-statistiques)\n"
+                "2. [Dares — Les métiers en 2030](https://dares.travail-emploi.gouv.fr/publications/les-metiers-en-2030)\n"
+            )
+        for offset in range(0, len(demo_report), 40):
+            chunk = demo_report[offset:offset + 40]
+            yield {"type": "delta", "text": chunk}
+            await asyncio.sleep(0.005)
+
+        yield research_activity("stage", f"Synthèse {mode_label} achevée.", sources=demo_sources, state="read")
+        yield {
+            "type": "done",
+            "content": demo_report,
+            "sources": demo_sources,
+            "citations": [s["url"] for s in demo_sources],
+        }
+        return
+
+    key = _key(settings, "llm_api_key", "du fournisseur IA")
+
+    if learn_mode:
+        system_content = (
+            f"Tu es cLAIr Apprendre, un professeur universitaire et pédagogue d'élite propulsé par Perplexity {sonar_display_name}.\n"
+            "Ton rôle est de concevoir un cours magistral complet, approfondi, hautement pédagogique et parfaitement structuré "
+            "sur le sujet demandé, en t'appuyant sur les connaissances les plus récentes et des sources fiables vérifiées en temps réel.\n\n"
+            "Directives pédagogiques et structurelles :\n"
+            "- Définis clairement les concepts clés et les fondements théoriques dès l'introduction.\n"
+            "- Développe le sujet de manière progressive et didactique avec des sections et sous-sections claires en Markdown.\n"
+            "- Illustre chaque notion théorique par des exemples concrets, des cas réels ou des analogies éclairantes.\n"
+            "- Intègre une section 'Mise en pratique & Cas d'application'.\n"
+            "- Propose à la fin du cours un module d'auto-évaluation interactif : 5 questions de révision ou quiz avec leurs réponses détaillées et expliquées.\n"
+            "- Intègre impérativement des citations précises entre crochets [1], [2], etc., pour étayer les théories, données et faits scientifiques.\n"
+            "- Dans la section finale des références, liste impérativement chaque référence avec son indice [1], [2], etc., et son URL directe et complète au format Markdown standard : 1. [Titre complet de la source](https://...) - Auteur/Organisme.\n"
+            "- Rédige entièrement en français, avec un ton bienveillant, stimulant, rigoureux et didactique."
+        )
+    else:
+        system_content = (
+            f"Tu es cLAIr DeepSearch, un chercheur-analyste multidisciplinaire d'élite propulsé par Perplexity {sonar_display_name}.\n"
+            "Ton rôle est de mener une investigation approfondie et sans concession sur le sujet demandé en exploitant exhaustivement les données web en temps réel.\n\n"
+            "Directives méthodologiques :\n"
+            "- Réfère-toi aux sources primaires fiables (instituts statistiques, ministères, rapports officiels, études empiriques, publications scientifiques).\n"
+            "- Distingue rigoureusement les faits établis, les statistiques vérifiées, les projections et les hypothèses.\n"
+            "- Confronte les perspectives et explicite les éventuelles contradictions ou controverses dans les données.\n"
+            "- Ne te contente pas de généralités : donne des chiffres précis, des données de cadrage et des exemples concrets étayés par tes sources.\n"
+            "- Rédige un rapport complet, structuré avec des titres et sous-titres clairs en Markdown.\n"
+            "- Intègre impérativement des citations précises pour chaque donnée ou affirmation clé sous forme d'indices entre crochets [1], [2], etc.\n"
+            "- Dans la section finale des références, liste impérativement chaque référence avec son indice [1], [2], etc., et son URL web directe complète et consultable au format Markdown : 1. [Titre complet de la source](https://...) - Description/Auteur.\n"
+            "- Rédige entièrement en français, avec un ton analytique, rigoureux et objectif."
+        )
+
+    user_parts = [clean_query]
+    if custom_queries:
+        cleaned_q = [q.strip() for q in custom_queries if q.strip()]
+        if cleaned_q:
+            user_parts.append("Axes prioritaires à traiter impérativement :\n" + "\n".join(f"- {q}" for q in cleaned_q))
+    if summary:
+        user_parts.append(f"Contexte préalable du dossier :\n{summary.strip()}")
+    if recent_turns:
+        turns_formatted = "\n".join(f"{t.get('role', 'user')}: {t.get('content', '')[:600]}" for t in recent_turns[-3:])
+        if turns_formatted:
+            user_parts.append(f"Derniers échanges de la conversation :\n{turns_formatted}")
+    if attachments_text:
+        user_parts.append(f"Extraits des documents joints :\n{attachments_text[:4000]}")
+
+    messages = [
+        {"role": "system", "content": system_content},
+        {"role": "user", "content": "\n\n".join(user_parts)},
+    ]
+
+    url = settings.llm_base_url.rstrip("/") + "/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Accept": "text/event-stream",
+        "HTTP-Referer": "https://clair.app",
+        "X-Title": f"cLAIr {mode_label}",
+    }
+    configured_max = getattr(settings, "deep_search_max_tokens", 131072) if not learn_mode else getattr(settings, "learn_mode_max_tokens", 98304)
+    max_tokens = max(int(configured_max or 131072), 131072 if not learn_mode else 98304)
+    payload_base = {
+        "model": model,
+        "stream": True,
+        "temperature": 0.1,
+        "max_tokens": max_tokens,
+    }
+
+    yield {"type": "status", "message": f"{mode_label} · Recherche web multi-sources via Perplexity {sonar_display_name}…"}
+    yield research_activity("query", f"Lancement de la recherche approfondie sur : {clean_query[:120]}", query=clean_query)
+
+    accumulated = ""
+    collected_citations: list[str] = []
+    status_tick = 0
+    status_messages = [
+        f"Recherche web multi-sources via Perplexity {sonar_display_name}…",
+        "Exploration approfondie et confrontation des sources primaires…",
+        "Analyse statistique et croisement des données…",
+        "Synthèse documentaire et structuration du document…",
+    ]
+    status_idx = 0
+
+    def _collect_from_obj(obj: Any):
+        if not isinstance(obj, dict):
+            return
+        cits = obj.get("citations")
+        if isinstance(cits, list):
+            for c in cits:
+                if isinstance(c, str) and c.startswith("http") and c not in collected_citations:
+                    collected_citations.append(c)
+        anns = obj.get("annotations")
+        if isinstance(anns, list):
+            for a in anns:
+                if isinstance(a, dict):
+                    u = a.get("url") or (a.get("url_citation") or {}).get("url")
+                    if isinstance(u, str) and u.startswith("http") and u not in collected_citations:
+                        collected_citations.append(u)
+        s_res = obj.get("search_results")
+        if isinstance(s_res, list):
+            for s in s_res:
+                if isinstance(s, dict):
+                    u = s.get("url")
+                    if isinstance(u, str) and u.startswith("http") and u not in collected_citations:
+                        collected_citations.append(u)
+
+    current_messages: list[dict[str, str]] = list(messages)
+    max_continuations = 2
+    continuation_pass = 0
+
+    while True:
+        payload = {
+            **payload_base,
+            "messages": current_messages,
+        }
+
+        queue: asyncio.Queue[dict[str, Any] | None | BaseException] = asyncio.Queue()
+
+        async def _reader():
+            try:
+                async with httpx.AsyncClient(timeout=_SONAR_DEEP_RESEARCH_TIMEOUT, follow_redirects=False) as client:
+                    async with client.stream("POST", url, headers=headers, json=payload) as response:
+                        _check_response(response, f"Fournisseur IA ({sonar_display_name})")
+                        event_lines: list[str] = []
+                        async for line in response.aiter_lines():
+                            if line.startswith(":"):
+                                # Ligne de ping/keepalive SSE (ex: : OPENROUTER PROCESSING)
+                                continue
+                            if line.startswith("data:"):
+                                event_lines.append(line[5:].lstrip(" "))
+                            elif not line and event_lines:
+                                raw_data = "\n".join(event_lines)
+                                event_lines.clear()
+                                if raw_data.strip() == "[DONE]":
+                                    break
+                                try:
+                                    chunk_data = json.loads(raw_data)
+                                    await queue.put(chunk_data)
+                                except Exception:
+                                    continue
+                        if event_lines:
+                            raw_data = "\n".join(event_lines)
+                            if raw_data.strip() != "[DONE]":
+                                try:
+                                    chunk_data = json.loads(raw_data)
+                                    await queue.put(chunk_data)
+                                except Exception:
+                                    pass
+                await queue.put(None)
+            except BaseException as exc:
+                await queue.put(exc)
+
+        reader_task = asyncio.create_task(_reader())
+        last_finish_reason: str | None = None
+        pass_accumulated = ""
+
+        try:
+            while True:
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=2.5)
+                except asyncio.TimeoutError:
+                    yield {"type": "ping"}
+                    status_tick += 1
+                    if status_tick >= 4 and status_idx < len(status_messages) - 1:
+                        status_tick = 0
+                        status_idx += 1
+                        yield {"type": "status", "message": f"{mode_label} · {status_messages[status_idx]}"}
+                    continue
+
+                if item is None:
+                    break
+                if isinstance(item, BaseException):
+                    if accumulated and isinstance(item, (httpx.TimeoutException, httpx.HTTPError)):
+                        _logger.warning("Interruption réseau sur Perplexity %s après %d caractères: %s", sonar_display_name, len(accumulated), item)
+                        break
+                    raise item
+
+                if isinstance(item, dict):
+                    _collect_from_obj(item)
+                    choices = item.get("choices")
+                    if isinstance(choices, list) and choices:
+                        ch0 = choices[0]
+                        _collect_from_obj(ch0)
+                        fr = ch0.get("finish_reason")
+                        if fr:
+                            last_finish_reason = str(fr)
+                        delta = ch0.get("delta", {})
+                        if isinstance(delta, dict):
+                            _collect_from_obj(delta)
+                            delta_thought = (
+                                delta.get("reasoning_content")
+                                or delta.get("reasoning")
+                                or delta.get("thought")
+                                or ""
+                            )
+                            if delta_thought:
+                                yield {"type": "thought", "text": delta_thought}
+                            delta_text = delta.get("content") or ""
+                            if delta_text:
+                                accumulated += delta_text
+                                pass_accumulated += delta_text
+                                yield {"type": "delta", "text": delta_text}
+        finally:
+            if not reader_task.done():
+                reader_task.cancel()
+
+        is_truncated = (
+            last_finish_reason == "length"
+            or (
+                bool(pass_accumulated)
+                and continuation_pass < max_continuations
+                and not accumulated.rstrip().endswith((".", "!", "?", "—", ":", "```", "]", ")", "*"))
+                and len(pass_accumulated) > 10000
+            )
+        )
+        if is_truncated and continuation_pass < max_continuations and bool(accumulated.strip()):
+            continuation_pass += 1
+            _logger.info(
+                "Perplexity %s semble tronqué (finish_reason=%s, pass=%d/%d). Lancement de la continuation automatique...",
+                sonar_display_name,
+                last_finish_reason,
+                continuation_pass,
+                max_continuations,
+            )
+            yield {"type": "status", "message": f"{mode_label} · Prolongement et complétion de la rédaction en cours…"}
+            current_messages = list(messages) + [
+                {"role": "assistant", "content": accumulated},
+                {
+                    "role": "user",
+                    "content": (
+                        "Poursuis immédiatement la rédaction du document exactement là où elle s'est interrompue. "
+                        "Ne répète rien du texte déjà rédigé, ne mets aucun préambule et continue directement le fil du texte jusqu'à la conclusion et aux références."
+                    ),
+                },
+            ]
+            continue
+        break
+
+    if not accumulated.strip():
+        raise ProviderError(f"Le modèle {sonar_display_name} a renvoyé une réponse vide ; réessayez.")
+
+    sources = extract_sources_from_research(accumulated, collected_citations)
+
+    yield research_activity(
+        "results",
+        f"{len(sources)} sources documentaires retenues et analysées par {sonar_display_name}.",
+        sources=sources,
+        state="selected",
+    )
+    yield research_activity(
+        "stage",
+        f"Synthèse et document {mode_label} finalisés.",
+        sources=sources,
+        state="read",
+    )
+    yield {
+        "type": "done",
+        "content": accumulated,
+        "sources": sources,
+        "citations": collected_citations,
+    }

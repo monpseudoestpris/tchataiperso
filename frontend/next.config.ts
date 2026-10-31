@@ -25,7 +25,7 @@ const config: NextConfig = {
   allowedDevOrigins,
   poweredByHeader: false,
   experimental: {
-    proxyClientMaxBodySize: "22mb",
+    proxyClientMaxBodySize: "45mb",
     proxyTimeout: 660_000,
   },
   async rewrites() {

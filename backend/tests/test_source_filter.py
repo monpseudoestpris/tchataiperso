@@ -43,6 +43,17 @@ def test_curate_falls_back_to_deterministic_when_judge_fails(monkeypatch):
     assert stats["kept"] == 1
 
 
+def test_partial_judge_response_does_not_drop_unjudged_primary_documents(monkeypatch):
+    async def partial(*args, **kwargs):
+        return {0: 0}
+
+    monkeypatch.setattr(providers, "judge_source_relevance", partial)
+    documents = [dict(GOOD, url="https://example.org/rejected"), GOOD]
+    kept, stats = asyncio.run(curate_sources(None, "insertion professionnelle", documents))
+    assert [s["url"] for s in kept] == [GOOD["url"]]
+    assert stats["kept"] == 1
+
+
 def test_findings_of_removed_sources_are_dropped():
     findings = ["[T | URL: https://www.cereq.fr/insertion | Date: N/A | Contexte: x] ok", "[T | URL: https://scribd.com/z | Date: N/A | Contexte: x] bad"]
     assert filter_findings_by_sources(findings, [GOOD]) == [findings[0]]

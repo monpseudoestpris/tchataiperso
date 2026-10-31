@@ -2,6 +2,7 @@ import asyncio
 from collections.abc import AsyncIterator
 import logging
 import re
+from typing import Any
 import unicodedata
 from uuid import uuid4
 
@@ -15,12 +16,17 @@ from ..base_prompt import BASE_USER_PROMPT
 from ..config import Settings
 from ..context import build_context
 from ..deep_search import execute_deep_search
-from ..evidence_ledger import extract_deterministic_evidence_from_sources
-from ..fact_verifier import format_verification_markdown, remedy_unverified_claims, run_repair_loop, verify_report_figures
+from ..source_registry import SourceRegistry
+from ..report_publication import finalize_report
+from ..fact_verifier import verify_report_figures
 from ..chat_export_html import generate_chat_export_html
 from ..deep_search_html import generate_report_html
 from ..learn_mode import execute_learn_mode
 from ..learn_html import generate_learn_course_html
+from ..presentation_html import (
+    generate_chat_presentation_html,
+    generate_report_presentation_html,
+)
 from ..multi_agent import execute_multi_agent_contradictory_debate, execute_multi_agent_debate, execute_multi_agent_synthesis
 from ..deps import check_model, claim, current_user, get_conversation, get_sessions, get_settings, get_upload_dir
 from ..documents import extraction_text
@@ -32,12 +38,18 @@ from ..serializers import conversation_json, deep_search_report_json, extract_me
 from ..web import fetch_and_parse_web_url
 
 
+from ..google_deep_research import plan_google_deep_research, stream_google_deep_research
+
 _DEFAULT_STREAM_CHAT = providers.stream_chat
 _DEFAULT_PLAN_REPORT_OUTLINE = providers.plan_report_outline
 _DEFAULT_CLASSIFY_CONVERSATION = providers.classify_conversation
 _DEFAULT_REWRITE_SEARCH_QUERY = providers.rewrite_search_query
 _DEFAULT_SEARCH_WEB = providers.search_web
 _DEFAULT_SEARCH_WEB_IMAGES = providers.search_web_images
+_DEFAULT_EXECUTE_DEEP_SEARCH = execute_deep_search
+_DEFAULT_EXECUTE_LEARN_MODE = execute_learn_mode
+_DEFAULT_STREAM_SONAR_DEEP_RESEARCH = providers.stream_sonar_deep_research
+_DEFAULT_STREAM_GOOGLE_DEEP_RESEARCH = stream_google_deep_research
 _logger = logging.getLogger("uvicorn.error")
 
 router = APIRouter(tags=["messages"])
@@ -57,7 +69,13 @@ async def send_message(
         raise HTTPException(503, "Configurez LLM_API_KEY ou activez explicitement DEMO_MODE pour une simulation")
     if not body.content.strip() and not body.attachment_ids:
         raise HTTPException(422, "Écrivez un message ou joignez un document")
-    if (body.web_search or body.deep_search or body.learn_mode) and not settings.web_search_enabled:
+    is_direct_research = (
+        (body.deep_search or body.learn_mode)
+        and getattr(settings, "deep_search_engine", "sonar") == "sonar"
+        and execute_deep_search is _DEFAULT_EXECUTE_DEEP_SEARCH
+        and execute_learn_mode is _DEFAULT_EXECUTE_LEARN_MODE
+    )
+    if (body.web_search or ((body.deep_search or body.learn_mode) and not is_direct_research)) and not settings.web_search_enabled:
         raise HTTPException(503, "La recherche web nécessite SearXNG, BRAVE_API_KEY ou DUCKDUCKGO_ENABLED en mode IA réel")
     lock = claim(request, user.id, conversation_id)
     await lock.acquire()
@@ -99,7 +117,17 @@ async def send_message(
                 or "openai/gpt-6-astra"
             )
 
-            if body.deep_search or body.learn_mode:
+            if body.deep_search:
+                if getattr(settings, "deep_search_engine", "sonar") == "sonar":
+                    model = (
+                        (st_cfg.synthesis_model if st_cfg and st_cfg.synthesis_model else None)
+                        or (body.model if body.model and "sonar" in body.model.lower() else None)
+                        or getattr(settings, "deep_search_model", None)
+                        or "perplexity/sonar-deep-research"
+                    )
+                else:
+                    model = stage_synthesis_model
+            elif body.learn_mode:
                 model = stage_synthesis_model
             try:
                 model_info = check_model(settings, model)
@@ -255,11 +283,23 @@ async def send_message(
         target_model: str,
         ping_interval: float = 2.0,
         enable_cache: bool = True,
-    ) -> AsyncIterator[tuple[str, bool]]:
-        try:
-            gen = providers.stream_chat(settings, chat_context, target_model, enable_cache=enable_cache)
-        except TypeError:
-            gen = providers.stream_chat(settings, chat_context, target_model)
+    ) -> AsyncIterator[tuple[dict[str, Any] | str | None, bool]]:
+        """
+        Générateur unifié pour le streaming de chat avec maintien de session SSE (keepalive).
+        Prend en charge providers.stream_chat_events (avec distinction delta / thought)
+        tout en restant 100% rétrocompatible avec les mocks/monkeypatches de stream_chat.
+        """
+        if providers.stream_chat is not _DEFAULT_STREAM_CHAT:
+            try:
+                gen = providers.stream_chat(settings, chat_context, target_model, enable_cache=enable_cache)
+            except TypeError:
+                gen = providers.stream_chat(settings, chat_context, target_model)
+        else:
+            try:
+                gen = providers.stream_chat_events(settings, chat_context, target_model, enable_cache=enable_cache)
+            except TypeError:
+                gen = providers.stream_chat_events(settings, chat_context, target_model)
+
         aiterator = gen.__aiter__()
         pending: asyncio.Task | None = None
         while True:
@@ -268,9 +308,9 @@ async def send_message(
             done, _ = await asyncio.wait([pending], timeout=ping_interval)
             if done:
                 try:
-                    chunk = pending.result()
+                    event_or_str = pending.result()
                     pending = None
-                    yield (chunk, False)
+                    yield (event_or_str, False)
                 except StopAsyncIteration:
                     pending = None
                     break
@@ -292,6 +332,7 @@ async def send_message(
 
     async def stream():
         accumulated = ""
+        accumulated_thought = ""
         sources = []
         try:
             yield ": keepalive\n\n"
@@ -374,7 +415,81 @@ async def send_message(
             ]
             effective_detail_level = body.detail_level if body.detail_level is not None else 8
             detail_spec = providers.get_detail_level_spec(effective_detail_level, learn_mode=body.learn_mode)
-            if body.deep_search:
+            use_direct_research = (
+                (body.deep_search or body.learn_mode)
+                and getattr(settings, "deep_search_engine", "sonar") == "sonar"
+                and execute_deep_search is _DEFAULT_EXECUTE_DEEP_SEARCH
+                and execute_learn_mode is _DEFAULT_EXECUTE_LEARN_MODE
+            )
+            deep_model = None
+            if use_direct_research:
+                raw_query = body.content.strip()[:1500]
+                with sessions() as db:
+                    conversation = get_conversation(db, conversation_id, user.id)
+                    search_summary = conversation.summary
+                    search_context = [
+                        {"role": item.role, "content": item.content}
+                        for item in conversation.messages[:-1][-4:]
+                    ]
+                att_texts = "\n".join(
+                    f"[{att.filename}]: {att.extracted_text[:2000]}"
+                    for att in attachments
+                    if att.extracted_text
+                )
+                candidate_model = (
+                    body.model
+                    if (body.model and any(k in body.model.lower() for k in ("sonar", "deep-research", "perplexity", "google/deep")))
+                    else None
+                )
+                if not candidate_model and st_cfg and st_cfg.synthesis_model and any(k in st_cfg.synthesis_model.lower() for k in ("sonar", "deep-research")):
+                    candidate_model = st_cfg.synthesis_model
+                deep_model = (
+                    candidate_model
+                    or getattr(settings, "deep_search_model", None)
+                    or "perplexity/sonar-deep-research"
+                )
+                queries_to_pass = body.deep_search_queries if body.deep_search else body.learn_mode_queries
+                extra_kwargs = {}
+                if "google" in deep_model.lower() and "deep-research" in deep_model.lower():
+                    stream_fn = stream_google_deep_research
+                    extra_kwargs["interaction_id"] = body.interaction_id
+                    extra_kwargs["plan_feedback"] = body.plan_feedback
+                else:
+                    stream_fn = providers.stream_sonar_deep_research
+
+                async for event in stream_fn(
+                    settings=settings,
+                    query=raw_query,
+                    model=deep_model,
+                    summary=search_summary,
+                    recent_turns=search_context,
+                    custom_queries=queries_to_pass,
+                    attachments_text=att_texts,
+                    learn_mode=body.learn_mode,
+                    **extra_kwargs,
+                ):
+                    if event["type"] == "status":
+                        yield sse("status", {"message": event["message"]})
+                    elif event["type"] == "thought":
+                        accumulated_thought += event["text"]
+                        yield sse("thought", {"text": event["text"]})
+                    elif event["type"] == "research_activity":
+                        yield sse("research_activity", event["activity"])
+                    elif event["type"] == "ping":
+                        yield ": keepalive\n\n"
+                    elif event["type"] == "delta":
+                        accumulated += event["text"]
+                        yield sse("delta", {"text": event["text"]})
+                    elif event["type"] == "done":
+                        sources = event.get("sources", [])
+                        if not accumulated and event.get("content"):
+                            accumulated = event["content"]
+                            yield sse("delta", {"text": accumulated})
+                if should_fetch_images and raw_query:
+                    web_imgs = await providers.search_web_images(settings, raw_query[:400], limit=6)
+                    if web_imgs:
+                        sources = list(sources) + web_imgs
+            elif body.deep_search:
                 raw_query = body.content.strip()[:1500]
                 with sessions() as db:
                     conversation = get_conversation(db, conversation_id, user.id)
@@ -397,6 +512,8 @@ async def send_message(
                 ):
                     if event["type"] == "status":
                         yield sse("status", {"message": event["message"]})
+                    elif event["type"] == "research_activity":
+                        yield sse("research_activity", event["activity"])
                     elif event["type"] == "ping":
                         yield ": keepalive\n\n"
                     elif event["type"] == "done":
@@ -622,7 +739,10 @@ async def send_message(
                     for item in conversation.messages[conversation.summary_through:]
                 ]
                 summary = conversation.summary
-            if body.multi_agent and body.multi_agent_config and body.multi_agent_config.agents:
+            if use_direct_research:
+                # La recherche directe (Sonar ou Google Deep Research) a directement investigué, rédigé et diffusé le document complet.
+                pass
+            elif body.multi_agent and body.multi_agent_config and body.multi_agent_config.agents:
                 agents_list = [a.model_dump() for a in body.multi_agent_config.agents]
                 mode_choice = body.multi_agent_config.mode
                 raw_query = body.content.strip() or "Question soumise au conseil d'experts"
@@ -721,6 +841,15 @@ async def send_message(
                     yield sse("delta", {"text": chunk})
                     await asyncio.sleep(0.005)
             else:
+                registry = SourceRegistry(sources)
+                if body.deep_search or body.learn_mode:
+                    if not registry.documents:
+                        raise providers.ProviderError(
+                            "Aucune source documentaire exploitable après filtrage. "
+                            "Le rapport ne peut pas être rédigé ; précisez la recherche et relancez."
+                        )
+                    sources = registry.export_sources()
+                    _logger.info("Research provenance stage=writing sources=%d evidence=%d", len(registry.documents), registry.ledger.count())
                 context = build_context(
                     settings,
                     summary,
@@ -751,7 +880,7 @@ async def send_message(
                         {
                             "message": (
                                 f"{mode_prefix} · Étape 1/2 — Agent Planificateur [{plan_display_name}] (Niveau {detail_spec['level']}/10 : {detail_spec['label']}) : "
-                                f"sélection des 3 experts et plan détaillé ({len(sources)} source{'s' if len(sources) != 1 else ''})…"
+                                f"sélection de l’expert référent et plan détaillé ({len(sources)} source{'s' if len(sources) != 1 else ''})…"
                             )
                         },
                     )
@@ -800,17 +929,12 @@ async def send_message(
                         detail_level=effective_detail_level,
                     )
                     accumulated += outline_md
-                    yield sse("delta", {"text": outline_md})
 
                     parts = outline.get("parts") or []
                     total_parts = len(parts)
                     written_headings: list[str] = []
 
-                    # Evidence Ledger (V2 Evidence-First) extrait des sources collectées
-                    evidence_ledger_text = ""
-                    if sources:
-                        ledger = extract_deterministic_evidence_from_sources(sources)
-                        evidence_ledger_text = ledger.format_for_analysts(max_items=50)
+                    evidence_ledger_text = registry.ledger.format_for_analysts(max_items=80)
 
                     for part_idx, part_item in enumerate(parts):
                         part_heading = str(part_item.get("heading") or f"## Partie {part_idx + 1}")
@@ -819,7 +943,7 @@ async def send_message(
                             "status",
                             {
                                 "message": (
-                                    f"{mode_prefix} · Étape 2/2 — Agent Écrivain (3 experts · Niveau {detail_spec['level']}/10) : "
+                                    f"{mode_prefix} · Étape 2/2 — Agent Écrivain (expert référent · Niveau {detail_spec['level']}/10) : "
                                     f"rédaction de la partie {part_idx + 1}/{total_parts} ({clean_heading_label})…"
                                 )
                             },
@@ -893,21 +1017,30 @@ async def send_message(
                             evidence_ledger=evidence_ledger_text,
                         )
                         part_text = ""
-                        async for chunk, is_ping in _stream_chat_with_keepalive(
+                        async for event_or_str, is_ping in _stream_chat_with_keepalive(
                             part_messages, stage_synthesis_model, enable_cache=user_prompt_cache
                         ):
                             if is_ping:
-                                yield chunk
+                                yield event_or_str
                             else:
-                                part_text += chunk
-                                accumulated += chunk
+                                if isinstance(event_or_str, dict):
+                                    ev_type = event_or_str.get("type")
+                                    ev_text = event_or_str.get("text") or ""
+                                    if ev_type == "thought":
+                                        accumulated_thought += ev_text
+                                        yield sse("thought", {"text": ev_text})
+                                    elif ev_type == "delta":
+                                        part_text += ev_text
+                                        accumulated += ev_text
+                                elif isinstance(event_or_str, str):
+                                    part_text += event_or_str
+                                    accumulated += event_or_str
                                 if len(accumulated) > 320000:
                                     raise providers.ProviderError("La réponse dépasse la limite autorisée")
-                                yield sse("delta", {"text": chunk})
+                                # Research drafts are released only after the publication gate.
                         if part_text.strip() and not part_text.endswith("\n\n"):
                             sep = "\n\n" if not part_text.endswith("\n") else "\n"
                             accumulated += sep
-                            yield sse("delta", {"text": sep})
                         written_headings.append(part_heading)
                     if body.deep_search or body.learn_mode:
                         # 1. Déduplication des images identiques insérées à travers plusieurs parties
@@ -925,7 +1058,7 @@ async def send_message(
                         )
 
                         # Pré-contrôle déterministe pour guider l'auditeur
-                        body_content = accumulated[len(outline_md):]
+                        body_content = registry.resolve_evidence_citations(accumulated[len(outline_md):])
                         pre_check = verify_report_figures(body_content, sources)
 
                         # Appel à l'auditeur critique (GPT-6 Astra)
@@ -939,25 +1072,12 @@ async def send_message(
                             model=stage_audit_model,
                         )
 
-                        # 3. Application des corrections de l'auditeur et boucle de réparation multi-cycles V2
-                        remedied_body = audit_result.get("remedied_markdown") or body_content
-                        # Boucle de réparation multi-cycles déterministe (Claim Validator + Repair Loop V2)
-                        remedied_body, final_check = run_repair_loop(remedied_body, sources, max_cycles=2)
-                        if remedied_body != body_content:
-                            accumulated = accumulated[:len(outline_md)] + remedied_body
+                        audit_result["coverage"] = aspect_checklist
+                        revised_body = audit_result.get("remedied_markdown") or body_content
+                        accumulated = finalize_report(revised_body, registry, audit_result, prefix=outline_md)
+                        yield sse("delta", {"text": accumulated})
+                        yield sse("status", {"message": f"{mode_prefix} · Contrôle documentaire terminé."})
 
-                        # 4. Registre de vérification factuelle final consolidé avec avis d'audit GPT-6 Astra
-                        registry_md = format_verification_markdown(final_check, audit_review=audit_result)
-                        if registry_md:
-                            decision_label = str(audit_result.get("decision") or "validé").replace("_", " ")
-                            yield sse(
-                                "status",
-                                {
-                                    "message": f"{mode_prefix} · Relecture {audit_display_name} terminée : statut {decision_label}."
-                                },
-                            )
-                            accumulated += "\n" + registry_md
-                            yield sse("delta", {"text": "\n" + registry_md})
                 else:
                     if body.deep_search:
                         status_label = f"DeepSearch · Synthèse globale et rapport approfondi ({len(sources)} source{'s' if len(sources) != 1 else ''})…"
@@ -968,14 +1088,28 @@ async def send_message(
                     else:
                         status_label = "Rédaction de la réponse…"
                     yield sse("status", {"message": status_label})
-                    async for chunk, is_ping in _stream_chat_with_keepalive(context, model, enable_cache=user_prompt_cache):
+                    async for event_or_str, is_ping in _stream_chat_with_keepalive(context, model, enable_cache=user_prompt_cache):
                         if is_ping:
-                            yield chunk
+                            yield event_or_str
                         else:
-                            accumulated += chunk
-                            if len(accumulated) > 240000:
-                                raise providers.ProviderError("La réponse dépasse la limite autorisée")
-                            yield sse("delta", {"text": chunk})
+                            if isinstance(event_or_str, dict):
+                                ev_type = event_or_str.get("type")
+                                ev_text = event_or_str.get("text") or ""
+                                if ev_type == "thought":
+                                    accumulated_thought += ev_text
+                                    yield sse("thought", {"text": ev_text})
+                                elif ev_type == "delta":
+                                    accumulated += ev_text
+                                    if len(accumulated) > 240000:
+                                        raise providers.ProviderError("La réponse dépasse la limite autorisée")
+                                    if not (body.deep_search or body.learn_mode):
+                                        yield sse("delta", {"text": ev_text})
+                            elif isinstance(event_or_str, str):
+                                accumulated += event_or_str
+                                if len(accumulated) > 240000:
+                                    raise providers.ProviderError("La réponse dépasse la limite autorisée")
+                                if not (body.deep_search or body.learn_mode):
+                                    yield sse("delta", {"text": event_or_str})
                 if not accumulated.strip():
                     _logger.warning("Réponse vide du modèle %s ; nouvelle tentative", model)
                     yield sse("status", {"message": "Réponse vide du modèle · nouvelle tentative…"})
@@ -987,15 +1121,29 @@ async def send_message(
                             "explicitement plutôt que de ne rien répondre."
                         ),
                     }]
-                    async for chunk, is_ping in _stream_chat_with_keepalive(retry_context, model, enable_cache=user_prompt_cache):
+                    async for event_or_str, is_ping in _stream_chat_with_keepalive(retry_context, model, enable_cache=user_prompt_cache):
                         if is_ping:
-                            yield chunk
+                            yield event_or_str
                         else:
-                            accumulated += chunk
-                            if len(accumulated) > 240000:
-                                raise providers.ProviderError("La réponse dépasse la limite autorisée")
-                            yield sse("delta", {"text": chunk})
-                if not use_two_step_section_writer and (body.deep_search or body.learn_mode):
+                            if isinstance(event_or_str, dict):
+                                ev_type = event_or_str.get("type")
+                                ev_text = event_or_str.get("text") or ""
+                                if ev_type == "thought":
+                                    accumulated_thought += ev_text
+                                    yield sse("thought", {"text": ev_text})
+                                elif ev_type == "delta":
+                                    accumulated += ev_text
+                                    if len(accumulated) > 240000:
+                                        raise providers.ProviderError("La réponse dépasse la limite autorisée")
+                                    if not (body.deep_search or body.learn_mode):
+                                        yield sse("delta", {"text": ev_text})
+                            elif isinstance(event_or_str, str):
+                                accumulated += event_or_str
+                                if len(accumulated) > 240000:
+                                    raise providers.ProviderError("La réponse dépasse la limite autorisée")
+                                if not (body.deep_search or body.learn_mode):
+                                    yield sse("delta", {"text": event_or_str})
+                if not use_direct_research and not use_two_step_section_writer and (body.deep_search or body.learn_mode):
                     mode_prefix = "Mode Apprendre" if body.learn_mode else "DeepSearch"
                     accumulated = providers.deduplicate_markdown_images(accumulated)
                     audit_display_name = stage_audit_model.split("/")[-1] if "/" in stage_audit_model else stage_audit_model
@@ -1005,6 +1153,7 @@ async def send_message(
                             "message": f"{mode_prefix} · Étape 5/5 — Relecture critique & validation par {audit_display_name}…"
                         },
                     )
+                    accumulated = registry.resolve_evidence_citations(accumulated)
                     pre_check = verify_report_figures(accumulated, sources)
                     audit_result = await providers.review_report_with_auditor(
                         settings=settings,
@@ -1015,13 +1164,11 @@ async def send_message(
                         learn_mode=body.learn_mode,
                         model=stage_audit_model,
                     )
-                    remedied_body = audit_result.get("remedied_markdown") or accumulated
-                    remedied_body, final_check = run_repair_loop(remedied_body, sources, max_cycles=2)
-                    accumulated = remedied_body
-                    registry_md = format_verification_markdown(final_check, audit_review=audit_result)
-                    if registry_md:
-                        accumulated += "\n" + registry_md
-                        yield sse("delta", {"text": "\n" + registry_md})
+                    audit_result["coverage"] = aspect_checklist
+                    revised_body = audit_result.get("remedied_markdown") or accumulated
+                    accumulated = finalize_report(revised_body, registry, audit_result)
+                    yield sse("delta", {"text": accumulated})
+
             if not accumulated.strip():
                 raise providers.ProviderError("Le fournisseur a retourné une réponse vide (deux tentatives). Réessayez ou changez de modèle.")
             generated_meta: dict | None = None
@@ -1053,7 +1200,16 @@ async def send_message(
                     generated_meta["keep_initial_title"] = True
             with sessions() as db:
                 conversation = get_conversation(db, conversation_id, user.id)
-                answer = Message(id=assistant_id, conversation_id=conversation_id, role="assistant", content=accumulated, sources=sources)
+                if use_direct_research and deep_model:
+                    conversation.model = deep_model
+                saved_content = accumulated
+                if (
+                    accumulated_thought.strip()
+                    and not (body.deep_search or body.learn_mode)
+                    and not saved_content.strip().startswith("<think>")
+                ):
+                    saved_content = f"<think>\n{accumulated_thought.strip()}\n</think>\n\n{saved_content}"
+                answer = Message(id=assistant_id, conversation_id=conversation_id, role="assistant", content=saved_content, sources=sources)
                 db.add(answer)
                 if generated_meta:
                     if auto_title_eligible and not generated_meta.get("keep_initial_title") and generated_meta.get("title"):
@@ -1194,6 +1350,25 @@ async def plan_conversation_deep_search(
         ]
 
     raw_query = body.content.strip()[:1500]
+    if body.model and "google" in body.model.lower() and "deep-research" in body.model.lower():
+        try:
+            g_plan = await plan_google_deep_research(
+                settings=settings,
+                query=raw_query,
+                model=body.model,
+                summary=search_summary or "",
+                recent_turns=search_context,
+                learn_mode=False,
+                previous_interaction_id=body.interaction_id,
+            )
+            return DeepSearchPlanResponse(
+                queries=g_plan.get("queries", []),
+                plan_text=g_plan.get("plan_text"),
+                interaction_id=g_plan.get("interaction_id"),
+            )
+        except Exception as exc:
+            _logger.warning("Collaborative planning Google Deep Research indisponible: %s", exc)
+
     st_plan_model = body.stage_models.plan_model if body.stage_models and body.stage_models.plan_model else None
     try:
         try:
@@ -1223,6 +1398,25 @@ async def plan_direct_deep_search(
         raise HTTPException(503, "La recherche web nécessite SearXNG, BRAVE_API_KEY ou DUCKDUCKGO_ENABLED en mode IA réel")
 
     raw_query = body.content.strip()[:1500]
+    if body.model and "google" in body.model.lower() and "deep-research" in body.model.lower():
+        try:
+            g_plan = await plan_google_deep_research(
+                settings=settings,
+                query=raw_query,
+                model=body.model,
+                summary="",
+                recent_turns=[],
+                learn_mode=False,
+                previous_interaction_id=body.interaction_id,
+            )
+            return DeepSearchPlanResponse(
+                queries=g_plan.get("queries", []),
+                plan_text=g_plan.get("plan_text"),
+                interaction_id=g_plan.get("interaction_id"),
+            )
+        except Exception as exc:
+            _logger.warning("Collaborative planning Google Deep Research indisponible: %s", exc)
+
     st_plan_model = body.stage_models.plan_model if body.stage_models and body.stage_models.plan_model else None
     try:
         try:
@@ -1307,6 +1501,55 @@ def get_deep_search_report_html(
             media_type="text/html; charset=utf-8",
             headers=headers,
         )
+
+
+@router.get("/api/deep-search/reports/{report_id}/slides")
+async def get_deep_search_report_slides(
+    report_id: str,
+    download: bool = False,
+    user: User = Depends(current_user),
+    settings: Settings = Depends(get_settings),
+    sessions: sessionmaker = Depends(get_sessions),
+):
+    with sessions() as db:
+        report = db.scalar(
+            select(DeepSearchReport).where(
+                DeepSearchReport.id == report_id, DeepSearchReport.user_id == user.id
+            )
+        )
+        if not report:
+            raise HTTPException(404, "Rapport DeepSearch introuvable")
+
+        title = report.title
+        markdown_content = report.markdown_content
+        topic = report.topic
+        created_at_str = report.created_at.strftime("%d/%m/%Y") if report.created_at else None
+        sources = list(report.sources or [])
+
+    headers = {
+        "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+        "Pragma": "no-cache",
+        "Expires": "0",
+    }
+    if download:
+        clean_ascii = unicodedata.normalize("NFKD", title).encode("ascii", "ignore").decode("ascii")
+        clean_filename = re.sub(r"[^a-zA-Z0-9_\-]", "_", clean_ascii).strip("_")[:40] or "presentation-deepsearch"
+        headers["Content-Disposition"] = f'attachment; filename="{clean_filename}-slides.html"'
+
+    html_doc = await generate_report_presentation_html(
+        settings=settings,
+        title=title,
+        markdown_content=markdown_content,
+        topic=topic,
+        model="DeepSearch",
+        created_at_str=created_at_str,
+        sources=sources,
+    )
+    return Response(
+        content=html_doc,
+        media_type="text/html; charset=utf-8",
+        headers=headers,
+    )
 
 
 @router.delete("/api/deep-search/reports/{report_id}")
@@ -1410,6 +1653,25 @@ async def plan_conversation_learn_mode(
         ]
 
     raw_query = body.content.strip()[:1500]
+    if body.model and "google" in body.model.lower() and "deep-research" in body.model.lower():
+        try:
+            g_plan = await plan_google_deep_research(
+                settings=settings,
+                query=raw_query,
+                model=body.model,
+                summary=search_summary or "",
+                recent_turns=search_context,
+                learn_mode=True,
+                previous_interaction_id=body.interaction_id,
+            )
+            return LearnModePlanResponse(
+                queries=g_plan.get("queries", []),
+                plan_text=g_plan.get("plan_text"),
+                interaction_id=g_plan.get("interaction_id"),
+            )
+        except Exception as exc:
+            _logger.warning("Collaborative planning Google Deep Research indisponible: %s", exc)
+
     st_plan_model = body.stage_models.plan_model if body.stage_models and body.stage_models.plan_model else None
     try:
         try:
@@ -1439,6 +1701,25 @@ async def plan_direct_learn_mode(
         raise HTTPException(503, "La recherche web nécessite SearXNG, BRAVE_API_KEY ou DUCKDUCKGO_ENABLED en mode IA réel")
 
     raw_query = body.content.strip()[:1500]
+    if body.model and "google" in body.model.lower() and "deep-research" in body.model.lower():
+        try:
+            g_plan = await plan_google_deep_research(
+                settings=settings,
+                query=raw_query,
+                model=body.model,
+                summary="",
+                recent_turns=[],
+                learn_mode=True,
+                previous_interaction_id=body.interaction_id,
+            )
+            return LearnModePlanResponse(
+                queries=g_plan.get("queries", []),
+                plan_text=g_plan.get("plan_text"),
+                interaction_id=g_plan.get("interaction_id"),
+            )
+        except Exception as exc:
+            _logger.warning("Collaborative planning Google Deep Research indisponible: %s", exc)
+
     st_plan_model = body.stage_models.plan_model if body.stage_models and body.stage_models.plan_model else None
     try:
         try:
@@ -1526,6 +1807,55 @@ def get_learn_report_html(
             media_type="text/html; charset=utf-8",
             headers=headers,
         )
+
+
+@router.get("/api/learn/reports/{report_id}/slides")
+async def get_learn_report_slides(
+    report_id: str,
+    download: bool = False,
+    user: User = Depends(current_user),
+    settings: Settings = Depends(get_settings),
+    sessions: sessionmaker = Depends(get_sessions),
+):
+    with sessions() as db:
+        report = db.scalar(
+            select(LearnReport).where(
+                LearnReport.id == report_id, LearnReport.user_id == user.id
+            )
+        )
+        if not report:
+            raise HTTPException(404, "Cours introuvable")
+
+        title = report.title or "Cours cLAIr"
+        markdown_content = report.markdown_content
+        topic = report.topic
+        created_at_str = report.created_at.strftime("%d/%m/%Y") if report.created_at else None
+        sources = list(report.sources or [])
+
+    headers = {
+        "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+        "Pragma": "no-cache",
+        "Expires": "0",
+    }
+    if download:
+        clean_ascii = unicodedata.normalize("NFKD", title).encode("ascii", "ignore").decode("ascii")
+        clean_filename = re.sub(r"[^a-zA-Z0-9_\-]", "_", clean_ascii).strip("_")[:40] or "presentation-cours"
+        headers["Content-Disposition"] = f'attachment; filename="{clean_filename}-slides.html"'
+
+    html_doc = await generate_report_presentation_html(
+        settings=settings,
+        title=title,
+        markdown_content=markdown_content,
+        topic=topic,
+        model="cLAIr Apprendre",
+        created_at_str=created_at_str,
+        sources=sources,
+    )
+    return Response(
+        content=html_doc,
+        media_type="text/html; charset=utf-8",
+        headers=headers,
+    )
 
 
 @router.delete("/api/learn/reports/{report_id}")
@@ -1727,6 +2057,144 @@ def get_message_html(
             clean_ascii = unicodedata.normalize("NFKD", title).encode("ascii", "ignore").decode("ascii")
             clean_filename = re.sub(r"[^a-zA-Z0-9_\-]", "_", clean_ascii).strip("_")[:40] or "document"
             headers["Content-Disposition"] = f'attachment; filename="{clean_filename}.html"'
+
+        return Response(
+            content=html_doc,
+            media_type="text/html; charset=utf-8",
+            headers=headers,
+        )
+
+
+@router.get("/api/messages/{message_id}/slides")
+async def get_message_slides(
+    message_id: str,
+    scope: str = "turn",
+    download: bool = False,
+    user: User = Depends(current_user),
+    settings: Settings = Depends(get_settings),
+    sessions: sessionmaker = Depends(get_sessions),
+):
+    with sessions() as db:
+        message = db.scalar(
+            select(Message)
+            .join(Conversation, Message.conversation_id == Conversation.id)
+            .where(
+                Message.id == message_id,
+                Conversation.user_id == user.id,
+            )
+        )
+        if not message:
+            raise HTTPException(404, "Message introuvable")
+
+        conv = message.conversation
+
+        if scope in ("conversation", "all"):
+            title = conv.title or "Synthèse de la discussion cLAIr"
+            messages_data = [
+                {
+                    "role": m.role,
+                    "content": m.content,
+                    "created_at_str": m.created_at.strftime("%d/%m/%Y %H:%M") if m.created_at else "",
+                    "sources": m.sources or [],
+                }
+                for m in conv.messages
+            ]
+            html_doc = await generate_chat_presentation_html(
+                settings=settings,
+                title=title,
+                messages=messages_data,
+                scope="conversation",
+                topic=conv.title,
+                model=conv.model,
+                created_at_str=conv.created_at.strftime("%d/%m/%Y") if conv.created_at else None,
+                summary=conv.summary or "",
+            )
+        else:
+            # 1. Vérifier si ce message possède un rapport Learn
+            learn_rep = db.scalar(
+                select(LearnReport).where(
+                    LearnReport.message_id == message.id,
+                    LearnReport.user_id == user.id,
+                )
+            )
+            if learn_rep:
+                title = learn_rep.title or "Cours cLAIr"
+                html_doc = await generate_report_presentation_html(
+                    settings=settings,
+                    title=learn_rep.title,
+                    markdown_content=learn_rep.markdown_content,
+                    topic=learn_rep.topic,
+                    model=conv.model or "cLAIr Apprendre",
+                    created_at_str=learn_rep.created_at.strftime("%d/%m/%Y") if learn_rep.created_at else None,
+                    sources=learn_rep.sources or [],
+                )
+            else:
+                # 2. Vérifier si ce message possède un rapport DeepSearch
+                ds_rep = db.scalar(
+                    select(DeepSearchReport).where(
+                        DeepSearchReport.message_id == message.id,
+                        DeepSearchReport.user_id == user.id,
+                    )
+                )
+                if ds_rep:
+                    title = ds_rep.title or "Rapport DeepSearch"
+                    html_doc = await generate_report_presentation_html(
+                        settings=settings,
+                        title=ds_rep.title,
+                        markdown_content=ds_rep.markdown_content,
+                        topic=ds_rep.topic,
+                        model=conv.model or "DeepSearch",
+                        created_at_str=ds_rep.created_at.strftime("%d/%m/%Y") if ds_rep.created_at else None,
+                        sources=ds_rep.sources or [],
+                    )
+                else:
+                    # 3. Message classique : Question & Réponse
+                    prev_user_msg = db.scalar(
+                        select(Message)
+                        .where(
+                            Message.conversation_id == message.conversation_id,
+                            Message.role == "user",
+                            Message.created_at <= message.created_at,
+                        )
+                        .order_by(Message.created_at.desc())
+                    )
+                    topic = prev_user_msg.content.strip() if prev_user_msg else (conv.title or "Échange cLAIr")
+                    title = conv.title or topic[:60] or "Présentation cLAIr"
+
+                    turn_messages = []
+                    if prev_user_msg:
+                        turn_messages.append({
+                            "role": "user",
+                            "content": prev_user_msg.content,
+                            "created_at_str": prev_user_msg.created_at.strftime("%d/%m/%Y %H:%M") if prev_user_msg.created_at else "",
+                            "sources": [],
+                        })
+                    turn_messages.append({
+                        "role": "assistant",
+                        "content": message.content,
+                        "created_at_str": message.created_at.strftime("%d/%m/%Y %H:%M") if message.created_at else "",
+                        "sources": message.sources or [],
+                    })
+
+                    html_doc = await generate_chat_presentation_html(
+                        settings=settings,
+                        title=title,
+                        messages=turn_messages,
+                        scope="turn",
+                        topic=topic,
+                        model=conv.model,
+                        created_at_str=message.created_at.strftime("%d/%m/%Y") if message.created_at else None,
+                    )
+
+        headers = {
+            "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        }
+        if download:
+            clean_ascii = unicodedata.normalize("NFKD", title).encode("ascii", "ignore").decode("ascii")
+            clean_filename = re.sub(r"[^a-zA-Z0-9_\-]", "_", clean_ascii).strip("_")[:40] or "presentation"
+            headers["Content-Disposition"] = f'attachment; filename="{clean_filename}-slides.html"'
 
         return Response(
             content=html_doc,

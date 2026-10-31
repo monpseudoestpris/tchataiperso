@@ -13,9 +13,10 @@ def rows_by_status(report):
     return {r["status"]: r for r in result["rows"]}, result
 
 
-def test_figure_found_in_two_sources_is_high_confidence():
+def test_figure_found_in_two_sources_still_needs_semantic_review():
     rows, _ = rows_by_status("L'insertion atteint 94 % [1][2].")
-    assert rows["retrouvé"]["confidence"] == "élevée"
+    assert rows["retrouvé"]["confidence"] == "moyenne"
+    assert rows["retrouvé"]["action"] == "semantic_review"
 
 
 def test_figure_found_in_single_source_is_medium():
@@ -35,7 +36,7 @@ def test_figure_absent_from_cited_source_is_not_found():
 
 def test_nonexistent_source_and_years_and_headings_ignored():
     rows, result = rows_by_status("## 1.1 Titre 45 %\nEn 2024 la situation évolue [1].\nChiffre 12 % [9].")
-    assert list(rows) == ["source inexistante"]
+    assert set(rows) == {"à vérifier", "source inexistante"}
     assert result["stats"]["total"] == 1
 
 
@@ -65,7 +66,8 @@ def test_remedy_unverified_claims():
     assert "NULLE" not in remedied
     assert "très faible" in remedied
     assert "Aucun risque" not in remedied
-    assert "ordre de grandeur indicatif" in remedied
+    assert "84 %" not in remedied
+    assert "retirée faute de preuve" not in remedied
 
 
 def test_claim_evidence_validator_scope_divergence():
@@ -118,7 +120,7 @@ def test_format_verification_markdown_with_astra_audit_review():
     md = format_verification_markdown(result, audit_review=audit_review)
     assert "## Registre de vérification factuelle & Arbitrage critique" in md
     assert "Gpt 6 Astra" in md or "GPT-6 Astra" in md or "Astra" in md
-    assert "Remanié & Sécurisé" in md
+    assert "Validation sémantique incomplète" in md
     assert "Arbitrage factuel" in md
     assert "Taux d'insertion de 94 % confirmé" in md
     assert "Périmètre limité aux diplômés" in md
@@ -136,7 +138,7 @@ def test_validation_status_never_contradicts_unverified_claims():
     }
     md = format_verification_markdown(result, audit_review=audit_review)
     assert "Conformité documentaire intégrale" not in md
-    assert "Validé avec réserves" in md or "Révision requise" in md
+    assert "Vérifications incomplètes" in md or "Révision requise" in md
 
 
 def test_universal_multi_domain_scope_divergence_and_categorical_nuances():
@@ -185,7 +187,8 @@ def test_run_repair_loop_multi_cycles():
     )
     remedied_text, final_result = run_repair_loop(raw_draft, SOURCES, max_cycles=2)
     assert "100 % garanti" not in remedied_text
-    assert "ordre de grandeur indicatif non consolidé" in remedied_text
+    assert "999 000" not in remedied_text
+    assert "retirée faute de preuve" not in remedied_text
     # Vérification que le badge de statut ne peut pas être PASSED avec des affirmations non consolidées
     stats = final_result.get("stats", {})
     from app.fact_verifier import compute_validation_status

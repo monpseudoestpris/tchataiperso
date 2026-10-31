@@ -1,3 +1,5 @@
+import type { ResearchActivity } from "./research-activity";
+
 export type Model = {
   id: string;
   name: string;
@@ -44,6 +46,7 @@ export type Attachment = {
   has_extraction?: boolean;
   page_count?: number;
   source_url?: string | null;
+  analysis_mode?: "ocr" | "vision" | "local" | "finance";
   finance_meta?: {
     symbol?: string;
     short_name?: string;
@@ -171,7 +174,7 @@ export type AgentTeamsResponse = {
   }>;
 };
 
-export type Message = { id: string; role: string; content: string; created_at: string; attachments: Attachment[]; sources: Source[]; deep_search_report_id?: string | null; learn_report_id?: string | null };
+export type Message = { id: string; role: string; content: string; thought?: string; created_at: string; attachments: Attachment[]; sources: Source[]; deep_search_report_id?: string | null; learn_report_id?: string | null };
 export type DeepSearchReport = {
   id: string;
   user_id: string;
@@ -317,6 +320,8 @@ export type AdminUser = AuthUser & { active: boolean; created_at: string };
 export type StreamEvent =
   | { type: "meta"; data: { user_message: Message; assistant_message_id: string } }
   | { type: "status"; data: { message: string } }
+  | { type: "thought"; data: { text: string } }
+  | { type: "research_activity"; data: ResearchActivity }
   | { type: "delta"; data: { text: string } }
   | {
       type: "done";
@@ -393,6 +398,8 @@ export async function streamMessage(
     multi_agent_config?: MultiAgentConfig;
     attachment_ids: string[];
     skill_ids?: string[];
+    interaction_id?: string;
+    plan_feedback?: string;
   },
   signal: AbortSignal,
   onEvent: (event: StreamEvent) => void,
@@ -416,7 +423,7 @@ export async function streamMessage(
     }
     if (!lines.length) return;
     const data = JSON.parse(lines.join("\n"));
-    if (["meta", "status", "delta", "done", "error"].includes(event)) {
+    if (["meta", "status", "thought", "research_activity", "delta", "done", "error"].includes(event)) {
       if (event === "done") completed = true;
       if (event === "error") throw new Error(data.message ?? "La génération a échoué.");
       onEvent({ type: event, data } as StreamEvent);
@@ -494,17 +501,29 @@ export async function deleteBlogPost(blogId: string, postId: string): Promise<vo
   });
 }
 
+export type PlanResearchResponse = {
+  queries: string[];
+  plan_text?: string;
+  interaction_id?: string;
+};
+
 export async function planDeepSearch(
   conversationId: string | null | undefined,
   content: string,
   stage_models?: StageModelsConfig,
-): Promise<string[]> {
+  model?: string,
+  interaction_id?: string,
+): Promise<PlanResearchResponse> {
   const url = conversationId ? `/conversations/${conversationId}/deep-search/plan` : "/deep-search/plan";
-  const res = await api<{ queries: string[] }>(url, {
+  const res = await api<PlanResearchResponse>(url, {
     method: "POST",
-    body: JSON.stringify({ content, stage_models }),
+    body: JSON.stringify({ content, stage_models, model, interaction_id }),
   });
-  return res.queries || [];
+  return {
+    queries: res.queries || [],
+    plan_text: res.plan_text,
+    interaction_id: res.interaction_id,
+  };
 }
 
 export async function fetchDeepSearchReports(): Promise<DeepSearchReport[]> {
@@ -531,13 +550,19 @@ export async function planLearnMode(
   conversationId: string | null | undefined,
   content: string,
   stage_models?: StageModelsConfig,
-): Promise<string[]> {
+  model?: string,
+  interaction_id?: string,
+): Promise<PlanResearchResponse> {
   const url = conversationId ? `/conversations/${conversationId}/learn/plan` : "/learn/plan";
-  const res = await api<{ queries: string[] }>(url, {
+  const res = await api<PlanResearchResponse>(url, {
     method: "POST",
-    body: JSON.stringify({ content, stage_models }),
+    body: JSON.stringify({ content, stage_models, model, interaction_id }),
   });
-  return res.queries || [];
+  return {
+    queries: res.queries || [],
+    plan_text: res.plan_text,
+    interaction_id: res.interaction_id,
+  };
 }
 
 export async function fetchLearnReports(): Promise<LearnReport[]> {

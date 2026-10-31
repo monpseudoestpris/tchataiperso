@@ -146,7 +146,7 @@ class EvidenceLedger:
                 norm_desc = f" | [Valeur: {it.normalized_value} {it.normalized_unit or ''} ({it.nature})]"
             lines.append(
                 f"- **[{it.evidence_id}]** (Source {it.source_id} - Tier {it.source_tier}) : "
-                f"« {it.exact_passage} »{norm_desc} — *Réf: {it.source_title}*"
+                f"« {it.exact_passage} »{norm_desc} — *Réf: {it.source_title}* — {it.source_url}"
             )
         return "\n".join(lines)
 
@@ -157,24 +157,13 @@ class EvidenceLedger:
     def from_dict_list(cls, data: list[dict[str, Any]]) -> EvidenceLedger:
         ledger = cls()
         for d in data:
-            ledger.add_evidence(
-                source_id=str(d.get("source_id") or "1"),
-                source_url=str(d.get("source_url") or ""),
-                source_title=str(d.get("source_title") or ""),
-                exact_passage=str(d.get("exact_passage") or ""),
-                claim_type=d.get("claim_type") or "factual_statement",
-                source_tier=str(d.get("source_tier") or "C"),
-                source_family_id=d.get("source_family_id"),
-                sub_question_id=str(d.get("sub_question_id") or ""),
-                topic=str(d.get("topic") or ""),
-                confidence=str(d.get("confidence") or "moyenne"),
-                normalized_metric=d.get("normalized_metric"),
-                normalized_value=d.get("normalized_value"),
-                normalized_unit=d.get("normalized_unit"),
-                period_or_year=d.get("period_or_year"),
-                nature=str(d.get("nature") or "constat"),
-                metadata=d.get("metadata") or {},
-            )
+            item = EvidenceItem(**{key: value for key, value in d.items() if key in EvidenceItem.__dataclass_fields__})
+            if item.evidence_id in ledger._by_id:
+                raise ValueError("Identifiant de preuve dupliqué.")
+            ledger._items.append(item)
+            ledger._by_id[item.evidence_id] = item
+        numeric_ids = [int(it.evidence_id[3:]) for it in ledger._items if re.fullmatch(r"EV_\d+", it.evidence_id)]
+        ledger._counter = max(numeric_ids, default=0) + 1
         return ledger
 
 
@@ -197,13 +186,15 @@ def extract_deterministic_evidence_from_sources(
     norm_re = re.compile(r"\b(arrêté|décret|article\s+[ldr]\.?\s*\d+|norme\s+iso|loi\s+n°|directive)\b", re.IGNORECASE)
 
     for idx, s in enumerate(sources, start=1):
+        if s.get("media_type") == "image" or s.get("img_src") or s.get("provider") == "searxng_images":
+            continue
         src_id = str(s.get("source_id") or idx)
         url = str(s.get("url") or "")
         title = str(s.get("title") or "")
         tier = str(s.get("tier") or "C")
 
         # Analyse des textes disponibles (snippet et extract/content)
-        text_blobs = [str(s.get("snippet") or "")]
+        text_blobs = [str(s.get("original_snippet", s.get("snippet")) or "")]
         content = str(s.get("content") or s.get("extract") or "")
         if content:
             text_blobs.append(content)
