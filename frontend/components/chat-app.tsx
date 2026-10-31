@@ -1106,7 +1106,7 @@ export function ChatApp() {
   const [soundStudioPrompt, setSoundStudioPrompt] = useState("");
   const [soundStudioInitialTab, setSoundStudioInitialTab] = useState<"effects" | "music" | "library">("effects");
   const [studyModalOpen, setStudyModalOpen] = useState(false);
-  const [studyModalKind, setStudyModalKind] = useState<"flashcards" | "quiz">("flashcards");
+  const [studyModalKind, setStudyModalKind] = useState<"flashcards" | "quiz" | "cloze" | "all">("all");
   const [multiAgentActive, setMultiAgentActive] = useState(false);
   const [multiAgentConfig, setMultiAgentConfig] = useState<MultiAgentConfig | null>(null);
   const [showMultiAgentModal, setShowMultiAgentModal] = useState(false);
@@ -1511,7 +1511,7 @@ export function ChatApp() {
     setSidebarOpen(false);
   }
 
-  function openStudyModal(initialKind: "flashcards" | "quiz" = "flashcards") {
+  function openStudyModal(initialKind: "flashcards" | "quiz" | "cloze" | "all" = "all") {
     setStudyModalKind(initialKind);
     setStudyModalOpen(true);
     setSidebarOpen(false);
@@ -1618,9 +1618,25 @@ export function ChatApp() {
       }
     } catch (err) { setError(errorMessage(err)); }
     finally {
-      setAttachments(old => [...old, ...uploaded]); setBusy(null); setStatus("");
       if (docInputRef.current) docInputRef.current.value = "";
       if (visionInputRef.current) visionInputRef.current.value = "";
+      if (uploaded.length > 0) {
+        const allFiles = [...attachments, ...uploaded];
+        setAttachments([]);
+        const currentDraft = draft.trim();
+        const promptText = currentDraft || (
+          mode === "vision"
+            ? (uploaded.length === 1
+                ? `Merci d'analyser en détail cette image (${uploaded[0].filename}) : décris ce qu'elle montre, relève le texte et les éléments visuels observables, et donne tes observations pour que nous puissions en discuter.`
+                : "Merci d'analyser en détail ces images : décris ce qu'elles montrent et donne tes observations pour que nous puissions en discuter.")
+            : (uploaded.length === 1
+                ? `Merci d'analyser ce document (${uploaded[0].filename}) : présente une synthèse claire et structurée de son contenu et de ses points clés pour que nous puissions en discuter.`
+                : "Merci d'analyser ces documents : présente une synthèse claire et structurée de leurs contenus pour que nous puissions en discuter.")
+        );
+        void send(undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, promptText, allFiles);
+      } else {
+        setBusy(null); setStatus("");
+      }
     }
   }
 
@@ -1715,15 +1731,29 @@ export function ChatApp() {
     customModel?: string,
     interactionId?: string,
     planFeedback?: string,
+    overrideText?: string,
+    overrideFiles?: Attachment[],
   ) {
     event?.preventDefault();
     if (!config) return;
 
+    const files = overrideFiles !== undefined ? overrideFiles : attachments;
     let text = (
-      draft.trim()
-      || (customDeepSearchQueries ? deepSearchModalQuestion : "")
-      || (customLearnQueries ? learnModalQuestion : "")
+      overrideText !== undefined
+        ? overrideText
+        : (
+            draft.trim()
+            || (customDeepSearchQueries ? deepSearchModalQuestion : "")
+            || (customLearnQueries ? learnModalQuestion : "")
+          )
     ).trim();
+
+    if (!text && files.length > 0) {
+      const hasVision = files.some(a => a.analysis_mode === "vision");
+      text = hasVision
+        ? "Merci d'analyser en détail cette image : décris précisément ce qu'elle montre, ses éléments remarquables et partage tes observations pour que nous puissions en discuter."
+        : "Merci d'analyser ce document : résume son contenu de façon claire et structurée et dégage les points clés pour que nous puissions en discuter.";
+    }
     if (customDeepSearchQueries && !text && customDeepSearchQueries.length > 0) {
       text = customDeepSearchQueries[0].trim();
     }
@@ -1751,7 +1781,7 @@ export function ChatApp() {
       }
       return;
     }
-    if (!text && attachments.length === 0) return;
+    if (!text && files.length === 0) return;
 
     const useDeepSearch = deepSearch && config.features.web_search;
     if (useDeepSearch && !customDeepSearchQueries) {
@@ -1771,7 +1801,6 @@ export function ChatApp() {
       return;
     }
 
-    const files = attachments;
     const messageSkillIds = extractMentionedSkillIds(text, skills);
     const controller = new AbortController();
     setBusy("send"); setError(""); setStatus("Connexion au modèle…"); setDraft(""); setAttachments([]); setAtBottom(true);
@@ -2460,18 +2489,16 @@ export function ChatApp() {
           <button type="button" className={`context-toggle ${contextOpen ? "is-selected" : ""}`} onClick={() => { setContextOpen(old => { const next = !old; if (next) setCanvasOpen(false); return next; }); }} aria-expanded={contextOpen} aria-controls="context-panel" aria-label="Mémoire & contexte" title="Consulter la mémoire et le contexte"><Brain size={17} /><span>Mémoire</span><span className="memory-count">{memories.length}</span></button>
 
           {/* Sortie & Export de la discussion */}
-          {conversation && (
-            <button
-              type="button"
-              className={`topbar-study-btn ${studyModalOpen ? "is-active" : ""}`}
-              onClick={() => openStudyModal("flashcards")}
-              title="Générer des Flashcards 3D ou un Quizz QCM sur le sujet discuté"
-              aria-label="Flashcards et Quizz d'auto-évaluation"
-            >
-              <Brain size={16} />
-              <span>Flash / Quizz</span>
-            </button>
-          )}
+          <button
+            type="button"
+            className={`topbar-study-btn ${studyModalOpen ? "is-active" : ""}`}
+            onClick={() => openStudyModal("all")}
+            title="Mode Réviser : révisez avec Flashcards 3D, Quizz interactif et Phrases à trous"
+            aria-label="Mode Réviser"
+          >
+            <GraduationCap size={16} />
+            <span>Réviser</span>
+          </button>
           {conversation && (
             <div className="topbar-export-wrap" ref={topbarExportRef}>
               <button
@@ -2707,7 +2734,7 @@ export function ChatApp() {
           <div className="chat-skills-toolbar"><span>{conversation?.skills?.length ? conversation.skills.map(skill => skill.name).join(" · ") : "Aucune compétence active"}</span><button type="button" onClick={() => { setContextOpen(false); setSkillsOpen(true); }}><Sparkles size={15} />Compétences<small>{conversation?.skills?.length ?? 0}</small></button></div>
           {skillsOpen && <SkillsPanel conversation={conversation} model={model} config={config} onClose={() => setSkillsOpen(false)} onConversationChange={setConversation} onRefreshConversations={refreshConversations} onSkillsChange={setSkills} />}
           <div className="chat-scroll" ref={messagesRef} onScroll={() => { const el = messagesRef.current; if (el) setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 120); }}>
-            {!messages.length && busy !== "switch" ? <div className="welcome"><div className="welcome-eyebrow"><span /> UN PEU DE CLARTÉ, BEAUCOUP DE POSSIBILITÉS</div><BrandMark /><h1>Qu’avez-vous en tête<span> aujourd’hui ?</span></h1><p>Un espace pour vos questions, vos idées et vos projets.<br />Commencez quelque part. On avance ensemble.</p><div className="suggestions">{suggestions.map((item, index) => <button type="button" className="suggestion" key={item.title} disabled={working} onClick={() => { if (index === 3) { openImageStudio(item.prompt); } else if (index === 1) { openBlogModal(item.prompt); } else { setDraft(item.prompt); textareaRef.current?.focus(); } }}><span className={`suggestion-icon suggestion-icon-${index}`}><item.icon size={19} strokeWidth={1.6} /></span><strong>{item.title}</strong><span>{item.description}</span><ChevronRight size={15} className="suggestion-arrow" /></button>)}</div><div className="welcome-note"><Brain size={14} /><span>Les souvenirs que vous choisissez gardent le fil d’une conversation à l’autre.</span></div></div> : busy === "switch" ? <div className="loading-conversation"><LoaderCircle size={23} className="spin" />Ouverture de votre conversation…</div> : <div className="messages"><div className="conversation-heading"><div className="conversation-heading-top"><span>CONVERSATION</span>{conversation?.theme && <button type="button" className={`conversation-theme-badge tone-${themeTone(conversation.theme)}`} onClick={() => { setGroupMode("theme"); setSelectedTheme(old => (old === conversation.theme ? "" : (conversation.theme ?? ""))); setSidebarOpen(true); }} title={`Voir toutes les discussions du thème « ${conversation.theme} »`}>{conversation.theme}</button>}<div className="conversation-heading-actions">{conversation && <button type="button" className="conversation-meta-btn conversation-study-btn" disabled={working} onClick={() => openStudyModal("flashcards")} title="Générer des Flashcards 3D ou un Quizz QCM sur le sujet discuté"><Brain size={12} /><span>Flash / Quizz</span></button>}{conversation && <button type="button" className="conversation-meta-btn" disabled={working} onClick={() => openEditDialog(conversation)} title="Modifier le titre, le thème et les mots-clés"><Pencil size={12} /><span>Éditer</span></button>}{conversation && <button type="button" className="conversation-meta-btn" disabled={working} onClick={() => void classifyConversation(conversation.id, true)} title="Régénérer le titre, le thème et les mots-clés automatiquement (Mistral Small)">{busy === "classify" ? <LoaderCircle size={12} className="spin" /> : <WandSparkles size={12} />}<span>Auto-tags IA</span></button>}</div></div><h1>{conversation?.title}</h1>{!!conversation?.keywords?.length && <div className="conversation-keywords-row" aria-label="Mots-clés de la discussion">{conversation.keywords.map(kw => <button key={kw} type="button" className={`conversation-keyword-chip ${selectedKeyword.toLocaleLowerCase("fr") === kw.toLocaleLowerCase("fr") ? "is-active" : ""}`} onClick={() => { toggleKeywordFilter(kw); setSidebarOpen(true); }} title={`Filtrer les discussions avec #${kw}`}>#{kw}</button>)}</div>}</div>{messages.map(message => <MessageView key={message.id} message={message} streaming={streamingId === message.id} onOpenCanvas={openCanvasForMessage} onOpenDeepSearchReport={handleOpenDeepSearchReport} researchActivity={researchRuns[message.id]} onOpenResearchActivity={setResearchActivityMessageId} onOpenLearnReport={handleOpenLearnReport} onOpenFinanceModal={openFinanceModal} />)}<div ref={bottomRef} /></div>}
+            {!messages.length && busy !== "switch" ? <div className="welcome"><div className="welcome-eyebrow"><span /> UN PEU DE CLARTÉ, BEAUCOUP DE POSSIBILITÉS</div><BrandMark /><h1>Qu’avez-vous en tête<span> aujourd’hui ?</span></h1><p>Un espace pour vos questions, vos idées et vos projets.<br />Commencez quelque part. On avance ensemble.</p><div className="suggestions">{suggestions.map((item, index) => <button type="button" className="suggestion" key={item.title} disabled={working} onClick={() => { if (index === 3) { openImageStudio(item.prompt); } else if (index === 1) { openBlogModal(item.prompt); } else { setDraft(item.prompt); textareaRef.current?.focus(); } }}><span className={`suggestion-icon suggestion-icon-${index}`}><item.icon size={19} strokeWidth={1.6} /></span><strong>{item.title}</strong><span>{item.description}</span><ChevronRight size={15} className="suggestion-arrow" /></button>)}</div><div className="welcome-note"><Brain size={14} /><span>Les souvenirs que vous choisissez gardent le fil d’une conversation à l’autre.</span></div></div> : busy === "switch" ? <div className="loading-conversation"><LoaderCircle size={23} className="spin" />Ouverture de votre conversation…</div> : <div className="messages"><div className="conversation-heading"><div className="conversation-heading-top"><span>CONVERSATION</span>{conversation?.theme && <button type="button" className={`conversation-theme-badge tone-${themeTone(conversation.theme)}`} onClick={() => { setGroupMode("theme"); setSelectedTheme(old => (old === conversation.theme ? "" : (conversation.theme ?? ""))); setSidebarOpen(true); }} title={`Voir toutes les discussions du thème « ${conversation.theme} »`}>{conversation.theme}</button>}<div className="conversation-heading-actions">{conversation && <button type="button" className="conversation-meta-btn conversation-study-btn" disabled={working} onClick={() => openStudyModal("all")} title="Réviser les notions de cette discussion : Flashcards 3D, Quizz QCM et Phrases à trous"><GraduationCap size={12} /><span>Réviser</span></button>}{conversation && <button type="button" className="conversation-meta-btn" disabled={working} onClick={() => openEditDialog(conversation)} title="Modifier le titre, le thème et les mots-clés"><Pencil size={12} /><span>Éditer</span></button>}{conversation && <button type="button" className="conversation-meta-btn" disabled={working} onClick={() => void classifyConversation(conversation.id, true)} title="Régénérer le titre, le thème et les mots-clés automatiquement (Mistral Small)">{busy === "classify" ? <LoaderCircle size={12} className="spin" /> : <WandSparkles size={12} />}<span>Auto-tags IA</span></button>}</div></div><h1>{conversation?.title}</h1>{!!conversation?.keywords?.length && <div className="conversation-keywords-row" aria-label="Mots-clés de la discussion">{conversation.keywords.map(kw => <button key={kw} type="button" className={`conversation-keyword-chip ${selectedKeyword.toLocaleLowerCase("fr") === kw.toLocaleLowerCase("fr") ? "is-active" : ""}`} onClick={() => { toggleKeywordFilter(kw); setSidebarOpen(true); }} title={`Filtrer les discussions avec #${kw}`}>#{kw}</button>)}</div>}</div>{messages.map(message => <MessageView key={message.id} message={message} streaming={streamingId === message.id} onOpenCanvas={openCanvasForMessage} onOpenDeepSearchReport={handleOpenDeepSearchReport} researchActivity={researchRuns[message.id]} onOpenResearchActivity={setResearchActivityMessageId} onOpenLearnReport={handleOpenLearnReport} onOpenFinanceModal={openFinanceModal} />)}<div ref={bottomRef} /></div>}
           </div>
           {!atBottom && !!messages.length && <IconButton className="scroll-bottom" label="Aller aux derniers messages" onClick={() => { setAtBottom(true); bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }}><ArrowDown size={18} /></IconButton>}
 
@@ -2937,7 +2964,7 @@ export function ChatApp() {
                 disabled={working || !config}
                 aria-describedby="composer-hint"
               />
-              <div className="composer-toolbar"><div className="composer-tools"><div className="composer-attach-wrapper" ref={attachMenuRef}><input className="sr-only" type="file" ref={docInputRef} multiple accept=".txt,.md,.csv,.json,.pdf,.docx,image/png,image/jpeg,image/webp" onChange={event => void uploadFiles(event.target.files, "ocr")} tabIndex={-1} /><input className="sr-only" type="file" ref={visionInputRef} multiple accept="image/png,image/jpeg,image/webp" onChange={event => void uploadFiles(event.target.files, "vision")} tabIndex={-1} /><IconButton label="Joindre un document ou analyser une image" aria-expanded={attachMenuOpen} aria-haspopup="menu" disabled={working || !config} onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); setAttachMenuOpen(prev => !prev); }}><Paperclip size={19} /></IconButton>{attachMenuOpen && <div className="composer-attach-popover" role="menu" onMouseDown={e => e.stopPropagation()}><div className="attach-popover-header"><span className="attach-popover-title">Joindre une pièce</span></div><button type="button" className="attach-popover-item" role="menuitem" onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); docInputRef.current?.click(); setAttachMenuOpen(false); }}><span className="attach-popover-icon is-doc"><FileText size={17} /></span><div className="attach-popover-text"><span className="attach-item-title">Document (Mistral OCR)</span><span className="attach-item-desc">PDF, Word, scans, tableaux — extraction structurée & fidèle</span></div></button><button type="button" className="attach-popover-item" role="menuitem" onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); visionInputRef.current?.click(); setAttachMenuOpen(false); }}><span className="attach-popover-icon is-vision"><Eye size={17} /></span><div className="attach-popover-text"><span className="attach-item-title">Image (Vision IA détaillée)</span><span className="attach-item-desc">Photos, infographies, schémas — analyse visuelle exhaustive</span></div></button></div>}</div><IconButton label="Analyser un lien web ou vidéo YouTube (URL)" disabled={working || !config} onClick={() => { setUrlError(""); setUrlInputValue(""); setShowUrlModal(true); }}><Link2 size={19} /></IconButton><span className="tool-divider" /><button type="button" className={`tool-button web-trigger ${effectiveWebMode !== "off" && !deepSearch && !learnMode ? "active" : ""} ${effectiveWebMode === "auto" && !deepSearch && !learnMode ? "web-auto" : ""} ${effectiveWebMode === "always" && !deepSearch && !learnMode ? "web-always" : ""} ${effectiveWebMode === "off" && !deepSearch && !learnMode ? "web-off" : ""}`} disabled={working || !isWebSearchAvailable} aria-pressed={effectiveWebMode !== "off" && !deepSearch && !learnMode} title={webSearchTooltip} aria-describedby={showDuckDuckGoNotice ? "web-search-hint" : undefined} onClick={() => { if (deepSearch || learnMode) { setDeepSearch(false); setLearnMode(false); setWebSearchMode("auto"); return; } setWebSearchMode(current => { if (current === "auto") return "always"; if (current === "always") return "off"; return "auto"; }); }}><Globe2 size={16} /><span>Web</span>{effectiveWebMode === "auto" && !deepSearch && !learnMode && <span className="auto-badge" title="Décision automatique par agent rapide">Auto</span>}{effectiveWebMode === "always" && !deepSearch && !learnMode && <Check size={12} />}</button><button type="button" className={`tool-button deepsearch-trigger ${deepSearch ? "active" : ""}`} disabled={working || !isWebSearchAvailable} aria-pressed={deepSearch} title={isWebSearchAvailable ? "DeepSearch : recherche large multi-requêtes via SearXNG et grand rapport d’analyse approfondi" : webSearchTooltip} onClick={() => { setDeepSearch(old => { if (!old) setLearnMode(false); return !old; }); }}><Compass size={16} /><span>DeepSearch</span>{deepSearch && <Check size={12} />}</button><button type="button" className={`tool-button learn-trigger ${learnMode ? "active" : ""}`} disabled={working || !isWebSearchAvailable} aria-pressed={learnMode} title={isWebSearchAvailable ? "Mode Apprendre : conception d'un cours complet et adapté au sujet avec plan pédagogique et supports" : webSearchTooltip} onClick={() => { setLearnMode(old => { if (!old) setDeepSearch(false); return !old; }); }}><GraduationCap size={16} /><span>Apprendre</span>{learnMode && <Check size={12} />}</button><button type="button" className={`tool-button codecanvas-trigger ${codeMode ? "active" : ""}`} disabled={working || !config} aria-pressed={codeMode} title="Mode Code Canvas : générer une application ou un projet multi-fichiers dans l’éditeur interactif avec téléchargement .zip" onClick={toggleCodeMode}><Code2 size={16} /><span>Code · Canvas</span>{codeMode && <Check size={12} />}</button><button type="button" className={`tool-button finance-trigger ${financeMode ? "active" : ""}`} disabled={working} aria-pressed={financeMode} title="Mode Finances & Bourse : télécharger automatiquement les cotations en direct (EOD) et les données financières (Yahoo Finance)" onClick={() => setFinanceMode(old => !old)}><TrendingUp size={16} /><span>Finances</span>{financeMode && <Check size={12} />}</button><button type="button" className="tool-button finance-chart-trigger" disabled={working} title="Ouvrir le tableau de bord boursier : courbe du cours EOD et statistiques financières complètes Yahoo" onClick={() => openFinanceModal()}><LineChart size={16} /><span>Courbe & Stats</span></button><button type="button" className={`tool-button multiagent-trigger ${multiAgentActive ? "active" : ""}`} disabled={working || !config} aria-pressed={multiAgentActive} title="Conseil Multi-Agents : orchestrer plusieurs modèles avec des personas dédiés (Synthèse d'experts ou Débat)" onClick={() => setShowMultiAgentModal(true)}><Users size={16} /><span>Conseil IA</span>{multiAgentActive && <Check size={12} />}</button><button type="button" className="tool-button studio-trigger" disabled={working} title="Ouvrir le Studio Image dédié (Ideogram, amélioration de prompt, visualisation et galerie)" onClick={() => openImageStudio(draft.trim())}><ImagePlus size={16} /><span>Studio Image</span></button><button type="button" className="tool-button sound-trigger" disabled={working} title="Ouvrir le Studio Son & Musique dédié (ElevenLabs Sound Effects & Eleven Music)" onClick={() => openSoundStudio(draft.trim())}><Volume2 size={16} /><span>Sons & Musique</span></button>{conversation && <button type="button" className={`tool-button study-trigger ${studyModalOpen ? "active" : ""}`} disabled={working} title="Générer des Flashcards ou un Quizz d'auto-évaluation sur les échanges du tchat" onClick={() => openStudyModal("flashcards")}><Brain size={16} /><span>Flash / Quizz</span></button>}</div><div className="composer-submit"><span className="enter-hint">↵ pour envoyer</span>{isCurrentStreaming ? <button className="send-button stop-button" type="button" onClick={stopCurrentStream} aria-label="Interrompre la génération" title="Interrompre la génération"><Square size={14} fill="currentColor" /></button> : <button className="send-button" type="submit" disabled={!canSend} aria-label="Envoyer le message">{busy === "upload" ? <LoaderCircle size={19} className="spin" /> : <ArrowUp size={20} />}</button>}</div></div>
+              <div className="composer-toolbar"><div className="composer-tools"><div className="composer-attach-wrapper" ref={attachMenuRef}><input className="sr-only" type="file" ref={docInputRef} multiple accept=".txt,.md,.csv,.json,.pdf,.docx,image/png,image/jpeg,image/webp" onChange={event => void uploadFiles(event.target.files, "ocr")} tabIndex={-1} /><input className="sr-only" type="file" ref={visionInputRef} multiple accept="image/png,image/jpeg,image/webp" onChange={event => void uploadFiles(event.target.files, "vision")} tabIndex={-1} /><IconButton label="Joindre un document ou analyser une image" aria-expanded={attachMenuOpen} aria-haspopup="menu" disabled={working || !config} onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); setAttachMenuOpen(prev => !prev); }}><Paperclip size={19} /></IconButton>{attachMenuOpen && <div className="composer-attach-popover" role="menu" onMouseDown={e => e.stopPropagation()}><div className="attach-popover-header"><span className="attach-popover-title">Joindre une pièce</span></div><button type="button" className="attach-popover-item" role="menuitem" onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); docInputRef.current?.click(); setAttachMenuOpen(false); }}><span className="attach-popover-icon is-doc"><FileText size={17} /></span><div className="attach-popover-text"><span className="attach-item-title">Document (Mistral OCR)</span><span className="attach-item-desc">PDF, Word, scans, tableaux — extraction structurée & fidèle</span></div></button><button type="button" className="attach-popover-item" role="menuitem" onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); visionInputRef.current?.click(); setAttachMenuOpen(false); }}><span className="attach-popover-icon is-vision"><Eye size={17} /></span><div className="attach-popover-text"><span className="attach-item-title">Image (Vision IA détaillée)</span><span className="attach-item-desc">Photos, infographies, schémas — analyse visuelle exhaustive</span></div></button></div>}</div><IconButton label="Analyser un lien web ou vidéo YouTube (URL)" disabled={working || !config} onClick={() => { setUrlError(""); setUrlInputValue(""); setShowUrlModal(true); }}><Link2 size={19} /></IconButton><span className="tool-divider" /><button type="button" className={`tool-button web-trigger ${effectiveWebMode !== "off" && !deepSearch && !learnMode ? "active" : ""} ${effectiveWebMode === "auto" && !deepSearch && !learnMode ? "web-auto" : ""} ${effectiveWebMode === "always" && !deepSearch && !learnMode ? "web-always" : ""} ${effectiveWebMode === "off" && !deepSearch && !learnMode ? "web-off" : ""}`} disabled={working || !isWebSearchAvailable} aria-pressed={effectiveWebMode !== "off" && !deepSearch && !learnMode} title={webSearchTooltip} aria-describedby={showDuckDuckGoNotice ? "web-search-hint" : undefined} onClick={() => { if (deepSearch || learnMode) { setDeepSearch(false); setLearnMode(false); setWebSearchMode("auto"); return; } setWebSearchMode(current => { if (current === "auto") return "always"; if (current === "always") return "off"; return "auto"; }); }}><Globe2 size={16} /><span>Web</span>{effectiveWebMode === "auto" && !deepSearch && !learnMode && <span className="auto-badge" title="Décision automatique par agent rapide">Auto</span>}{effectiveWebMode === "always" && !deepSearch && !learnMode && <Check size={12} />}</button><button type="button" className={`tool-button deepsearch-trigger ${deepSearch ? "active" : ""}`} disabled={working || !isWebSearchAvailable} aria-pressed={deepSearch} title={isWebSearchAvailable ? "DeepSearch : recherche large multi-requêtes via SearXNG et grand rapport d’analyse approfondi" : webSearchTooltip} onClick={() => { setDeepSearch(old => { if (!old) setLearnMode(false); return !old; }); }}><Compass size={16} /><span>DeepSearch</span>{deepSearch && <Check size={12} />}</button><button type="button" className={`tool-button learn-trigger ${learnMode ? "active" : ""}`} disabled={working || !isWebSearchAvailable} aria-pressed={learnMode} title={isWebSearchAvailable ? "Mode Apprendre : conception d'un cours complet et adapté au sujet avec plan pédagogique et supports" : webSearchTooltip} onClick={() => { setLearnMode(old => { if (!old) setDeepSearch(false); return !old; }); }}><GraduationCap size={16} /><span>Apprendre</span>{learnMode && <Check size={12} />}</button><button type="button" className={`tool-button codecanvas-trigger ${codeMode ? "active" : ""}`} disabled={working || !config} aria-pressed={codeMode} title="Mode Code Canvas : générer une application ou un projet multi-fichiers dans l’éditeur interactif avec téléchargement .zip" onClick={toggleCodeMode}><Code2 size={16} /><span>Code · Canvas</span>{codeMode && <Check size={12} />}</button><button type="button" className={`tool-button finance-trigger ${financeMode ? "active" : ""}`} disabled={working} aria-pressed={financeMode} title="Mode Finances & Bourse : télécharger automatiquement les cotations en direct (EOD) et les données financières (Yahoo Finance)" onClick={() => setFinanceMode(old => !old)}><TrendingUp size={16} /><span>Finances</span>{financeMode && <Check size={12} />}</button><button type="button" className="tool-button finance-chart-trigger" disabled={working} title="Ouvrir le tableau de bord boursier : courbe du cours EOD et statistiques financières complètes Yahoo" onClick={() => openFinanceModal()}><LineChart size={16} /><span>Courbe & Stats</span></button><button type="button" className={`tool-button multiagent-trigger ${multiAgentActive ? "active" : ""}`} disabled={working || !config} aria-pressed={multiAgentActive} title="Conseil Multi-Agents : orchestrer plusieurs modèles avec des personas dédiés (Synthèse d'experts ou Débat)" onClick={() => setShowMultiAgentModal(true)}><Users size={16} /><span>Conseil IA</span>{multiAgentActive && <Check size={12} />}</button><button type="button" className="tool-button studio-trigger" disabled={working} title="Ouvrir le Studio Image dédié (Ideogram, amélioration de prompt, visualisation et galerie)" onClick={() => openImageStudio(draft.trim())}><ImagePlus size={16} /><span>Studio Image</span></button><button type="button" className="tool-button sound-trigger" disabled={working} title="Ouvrir le Studio Son & Musique dédié (ElevenLabs Sound Effects & Eleven Music)" onClick={() => openSoundStudio(draft.trim())}><Volume2 size={16} /><span>Sons & Musique</span></button><button type="button" className={`tool-button study-trigger ${studyModalOpen ? "active" : ""}`} disabled={working} title="Mode Réviser : révisez avec Flashcards 3D, Quizz interactif et Phrases à trous à partir de vos cours" onClick={() => openStudyModal("all")}><GraduationCap size={16} /><span>Réviser</span></button></div><div className="composer-submit"><span className="enter-hint">↵ pour envoyer</span>{isCurrentStreaming ? <button className="send-button stop-button" type="button" onClick={stopCurrentStream} aria-label="Interrompre la génération" title="Interrompre la génération"><Square size={14} fill="currentColor" /></button> : <button className="send-button" type="submit" disabled={!canSend} aria-label="Envoyer le message">{busy === "upload" ? <LoaderCircle size={19} className="spin" /> : <ArrowUp size={20} />}</button>}</div></div>
             </form>
             <div className="composer-footnote" id="composer-hint"><span>cLAIr peut se tromper. Gardez un regard critique sur les réponses.</span><span>Maj + Entrée pour un saut de ligne</span></div>
           </div>
@@ -3043,11 +3070,12 @@ export function ChatApp() {
         }}
       />
     )}
-    {studyModalOpen && conversation && (
+    {studyModalOpen && (
       <StudyModal
         isOpen={studyModalOpen}
         conversation={conversation}
         initialKind={studyModalKind}
+        initialCourseText={draft.trim()}
         onClose={() => setStudyModalOpen(false)}
         onSendToChat={(content) => {
           setDraft((prev) => (prev ? `${prev}\n\n${content}` : content));

@@ -2,15 +2,18 @@
 
 import { useEffect, useState } from "react";
 import {
+  BookOpen,
   Brain,
   Check,
   CircleAlert,
   Copy,
+  FileText,
   GraduationCap,
   HelpCircle,
   Layers,
   LoaderCircle,
   MessageSquareQuote,
+  Pencil,
   RotateCcw,
   Sliders,
   Sparkles,
@@ -24,15 +27,18 @@ import {
   type Conversation,
   type Flashcard,
   type QuizQuestion,
+  type ClozeTestItem,
   type StudyMaterialResponse,
 } from "@/lib/api";
 import { LearnFlashcards } from "@/components/learn-flashcards";
 import { LearnQuiz } from "@/components/learn-quiz";
+import { LearnCloze } from "@/components/learn-cloze";
 
 type StudyModalProps = {
   isOpen: boolean;
-  conversation: Conversation | null;
-  initialKind?: "flashcards" | "quiz";
+  conversation?: Conversation | null;
+  initialKind?: "flashcards" | "quiz" | "cloze" | "all";
+  initialCourseText?: string;
   onClose: () => void;
   onSendToChat?: (content: string) => void;
 };
@@ -40,10 +46,10 @@ type StudyModalProps = {
 type Difficulty = "easy" | "medium" | "hard";
 
 const COUNT_PRESETS = [
-  { count: 5, label: "5 cartes", hint: "Express (~3 min)" },
-  { count: 10, label: "10 cartes", hint: "Standard (~6 min)" },
-  { count: 15, label: "15 cartes", hint: "Approfondi (~10 min)" },
-  { count: 20, label: "20 cartes", hint: "Examen (~15 min)" },
+  { count: 5, label: "5 éléments", hint: "Express (~3 min)" },
+  { count: 10, label: "10 éléments", hint: "Standard (~6 min)" },
+  { count: 15, label: "15 éléments", hint: "Approfondi (~10 min)" },
+  { count: 20, label: "20 éléments", hint: "Examen (~15 min)" },
 ];
 
 const DIFFICULTY_OPTIONS: { id: Difficulty; label: string; icon: string; desc: string; tone: string }[] = [
@@ -74,10 +80,13 @@ export function StudyModal({
   isOpen,
   conversation,
   initialKind = "flashcards",
+  initialCourseText = "",
   onClose,
   onSendToChat,
 }: StudyModalProps) {
-  const [kind, setKind] = useState<"flashcards" | "quiz">(initialKind);
+  const [kind, setKind] = useState<"flashcards" | "quiz" | "cloze" | "all">(initialKind);
+  const [sourceMode, setSourceMode] = useState<"conversation" | "custom">("custom");
+  const [courseText, setCourseText] = useState<string>("");
   const [count, setCount] = useState<number>(10);
   const [difficulty, setDifficulty] = useState<Difficulty>("medium");
   const [topic, setTopic] = useState<string>("");
@@ -86,20 +95,35 @@ export function StudyModal({
   const [copied, setCopied] = useState(false);
   const [showConfig, setShowConfig] = useState(true);
 
-  // Stockage des résultats par conversation
+  // Pour naviguer entre les activités quand "Pack Complet" (all) est sélectionné
+  const [activePackTab, setActivePackTab] = useState<"flashcards" | "quiz" | "cloze">("flashcards");
+
+  // Stockage des résultats
   const [result, setResult] = useState<StudyMaterialResponse | null>(null);
 
-  // Initialisation à l'ouverture ou au changement de conversation
+  // Initialisation à l'ouverture
   useEffect(() => {
-    if (isOpen && conversation) {
-      const defaultTopic = conversation.title && conversation.title !== "Nouvelle conversation"
-        ? conversation.title
-        : conversation.theme || "Sujet abordé dans le tchat";
+    if (isOpen) {
+      if (initialCourseText && initialCourseText.trim()) {
+        setCourseText(initialCourseText);
+        setSourceMode("custom");
+      } else if (conversation && conversation.title) {
+        setSourceMode("conversation");
+      } else {
+        setSourceMode("custom");
+      }
+
+      const defaultTopic =
+        conversation?.title && conversation.title !== "Nouvelle conversation"
+          ? conversation.title
+          : conversation?.theme ||
+            (initialCourseText ? initialCourseText.split("\n")[0].replace(/^#+\s*/, "").slice(0, 60) : "Sujet de cours");
+
       setTopic(defaultTopic);
       setKind(initialKind);
       setError(null);
     }
-  }, [isOpen, conversation, initialKind]);
+  }, [isOpen, conversation, initialKind, initialCourseText]);
 
   // Raccourci Échap pour fermer la modale
   useEffect(() => {
@@ -113,26 +137,39 @@ export function StudyModal({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [isOpen, loading, onClose]);
 
-  if (!isOpen || !conversation) {
+  if (!isOpen) {
     return null;
   }
 
-  async function handleGenerate(targetKind?: "flashcards" | "quiz") {
-    if (!conversation) return;
+  async function handleGenerate(targetKind?: "flashcards" | "quiz" | "cloze" | "all") {
     const activeKind = targetKind || kind;
     setKind(activeKind);
     setLoading(true);
     setError(null);
 
+    const isUsingCustom = sourceMode === "custom" || !conversation;
+    if (isUsingCustom && !courseText.trim()) {
+      setError("Veuillez saisir ou coller le texte de votre cours pour générer les révisions.");
+      setLoading(false);
+      return;
+    }
+
     try {
-      const data = await generateStudyMaterial(conversation.id, {
+      const data = await generateStudyMaterial(isUsingCustom ? null : conversation?.id, {
         kind: activeKind,
         count,
         difficulty,
-        topic: topic.trim() || conversation.title || "Discussion",
+        topic:
+          topic.trim() ||
+          conversation?.title ||
+          (courseText.trim() ? courseText.trim().split("\n")[0].replace(/^#+\s*/, "").slice(0, 60) : "Cours"),
+        course_text: isUsingCustom ? courseText.trim() : undefined,
       });
       setResult(data);
       setShowConfig(false);
+      if (activeKind === "all") {
+        setActivePackTab("flashcards");
+      }
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -143,16 +180,19 @@ export function StudyModal({
   function handleCopyMarkdown() {
     if (!result) return;
     let md = "";
-    if (result.kind === "flashcards" && result.flashcards) {
-      md = `# 📇 Flashcards de révision : ${result.topic}\n\n`;
+
+    if (result.flashcards && result.flashcards.length > 0) {
+      md += `# 📇 Flashcards de révision : ${result.topic}\n\n`;
       md += `*Niveau : ${difficulty} · ${result.flashcards.length} cartes de mémorisation active*\n\n`;
       result.flashcards.forEach((card, idx) => {
         md += `### Flashcard ${idx + 1} (${card.category || "Point Clé"})\n`;
         md += `**Recto :** ${card.recto}\n`;
         md += `**Verso :** ${card.verso}\n\n`;
       });
-    } else if (result.kind === "quiz" && result.questions) {
-      md = `# 🎯 Quizz d'auto-évaluation : ${result.topic}\n\n`;
+    }
+
+    if (result.questions && result.questions.length > 0) {
+      md += `# 🎯 Quizz d'auto-évaluation : ${result.topic}\n\n`;
       md += `*Niveau : ${difficulty} · ${result.questions.length} questions QCM*\n\n`;
       result.questions.forEach((q, idx) => {
         md += `### Question ${idx + 1} : ${q.question}\n`;
@@ -163,6 +203,19 @@ export function StudyModal({
         const correctLetter = String.fromCharCode(65 + q.answer);
         md += `\n*Bonne réponse : Option ${correctLetter}*\n`;
         md += `> **Explication :** ${q.explanation}\n\n`;
+      });
+    }
+
+    if (result.cloze_items && result.cloze_items.length > 0) {
+      md += `# ✍️ Phrases à trous de révision : ${result.topic}\n\n`;
+      md += `*Niveau : ${difficulty} · ${result.cloze_items.length} exercices Cloze test*\n\n`;
+      result.cloze_items.forEach((item, idx) => {
+        md += `### Exercice ${idx + 1}\n`;
+        md += `> ${item.text_with_blanks || item.sentence}\n\n`;
+        md += `*Terme(s) manquant(s) :* **${item.missing_words.join(", ")}**\n`;
+        if (item.explanation) {
+          md += `*Justification :* ${item.explanation}\n\n`;
+        }
       });
     }
 
@@ -177,13 +230,16 @@ export function StudyModal({
   function handleInsertInChat() {
     if (!result || !onSendToChat) return;
     let text = "";
-    if (result.kind === "flashcards" && result.flashcards) {
-      text = `### 📇 Flashcards générées sur « ${result.topic} »\n\n`;
+
+    if (result.flashcards && result.flashcards.length > 0) {
+      text += `### 📇 Flashcards sur « ${result.topic} »\n\n`;
       result.flashcards.forEach((c, idx) => {
         text += `**${idx + 1}. [${c.category || "Point Clé"}]** ${c.recto}\n*→ ${c.verso}*\n\n`;
       });
-    } else if (result.kind === "quiz" && result.questions) {
-      text = `### 🎯 Quizz d'entraînement sur « ${result.topic} »\n\n`;
+    }
+
+    if (result.questions && result.questions.length > 0) {
+      text += `### 🎯 Quizz QCM sur « ${result.topic} »\n\n`;
       result.questions.forEach((q, idx) => {
         text += `**Question ${idx + 1} :** ${q.question}\n`;
         q.options.forEach((opt, optIdx) => {
@@ -194,6 +250,15 @@ export function StudyModal({
         text += `*Bonne réponse : ${correctLetter}* (${q.explanation})\n\n`;
       });
     }
+
+    if (result.cloze_items && result.cloze_items.length > 0) {
+      text += `### ✍️ Phrases à trous sur « ${result.topic} »\n\n`;
+      result.cloze_items.forEach((c, idx) => {
+        text += `**Exercice ${idx + 1} :** ${c.text_with_blanks || c.sentence}\n`;
+        text += `*Mots clés : ${c.missing_words.join(", ")}* (${c.explanation})\n\n`;
+      });
+    }
+
     onSendToChat(text);
     onClose();
   }
@@ -215,17 +280,23 @@ export function StudyModal({
         <div className="deepsearch-modal-header study-modal-header">
           <div className="deepsearch-modal-header-left">
             <span className="deepsearch-modal-badge-icon study-modal-badge-icon">
-              <Brain size={20} />
+              <GraduationCap size={20} />
             </span>
             <div className="deepsearch-modal-title-group">
               <div className="deepsearch-modal-eyebrow study-modal-eyebrow">
                 <Sparkles size={12} />
-                <span>RÉVISION ACTIVE & AUTO-ÉVALUATION</span>
+                <span>ESPACE RÉVISION & ENTRAÎNEMENT DIDACTIQUE</span>
               </div>
-              <h2 id="study-modal-title">Flashcards 3D & Quizz Interactif</h2>
+              <h2 id="study-modal-title">Mode Réviser · Flashcards, Quizz & Phrases à trous</h2>
               <div className="study-modal-subheading">
-                <span>Discussion : <strong>{conversation.title || "Tchat en cours"}</strong></span>
-                {conversation.theme && (
+                {conversation?.title ? (
+                  <span>
+                    Discussion liée : <strong>{conversation.title}</strong>
+                  </span>
+                ) : (
+                  <span>Cours personnalisé ou extrait libre</span>
+                )}
+                {conversation?.theme && (
                   <span className="study-modal-theme-pill">{conversation.theme}</span>
                 )}
               </div>
@@ -257,34 +328,96 @@ export function StudyModal({
               <div className="study-loading-orb">
                 <LoaderCircle size={38} className="spin" />
               </div>
-              <h3>Génération pédagogique en cours…</h3>
+              <h3>Conception pédagogique de vos révisions…</h3>
               <p>
-                Analyse de la discussion et extraction des concepts clés pour concevoir vos{" "}
-                <strong>{count} {kind === "flashcards" ? "Flashcards 3D" : "Questions de Quizz"}</strong> ({difficultyMeta.label}).
+                Analyse du cours et extraction des définitions et mécanismes clés pour concevoir vos{" "}
+                <strong>
+                  {count}{" "}
+                  {kind === "flashcards"
+                    ? "Flashcards 3D"
+                    : kind === "quiz"
+                    ? "Questions de Quizz"
+                    : kind === "cloze"
+                    ? "Phrases à trous"
+                    : "Activités complètes (Flash, Quizz, Trous)"}
+                </strong>{" "}
+                ({difficultyMeta.label}).
               </p>
               <div className="study-loading-steps">
-                <span>✓ Analyse des échanges & du contexte</span>
-                <span>⚡ Formulation des questions & explications didactiques</span>
-                <span>✨ Finalisation de l'évaluation interactive</span>
+                <span>✓ Analyse didactique du cours & des notions clés</span>
+                <span>⚡ Formulation des questions, réponses et pièges didactiques</span>
+                <span>✨ Génération de vos supports de révision interactive</span>
               </div>
             </div>
           )}
 
-          {/* VUE 2 : CONFIGURATION DES PARAMÈTRES (Avant génération ou lors d'un réajustement) */}
+          {/* VUE 2 : CONFIGURATION DES PARAMÈTRES */}
           {!loading && (showConfig || !result) && (
             <div className="study-config-panel">
               <div className="study-config-intro">
                 <p>
-                  Choisissez le format d’apprentissage souhaité, le nombre de cartes et le niveau d’exigence.
-                  L’IA synthétise les points clés abordés dans cette conversation pour créer votre entraînement personnalisé.
+                  Mettez votre cours ou vos notes de révision pour générer instantanément des flashcards 3D,
+                  un quizz à choix multiples ou des phrases à trous interactives.
                 </p>
               </div>
 
-              {/* 1. SÉLECTEUR DE MODE : Flashcards OU Quizz */}
+              {/* 1. SOURCE DU COURS : Discussion OU Saisie personnalisée */}
+              <div className="study-section-block">
+                <label className="study-section-title">
+                  <BookOpen size={15} />
+                  <span>1. Source du cours à réviser</span>
+                </label>
+                <div className="study-source-tabs">
+                  <button
+                    type="button"
+                    className={`study-source-tab ${sourceMode === "custom" ? "is-active" : ""}`}
+                    onClick={() => setSourceMode("custom")}
+                  >
+                    <FileText size={13} />
+                    <span>Coller / Écrire un cours</span>
+                  </button>
+                  {conversation && (
+                    <button
+                      type="button"
+                      className={`study-source-tab ${sourceMode === "conversation" ? "is-active" : ""}`}
+                      onClick={() => setSourceMode("conversation")}
+                    >
+                      <MessageSquareQuote size={13} />
+                      <span>Utiliser les échanges du tchat</span>
+                    </button>
+                  )}
+                </div>
+
+                {sourceMode === "custom" && (
+                  <div className="study-course-input-wrap">
+                    <textarea
+                      className="study-course-textarea"
+                      placeholder="Collez ici votre cours, vos notes, un résumé ou les définitions à réviser (ex: architecture Docker, cours de SVT, histoire, programmation, droit...)"
+                      value={courseText}
+                      onChange={(e) => setCourseText(e.target.value)}
+                      maxLength={40000}
+                    />
+                    <div className="study-course-meta">
+                      <span>{courseText.length} caractères saisis</span>
+                      {courseText && (
+                        <button
+                          type="button"
+                          className="text-xs text-rose-500 hover:underline"
+                          onClick={() => setCourseText("")}
+                        >
+                          Effacer le cours
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* 2. SÉLECTEUR DE FORMAT D'APPRENTISSAGE */}
               <div className="study-section-block">
                 <label className="study-section-title">
                   <Layers size={15} />
-                  <span>1. Choisissez le format d'apprentissage</span>
+                  <span>2. Choisissez vos activités de révision</span>
                 </label>
                 <div className="study-format-cards-grid">
                   <button
@@ -320,20 +453,62 @@ export function StudyModal({
                       </div>
                     </div>
                     <p>
-                      Évaluation méthodique avec validation directe vert/rouge, explications expertes détaillées, calcul de score en temps réel et trophée final.
+                      Évaluation méthodique avec validation directe vert/rouge, explications expertes détaillées, calcul de score en direct et trophée.
                     </p>
                     <div className="study-format-card-footer">
-                      <span className="study-format-badge">Score en direct & Trophée</span>
+                      <span className="study-format-badge">Score direct & Explications</span>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    className={`study-format-card ${kind === "cloze" ? "is-selected" : ""}`}
+                    onClick={() => setKind("cloze")}
+                  >
+                    <div className="study-format-card-header">
+                      <span className="study-format-card-icon">✍️</span>
+                      <div className="study-format-card-name">
+                        <strong>Phrases à trous</strong>
+                        <small>Cloze test interactif & auto-complétion</small>
+                      </div>
+                    </div>
+                    <p>
+                      Complétez les notions clés directement au clavier ou via la banque de mots cliquables. Vérification immédiate, indices et solutions.
+                    </p>
+                    <div className="study-format-card-footer">
+                      <span className="study-format-badge">Banque de mots & Indices</span>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    className={`study-format-card ${kind === "all" ? "is-selected" : ""}`}
+                    onClick={() => setKind("all")}
+                  >
+                    <div className="study-format-card-header">
+                      <span className="study-format-card-icon">🌟</span>
+                      <div className="study-format-card-name">
+                        <strong>Pack Révision Complet</strong>
+                        <small>Flashcards + Quizz + Phrases à trous</small>
+                      </div>
+                    </div>
+                    <p>
+                      Générez en une seule fois l'ensemble des 3 formats pour un entraînement exhaustif à 360° sur votre cours.
+                    </p>
+                    <div className="study-format-card-footer">
+                      <span className="study-format-badge">Pack 3-en-1</span>
                     </div>
                   </button>
                 </div>
               </div>
 
-              {/* 2. NOMBRE DE CARTES / QUESTIONS */}
+              {/* 3. NOMBRE DE CARTES / QUESTIONS */}
               <div className="study-section-block">
                 <label className="study-section-title">
                   <Sliders size={15} />
-                  <span>2. Nombre de {kind === "flashcards" ? "cartes" : "questions"} : <strong>{count}</strong></span>
+                  <span>
+                    3. Nombre d'éléments par activité : <strong>{count}</strong>
+                  </span>
                 </label>
                 <div className="study-count-chips-row">
                   {COUNT_PRESETS.map((preset) => (
@@ -366,11 +541,11 @@ export function StudyModal({
                 </div>
               </div>
 
-              {/* 3. NIVEAU DE DIFFICULTÉ */}
+              {/* 4. NIVEAU DE DIFFICULTÉ */}
               <div className="study-section-block">
                 <label className="study-section-title">
                   <GraduationCap size={15} />
-                  <span>3. Niveau de difficulté</span>
+                  <span>4. Niveau d'exigence</span>
                 </label>
                 <div className="study-difficulty-grid">
                   {DIFFICULTY_OPTIONS.map((opt) => (
@@ -390,11 +565,11 @@ export function StudyModal({
                 </div>
               </div>
 
-              {/* 4. SUJET / FOCUS OPTIONNEL */}
+              {/* 5. SUJET / FOCUS OPTIONNEL */}
               <div className="study-section-block">
                 <label htmlFor="study-topic-input" className="study-section-title">
                   <WandSparkles size={15} />
-                  <span>4. Sujet ou axe ciblé (optionnel)</span>
+                  <span>5. Sujet ou titre du cours (optionnel)</span>
                 </label>
                 <input
                   id="study-topic-input"
@@ -402,11 +577,11 @@ export function StudyModal({
                   className="study-topic-input"
                   value={topic}
                   onChange={(e) => setTopic(e.target.value)}
-                  placeholder="Ex: Le cycle de vie des composants, les erreurs de syntaxe, l'historique..."
+                  placeholder="Ex: Architecture des microservices, La Révolution française, Les pointeurs en C..."
                   maxLength={160}
                 />
                 <span className="study-topic-hint">
-                  Pré-rempli avec le thème du tchat. Vous pouvez préciser un sous-thème spécifique pour cibler l'évaluation.
+                  Permet de guider et contextualiser l'intitulé de vos fiches de révision.
                 </span>
               </div>
 
@@ -429,7 +604,16 @@ export function StudyModal({
                 >
                   <Sparkles size={16} />
                   <span>
-                    Générer {count} {kind === "flashcards" ? "Flashcards 3D" : "Questions de Quizz"}
+                    Générer{" "}
+                    {kind === "all"
+                      ? "le Pack Complet de Révision"
+                      : `${count} ${
+                          kind === "flashcards"
+                            ? "Flashcards 3D"
+                            : kind === "quiz"
+                            ? "Questions de Quizz"
+                            : "Phrases à trous"
+                        }`}
                   </span>
                 </button>
               </div>
@@ -443,8 +627,16 @@ export function StudyModal({
               <div className="study-results-toolbar">
                 <div className="study-results-toolbar-left">
                   <div className="study-active-pill">
-                    <span>{result.kind === "flashcards" ? "📇 Flashcards" : "🎯 Quizz QCM"}</span>
-                    <small>({result.count} cartes · {difficultyMeta.label})</small>
+                    <span>
+                      {result.kind === "flashcards"
+                        ? "📇 Flashcards"
+                        : result.kind === "quiz"
+                        ? "🎯 Quizz QCM"
+                        : result.kind === "cloze"
+                        ? "✍️ Phrases à trous"
+                        : "🌟 Pack Révision 3-en-1"}
+                    </span>
+                    <small>({difficultyMeta.label})</small>
                   </div>
                   <span className="study-results-topic-label" title={result.topic}>
                     Sujet : <strong>{result.topic}</strong>
@@ -456,30 +648,20 @@ export function StudyModal({
                     type="button"
                     className="study-toolbar-btn"
                     onClick={() => setShowConfig(true)}
-                    title="Modifier le nombre, la difficulté ou régénérer"
+                    title="Modifier le cours, le nombre ou régénérer"
                   >
                     <Sliders size={14} />
-                    <span>Ajuster / Régénérer</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    className="study-toolbar-btn"
-                    onClick={() => handleGenerate(result.kind === "flashcards" ? "quiz" : "flashcards")}
-                    title={`Générer directement ${result.kind === "flashcards" ? "un Quizz QCM" : "des Flashcards 3D"} sur ce même sujet`}
-                  >
-                    <RotateCcw size={14} />
-                    <span>{result.kind === "flashcards" ? "Créer le Quizz" : "Créer les Flashcards"}</span>
+                    <span>Ajuster / Nouveau cours</span>
                   </button>
 
                   <button
                     type="button"
                     className="study-toolbar-btn"
                     onClick={handleCopyMarkdown}
-                    title="Copier l'ensemble des cartes ou questions au format texte Markdown"
+                    title="Copier toutes les activités au format texte Markdown"
                   >
                     {copied ? <Check size={14} color="#10b981" /> : <Copy size={14} />}
-                    <span>{copied ? "Copié !" : "Copier"}</span>
+                    <span>{copied ? "Copié !" : "Copier Markdown"}</span>
                   </button>
 
                   {onSendToChat && (
@@ -487,7 +669,7 @@ export function StudyModal({
                       type="button"
                       className="study-toolbar-btn is-highlight"
                       onClick={handleInsertInChat}
-                      title="Insérer ces cartes de révision dans le fil de la discussion"
+                      title="Insérer ces supports de révision dans le fil de discussion"
                     >
                       <MessageSquareQuote size={14} />
                       <span>Insérer dans le tchat</span>
@@ -496,23 +678,67 @@ export function StudyModal({
                 </div>
               </div>
 
-              {/* Rendu interactif selon le format */}
-              <div className="study-interactive-container">
-                {result.kind === "flashcards" && result.flashcards && result.flashcards.length > 0 && (
-                  <LearnFlashcards
-                    flashcards={result.flashcards}
-                    title={`${result.flashcards.length} Flashcards Interactives · ${result.topic}`}
-                    subtitle={`Entraînez-vous activement sur « ${result.topic} ». Niveau : ${difficultyMeta.label}. Retournez les cartes au clic ou avec Espace.`}
-                  />
-                )}
+              {/* Si Pack Complet : Onglets pour basculer facilement entre les 3 activités */}
+              {result.kind === "all" && (
+                <div className="study-pack-tabs">
+                  <button
+                    type="button"
+                    className={`study-pack-tab ${activePackTab === "flashcards" ? "is-active" : ""}`}
+                    onClick={() => setActivePackTab("flashcards")}
+                  >
+                    <span>📇 Flashcards 3D ({result.flashcards?.length || 0})</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`study-pack-tab ${activePackTab === "quiz" ? "is-active" : ""}`}
+                    onClick={() => setActivePackTab("quiz")}
+                  >
+                    <span>🎯 Quizz QCM ({result.questions?.length || 0})</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`study-pack-tab ${activePackTab === "cloze" ? "is-active" : ""}`}
+                    onClick={() => setActivePackTab("cloze")}
+                  >
+                    <span>✍️ Phrases à trous ({result.cloze_items?.length || 0})</span>
+                  </button>
+                </div>
+              )}
 
-                {result.kind === "quiz" && result.questions && result.questions.length > 0 && (
-                  <LearnQuiz
-                    questions={result.questions}
-                    title={`Quizz d'Auto-évaluation (${result.questions.length} QCM) · ${result.topic}`}
-                    subtitle={`Testez votre maîtrise sur « ${result.topic} » (Niveau ${difficultyMeta.label}). Choisissez l'option correcte pour afficher la justification experte.`}
-                  />
-                )}
+              {/* Rendu interactif selon le format sélectionné */}
+              <div className="study-interactive-container">
+                {/* 1. Flashcards */}
+                {((result.kind === "flashcards") || (result.kind === "all" && activePackTab === "flashcards")) &&
+                  result.flashcards &&
+                  result.flashcards.length > 0 && (
+                    <LearnFlashcards
+                      flashcards={result.flashcards}
+                      title={`${result.flashcards.length} Flashcards Interactives · ${result.topic}`}
+                      subtitle={`Entraînez-vous activement sur « ${result.topic} » (Niveau : ${difficultyMeta.label}). Espace pour retourner, Flèches pour naviguer.`}
+                    />
+                  )}
+
+                {/* 2. Quizz */}
+                {((result.kind === "quiz") || (result.kind === "all" && activePackTab === "quiz")) &&
+                  result.questions &&
+                  result.questions.length > 0 && (
+                    <LearnQuiz
+                      questions={result.questions}
+                      title={`Quizz d'Auto-évaluation (${result.questions.length} Questions) · ${result.topic}`}
+                      subtitle={`Testez votre maîtrise sur « ${result.topic} ». Choisissez l'option correcte pour afficher immédiatement l'explication didactique.`}
+                    />
+                  )}
+
+                {/* 3. Phrases à trous */}
+                {((result.kind === "cloze") || (result.kind === "all" && activePackTab === "cloze")) &&
+                  result.cloze_items &&
+                  result.cloze_items.length > 0 && (
+                    <LearnCloze
+                      clozeItems={result.cloze_items}
+                      title={`Phrases à Trous (${result.cloze_items.length} Exercices) · ${result.topic}`}
+                      subtitle={`Complétez les mots clés manquants sur « ${result.topic} ». Saisissez au clavier ou cliquez sur la banque de mots.`}
+                    />
+                  )}
               </div>
             </div>
           )}

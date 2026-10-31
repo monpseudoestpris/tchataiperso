@@ -172,7 +172,7 @@ async def extract_document(settings: Settings, content: bytes, filename: str, mo
                 description = await providers.describe_image(settings, image, image_mime)
             extraction = DocumentExtraction(
                 model=settings.vision_model,
-                pages=[ExtractedPage(index=0, markdown=description, vision_description=description, method="vision")],
+                pages=[ExtractedPage(index=0, markdown="", vision_description=description, method="vision")],
                 warnings=[],
             )
             return mime, description, extraction.model_dump()

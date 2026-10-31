@@ -13,6 +13,7 @@ import {
   X,
 } from "lucide-react";
 import type { QuizQuestion } from "@/lib/api";
+import { MathMarkdown } from "@/components/math-markdown";
 
 type LearnQuizProps = {
   questions: QuizQuestion[];
@@ -134,7 +135,9 @@ export function LearnQuiz({ questions, title, subtitle }: LearnQuizProps) {
                 )}
               </div>
 
-              <h3 className="learn-quiz-statement">{q.question}</h3>
+              <div className="learn-quiz-statement">
+                <MathMarkdown content={q.question} />
+              </div>
 
               {/* Options A, B, C, D */}
               <div className="learn-quiz-options-list">
@@ -163,7 +166,9 @@ export function LearnQuiz({ questions, title, subtitle }: LearnQuizProps) {
                       disabled={hasAnswered}
                     >
                       <span className="learn-quiz-option-letter">{letter}</span>
-                      <span className="learn-quiz-option-text">{optionText}</span>
+                      <span className="learn-quiz-option-text">
+                        <MathMarkdown content={optionText} inline />
+                      </span>
                       {hasAnswered && isThisCorrect && (
                         <CheckCircle2 size={16} className="learn-option-feedback-icon is-ok" />
                       )}
@@ -182,7 +187,9 @@ export function LearnQuiz({ questions, title, subtitle }: LearnQuizProps) {
                     <Lightbulb size={16} />
                     <strong>Justification méthodologique :</strong>
                   </div>
-                  <p>{q.explanation}</p>
+                  <div className="learn-quiz-explanation-text">
+                    <MathMarkdown content={q.explanation} />
+                  </div>
                 </div>
               )}
             </div>

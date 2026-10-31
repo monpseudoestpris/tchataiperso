@@ -148,3 +148,93 @@ def test_study_material_api_endpoint(tmp_path):
         assert quiz_data["count"] == 6
         assert len(quiz_data["questions"]) == 6
         assert len(quiz_data["questions"][0]["options"]) == 4
+
+        # Test cloze generation
+        res_cloze = client.post(
+            f"/api/conversations/{conv.id}/study",
+            json={"kind": "cloze", "count": 5, "difficulty": "medium"},
+        )
+        assert res_cloze.status_code == 200
+        cloze_data = res_cloze.json()
+        assert cloze_data["kind"] == "cloze"
+        assert len(cloze_data["cloze_items"]) == 5
+        assert len(cloze_data["cloze_items"][0]["missing_words"]) >= 1
+
+        # Test direct course_text study endpoint
+        course_sample = (
+            "# Cours d'Architecture Réseau\n\n"
+            "- **Routeur :** Équipement réseau qui achemine les paquets IP entre plusieurs réseaux distincts.\n"
+            "- **Switch :** Commutateur réseau qui relie des équipements au sein d'un même réseau local (LAN).\n"
+            "- **DNS :** Système de noms de domaine traduisant les adresses IP en noms lisibles."
+        )
+        res_direct = client.post(
+            "/api/study/generate",
+            json={"kind": "all", "count": 3, "course_text": course_sample},
+        )
+        assert res_direct.status_code == 200
+        direct_data = res_direct.json()
+        assert direct_data["kind"] == "all"
+        assert len(direct_data["flashcards"]) == 3
+        assert len(direct_data["questions"]) == 3
+        assert len(direct_data["cloze_items"]) == 3
+        assert "Routeur" in direct_data["topic"] or "Réseau" in direct_data["topic"]
+
+
+def test_study_material_no_generic_methodology_on_vectors_course():
+    vectors_transcript = (
+        "Un vecteur, pour faire simple, c'est un outil mathématique qui possède trois caractéristiques :\n"
+        "1. **Une direction** (la droite selon laquelle il s'exerce, et ses parallèles).\n"
+        "2. **Un sens** (de A vers B, ou de B vers A).\n"
+        "3. **Une norme** (sa longueur, ou la distance entre son origine et son extrémité).\n\n"
+        "### 1. Notation et égalité\n"
+        "Deux vecteurs $\\vec{u}$ et $\\vec{v}$ sont **égaux** s'ils ont la même direction, le même sens et la même norme. "
+        "Si $\\vec{AB} = \\vec{CD}$, alors le quadrilatère $ABDC$ est un parallélogramme.\n\n"
+        "### 2. Addition de vecteurs et relation de Chasles\n"
+        "La star absolue de ce chapitre, c'est la **relation de Chasles**. Pour n'importe quels points $A$, $B$ et $C$ du plan :\n"
+        "$$\\vec{AB} + \\vec{BC} = \\vec{AC}$$\n\n"
+        "### 3. Multiplication par un réel\n"
+        "* Sa direction reste la même (les vecteurs $\\vec{u}$ et $k\\vec{u}$ sont **colinéaires**).\n"
+        "* Sa longueur est multipliée par $|k|$ (la valeur absolue de $k$).\n"
+        "* Son sens est conservé si $k > 0$, et inversé si $k < 0$.\n"
+        "Deux droites $(AB)$ et $(CD)$ sont parallèles si et seulement si les vecteurs $\\vec{AB}$ et $\\vec{CD}$ sont colinéaires.\n\n"
+        "### 4. Coordonnées dans un repère\n"
+        "* Les coordonnées du vecteur $\\vec{AB}$ se calculent ainsi : $\\vec{AB} (x_B - x_A ; y_B - y_A)$\n"
+        "* Pour additionner deux vecteurs en coordonnées, on additionne leurs abscisses entre elles et leurs ordonnées entre elles.\n"
+        "* Pour multiplier par un réel $k$, on multiplie chaque coordonnée par $k$.\n"
+    )
+
+    res = fallback_study_material(
+        transcript=vectors_transcript,
+        kind="all",
+        count=10,
+        difficulty="medium",
+        topic="Révision des vecteurs mathématiques niveau seconde",
+    )
+
+    assert len(res["flashcards"]) == 10
+    assert len(res["questions"]) == 10
+    assert len(res["cloze_items"]) == 10
+
+    # Ensure NO card contains generic meta-methodology questions
+    for card in res["flashcards"]:
+        recto = card["recto"].lower()
+        verso = card["verso"].lower()
+        assert "piège ou l'erreur courante" not in recto
+        assert "première démarche recommandée" not in recto
+        assert "règle cardinale à respecter" not in recto
+        assert "quel est l'objectif premier" not in recto
+        assert "comment s'organiser" not in recto
+        assert "se précipiter sur une solution superficielle" not in verso
+
+    # Check that real vector concepts are present across the cards
+    all_rectos = " ".join([c["recto"] for c in res["flashcards"]])
+    assert "direction" in all_rectos.lower() or "sens" in all_rectos.lower() or "norme" in all_rectos.lower()
+    assert "Chasles" in all_rectos or "égaux" in all_rectos or "colinéaires" in all_rectos or "Notation" in all_rectos
+
+    # Ensure NO quiz question contains generic meta-methodology
+    for q in res["questions"]:
+        q_text = q["question"].lower()
+        assert "finalité principale" not in q_text
+        assert "piège fréquent" not in q_text
+        assert "face à une difficulté" not in q_text
+

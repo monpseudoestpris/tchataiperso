@@ -351,10 +351,12 @@ async def generate_conversation_study_material(
     settings: Settings = Depends(get_settings),
     sessions: sessionmaker = Depends(get_sessions),
 ):
+    course_text = (body.course_text or "").strip()
+    transcript = ""
     with sessions() as db:
         conv = get_conversation(db, conversation_id, user.id)
-        if not conv.messages:
-            raise HTTPException(422, "La conversation doit comporter au moins un message pour générer des révisions.")
+        if not conv.messages and not course_text:
+            raise HTTPException(422, "La conversation doit comporter au moins un message ou un texte de cours pour générer des révisions.")
 
         parts: list[str] = []
         if conv.summary:
@@ -375,8 +377,54 @@ async def generate_conversation_study_material(
         difficulty=body.difficulty,
         topic=topic,
         model=model,
+        course_text=course_text,
     )
     return StudyMaterialResponse(**result)
+
+
+@router.post("/api/study/generate", response_model=StudyMaterialResponse)
+async def generate_study_material_direct(
+    body: GenerateStudyMaterialRequest,
+    user: User = Depends(current_user),
+    settings: Settings = Depends(get_settings),
+    sessions: sessionmaker = Depends(get_sessions),
+):
+    transcript = ""
+    topic = (body.topic or "").strip()
+    model = getattr(settings, "default_model", "")
+
+    if body.conversation_id:
+        with sessions() as db:
+            conv = get_conversation(db, body.conversation_id, user.id)
+            if conv.messages:
+                parts: list[str] = []
+                if conv.summary:
+                    parts.append(f"Résumé contextuel : {conv.summary}")
+                for m in conv.messages:
+                    if m.content and m.content.strip():
+                        role_label = "Utilisateur" if m.role == "user" else "Assistant"
+                        parts.append(f"{role_label} : {m.content.strip()}")
+                transcript = "\n\n".join(parts)
+            if not topic:
+                topic = conv.title or conv.theme or ""
+            model = conv.model or model
+
+    course_text = (body.course_text or "").strip()
+    if not course_text and not transcript:
+        raise HTTPException(422, "Veuillez fournir un texte de cours ou sélectionner une conversation avec des échanges.")
+
+    result = await providers.generate_study_material(
+        settings=settings,
+        transcript=transcript,
+        kind=body.kind,
+        count=body.count,
+        difficulty=body.difficulty,
+        topic=topic or "",
+        model=model,
+        course_text=course_text,
+    )
+    return StudyMaterialResponse(**result)
+
 
 
 

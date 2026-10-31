@@ -1,66 +1,48 @@
 # Relais — 31 octobre 2026
 
 ## 1. Project Overview
-cLAIr : application de conversation IA avancée, backend FastAPI/SQLAlchemy/Python, frontend Next.js 16/React/TypeScript. DeepSearch et Mode Apprendre effectuent des investigations web approfondies, capturent les sources avec rigueur, génèrent des visualisations graphiques et produisent des rapports structurés archivés et exportables en formats web (HTML), documents éditoriaux (PDF) et présentations PowerPoint générées par IA.
+cLAIr : application d'apprentissage et de révision didactique, conversation IA avancée, backend FastAPI/SQLAlchemy/Python, frontend Next.js 16/React/TypeScript.
 
 ## 2. Current Objective
-Sélection explicite du mode d'analyse lors de l'ajout d'une pièce jointe dans le tchat (Option A) :
-1. **Document (Mistral OCR)** : extraction textuelle et structurelle fidèle (PDF, Word, scans, textes, tableaux).
-2. **Image (Vision IA détaillée)** : analyse visuelle exhaustive et détaillée de l'image (photos, infographies, schémas, graphiques) directement par le modèle de vision multimodale (`VISION_MODEL`), sans passer par le filtre de l'OCR.
-3. **Correction d'affichage & ergonomie du popover** :
-   - Suppression du `overflow: hidden` sur `.composer` qui rognait la moitié supérieure du popover flottant.
-   - Positionnement en `overflow: visible; position: relative; z-index: 1000`.
-   - Sécurisation du clic via `stopPropagation()` sur `mousedown` et déclenchement direct du sélecteur de fichiers.
+Suppression intégrale des questions méta-méthodologiques ("Quel est le piège à éviter avec...", "Quelle démarche adopter...", etc.) et garantie d'une génération de questions, flashcards et quizz portant à 100% sur le contenu concret du cours fourni (définitions, théorèmes, formules LaTeX, calculs de coordonnées, relation de Chasles, colinéarité).
 
 ## 3. Completed Work
-- **Backend FastAPI** :
-  - `backend/app/routers/attachments.py` : acceptation du paramètre de formulaire `mode: str = Form("auto")` dans `POST /api/attachments`.
-  - `backend/app/documents.py` : implémentation du mode explicite `"vision"` :
-    - Vérification du type d'image/PDF et normalisation de résolution.
-    - Appel direct à `providers.describe_image` avec timeout dédié.
-    - Structuration dans `DocumentExtraction` avec `method="vision"` et transcription visuelle détaillée enregistrée dans `extracted_text`.
-    - Mode `"ocr"` / `"document"` conservé avec Mistral OCR.
-  - `backend/app/serializers.py` : exposition du champ `analysis_mode` (`"ocr" | "vision" | "local" | "finance"`) dans le JSON de l'attachement.
-  - `backend/tests/test_api.py` : test unitaire `test_explicit_vision_and_ocr_modes` vérifiant l'appel direct sans OCR en mode vision, le comportement OCR et le rejet propre des formats non compatibles vision (ex: `.txt`).
-- **Frontend Next.js** :
-  - `frontend/lib/api.ts` : ajout de `analysis_mode?: "ocr" | "vision" | "local" | "finance"` dans le type `Attachment`.
-  - `frontend/components/chat-app.tsx` :
-    - Popover Option A au clic sur le bouton trombone 📎 proposant les deux choix avec icônes, libellés et descriptions détaillées.
-    - Deux inputs `file` séparés (`docInputRef` et `visionInputRef`) avec filtres d'extensions appropriés.
-    - Statut d'upload dynamique ("Importation et analyse visuelle (Vision IA)" vs "documentaire (Mistral OCR)").
-    - Badges visuels distincts sur les pièces jointes : `👁️ Vision IA` (violet) et `📄 Mistral OCR` (bleu).
-    - Panneau accordéon `AttachmentAnalysis` adapté (titre "Analyse visuelle détaillée (Modèle Vision)" et affichage de la description visuelle).
-    - Fix d'événements de clic et propagation sur le menu déroulant.
-  - `frontend/app/globals.css` :
-    - Remplacement de `overflow: hidden` sur `.composer` par `overflow: visible; position: relative;`.
-    - Élévation du `z-index` à 1000 et espacement `bottom: calc(100% + 12px)`.
-    - Styles complets et animations du popover de sélection et des badges de mode (thèmes clair et sombre).
-- **Tests & Déploiement** :
-  - Suite complète backend `test_api.py`, `test_document_validation.py`, `test_context.py`, `test_presentation_html.py`, `test_report_integrity.py` : **115 passed en 26.76s**.
-  - Build Next.js 16 validé (0 erreur TypeScript, compilation en 2.4s).
-  - Images Docker reconstruites et conteneurs opérationnels (`healthy`).
+- **Identification de la cause racine** :
+  1. Les modèles LLM écrivant des formules LaTeX dans des réponses JSON omettaient le doublement de l'antislash (ex: `\vec`, `\sqrt`, `\alpha`). `json.loads` standard levait alors `JSONDecodeError: Invalid \escape`, provoquant silencieusement un repli vers `fallback_study_material`.
+  2. L'ancien `fallback_study_material` contenait des templates statiques de méthodologie générale ("Piège fréquent : Quel est le piège ou l'erreur courante à éviter avec : [sujet] ?", "Méthodologie", "Règle d'or"), qui se retrouvaient affichés aux élèves.
+  3. L'ancien prompt LLM suggérait des axes méta ("Méthode", "Piège à éviter") au lieu d'interdire les questions de méthodologie.
+- **Résolution & Améliorations (`backend/app/providers.py`)** :
+  - **Désensibilisation et réparation JSON des antislashs LaTeX** : `re.sub(r"(?<!\\)\\(?![\\\"/])", r"\\\\", candidate)` répare automatiquement toute notation LaTeX non échappée sans altérer les séquences JSON valides (`\"`, `\\`).
+  - **Refonte intégrale de `fallback_study_material`** :
+    - Élimination complète de tous les templates de méthodologie générique.
+    - Analyseur syntaxique multi-passes extrayant les définitions numérotées/puces, termes en gras au sein des phrases, sections du cours, formules mathématiques et règles de calcul directement depuis le texte.
+    - Génération de questions factuelles et disciplinaires ciblées ("Que désigne ou définit précisément...", "Concernant [Concept], qu'énonce le cours ?", etc.).
+    - Filtre de sécurité `_is_methodology_study_item` éliminant tout énoncé méta résiduel.
+  - **Durcissement des Prompts LLM (`generate_study_material`)** :
+    - Interdiction formelle et explicite de toute question méta, de démarche d'étude ou d'attitude de l'élève.
+    - Consigne stricte : 100% des questions doivent porter exclusivement sur le cours (notions, formules, théorèmes, règles, exemples).
+    - Obligation de notations LaTeX KaTeX entre dollars simples `$ ... $`.
+    - Catégories exclusivement disciplinaires ('Définition', 'Formule', 'Théorème', 'Propriété', 'Calcul', 'Règle', 'Application').
+    - Remplacement de tout élément méta détecté dans le retour LLM par une unité de cours vérifiée.
+- **Tests & Vérifications** :
+  - `backend/tests/test_study_material.py` : test de régression ajouté `test_study_material_no_generic_methodology_on_vectors_course` (5/5 passés).
+  - Suite complète backend : **391 tests passés** avec succès.
+  - Test en direct sur le conteneur `tchataiperso-clair-api` avec la conversation réelle sur les vecteurs : 10 cartes générées avec succès par le modèle IA, 100% axées sur le cours de vecteurs (caractéristiques, égalité, Chasles, colinéarité, coordonnées, parallélisme).
 
 ## 4. Key Decisions
-- **Option A (Menu Popover au clic sur le trombone)** : préserve la sobriété de la barre d'outils tout en offrant un guidage explicite et deux parcours distincts selon le besoin de l'utilisateur.
-- **Routage direct Vision sans passage par Mistral OCR** : en mode "Image (Vision)", l'image n'est plus traitée par l'OCR, ce qui évite qu'une photo avec un petit texte ne soit tronquée et garantit un compte-rendu visuel exhaustif.
-- **`overflow: visible` sur le composer** : permet aux popovers et menus de la barre d'outils de flotter naturellement au-dessus du champ de saisie sans être rognés par le bord de la boîte.
+- **Réparation transparente des échappements LaTeX dans les flux JSON** : permet au LLM d'utiliser naturellement les délimiteurs mathématiques LaTeX sans faire échouer le parsing JSON.
+- **Ancrage textuel strict** : le fallback comme le prompt privilégient toujours les concepts concrets extraits du cours.
 
 ## 5. Modified Files
-- `backend/app/routers/attachments.py` : paramètre `mode: str = Form("auto")`.
-- `backend/app/documents.py` : routage conditionnel `mode="vision"` vers `describe_image`.
-- `backend/app/serializers.py` : ajout de `analysis_mode` dans `attachment_json`.
-- `backend/tests/test_api.py` : test `test_explicit_vision_and_ocr_modes`.
-- `frontend/lib/api.ts` : champ `analysis_mode` sur `Attachment`.
-- `frontend/components/chat-app.tsx` : popover Option A, gestion des modes d'upload, badges, stopPropagation et gestion du clic.
-- `frontend/app/globals.css` : `overflow: visible` sur `.composer`, styles du popover (z-index: 1000) et badges de mode.
-- `HANDOFF.md` : mise à jour de l'état du projet.
+- `backend/app/providers.py` : réparation JSON LaTeX, prompts durcis sans méthodologie, nouvelle extraction de cours et suppression des templates méta.
+- `backend/tests/test_study_material.py` : ajout de tests de non-régression validant l'absence de questions méta et la présence de contenu disciplinaire.
+- `HANDOFF.md` : mise à jour de la documentation d'étape.
 
 ## 6. Verification
-- `PYTHONPATH=backend backend/.venv/bin/pytest backend/tests/test_api.py -k test_explicit_vision_and_ocr_modes` : **1 passed**.
-- `PYTHONPATH=backend backend/.venv/bin/pytest backend/tests/test_api.py backend/tests/test_document_validation.py backend/tests/test_context.py backend/tests/test_presentation_html.py backend/tests/test_report_integrity.py` : **115 passed en 26.76s**.
-- `npm --prefix frontend run build` : **succès, 0 erreur TypeScript**.
-- `docker compose build clair-api clair-web && docker compose up -d clair-api clair-web` : **succès**.
-- `docker compose ps` : conteneurs `clair-api` (healthy sur 8001) et `clair-web` (healthy sur 3001).
+- `PYTHONPATH=backend backend/.venv/bin/pytest backend/tests/test_study_material.py` : 5 passés.
+- `PYTHONPATH=backend backend/.venv/bin/pytest backend/tests` : 391 passés.
+- `docker compose build clair-api && docker compose up -d clair-api` : conteneur reconstruit et opérationnel (`healthy`).
+- Test d'exécution réelle sur la conversation des vecteurs niveau seconde : 10 cartes de cours pures obtenues.
 
 ## 7. Known Issues and Risks
 - Aucun problème connu.

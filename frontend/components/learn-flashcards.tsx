@@ -14,6 +14,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import type { Flashcard } from "@/lib/api";
+import { MathMarkdown } from "@/components/math-markdown";
 
 type LearnFlashcardsProps = {
   flashcards: Flashcard[];
@@ -249,7 +250,9 @@ export function LearnFlashcards({ flashcards: initialFlashcards, title, subtitle
                   <div className="learn-flashcard-icon">
                     <HelpCircle size={28} />
                   </div>
-                  <h3 className="learn-flashcard-prompt">{currentCard.recto}</h3>
+                  <div className="learn-flashcard-prompt">
+                    <MathMarkdown content={currentCard.recto} />
+                  </div>
                 </div>
 
                 <div className="learn-flashcard-face-bottom">
@@ -270,7 +273,9 @@ export function LearnFlashcards({ flashcards: initialFlashcards, title, subtitle
                 </div>
 
                 <div className="learn-flashcard-body">
-                  <p className="learn-flashcard-answer">{currentCard.verso}</p>
+                  <div className="learn-flashcard-answer">
+                    <MathMarkdown content={currentCard.verso} />
+                  </div>
                 </div>
 
                 <div className="learn-flashcard-face-bottom">
@@ -359,12 +364,16 @@ export function LearnFlashcards({ flashcards: initialFlashcards, title, subtitle
                   {flipped ? (
                     <div className="learn-grid-verso">
                       <strong>Réponse :</strong>
-                      <p>{card.verso}</p>
+                      <div className="learn-grid-card-text">
+                        <MathMarkdown content={card.verso} />
+                      </div>
                     </div>
                   ) : (
                     <div className="learn-grid-recto">
                       <strong>Question :</strong>
-                      <p>{card.recto}</p>
+                      <div className="learn-grid-card-text">
+                        <MathMarkdown content={card.recto} />
+                      </div>
                     </div>
                   )}
                 </div>

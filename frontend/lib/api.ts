@@ -637,28 +637,42 @@ export async function deleteGeneratedSound(id: string): Promise<void> {
   });
 }
 
+export type ClozeTestItem = {
+  id: number;
+  sentence: string;
+  text_with_blanks: string;
+  missing_words: string[];
+  hints?: string[];
+  options?: string[];
+  explanation?: string;
+};
+
 export type StudyMaterialRequest = {
-  kind: "flashcards" | "quiz";
+  kind: "flashcards" | "quiz" | "cloze" | "all";
   count: number;
   difficulty: "easy" | "medium" | "hard";
   topic?: string;
+  course_text?: string;
+  conversation_id?: string;
 };
 
 export type StudyMaterialResponse = {
-  kind: "flashcards" | "quiz";
+  kind: "flashcards" | "quiz" | "cloze" | "all";
   count: number;
   difficulty: "easy" | "medium" | "hard";
   topic: string;
   flashcards: Flashcard[];
   questions: QuizQuestion[];
+  cloze_items?: ClozeTestItem[];
 };
 
 export async function generateStudyMaterial(
-  conversationId: string,
+  conversationId: string | null | undefined,
   payload: StudyMaterialRequest,
   init?: RequestInit
 ): Promise<StudyMaterialResponse> {
-  return api<StudyMaterialResponse>(`/conversations/${conversationId}/study`, {
+  const url = conversationId ? `/conversations/${conversationId}/study` : "/study/generate";
+  return api<StudyMaterialResponse>(url, {
     method: "POST",
     body: JSON.stringify(payload),
     ...init,

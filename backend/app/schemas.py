@@ -553,11 +553,23 @@ class QuizQuestionItem(BaseModel):
     explanation: str
 
 
+class ClozeTestItem(BaseModel):
+    id: int
+    sentence: str
+    text_with_blanks: str
+    missing_words: list[str]
+    hints: list[str] = Field(default_factory=list)
+    options: list[str] = Field(default_factory=list)
+    explanation: str = ""
+
+
 class GenerateStudyMaterialRequest(BaseModel):
-    kind: Literal["flashcards", "quiz"] = "flashcards"
+    kind: Literal["flashcards", "quiz", "cloze", "all"] = "flashcards"
     count: int = Field(default=10, ge=1, le=30)
     difficulty: Literal["easy", "medium", "hard"] = "medium"
     topic: str | None = Field(default=None, max_length=200)
+    course_text: str | None = Field(default=None, max_length=50000)
+    conversation_id: str | None = None
 
     @field_validator("topic")
     @classmethod
@@ -567,14 +579,23 @@ class GenerateStudyMaterialRequest(BaseModel):
         value = value.strip()
         return value or None
 
+    @field_validator("course_text")
+    @classmethod
+    def trim_optional_course_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        return value or None
+
 
 class StudyMaterialResponse(BaseModel):
-    kind: Literal["flashcards", "quiz"]
+    kind: Literal["flashcards", "quiz", "cloze", "all"]
     count: int
     difficulty: Literal["easy", "medium", "hard"]
     topic: str
     flashcards: list[FlashcardItem] = Field(default_factory=list)
     questions: list[QuizQuestionItem] = Field(default_factory=list)
+    cloze_items: list[ClozeTestItem] = Field(default_factory=list)
 
 
 from .base_prompt import BASE_USER_PROMPT

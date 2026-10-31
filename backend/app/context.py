@@ -293,7 +293,15 @@ def build_context(settings: Settings, summary: str, memories: list[str], message
                     if len(extracted) > per_attachment:
                         notice = "\n[Texte tronque par la limite de contexte.]"
                         extracted = (extracted[:max(0, per_attachment - len(notice))] + notice)[:per_attachment]
-                text += f"\n\n[Document joint : {attachment['filename']}]\n{extracted}"
+                is_vision_att = (
+                    attachment.get("analysis_mode") == "vision"
+                    or (
+                        isinstance(attachment.get("extraction"), dict)
+                        and (attachment["extraction"].get("pages") or [{}])[0].get("method") == "vision"
+                    )
+                )
+                label = "Relevé d'analyse visuelle détaillée de l'image" if is_vision_att else "Document joint"
+                text += f"\n\n[{label} : {attachment['filename']}]\n{extracted}"
             if attachment["mime_type"].startswith("image/"):
                 text += f"\n[Image jointe : {attachment['filename']}]"
                 # OpenAI-compatible chat permits image parts on user messages.
