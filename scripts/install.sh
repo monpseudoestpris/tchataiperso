@@ -31,12 +31,14 @@ case "${1:-}" in
     export npm_config_cache="${npm_config_cache:-$repo_dir/../.cache/npm}"
     backend/.venv/bin/python -m pip install --requirement backend/requirements-dev.txt
     npm --prefix frontend ci --no-audit --no-fund
+    python3 scripts/download_svg_assets.py
     echo 'Dépendances installées. Démarrage : ./scripts/dev.sh'
     ;;
   '')
     ./scripts/compose.sh version >/dev/null
     docker info >/dev/null
     ./scripts/compose.sh config --quiet
+    python3 scripts/download_svg_assets.py
     ./scripts/compose.sh up --detach --wait --wait-timeout 180 clair-db
     ./scripts/compose.sh build clair-api
     ./scripts/compose.sh run --rm --no-deps clair-api python -m app.cli migrate-schema

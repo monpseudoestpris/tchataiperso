@@ -1,6 +1,7 @@
 import pytest
 from app.config import Settings
 from app.page_generator import extract_html, extract_title_from_html, generate_fallback_page, slugify
+from app.svg_assets import THEMATIC_ILLUSTRATIONS, inject_svg_placeholders, render_svg_asset
 
 try:
     from test_api import authenticated_client
@@ -175,4 +176,63 @@ def test_web_page_options(client):
     assert "4px 4px 0px" in html or "2.5px solid" in html
     # SVG must be excluded
     assert "Schéma conceptuel interactif" not in html
+
+
+def test_svg_assets_and_placeholders():
+    # 1. Direct render of existing assets
+    science_svg = render_svg_asset("science_biology")
+    assert science_svg is not None
+    assert "<svg" in science_svg
+    assert "var(--primary)" in science_svg or "#" in science_svg
+
+    icon_bulb = render_svg_asset("bulb")
+    assert icon_bulb is not None
+    assert 'class="clair-icon"' in icon_bulb
+
+    wave = render_svg_asset("wave_smooth")
+    assert wave is not None
+    assert "clair-divider" in wave
+
+    # Unknown returns None
+    assert render_svg_asset("non_existent_asset") is None
+
+    # 2. Tag substitution <clair-svg name="..." />
+    sample = '<section><h2>Sciences</h2><clair-svg name="science_biology" /><p>Texte</p><clair-svg name="bulb"/></section>'
+    substituted = inject_svg_placeholders(sample)
+    assert '<clair-svg name="science_biology"' not in substituted
+    assert '<clair-svg name="bulb"' not in substituted
+    assert "<svg" in substituted
+    assert 'class="clair-illustration"' in substituted
+    assert 'class="clair-icon"' in substituted
+
+    # 3. HTML comment substitution <!-- clair-svg: ... -->
+    sample_comment = '<div class="header"><!-- clair-svg: wave_layered --></div>'
+    sub_comment = inject_svg_placeholders(sample_comment)
+    assert "<!-- clair-svg:" not in sub_comment
+    assert "clair-divider" in sub_comment
+
+    # 4. On-disk Tabler Icons library resolution (+5000 icons)
+    tabler_cpu = render_svg_asset("tabler/cpu")
+    assert tabler_cpu is not None
+    assert "<svg" in tabler_cpu
+    assert "icon-tabler-cpu" in tabler_cpu
+
+    # 5. On-disk unDraw illustrations resolution (+1700 scenes)
+    undraw_science = render_svg_asset("undraw/science")
+    assert undraw_science is not None
+    assert "<svg" in undraw_science
+    assert "clair-illustration" in undraw_science
+
+    # 6. Tag substitution with prefixes
+    sample_prefixed = '<header><clair-svg name="tabler/database" /></header><main><clair-svg name="undraw/science" /></main>'
+    sub_prefixed = inject_svg_placeholders(sample_prefixed)
+    assert '<clair-svg' not in sub_prefixed
+    assert 'icon-tabler-database' in sub_prefixed
+    assert 'clair-illustration' in sub_prefixed
+
+    # 7. Path traversal security
+    assert render_svg_asset("../../etc/passwd") is None
+    assert render_svg_asset("tabler/../../config") is None
+
+
 

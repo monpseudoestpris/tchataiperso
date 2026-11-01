@@ -17,3 +17,8 @@ playwright-report/
 test-results/
 .DS_Store
 .aider*
+
+# Local SVG asset libraries (downloaded automatically via scripts/download_svg_assets.py)
+backend/app/assets/svg/tabler/
+backend/app/assets/svg/undraw/
+

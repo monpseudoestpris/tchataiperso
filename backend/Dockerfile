@@ -10,6 +10,7 @@ RUN --mount=type=secret,id=cloud_ca \
 COPY --chown=app:app app ./app
 COPY --chown=app:app migrations ./migrations
 COPY --chown=app:app alembic.ini ./alembic.ini
+RUN python -m app.svg_assets
 USER app
 EXPOSE 8001
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "1"]

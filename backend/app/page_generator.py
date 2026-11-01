@@ -9,6 +9,7 @@ import httpx
 
 from .config import Settings
 from .providers import ProviderError, _check_response, _json, _key
+from .svg_assets import inject_svg_placeholders, render_svg_asset
 
 _logger = logging.getLogger("uvicorn.error")
 
@@ -94,9 +95,17 @@ RÈGLES D'OR ABSOLUES D'AUTONOMIE (TRÈS STRICT) :
    - Révisions scolaires ou pédagogie active -> Encadrés "À retenir", définitions clés, mini-quiz interactif immédiat.
    - Vulgarisation ou essai -> Citations marquantes, encadrés "Le saviez-vous ?", analogies visuelles.
    Ne force jamais de composants superflus si le sujet ne s'y prête pas.
-4. ILLUSTRATIONS & GRAPHISME EN SVG INLINE :
-   - Crée des illustrations, schémas vectoriels ou diagrammes en SVG directement intégrés dans le HTML (<svg viewBox="0 0 ...">).
-   - Rends-les responsive (width="100%", height="auto", viewBox), modernes, avec dégradés <defs><linearGradient>... et formes soignées.
+4. ILLUSTRATIONS, GRAPHISME ET ICÔNES EN SVG INLINE (Banques locales : Tabler Icons + unDraw + Haikei) :
+   - IMMENSE BANQUE LOCALE AUTONOME INTÉGRÉE (Zéro externe, +7 000 ressources disponibles) :
+     Pour une qualité graphique irréprochable et un rendu instantané, tu peux insérer des balises autonomes <clair-svg name="..." /> substituées automatiquement par le code SVG avec harmonisation de la palette CSS active :
+     * Plus de 5 000 icônes didactiques & techniques Tabler Icons (trait fin 2px, stroke="currentColor") :
+       Exemples : <clair-svg name="tabler/cpu" />, <clair-svg name="tabler/database" />, <clair-svg name="tabler/calendar" />, <clair-svg name="tabler/flask" />, <clair-svg name="tabler/chart-line" />, <clair-svg name="tabler/device-laptop" />, <clair-svg name="tabler/dna" />, <clair-svg name="tabler/brain" />, etc. (ou raccourcis : <clair-svg name="bulb" />, <clair-svg name="atom" />, <clair-svg name="shield" />, <clair-svg name="book" />, <clair-svg name="zap" />, <clair-svg name="check" />, etc.).
+     * Plus de 1 700 scènes conceptuelles unDraw (illustrations thématiques complètes adaptées aux couleurs var(--primary)) :
+       Exemples : <clair-svg name="undraw/science" />, <clair-svg name="undraw/education" />, <clair-svg name="undraw/developer-activity" />, <clair-svg name="undraw/data-report" />, <clair-svg name="undraw/mindfulness" />, <clair-svg name="undraw/studying" />, etc. (ou raccourcis thématiques : <clair-svg name="science_biology" />, <clair-svg name="education_learning" />, <clair-svg name="tech_coding" />, <clair-svg name="analytics_growth" />, <clair-svg name="nature_ecology" />, <clair-svg name="ideas_brainstorm" />).
+     * Séparateurs de vagues fluides (style Haikei) :
+       - <clair-svg name="wave_smooth" /> ou <clair-svg name="wave_layered" /> : transitions douces entre les blocs ou sous l'en-tête hero.
+   - CRÉATION SUR-MESURE : Tu peux également dessiner tes propres diagrammes SVG inline spécifiques au sujet (ex: frise chronologique historique avec repères d'années, schéma anatomique ou circuit logique) en respectant les bonnes pratiques SVG responsive (width="100%", height="auto", viewBox).
+   - Rends tous les SVG responsive, modernes, sans dépendance externe et sans pixellisation.
 5. CSS3 MODERNE ET RESPONSIVE :
    - Définis des variables CSS dans :root pour les couleurs, rayons de courbure, ombres.
    - Prise en charge du thème clair et du thème sombre (via prefers-color-scheme ou un sélecteur [data-theme="dark"]).
@@ -355,7 +364,7 @@ def generate_fallback_page(
 
     print_badge = '<span class="brand-badge" style="background:rgba(234,88,12,0.15);color:#ea580c;">Format Fiche Impression A4</span>' if is_print else '<span class="brand-badge">Autonome & Hors-ligne</span>'
 
-    return f"""<!DOCTYPE html>
+    full_page = f"""<!DOCTYPE html>
 <html lang="fr" data-theme="dark">
 <head>
   <meta charset="UTF-8">
@@ -673,16 +682,30 @@ def generate_fallback_page(
       <p>{safe_topic}</p>
     </section>
 
+    <!-- Haikei-inspired organic wave transition -->
+    <div style="margin: -0.5rem auto 1.5rem; max-width: 100%; overflow: hidden; opacity: 0.65;" class="no-print">
+      <svg viewBox="0 0 1200 48" fill="none" xmlns="http://www.w3.org/2000/svg" style="width: 100%; height: 28px; display: block;">
+        <path d="M0,20 C180,45 360,5 540,25 C720,45 900,10 1080,30 L1200,20 L1200,48 L0,48 Z" fill="var(--primary)" opacity="0.18" />
+        <path d="M0,28 C200,8 400,38 600,18 C800,40 1000,15 1200,25 L1200,48 L0,48 Z" fill="var(--accent)" opacity="0.12" />
+      </svg>
+    </div>
+
     {svg_section}
 
-    <!-- Cards Grid -->
+    <!-- Cards Grid with Tabler-inspired SVG Icons -->
     <div class="grid-2">
       <div class="card">
-        <h3>💡 Clé de voûte</h3>
+        <h3>
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-7 7c0 3.03 1.8 5.64 4.38 6.74A1 1 0 0 0 10 16.7V18h4v-1.3a1 1 0 0 0 .62-.96C17.2 14.64 19 12.03 19 9a7 7 0 0 0-7-7z"/></svg>
+          <span>Clé de voûte</span>
+        </h3>
         <p>Ce document est 100 % autonome : tout le code CSS, JavaScript et les illustrations vectorielles SVG sont incorporés sans aucune ressource externe.</p>
       </div>
       <div class="card">
-        <h3>⚡ Réactivité & fluidité</h3>
+        <h3>
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+          <span>Réactivité & fluidité</span>
+        </h3>
         <p>Le document s'adapte immédiatement à votre taille d'écran, vos préférences de contraste et fonctionne intégralement hors ligne.</p>
       </div>
     </div>
@@ -768,6 +791,7 @@ def generate_fallback_page(
   </script>
 </body>
 </html>"""
+    return inject_svg_placeholders(full_page)
 
 
 async def generate_page_html(
@@ -983,6 +1007,7 @@ async def generate_page_html(
                 creative_freedom=creative_freedom,
             )
 
+        html_code = inject_svg_placeholders(html_code)
         resolved_title = title or extract_title_from_html(html_code, fallback=clean_prompt[:60])
         return resolved_title, html_code
 
@@ -1063,7 +1088,7 @@ async def refine_page_html(
         if not updated_html or "<html" not in updated_html.lower():
             return current_html
 
-        return updated_html
+        return inject_svg_placeholders(updated_html)
 
     except Exception as exc:
         _logger.warning("Erreur lors de l'affinage de page HTML par IA: %s", exc)
