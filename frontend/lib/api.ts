@@ -269,17 +269,101 @@ export type Blog = {
   } | null;
   posts?: BlogPost[];
 };
+export type WebPageVersion = {
+  id: string;
+  page_id: string;
+  version_number: number;
+  prompt_used: string;
+  html_content?: string;
+  created_at: string;
+};
+
+export type WebPage = {
+  id: string;
+  user_id: string;
+  title: string;
+  slug: string;
+  public_token: string;
+  is_published: boolean;
+  created_at: string;
+  updated_at: string;
+  versions_count: number;
+  latest_version_number: number;
+  latest_html?: string;
+  latest_prompt?: string;
+  versions?: WebPageVersion[];
+};
+
 export type Conversation = {
   id: string;
   title: string;
   model: string;
   theme?: string;
   keywords?: string[];
+  topic_space_id?: string | null;
   created_at: string;
   updated_at: string;
   summary?: string | null;
   messages?: Message[];
   skills?: Skill[];
+};
+export type TopicType = "learning" | "project" | "interest" | "personal";
+export type TopicMemoryStatus = "discussed" | "in_progress" | "needs_review" | "provisional_mastery" | "validated";
+
+export type TopicMemory = {
+  id: string;
+  topic_space_id: string;
+  fact: string;
+  category: string;
+  status: TopicMemoryStatus;
+  confidence: number;
+  source_message_id?: string | null;
+  user_verified: boolean;
+  is_archived: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type TopicEvent = {
+  id: string;
+  topic_space_id: string;
+  event_type: string;
+  title: string;
+  details: Record<string, any>;
+  created_at: string;
+};
+
+export type TopicResourceType = "link" | "document" | "note";
+
+export type TopicResource = {
+  id: string;
+  topic_space_id: string;
+  title: string;
+  resource_type: TopicResourceType;
+  url?: string | null;
+  content: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type TopicSpace = {
+  id: string;
+  user_id: string;
+  title: string;
+  icon: string;
+  topic_type: TopicType;
+  objective: string;
+  current_resume_context: string;
+  suggested_next_step: string;
+  created_at: string;
+  updated_at: string;
+  conversations_count: number;
+  memories_count: number;
+  resources_count?: number;
+  conversations?: Conversation[];
+  memories?: TopicMemory[];
+  events?: TopicEvent[];
+  resources?: TopicResource[];
 };
 export type Memory = { id: string; content: string; created_at: string };
 export type PromptPreset = {
@@ -342,6 +426,14 @@ export type StreamEvent =
         memories?: Memory[];
         new_memories?: string[];
         deleted_memories?: string[];
+        topic_space_update?: {
+          topic_id?: string | null;
+          title?: string | null;
+          icon?: string | null;
+          new_memories?: Array<{ fact: string; status: string; category?: string }>;
+          resume_context?: string | null;
+          suggested_next_step?: string | null;
+        } | null;
       };
     }
   | { type: "error"; data: { message: string } };
@@ -409,6 +501,7 @@ export async function streamMessage(
     skill_ids?: string[];
     interaction_id?: string;
     plan_feedback?: string;
+    auto_memory_enabled?: boolean;
   },
   signal: AbortSignal,
   onEvent: (event: StreamEvent) => void,
@@ -509,6 +602,73 @@ export async function deleteBlogPost(blogId: string, postId: string): Promise<vo
     method: "DELETE",
   });
 }
+
+export async function fetchWebPages(): Promise<WebPage[]> {
+  return api<WebPage[]>("/pages");
+}
+
+export async function fetchWebPage(pageId: string): Promise<WebPage> {
+  return api<WebPage>(`/pages/${pageId}`);
+}
+
+export async function createWebPage(payload: {
+  prompt: string;
+  title?: string;
+  conversation_id?: string;
+  model?: string;
+  page_type?: string;
+  target_audience?: string;
+  creative_freedom?: "low" | "medium" | "high";
+  orientation?: "portrait" | "landscape";
+  layout_style?: "tabs" | "single_page" | "print_sheet" | "auto";
+  text_density?: number;
+  interactivity?: "auto" | "high" | "none";
+  include_quiz?: boolean;
+  include_svg?: boolean;
+  theme_palette?: string;
+  visual_style?: string;
+}): Promise<WebPage> {
+  return api<WebPage>("/pages", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateWebPage(
+  pageId: string,
+  payload: { title?: string; is_published?: boolean }
+): Promise<WebPage> {
+  return api<WebPage>(`/pages/${pageId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteWebPage(pageId: string): Promise<void> {
+  return api<void>(`/pages/${pageId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function refineWebPage(
+  pageId: string,
+  payload: { instruction: string; model?: string }
+): Promise<WebPage> {
+  return api<WebPage>(`/pages/${pageId}/refine`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function restoreWebPageVersion(
+  pageId: string,
+  versionId: string
+): Promise<WebPage> {
+  return api<WebPage>(`/pages/${pageId}/versions/${versionId}/restore`, {
+    method: "POST",
+  });
+}
+
 
 export type PlanResearchResponse = {
   queries: string[];
@@ -805,6 +965,119 @@ export type FinancialDashboardData = {
 export async function fetchFinanceDetails(query: string): Promise<FinancialDashboardData> {
   return api<FinancialDashboardData>(`/finance/details?query=${encodeURIComponent(query)}`);
 }
+
+export async function fetchTopics(): Promise<TopicSpace[]> {
+  return api<TopicSpace[]>("/topics");
+}
+
+export async function createTopic(data: {
+  title: string;
+  icon?: string;
+  topic_type?: TopicType;
+  objective?: string;
+}): Promise<TopicSpace> {
+  return api<TopicSpace>("/topics", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function fetchTopic(id: string): Promise<TopicSpace> {
+  return api<TopicSpace>(`/topics/${id}`);
+}
+
+export async function updateTopic(id: string, data: {
+  title?: string;
+  icon?: string;
+  topic_type?: TopicType;
+  objective?: string;
+  current_resume_context?: string;
+  suggested_next_step?: string;
+}): Promise<TopicSpace> {
+  return api<TopicSpace>(`/topics/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteTopic(id: string): Promise<void> {
+  return api<void>(`/topics/${id}`, { method: "DELETE" });
+}
+
+export async function linkConversationToTopic(topicId: string, conversationId: string): Promise<TopicSpace> {
+  return api<TopicSpace>(`/topics/${topicId}/conversations/${conversationId}`, { method: "POST" });
+}
+
+export async function unlinkConversationFromTopic(topicId: string, conversationId: string): Promise<TopicSpace> {
+  return api<TopicSpace>(`/topics/${topicId}/conversations/${conversationId}`, { method: "DELETE" });
+}
+
+export async function createTopicMemory(topicId: string, data: {
+  fact: string;
+  category?: string;
+  status?: TopicMemoryStatus;
+}): Promise<TopicMemory> {
+  return api<TopicMemory>(`/topics/${topicId}/memories`, {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateTopicMemory(topicId: string, memoryId: string, data: {
+  fact?: string;
+  category?: string;
+  status?: TopicMemoryStatus;
+  user_verified?: boolean;
+  is_archived?: boolean;
+}): Promise<TopicMemory> {
+  return api<TopicMemory>(`/topics/${topicId}/memories/${memoryId}`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteTopicMemory(topicId: string, memoryId: string): Promise<void> {
+  return api<void>(`/topics/${topicId}/memories/${memoryId}`, { method: "DELETE" });
+}
+
+export async function createTopicEvent(topicId: string, data: {
+  event_type: string;
+  title: string;
+  details?: Record<string, any>;
+}): Promise<TopicEvent> {
+  return api<TopicEvent>(`/topics/${topicId}/events`, {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function fetchTopicResources(topicId: string): Promise<TopicResource[]> {
+  return api<TopicResource[]>(`/topics/${topicId}/resources`);
+}
+
+export async function createTopicResource(topicId: string, data: {
+  title: string;
+  resource_type: TopicResourceType;
+  url?: string;
+  content?: string;
+}): Promise<TopicResource> {
+  return api<TopicResource>(`/topics/${topicId}/resources`, {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateTopicResource(topicId: string, resourceId: string, data: Partial<TopicResource>): Promise<TopicResource> {
+  return api<TopicResource>(`/topics/${topicId}/resources/${resourceId}`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteTopicResource(topicId: string, resourceId: string): Promise<void> {
+  return api<void>(`/topics/${topicId}/resources/${resourceId}`, { method: "DELETE" });
+}
+
 
 
 

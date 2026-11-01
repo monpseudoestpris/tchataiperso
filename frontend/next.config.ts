@@ -29,7 +29,10 @@ const config: NextConfig = {
     proxyTimeout: 660_000,
   },
   async rewrites() {
-    return [{ source: "/api/:path*", destination: `${backendUrl}/api/:path*` }];
+    return [
+      { source: "/api/:path*", destination: `${backendUrl}/api/:path*` },
+      { source: "/p/:path*", destination: `${backendUrl}/p/:path*` },
+    ];
   },
 };
 

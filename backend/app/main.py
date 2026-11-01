@@ -23,10 +23,12 @@ from .routers import (
     images,
     memories,
     messages,
+    pages,
     settings as settings_router,
     skills,
     sounds,
     system,
+    topics,
 )
 from .serializers import (
     IMAGE_ASPECT_RATIOS,
@@ -73,12 +75,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if "extraction" not in {column["name"] for column in inspector.get_columns("attachments")}:
             raise RuntimeError("Base non migrée ; exécutez `python -m app.cli migrate-legacy` pour appliquer la migration des pièces jointes.")
         conv_columns = {column["name"] for column in inspector.get_columns("conversations")}
-        if "theme" not in conv_columns or "keywords" not in conv_columns:
-            with engine.begin() as conn:
-                if "theme" not in conv_columns:
-                    conn.execute(text("ALTER TABLE conversations ADD COLUMN theme VARCHAR(80) NOT NULL DEFAULT ''"))
-                if "keywords" not in conv_columns:
-                    conn.execute(text("ALTER TABLE conversations ADD COLUMN keywords JSON NOT NULL DEFAULT '[]'"))
+        with engine.begin() as conn:
+            if "theme" not in conv_columns:
+                conn.execute(text("ALTER TABLE conversations ADD COLUMN theme VARCHAR(80) NOT NULL DEFAULT ''"))
+            if "keywords" not in conv_columns:
+                conn.execute(text("ALTER TABLE conversations ADD COLUMN keywords JSON NOT NULL DEFAULT '[]'"))
+            if "topic_space_id" not in conv_columns:
+                conn.execute(text("ALTER TABLE conversations ADD COLUMN topic_space_id VARCHAR(36)"))
         user_columns = {column["name"] for column in inspector.get_columns("users")}
         with engine.begin() as conn:
             if "family_group_id" not in user_columns:
@@ -154,6 +157,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(blogs.router)
     app.include_router(settings_router.router)
     app.include_router(agent_teams.router)
+    app.include_router(topics.router)
+    app.include_router(pages.router)
     app.include_router(finance_router.router, prefix="/api/finance", tags=["finance"])
 
     return app

@@ -1,12 +1,12 @@
 "use client";
 
 import {
-  ArrowDown, ArrowRightLeft, ArrowUp, BookOpen, Brain, Check, ChevronDown, ChevronLeft, ChevronRight,
-  CircleAlert, Code2, Compass, Copy, Download, ExternalLink, Eye, FileCode2, FileText, FolderArchive,
-  Globe2, GraduationCap, ImagePlus, LineChart, Link2, LoaderCircle, LogOut, Menu, MessageCircle, Newspaper, PanelLeftClose, Paperclip,
-  Pencil, Plus, Presentation, Search, RefreshCw, Settings, Share2, Shield, Sparkles, Square, SquarePlay, Trash2, TrendingUp, Users, UsersRound, Volume2, WandSparkles, X,
+  ArrowDown, ArrowRightLeft, ArrowUp, Bookmark, BookmarkCheck, BookOpen, Brain, Check, ChevronDown, ChevronLeft, ChevronRight,
+  CircleAlert, Code2, Compass, Copy, Download, ExternalLink, Eye, FileCode2, FileText, FolderArchive, FolderKanban,
+  Globe, Globe2, GraduationCap, ImagePlus, LayoutGrid, LineChart, Link2, LoaderCircle, LogOut, Menu, MessageCircle, Newspaper, PanelLeftClose, Paperclip,
+  Pencil, Plus, Presentation, Search, RefreshCw, Settings, Share2, Shield, Sparkles, Square, SquarePlay, Target, Trash2, TrendingUp, Unlink, Users, UsersRound, Volume2, WandSparkles, X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
@@ -28,9 +28,12 @@ import { ModelModal } from "@/components/model-modal";
 import { SettingsModal } from "@/components/settings-modal";
 import { SkillsPanel } from "@/components/skills-panel";
 import { StudyModal } from "@/components/study-modal";
+import { ToolsModal } from "@/components/tools-modal";
 import { StageModelsModal } from "@/components/stage-models-modal";
 import { ThoughtAccordion } from "@/components/thought-accordion";
-import { ApiError, api, attachUrl, createLearnReportFromMessage, createReportFromMessage, errorMessage, skillToSlug, streamMessage, type Attachment, type AuthUser, type Config, type Conversation, type DocumentExtraction, type FamilyGroupInfo, type FinancialDashboardData, type GeneratedSound, type Memory, type Message, type Model, type MultiAgentConfig, type Skill, type Source, type StageModelsConfig } from "@/lib/api";
+import { TopicModal } from "@/components/topic-modal";
+import { WebPageModal } from "@/components/web-page-modal";
+import { ApiError, api, attachUrl, createLearnReportFromMessage, createReportFromMessage, errorMessage, fetchTopics, linkConversationToTopic, unlinkConversationFromTopic, skillToSlug, streamMessage, type Attachment, type AuthUser, type Config, type Conversation, type DocumentExtraction, type FamilyGroupInfo, type FinancialDashboardData, type GeneratedSound, type Memory, type Message, type Model, type MultiAgentConfig, type Skill, type Source, type StageModelsConfig, type TopicSpace } from "@/lib/api";
 import { collectConversationCanvasFiles, createZipBlob, extractCanvasFiles, hasExplicitCanvasFiles, triggerBlobDownload } from "@/lib/code-canvas";
 import { hasInteractiveLearnModules, stripInteractiveModulesForBody } from "@/lib/learn-parser";
 
@@ -490,7 +493,7 @@ function SourceImageThumb({
   );
 }
 
-function MessageView({
+const MessageView = memo(function MessageView({
   message,
   streaming,
   onOpenCanvas,
@@ -1028,7 +1031,7 @@ function MessageView({
       </div>
     )}
   </article>;
-}
+});
 
 export function ChatApp() {
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -1107,11 +1110,19 @@ export function ChatApp() {
   const [soundStudioInitialTab, setSoundStudioInitialTab] = useState<"effects" | "music" | "library">("effects");
   const [studyModalOpen, setStudyModalOpen] = useState(false);
   const [studyModalKind, setStudyModalKind] = useState<"flashcards" | "quiz" | "cloze" | "all">("all");
+  const [studyModalCourseText, setStudyModalCourseText] = useState("");
   const [multiAgentActive, setMultiAgentActive] = useState(false);
   const [multiAgentConfig, setMultiAgentConfig] = useState<MultiAgentConfig | null>(null);
   const [showMultiAgentModal, setShowMultiAgentModal] = useState(false);
   const [blogModalOpen, setBlogModalOpen] = useState(false);
   const [blogModalSeedPrompt, setBlogModalSeedPrompt] = useState("");
+  const [webPagesModalOpen, setWebPagesModalOpen] = useState(false);
+  const [webPagesModalPrompt, setWebPagesModalPrompt] = useState<string | undefined>(undefined);
+  const [topics, setTopics] = useState<TopicSpace[]>([]);
+  const [topicModalOpen, setTopicModalOpen] = useState(false);
+  const [topicModalId, setTopicModalId] = useState<string | null>(null);
+  const [activeTopicSpaceId, setActiveTopicSpaceId] = useState<string | null>(null);
+  const [linkTopicDialogOpen, setLinkTopicDialogOpen] = useState(false);
   const [busy, setBusy] = useState<string | null>("init");
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
@@ -1119,7 +1130,8 @@ export function ChatApp() {
   const [researchRuns, setResearchRuns] = useState<Record<string, ResearchRun>>({});
   const [researchActivityMessageId, setResearchActivityMessageId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  const [groupMode, setGroupMode] = useState<"date" | "theme">("date");
+  const [groupMode, setGroupMode] = useState<"date" | "theme" | "space">("date");
+  const [collapsedSpaces, setCollapsedSpaces] = useState<Record<string, boolean>>({});
   const [selectedKeyword, setSelectedKeyword] = useState("");
   const [selectedTheme, setSelectedTheme] = useState("");
   const [collapsedThemes, setCollapsedThemes] = useState<Record<string, boolean>>({});
@@ -1156,6 +1168,30 @@ export function ChatApp() {
   const [topbarExportOpen, setTopbarExportOpen] = useState(false);
   const topbarExportRef = useRef<HTMLDivElement>(null);
   const [memoryNotice, setMemoryNotice] = useState<string | null>(null);
+  const [topicNotice, setTopicNotice] = useState<string | null>(null);
+  const [toolsModalOpen, setToolsModalOpen] = useState(false);
+  const autoMemoryActive = user?.auto_memory_enabled ?? true;
+
+  async function toggleAutoMemory() {
+    if (!user) return;
+    const nextVal = !autoMemoryActive;
+    setUser(prev => prev ? { ...prev, auto_memory_enabled: nextVal } : prev);
+    setMemoryNotice(
+      nextVal
+        ? "Mémorisation activée : l’IA retient vos préférences et faits utiles."
+        : "Mémorisation en pause : aucun souvenir ne sera retenu."
+    );
+    try {
+      const res = await api<{ auto_memory_enabled: boolean }>("/settings", {
+        method: "PATCH",
+        body: JSON.stringify({ auto_memory_enabled: nextVal }),
+      });
+      setUser(prev => prev ? { ...prev, auto_memory_enabled: res.auto_memory_enabled ?? nextVal } : prev);
+    } catch (err) {
+      setUser(prev => prev ? { ...prev, auto_memory_enabled: autoMemoryActive } : prev);
+      setError(`Impossible de modifier la mémorisation : ${errorMessage(err)}`);
+    }
+  }
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -1206,14 +1242,19 @@ export function ChatApp() {
     }
   }
 
+  async function refreshTopics() {
+    setTopics(await fetchTopics().catch(() => []));
+  }
+
   async function loadWorkspace(signal?: AbortSignal) {
-    const [settings, chats, savedMemories, userSkills] = await Promise.all([
+    const [settings, chats, savedMemories, userSkills, topicsList] = await Promise.all([
       api<Config>("/config", { signal }),
       api<Conversation[]>("/conversations", { signal }),
       api<Memory[]>("/memories", { signal }),
       api<Skill[]>("/skills", { signal }).catch(() => [] as Skill[]),
+      fetchTopics().catch(() => [] as TopicSpace[]),
     ]);
-    setConfig(settings); setModel(settings.default_model); setConversations(chats); setMemories(savedMemories); setSkills(userSkills);
+    setConfig(settings); setModel(settings.default_model); setConversations(chats); setMemories(savedMemories); setSkills(userSkills); setTopics(topicsList);
     void loadFamily(signal);
   }
 
@@ -1236,14 +1277,15 @@ export function ChatApp() {
       .then(async current => {
         if (!active) return;
         setUser(current);
-        const [settings, chats, savedMemories, userSkills] = await Promise.all([
+        const [settings, chats, savedMemories, userSkills, topicsList] = await Promise.all([
           api<Config>("/config", { signal: controller.signal }),
           api<Conversation[]>("/conversations", { signal: controller.signal }),
           api<Memory[]>("/memories", { signal: controller.signal }),
           api<Skill[]>("/skills", { signal: controller.signal }).catch(() => [] as Skill[]),
+          fetchTopics().catch(() => [] as TopicSpace[]),
         ]);
         if (!active) return;
-        setConfig(settings); setModel(settings.default_model); setConversations(chats); setMemories(savedMemories); setSkills(userSkills);
+        setConfig(settings); setModel(settings.default_model); setConversations(chats); setMemories(savedMemories); setSkills(userSkills); setTopics(topicsList);
         void loadFamily(controller.signal);
       }).catch(err => {
         if (!active || (err instanceof ApiError && err.status === 401)) return;
@@ -1258,7 +1300,10 @@ export function ChatApp() {
 
   useEffect(() => {
     const textarea = textareaRef.current;
-    if (textarea) { textarea.style.height = "auto"; textarea.style.height = `${Math.min(textarea.scrollHeight, 180)}px`; }
+    if (!textarea) return;
+    if (!draft) {
+      textarea.style.height = "48px";
+    }
   }, [draft]);
 
   useEffect(() => {
@@ -1269,9 +1314,25 @@ export function ChatApp() {
     return () => previous?.focus();
   }, [dialog]);
 
+  const atBottomRef = useRef(true);
+
   useEffect(() => {
-    if (atBottom) bottomRef.current?.scrollIntoView({ behavior: streamingId ? "instant" : "smooth", block: "end" });
-  }, [conversation?.messages, atBottom, streamingId, status]);
+    atBottomRef.current = atBottom;
+  }, [atBottom]);
+
+  useEffect(() => {
+    if (!atBottomRef.current) return;
+    const el = messagesRef.current;
+    if (!el) return;
+
+    if (streamingId) {
+      // Instant non-jumping scroll directly on container during streaming
+      el.scrollTop = el.scrollHeight;
+    } else {
+      // Smooth scroll only on new completed messages
+      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    }
+  }, [conversation?.messages, streamingId]);
 
   const messages = useMemo(() => conversation?.messages ?? [], [conversation?.messages]);
   const researchActivityMessage = messages.find(message => message.id === researchActivityMessageId);
@@ -1444,6 +1505,30 @@ export function ChatApp() {
   }, [conversations, query, selectedKeyword, selectedTheme]);
 
   const groups = useMemo(() => {
+    if (groupMode === "space") {
+      const bySpace = new Map<string, { label: string; icon: string; items: Conversation[]; topicId?: string }>();
+      for (const t of topics) {
+        bySpace.set(t.id, { label: t.title, icon: t.icon || "📌", items: [], topicId: t.id });
+      }
+      for (const item of filteredConversations) {
+        const spaceId = item.topic_space_id;
+        if (spaceId && bySpace.has(spaceId)) {
+          bySpace.get(spaceId)!.items.push(item);
+        } else {
+          const freeKey = "__none__";
+          const grp = bySpace.get(freeKey) ?? { label: "Discussions libres", icon: "💬", items: [], topicId: undefined };
+          grp.items.push(item);
+          bySpace.set(freeKey, grp);
+        }
+      }
+      return Array.from(bySpace.values())
+        .filter(grp => grp.items.length > 0)
+        .sort((a, b) => {
+          if (a.topicId && !b.topicId) return -1;
+          if (!a.topicId && b.topicId) return 1;
+          return a.label.localeCompare(b.label, "fr");
+        });
+    }
     if (groupMode === "theme") {
       const byTheme = new Map<string, Conversation[]>();
       for (const item of filteredConversations) {
@@ -1454,7 +1539,7 @@ export function ChatApp() {
       }
       const order = availableThemes;
       return Array.from(byTheme.entries())
-        .map(([label, items]) => ({ label, items }))
+        .map(([label, items]) => ({ label, icon: undefined, topicId: undefined, items }))
         .sort((a, b) => {
           if (a.label === "Général" && b.label !== "Général") return 1;
           if (b.label === "Général" && a.label !== "Général") return -1;
@@ -1465,9 +1550,9 @@ export function ChatApp() {
         });
     }
     return ["Aujourd’hui", "Ces 7 derniers jours", "Plus tôt"]
-      .map(label => ({ label, items: filteredConversations.filter(item => dateGroup(item.updated_at) === label) }))
+      .map(label => ({ label, icon: undefined, topicId: undefined, items: filteredConversations.filter(item => dateGroup(item.updated_at) === label) }))
       .filter(group => group.items.length > 0);
-  }, [groupMode, filteredConversations, availableThemes]);
+  }, [groupMode, filteredConversations, availableThemes, topics]);
 
   const hasActiveFilter = Boolean(query.trim() || selectedKeyword || selectedTheme);
 
@@ -1511,8 +1596,9 @@ export function ChatApp() {
     setSidebarOpen(false);
   }
 
-  function openStudyModal(initialKind: "flashcards" | "quiz" | "cloze" | "all" = "all") {
+  function openStudyModal(initialKind: "flashcards" | "quiz" | "cloze" | "all" = "all", customCourseText = "") {
     setStudyModalKind(initialKind);
+    setStudyModalCourseText(customCourseText);
     setStudyModalOpen(true);
     setSidebarOpen(false);
   }
@@ -1520,6 +1606,12 @@ export function ChatApp() {
   function openBlogModal(seedPrompt = "") {
     setBlogModalSeedPrompt(seedPrompt);
     setBlogModalOpen(true);
+    setSidebarOpen(false);
+  }
+
+  function openWebPagesModal(seedPrompt?: string) {
+    setWebPagesModalPrompt(seedPrompt);
+    setWebPagesModalOpen(true);
     setSidebarOpen(false);
   }
 
@@ -1559,6 +1651,7 @@ export function ChatApp() {
       }
       const hasCanvas = (loaded.messages ?? []).some(msg => msg.role === "assistant" && hasExplicitCanvasFiles(msg.content));
       setConversation(loaded); setModel(loaded.model); setDraft(""); setAttachments([]); setAtBottom(true);
+      setActiveTopicSpaceId(loaded.topic_space_id ?? null);
       setCanvasMessageId(null); setCanvasSelectedPath(null); setCanvasIncludeUnnamed(false);
       if (hasCanvas) { setContextOpen(false); setCanvasOpen(true); }
       if (warning) setError(warning);
@@ -1566,12 +1659,13 @@ export function ChatApp() {
     finally { setBusy(null); }
   }
 
-  async function newConversation() {
+  async function newConversation(topicId?: string) {
     setResearchActivityMessageId(null);
     if (busy === "cleanup" || busy === "switch") return;
     setBusy("cleanup");
     const warning = await discardUploads(attachments);
     setConversation(null); setDraft(""); setAttachments([]); setModel(config?.default_model ?? ""); setError(""); setSidebarOpen(false); setAtBottom(true);
+    setActiveTopicSpaceId(topicId ?? null);
     setCanvasMessageId(null); setCanvasSelectedPath(null); setCanvasIncludeUnnamed(false);
     setStreamingId(null); setStatus("");
     if (!codeMode) setCanvasOpen(false);
@@ -1810,7 +1904,9 @@ export function ChatApp() {
     let assistantId = "";
     try {
       if (!activeId) {
-        const created = await api<Conversation>("/conversations", { method: "POST", body: JSON.stringify({ model }), signal: controller.signal });
+        const postData: Record<string, any> = { model };
+        if (activeTopicSpaceId) postData.topic_space_id = activeTopicSpaceId;
+        const created = await api<Conversation>("/conversations", { method: "POST", body: JSON.stringify(postData), signal: controller.signal });
         activeId = created.id;
         conversationIdRef.current = activeId;
         setConversation({ ...created, messages: created.messages ?? [] });
@@ -1850,6 +1946,7 @@ export function ChatApp() {
           skill_ids: messageSkillIds,
           interaction_id: interactionId,
           plan_feedback: planFeedback,
+          auto_memory_enabled: autoMemoryActive,
         },
         controller.signal,
         event => {
@@ -1942,12 +2039,24 @@ export function ChatApp() {
               setMemoryNotice(notice);
               setTimeout(() => setMemoryNotice(null), 7000);
             }
+            if (event.data.topic_space_update) {
+              void refreshTopics();
+              const tUp = event.data.topic_space_update;
+              if (tUp.new_memories && tUp.new_memories.length > 0) {
+                const firstFact = tUp.new_memories[0].fact;
+                setTopicNotice(`${tUp.icon || "📌"} Mémorisé dans ${tUp.title} : « ${firstFact.slice(0, 55)}${firstFact.length > 55 ? "..." : ""} »`);
+                setTimeout(() => setTopicNotice(null), 8000);
+              }
+            }
           }
         }
       );
       const loaded = await api<Conversation>(`/conversations/${activeId}`);
       if (conversationIdRef.current === activeId) setConversation(loaded);
       await refreshConversations();
+      if (activeTopicSpaceId || loaded.topic_space_id) {
+        void refreshTopics();
+      }
     } catch (err) {
       const aborted = err instanceof DOMException && err.name === "AbortError";
       setResearchRuns(old => old[assistantId]?.state === "running" ? { ...old, [assistantId]: { ...old[assistantId], state: aborted ? "interrupted" : "failed" } } : old);
@@ -2013,7 +2122,7 @@ export function ChatApp() {
   function invitationAccepted() {
     setResearchRuns({}); setResearchActivityMessageId(null);
     setUser(null); setConfig(null); setConversations([]); setConversation(null); setMemories([]);
-    setDraft(""); setAttachments([]); setMemoryDraft(""); setAdminOpen(false); setFamilyModalOpen(false); setSettingsModalOpen(false); setProfileMenuOpen(false);
+    setDraft(""); setAttachments([]); setMemoryDraft(""); setAdminOpen(false); setFamilyModalOpen(false); setSettingsModalOpen(false); setToolsModalOpen(false); setProfileMenuOpen(false);
     window.history.replaceState({}, "", window.location.pathname + window.location.search);
     window.dispatchEvent(new PopStateEvent("popstate"));
   }
@@ -2027,7 +2136,7 @@ export function ChatApp() {
     } finally {
       setUser(null); setConfig(null); setConversations([]); setConversation(null); setMemories([]);
       setResearchRuns({}); setResearchActivityMessageId(null);
-      setSkills([]); setFamilyInfo(null); setAdminOpen(false); setFamilyModalOpen(false); setSettingsModalOpen(false); setProfileMenuOpen(false);
+      setSkills([]); setFamilyInfo(null); setAdminOpen(false); setFamilyModalOpen(false); setSettingsModalOpen(false); setToolsModalOpen(false); setProfileMenuOpen(false);
       setAuthReady(true);
     }
   }
@@ -2046,6 +2155,10 @@ export function ChatApp() {
 
   function toggleThemeCollapse(label: string) {
     setCollapsedThemes(old => ({ ...old, [label]: !old[label] }));
+  }
+
+  function toggleSpaceCollapse(label: string) {
+    setCollapsedSpaces(old => ({ ...old, [label]: !old[label] }));
   }
 
   async function classifyConversation(id: string, updateTitle = true) {
@@ -2210,6 +2323,67 @@ export function ChatApp() {
         </div>
       )}
 
+      {/* Mes Espaces Thématiques */}
+      <div className="sidebar-topics-section" aria-label="Mes espaces thématiques">
+        <div className="sidebar-topics-header">
+          <span className="sidebar-topics-title">
+            <Compass size={13} />
+            <span>MES ESPACES</span>
+            {topics.length > 0 && <span className="sidebar-topics-count">· {topics.length}</span>}
+          </span>
+          <button
+            type="button"
+            className="sidebar-topics-add-btn"
+            onClick={() => {
+              setTopicModalId(null);
+              setTopicModalOpen(true);
+            }}
+            title="Créer un nouvel espace thématique (Espagnol, Projet...)"
+            aria-label="Créer un espace"
+          >
+            <Plus size={14} />
+          </button>
+        </div>
+
+        {topics.length > 0 ? (
+          <div className="sidebar-topics-list">
+            {topics.map(t => {
+              const isActive = conversation?.topic_space_id === t.id || activeTopicSpaceId === t.id;
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  className={`sidebar-topic-item ${isActive ? "is-active" : ""}`}
+                  onClick={() => {
+                    setTopicModalId(t.id);
+                    setTopicModalOpen(true);
+                  }}
+                  title={`Ouvrir l'espace « ${t.title} »`}
+                >
+                  <span className="sidebar-topic-icon">{t.icon || "📌"}</span>
+                  <span className="sidebar-topic-name">{t.title}</span>
+                  <span className={`sidebar-topic-type-tag type-${t.topic_type}`}>
+                    {t.topic_type === "learning" ? "Apprendre" : t.topic_type === "project" ? "Projet" : t.topic_type === "interest" ? "Intérêt" : "Dossier"}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <button
+            type="button"
+            className="sidebar-topic-empty-prompt"
+            onClick={() => {
+              setTopicModalId(null);
+              setTopicModalOpen(true);
+            }}
+          >
+            <Sparkles size={12} />
+            <span>Créer un espace (Espagnol, Projet...)</span>
+          </button>
+        )}
+      </div>
+
       <div className="history-header">
         <span>VOTRE ESPACE · {filteredConversations.length}</span>
         <div className="history-header-controls">
@@ -2242,15 +2416,26 @@ export function ChatApp() {
             >
               Thèmes
             </button>
+            <button
+              type="button"
+              className={groupMode === "space" ? "is-active" : ""}
+              aria-pressed={groupMode === "space"}
+              onClick={() => setGroupMode("space")}
+              title="Regrouper les discussions par Espace thématique"
+            >
+              Espaces
+            </button>
           </div>
         </div>
       </div>
       <nav className="history-list" aria-label="Historique des conversations">
         {busy === "init" ? <p className="history-empty"><LoaderCircle className="spin" size={16} /> Chargement de l’historique…</p> : groups.length ? groups.map(group => {
-          const isCollapsed = groupMode === "theme" && Boolean(collapsedThemes[group.label]);
+          const isThemeCollapsed = groupMode === "theme" && Boolean(collapsedThemes[group.label]);
+          const isSpaceCollapsed = groupMode === "space" && Boolean(collapsedSpaces[group.label]);
+          const isCollapsed = isThemeCollapsed || isSpaceCollapsed;
           const tone = groupMode === "theme" ? themeTone(group.label) : "general";
           return (
-            <div key={group.label} className={`history-group ${groupMode === "theme" ? "is-theme-group" : ""}`}>
+            <div key={group.label} className={`history-group ${groupMode === "theme" ? "is-theme-group" : groupMode === "space" ? "is-space-group" : ""}`}>
               {groupMode === "theme" ? (
                 <button
                   type="button"
@@ -2263,12 +2448,55 @@ export function ChatApp() {
                   <span className="history-theme-count">{group.items.length}</span>
                   {isCollapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
                 </button>
+              ) : groupMode === "space" ? (
+                <div
+                  className="history-space-header"
+                  onClick={() => toggleSpaceCollapse(group.label)}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={e => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      toggleSpaceCollapse(group.label);
+                    }
+                  }}
+                  aria-expanded={!isCollapsed}
+                >
+                  <span className="history-space-icon">{group.icon || "📁"}</span>
+                  <span className="history-space-title">{group.label}</span>
+                  <span className="history-space-count">{group.items.length}</span>
+                  {group.topicId && (
+                    <div className="history-space-actions" onClick={e => e.stopPropagation()}>
+                      <button
+                        type="button"
+                        className="history-space-action-btn"
+                        title="Ouvrir le tableau de bord de l'espace"
+                        onClick={() => {
+                          setTopicModalId(group.topicId!);
+                          setTopicModalOpen(true);
+                        }}
+                      >
+                        <Sparkles size={11} />
+                      </button>
+                      <button
+                        type="button"
+                        className="history-space-action-btn"
+                        title="Nouvelle discussion dans cet espace"
+                        onClick={() => void newConversation(group.topicId)}
+                      >
+                        <Plus size={11} />
+                      </button>
+                    </div>
+                  )}
+                  {isCollapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
+                </div>
               ) : (
                 <h2>{group.label}</h2>
               )}
               {!isCollapsed && group.items.map(item => {
                 const itemTheme = item.theme?.trim() || "";
                 const itemKeywords = (item.keywords ?? []).slice(0, 3);
+                const itemTopic = item.topic_space_id ? topics.find(t => t.id === item.topic_space_id) : null;
                 return (
                   <div key={item.id} className={`history-item ${conversation?.id === item.id ? "is-active" : ""}`}>
                     <div className="history-item-main">
@@ -2281,8 +2509,22 @@ export function ChatApp() {
                           </span>
                         )}
                       </button>
-                      {(itemKeywords.length > 0 || (groupMode === "date" && itemTheme)) && (
+                      {(itemKeywords.length > 0 || (groupMode === "date" && itemTheme) || (groupMode !== "space" && itemTopic)) && (
                         <div className="history-item-meta">
+                          {groupMode !== "space" && itemTopic && (
+                            <button
+                              type="button"
+                              className="history-space-badge"
+                              onClick={() => {
+                                setTopicModalId(itemTopic.id);
+                                setTopicModalOpen(true);
+                              }}
+                              title={`Espace : ${itemTopic.title} (cliquer pour ouvrir)`}
+                            >
+                              <span>{itemTopic.icon || "📌"}</span>
+                              <span>{itemTopic.title}</span>
+                            </button>
+                          )}
                           {groupMode === "date" && itemTheme && (
                             <button
                               type="button"
@@ -2326,6 +2568,16 @@ export function ChatApp() {
       </nav>
       <div className="sidebar-bottom">
         <div className="sidebar-quick-tools" aria-label="Accès rapides aux espaces et outils">
+          <button
+            type="button"
+            className={`sidebar-quick-btn pages-quick ${webPagesModalOpen ? "is-active" : ""}`}
+            onClick={() => { openWebPagesModal(); setSidebarOpen(false); }}
+            title="cLAIr Pages (Générateur HTML5/SVG autonome)"
+            aria-label="cLAIr Pages"
+          >
+            <Globe size={16} />
+            <span className="sidebar-quick-label">Pages</span>
+          </button>
           <button
             type="button"
             className={`sidebar-quick-btn blog-quick ${blogModalOpen ? "is-active" : ""}`}
@@ -2441,64 +2693,64 @@ export function ChatApp() {
           <span className="personal-label">Votre espace IA</span>
         </div>
         <div className="topbar-right">
+          {/* Boîte à outils & Studios IA */}
           <button
             type="button"
-            className={`deepsearch-topbar-button ${deepSearchModalOpen ? "is-selected" : ""}`}
+            className={`tools-topbar-button ${toolsModalOpen ? "is-selected" : ""}`}
+            onClick={() => setToolsModalOpen(true)}
+            aria-label="Ouvrir la boîte à outils IA"
+            title="Boîte à outils IA : DeepSearch, Cours, Blogs, Studio Image, Sons & Musique, Canvas Code, Conseil IA, Réviser, Marchés..."
+          >
+            <LayoutGrid size={16} />
+            <span>Outils</span>
+            {(multiAgentActive || canvasFiles.length > 0) && (
+              <span className="topbar-active-dot" title="Outils actifs en cours" />
+            )}
+          </button>
+
+          {/* Activer / Désactiver la mémorisation à la demande */}
+          <button
+            type="button"
+            className={`topbar-memory-toggle-btn ${autoMemoryActive ? "is-active" : "is-paused"}`}
+            onClick={() => void toggleAutoMemory()}
+            aria-pressed={autoMemoryActive}
+            aria-label={autoMemoryActive ? "Mémorisation active. Cliquer pour désactiver à la demande." : "Mémorisation en pause. Cliquer pour réactiver."}
+            title={
+              autoMemoryActive
+                ? "Mémorisation active : l’IA retient automatiquement vos faits utiles et préférences. Cliquez pour désactiver à la demande."
+                : "Mémorisation en pause : l’IA ne retient rien de vos échanges. Cliquez pour réactiver à la demande."
+            }
+          >
+            <Brain size={16} />
+            <span className="topbar-memory-label">Mémorisation</span>
+            <span className={`topbar-memory-pill ${autoMemoryActive ? "is-on" : "is-off"}`}>
+              <span className="topbar-memory-dot" />
+              {autoMemoryActive ? "Active" : "En pause"}
+            </span>
+          </button>
+
+          {/* Consultation des Souvenirs & du Contexte */}
+          <button
+            type="button"
+            className={`context-toggle ${contextOpen ? "is-selected" : ""}`}
             onClick={() => {
-              setDeepSearchModalQuestion(draft.trim());
-              setDeepSearchModalTab("reports");
-              setDeepSearchModalReportId(null);
-              setDeepSearchModalOpen(true);
+              setContextOpen(old => {
+                const next = !old;
+                if (next) setCanvasOpen(false);
+                return next;
+              });
             }}
-            aria-label="Ouvrir mes rapports DeepSearch"
-            title="Consulter mes rapports d’analyse approfondie DeepSearch"
+            aria-expanded={contextOpen}
+            aria-controls="context-panel"
+            aria-label="Consulter mes souvenirs"
+            title="Consulter vos souvenirs enregistrés et le fil du contexte"
           >
-            <Compass size={17} />
-            <span>DeepSearch</span>
+            <Bookmark size={16} />
+            <span>Souvenirs</span>
+            <span className="memory-count">{memories.length}</span>
           </button>
-          <button
-            type="button"
-            className={`learn-topbar-button ${learnModalOpen ? "is-selected" : ""}`}
-            onClick={() => {
-              setLearnModalQuestion(draft.trim());
-              setLearnModalTab("reports");
-              setLearnModalReportId(null);
-              setLearnModalOpen(true);
-            }}
-            aria-label="Ouvrir mes cours et formations"
-            title="Consulter mes cours, parcours de formation et fiches de révision"
-          >
-            <GraduationCap size={17} />
-            <span>Cours</span>
-          </button>
-          <button type="button" className={`blog-topbar-button ${blogModalOpen ? "is-selected" : ""}`} onClick={() => openBlogModal("")} aria-label="Ouvrir mes blogs" title="Consulter mes blogs d’actualités SearXNG"><Newspaper size={17} /><span>Blogs</span></button>
-          <button type="button" className={`canvas-topbar-button ${canvasOpen ? "is-selected" : ""}`} onClick={() => { setCanvasOpen(old => { const next = !old; if (next) { setContextOpen(false); setSkillsOpen(false); } return next; }); }} aria-expanded={canvasOpen} aria-label="Ouvrir le Canvas Code" title="Ouvrir le Canvas Code interactif"><Code2 size={17} /><span>Canvas Code</span>{canvasFiles.length > 0 && <span className="canvas-topbar-count">{canvasFiles.length}</span>}</button>
-          <button type="button" className="studio-topbar-button" onClick={() => openImageStudio(draft.trim())} aria-label="Ouvrir le Studio Image" title="Ouvrir le Studio Image"><ImagePlus size={17} /><span>Studio Image</span></button>
-          <button type="button" className={`sound-topbar-button ${soundStudioOpen ? "is-selected" : ""}`} onClick={() => openSoundStudio(draft.trim())} aria-label="Ouvrir le Studio Son & Musique" title="Générer des effets sonores et morceaux de musique avec ElevenLabs"><Volume2 size={17} /><span>Sons & Musique</span></button>
-          <button
-            type="button"
-            className={`multiagent-topbar-button ${multiAgentActive ? "is-selected" : ""}`}
-            onClick={() => setShowMultiAgentModal(true)}
-            aria-label="Ouvrir le Conseil Multi-Agents"
-            title="Conseil Multi-Agents : délibération collaborative entre plusieurs modèles et personnalités (Synthèse d'experts ou Débat)"
-          >
-            <Users size={17} />
-            <span>Conseil IA</span>
-            {multiAgentActive && <span className="topbar-active-dot" />}
-          </button>
-          <button type="button" className={`context-toggle ${contextOpen ? "is-selected" : ""}`} onClick={() => { setContextOpen(old => { const next = !old; if (next) setCanvasOpen(false); return next; }); }} aria-expanded={contextOpen} aria-controls="context-panel" aria-label="Mémoire & contexte" title="Consulter la mémoire et le contexte"><Brain size={17} /><span>Mémoire</span><span className="memory-count">{memories.length}</span></button>
 
           {/* Sortie & Export de la discussion */}
-          <button
-            type="button"
-            className={`topbar-study-btn ${studyModalOpen ? "is-active" : ""}`}
-            onClick={() => openStudyModal("all")}
-            title="Mode Réviser : révisez avec Flashcards 3D, Quizz interactif et Phrases à trous"
-            aria-label="Mode Réviser"
-          >
-            <GraduationCap size={16} />
-            <span>Réviser</span>
-          </button>
           {conversation && (
             <div className="topbar-export-wrap" ref={topbarExportRef}>
               <button
@@ -2733,12 +2985,135 @@ export function ChatApp() {
         <section className="chat-panel" aria-label="Conversation">
           <div className="chat-skills-toolbar"><span>{conversation?.skills?.length ? conversation.skills.map(skill => skill.name).join(" · ") : "Aucune compétence active"}</span><button type="button" onClick={() => { setContextOpen(false); setSkillsOpen(true); }}><Sparkles size={15} />Compétences<small>{conversation?.skills?.length ?? 0}</small></button></div>
           {skillsOpen && <SkillsPanel conversation={conversation} model={model} config={config} onClose={() => setSkillsOpen(false)} onConversationChange={setConversation} onRefreshConversations={refreshConversations} onSkillsChange={setSkills} />}
-          <div className="chat-scroll" ref={messagesRef} onScroll={() => { const el = messagesRef.current; if (el) setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 120); }}>
-            {!messages.length && busy !== "switch" ? <div className="welcome"><div className="welcome-eyebrow"><span /> UN PEU DE CLARTÉ, BEAUCOUP DE POSSIBILITÉS</div><BrandMark /><h1>Qu’avez-vous en tête<span> aujourd’hui ?</span></h1><p>Un espace pour vos questions, vos idées et vos projets.<br />Commencez quelque part. On avance ensemble.</p><div className="suggestions">{suggestions.map((item, index) => <button type="button" className="suggestion" key={item.title} disabled={working} onClick={() => { if (index === 3) { openImageStudio(item.prompt); } else if (index === 1) { openBlogModal(item.prompt); } else { setDraft(item.prompt); textareaRef.current?.focus(); } }}><span className={`suggestion-icon suggestion-icon-${index}`}><item.icon size={19} strokeWidth={1.6} /></span><strong>{item.title}</strong><span>{item.description}</span><ChevronRight size={15} className="suggestion-arrow" /></button>)}</div><div className="welcome-note"><Brain size={14} /><span>Les souvenirs que vous choisissez gardent le fil d’une conversation à l’autre.</span></div></div> : busy === "switch" ? <div className="loading-conversation"><LoaderCircle size={23} className="spin" />Ouverture de votre conversation…</div> : <div className="messages"><div className="conversation-heading"><div className="conversation-heading-top"><span>CONVERSATION</span>{conversation?.theme && <button type="button" className={`conversation-theme-badge tone-${themeTone(conversation.theme)}`} onClick={() => { setGroupMode("theme"); setSelectedTheme(old => (old === conversation.theme ? "" : (conversation.theme ?? ""))); setSidebarOpen(true); }} title={`Voir toutes les discussions du thème « ${conversation.theme} »`}>{conversation.theme}</button>}<div className="conversation-heading-actions">{conversation && <button type="button" className="conversation-meta-btn conversation-study-btn" disabled={working} onClick={() => openStudyModal("all")} title="Réviser les notions de cette discussion : Flashcards 3D, Quizz QCM et Phrases à trous"><GraduationCap size={12} /><span>Réviser</span></button>}{conversation && <button type="button" className="conversation-meta-btn" disabled={working} onClick={() => openEditDialog(conversation)} title="Modifier le titre, le thème et les mots-clés"><Pencil size={12} /><span>Éditer</span></button>}{conversation && <button type="button" className="conversation-meta-btn" disabled={working} onClick={() => void classifyConversation(conversation.id, true)} title="Régénérer le titre, le thème et les mots-clés automatiquement (Mistral Small)">{busy === "classify" ? <LoaderCircle size={12} className="spin" /> : <WandSparkles size={12} />}<span>Auto-tags IA</span></button>}</div></div><h1>{conversation?.title}</h1>{!!conversation?.keywords?.length && <div className="conversation-keywords-row" aria-label="Mots-clés de la discussion">{conversation.keywords.map(kw => <button key={kw} type="button" className={`conversation-keyword-chip ${selectedKeyword.toLocaleLowerCase("fr") === kw.toLocaleLowerCase("fr") ? "is-active" : ""}`} onClick={() => { toggleKeywordFilter(kw); setSidebarOpen(true); }} title={`Filtrer les discussions avec #${kw}`}>#{kw}</button>)}</div>}</div>{messages.map(message => <MessageView key={message.id} message={message} streaming={streamingId === message.id} onOpenCanvas={openCanvasForMessage} onOpenDeepSearchReport={handleOpenDeepSearchReport} researchActivity={researchRuns[message.id]} onOpenResearchActivity={setResearchActivityMessageId} onOpenLearnReport={handleOpenLearnReport} onOpenFinanceModal={openFinanceModal} />)}<div ref={bottomRef} /></div>}
+          <div className="chat-scroll" ref={messagesRef} onScroll={() => { const el = messagesRef.current; if (el) { const isBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120; atBottomRef.current = isBottom; setAtBottom(isBottom); } }}>
+            {!messages.length && busy !== "switch" ? (
+              activeTopicSpaceId && topics.find(t => t.id === activeTopicSpaceId) ? (() => {
+                const at = topics.find(t => t.id === activeTopicSpaceId)!;
+                return (
+                  <div className="welcome">
+                    <div className="welcome-eyebrow" style={{ color: "#2563eb" }}>
+                      <span style={{ background: "#2563eb" }} /> ESPACE THÉMATIQUE · {at.topic_type.toUpperCase()}
+                    </div>
+                    <div className="brand-mark small" style={{ fontSize: "24px", width: "46px", height: "46px", background: "linear-gradient(135deg, #2563eb 0%, #4f46e5 100%)" }}>
+                      {at.icon || "📌"}
+                    </div>
+                    <h1>{at.title}</h1>
+                    {at.objective && (
+                      <p style={{ maxWidth: 520, margin: "6px auto 0", color: "var(--text-secondary, #64748b)", fontSize: "13px" }}>
+                        🎯 {at.objective}
+                      </p>
+                    )}
+
+                    {at.current_resume_context && (
+                      <div style={{ maxWidth: 640, margin: "16px auto 0", padding: "14px 18px", borderRadius: "12px", background: "linear-gradient(135deg, rgba(37,99,235,0.08) 0%, rgba(99,102,241,0.04) 100%)", border: "1px solid rgba(37,99,235,0.18)", textAlign: "left" }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "6px" }}>
+                          <strong style={{ fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.05em", color: "#1d4ed8", display: "flex", alignItems: "center", gap: "5px" }}>
+                            <Compass size={13} />
+                            Ton point de reprise
+                          </strong>
+                          <button
+                            type="button"
+                            style={{ fontSize: "11px", color: "#2563eb", background: "none", border: "none", cursor: "pointer", fontWeight: 600 }}
+                            onClick={() => { setTopicModalId(at.id); setTopicModalOpen(true); }}
+                          >
+                            Ouvrir l&apos;espace ➔
+                          </button>
+                        </div>
+                        <p style={{ margin: 0, fontSize: "13px", lineHeight: 1.5, color: "var(--text-primary, #0f172a)" }}>
+                          {at.current_resume_context}
+                        </p>
+                        {at.suggested_next_step && (
+                          <div style={{ marginTop: "10px", padding: "8px 12px", background: "rgba(255,255,255,0.85)", borderRadius: "8px", border: "1px solid rgba(37,99,235,0.15)", fontSize: "12px", display: "flex", alignItems: "center", gap: "8px" }}>
+                            <Target size={14} style={{ color: "#2563eb", flexShrink: 0 }} />
+                            <span><strong>Prochaine étape :</strong> {at.suggested_next_step}</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    <div className="suggestions" style={{ marginTop: "18px" }}>
+                      <button
+                        type="button"
+                        className="suggestion"
+                        disabled={working}
+                        onClick={() => {
+                          setDraft(at.suggested_next_step ? `Continuons sur la prochaine étape : ${at.suggested_next_step}` : "Reprenons là où nous en étions.");
+                          textareaRef.current?.focus();
+                        }}
+                      >
+                        <span className="suggestion-icon suggestion-icon-0"><Target size={19} /></span>
+                        <strong>Reprendre la suite</strong>
+                        <span>{at.suggested_next_step || "Continuer la progression"}</span>
+                        <ChevronRight size={15} className="suggestion-arrow" />
+                      </button>
+
+                      <button
+                        type="button"
+                        className="suggestion"
+                        disabled={working}
+                        onClick={() => {
+                          setDraft("Faisons un point rapide sur mes acquis et mes difficultés actuelles sur ce sujet.");
+                          textareaRef.current?.focus();
+                        }}
+                      >
+                        <span className="suggestion-icon suggestion-icon-1"><Brain size={19} /></span>
+                        <strong>Faire le point</strong>
+                        <span>Tester mes acquis et identifier les difficultés</span>
+                        <ChevronRight size={15} className="suggestion-arrow" />
+                      </button>
+
+                      <button
+                        type="button"
+                        className="suggestion"
+                        disabled={working}
+                        onClick={() => {
+                          setDraft("Je souhaite aborder une nouvelle notion ou étape sur ce sujet.");
+                          textareaRef.current?.focus();
+                        }}
+                      >
+                        <span className="suggestion-icon suggestion-icon-2"><Sparkles size={19} /></span>
+                        <strong>Nouvelle étape</strong>
+                        <span>Découvrir un nouvel aspect</span>
+                        <ChevronRight size={15} className="suggestion-arrow" />
+                      </button>
+                    </div>
+
+                    <div className="welcome-note">
+                      <Compass size={14} />
+                      <span>Mémoire active : les progrès et décisions seront synchronisés avec cet espace.</span>
+                    </div>
+                  </div>
+                );
+              })() : (
+                <div className="welcome"><div className="welcome-eyebrow"><span /> UN PEU DE CLARTÉ, BEAUCOUP DE POSSIBILITÉS</div><BrandMark /><h1>Qu’avez-vous en tête<span> aujourd’hui ?</span></h1><p>Un espace pour vos questions, vos idées et vos projets.<br />Commencez quelque part. On avance ensemble.</p><div className="suggestions">{suggestions.map((item, index) => <button type="button" className="suggestion" key={item.title} disabled={working} onClick={() => { if (index === 3) { openImageStudio(item.prompt); } else if (index === 1) { openBlogModal(item.prompt); } else { setDraft(item.prompt); textareaRef.current?.focus(); } }}><span className={`suggestion-icon suggestion-icon-${index}`}><item.icon size={19} strokeWidth={1.6} /></span><strong>{item.title}</strong><span>{item.description}</span><ChevronRight size={15} className="suggestion-arrow" /></button>)}</div><div className="welcome-note"><Brain size={14} /><span>Les souvenirs que vous choisissez gardent le fil d’une conversation à l’autre.</span></div></div>
+              )
+            ) : busy === "switch" ? <div className="loading-conversation"><LoaderCircle size={23} className="spin" />Ouverture de votre conversation…</div> : <div className="messages"><div className="conversation-heading"><div className="conversation-heading-top"><span>CONVERSATION</span>{conversation?.topic_space_id && (() => { const curTopic = topics.find(t => t.id === conversation.topic_space_id); if (!curTopic) return null; return <button type="button" className="conversation-topic-badge" onClick={() => { setTopicModalId(curTopic.id); setTopicModalOpen(true); }} title={`Espace : ${curTopic.title} (cliquer pour voir la synthèse et mémoire)`}><span>{curTopic.icon || "📌"}</span><span>{curTopic.title}</span></button>; })()}{conversation?.theme && <button type="button" className={`conversation-theme-badge tone-${themeTone(conversation.theme)}`} onClick={() => { setGroupMode("theme"); setSelectedTheme(old => (old === conversation.theme ? "" : (conversation.theme ?? ""))); setSidebarOpen(true); }} title={`Voir toutes les discussions du thème « ${conversation.theme} »`}>{conversation.theme}</button>}<div className="conversation-heading-actions">{conversation && <button type="button" className="conversation-meta-btn" disabled={working} onClick={() => setLinkTopicDialogOpen(true)} title="Associer ou détacher cette discussion d'un espace thématique"><FolderKanban size={12} /><span>{conversation.topic_space_id ? "Espace lié" : "Lier à un espace"}</span></button>}{conversation && <button type="button" className="conversation-meta-btn conversation-page-btn" disabled={working} onClick={() => openWebPagesModal()} title="Générer une page web autonome (HTML5 + SVG + JS) à partir de cette conversation"><Globe size={12} /><span>Page Web</span></button>}{conversation && <button type="button" className="conversation-meta-btn conversation-study-btn" disabled={working} onClick={() => openStudyModal("all")} title="Réviser les notions de cette discussion : Flashcards 3D, Quizz QCM et Phrases à trous"><GraduationCap size={12} /><span>Réviser</span></button>}{conversation && <button type="button" className="conversation-meta-btn" disabled={working} onClick={() => openEditDialog(conversation)} title="Modifier le titre, le thème et les mots-clés"><Pencil size={12} /><span>Éditer</span></button>}{conversation && <button type="button" className="conversation-meta-btn" disabled={working} onClick={() => void classifyConversation(conversation.id, true)} title="Régénérer le titre, le thème et les mots-clés automatiquement (Mistral Small)">{busy === "classify" ? <LoaderCircle size={12} className="spin" /> : <WandSparkles size={12} />}<span>Auto-tags IA</span></button>}</div></div><h1>{conversation?.title}</h1>{!!conversation?.keywords?.length && <div className="conversation-keywords-row" aria-label="Mots-clés de la discussion">{conversation.keywords.map(kw => <button key={kw} type="button" className={`conversation-keyword-chip ${selectedKeyword.toLocaleLowerCase("fr") === kw.toLocaleLowerCase("fr") ? "is-active" : ""}`} onClick={() => { toggleKeywordFilter(kw); setSidebarOpen(true); }} title={`Filtrer les discussions avec #${kw}`}>#{kw}</button>)}</div>}</div>{messages.map(message => <MessageView key={message.id} message={message} streaming={streamingId === message.id} onOpenCanvas={openCanvasForMessage} onOpenDeepSearchReport={handleOpenDeepSearchReport} researchActivity={researchRuns[message.id]} onOpenResearchActivity={setResearchActivityMessageId} onOpenLearnReport={handleOpenLearnReport} onOpenFinanceModal={openFinanceModal} />)}<div ref={bottomRef} /></div>}
           </div>
-          {!atBottom && !!messages.length && <IconButton className="scroll-bottom" label="Aller aux derniers messages" onClick={() => { setAtBottom(true); bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }}><ArrowDown size={18} /></IconButton>}
+          {!atBottom && !!messages.length && <IconButton className="scroll-bottom" label="Aller aux derniers messages" onClick={() => { atBottomRef.current = true; setAtBottom(true); messagesRef.current?.scrollTo({ top: messagesRef.current.scrollHeight, behavior: "smooth" }); }}><ArrowDown size={18} /></IconButton>}
 
           <div className="composer-area">
+            {topicNotice && (
+              <div className="memory-toast" style={{ borderColor: "#93c5fd", background: "#eff6ff" }} role="status">
+                <Compass size={14} className="memory-toast-icon" style={{ color: "#2563eb" }} />
+                <span className="memory-toast-text" style={{ color: "#1e3a8a" }}>{topicNotice}</span>
+                {activeTopicSpaceId && (
+                  <button
+                    type="button"
+                    className="memory-toast-action"
+                    onClick={() => {
+                      setTopicModalId(activeTopicSpaceId);
+                      setTopicModalOpen(true);
+                      setTopicNotice(null);
+                    }}
+                  >
+                    Voir l&apos;espace
+                  </button>
+                )}
+                <IconButton label="Fermer la notification espace" onClick={() => setTopicNotice(null)}>
+                  <X size={13} />
+                </IconButton>
+              </div>
+            )}
             {memoryNotice && (
               <div className="memory-toast" role="status">
                 <Brain size={14} className="memory-toast-icon" />
@@ -2948,7 +3323,10 @@ export function ChatApp() {
                 onChange={event => {
                   const val = event.target.value;
                   setDraft(val);
-                  const cursorPos = event.target.selectionStart ?? val.length;
+                  const el = event.target;
+                  el.style.height = "auto";
+                  el.style.height = `${Math.min(Math.max(el.scrollHeight, 48), 180)}px`;
+                  const cursorPos = el.selectionStart ?? val.length;
                   const mention = findMentionQuery(val, cursorPos);
                   if (mention) {
                     setMentionQuery(mention.query);
@@ -2987,7 +3365,7 @@ export function ChatApp() {
         )}
 
         {contextOpen && <aside className="context-panel" id="context-panel" aria-label="Mémoire et contexte"><div className="context-heading"><div><span className="eyebrow">GARDER LE FIL</span><h2>Mémoire & contexte</h2></div><IconButton label="Fermer le panneau mémoire" onClick={() => setContextOpen(false)}><X size={18} /></IconButton></div><div className="context-tabs" role="tablist" aria-label="Contexte"><button id="summary-tab" type="button" role="tab" aria-selected={contextTab === "summary"} aria-controls="summary-panel" className={contextTab === "summary" ? "active" : ""} onClick={() => setContextTab("summary")}>Cette conversation</button><button id="memories-tab" type="button" role="tab" aria-selected={contextTab === "memories"} aria-controls="memories-panel" className={contextTab === "memories" ? "active" : ""} onClick={() => setContextTab("memories")}>Mes souvenirs <span>{memories.length}</span></button></div>
-          {contextTab === "summary" ? <div className="context-content" role="tabpanel" id="summary-panel" aria-labelledby="summary-tab"><div className="context-info"><BookOpen size={19} /><h3>L’essentiel, au même endroit.</h3><p>Un résumé progressif aide l’IA à garder le contexte quand la conversation s’allonge.</p></div>{conversation?.summary ? <div className="summary-card markdown"><ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins}>{normalizeMathMarkdown(conversation.summary)}</ReactMarkdown></div> : <div className="context-empty"><span className="empty-orbit"><BookOpen size={24} strokeWidth={1.2} /></span><strong>Chaque échange a son fil.</strong><p>{conversation ? "Le résumé apparaîtra ici lorsque cette conversation sera assez longue." : "Commencez une conversation pour retrouver son résumé ici."}</p></div>}<p className="context-explainer"><CircleAlert size={14} />Ce résumé est lié à cette conversation. Vos souvenirs, eux, peuvent enrichir tous vos échanges.</p></div> : <div className="context-content" role="tabpanel" id="memories-panel" aria-labelledby="memories-tab"><div className="context-info"><Brain size={20} /><h3>Les petites choses à retenir.</h3><p>Vos souvenirs s&apos;enrichissent soit automatiquement par l&apos;agent IA au fil des échanges, soit dès que vous lui dites <em>« note en mémoire que... »</em>. Vous gardez le contrôle total.</p></div><form className="memory-form" onSubmit={event => void saveMemory(event)}><label className="sr-only" htmlFor="memory-input">Nouvelle information à mémoriser</label><textarea id="memory-input" placeholder="Par exemple : je préfère des réponses courtes et concrètes." value={memoryDraft} onChange={event => setMemoryDraft(event.target.value)} disabled={working} maxLength={2000} rows={3} /><button type="submit" disabled={!memoryDraft.trim() || working}><Plus size={15} />Mémoriser</button></form>{memories.length ? <ul className="memory-list">{memories.map(memory => <li key={memory.id}><div><span className="memory-bullet" /><p>{memory.content}</p><IconButton label={`Oublier : ${memory.content.slice(0, 45)}`} disabled={working} onClick={() => void deleteMemory(memory.id)}><Trash2 size={14} /></IconButton></div><small>Ajouté le {shortDate(memory.created_at)}</small></li>)}</ul> : <div className="memory-empty"><Brain size={23} strokeWidth={1.3} /><p>Votre mémoire est encore une page blanche.</p></div>}<p className="context-explainer"><CircleAlert size={14} />Ces informations sont envoyées au modèle dans vos conversations. Vous pouvez les supprimer à tout moment.</p></div>}
+          {contextTab === "summary" ? <div className="context-content" role="tabpanel" id="summary-panel" aria-labelledby="summary-tab"><div className="context-info"><BookOpen size={19} /><h3>L’essentiel, au même endroit.</h3><p>Un résumé progressif aide l’IA à garder le contexte quand la conversation s’allonge.</p></div>{conversation?.summary ? <div className="summary-card markdown"><ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins}>{normalizeMathMarkdown(conversation.summary)}</ReactMarkdown></div> : <div className="context-empty"><span className="empty-orbit"><BookOpen size={24} strokeWidth={1.2} /></span><strong>Chaque échange a son fil.</strong><p>{conversation ? "Le résumé apparaîtra ici lorsque cette conversation sera assez longue." : "Commencez une conversation pour retrouver son résumé ici."}</p></div>}<p className="context-explainer"><CircleAlert size={14} />Ce résumé est lié à cette conversation. Vos souvenirs, eux, peuvent enrichir tous vos échanges.</p></div> : <div className="context-content" role="tabpanel" id="memories-panel" aria-labelledby="memories-tab"><div className="context-info"><Brain size={20} /><h3>Les petites choses à retenir.</h3><p>Vos souvenirs s&apos;enrichissent soit automatiquement par l&apos;agent IA au fil des échanges, soit dès que vous lui dites <em>« note en mémoire que... »</em>. Vous gardez le contrôle total.</p></div><div className="memory-panel-toggle-card"><div className="memory-panel-toggle-text"><div className="memory-panel-status-row"><span className={`memory-panel-dot ${autoMemoryActive ? "is-active" : "is-paused"}`} /><strong>Mémorisation continue {autoMemoryActive ? "active" : "en pause"}</strong></div><p>{autoMemoryActive ? "L’assistant IA retient intelligemment vos faits et préférences durables." : "La capture de souvenirs est en pause. Aucun nouveau fait n’est enregistré."}</p></div><button type="button" className={`memory-panel-toggle-btn ${autoMemoryActive ? "btn-pause" : "btn-resume"}`} onClick={() => void toggleAutoMemory()} title={autoMemoryActive ? "Désactiver la mémorisation à la demande" : "Activer la mémorisation"}>{autoMemoryActive ? "Désactiver" : "Activer"}</button></div><form className="memory-form" onSubmit={event => void saveMemory(event)}><label className="sr-only" htmlFor="memory-input">Nouvelle information à mémoriser</label><textarea id="memory-input" placeholder="Par exemple : je préfère des réponses courtes et concrètes." value={memoryDraft} onChange={event => setMemoryDraft(event.target.value)} disabled={working} maxLength={2000} rows={3} /><button type="submit" disabled={!memoryDraft.trim() || working}><Plus size={15} />Mémoriser</button></form>{memories.length ? <ul className="memory-list">{memories.map(memory => <li key={memory.id}><div><span className="memory-bullet" /><p>{memory.content}</p><IconButton label={`Oublier : ${memory.content.slice(0, 45)}`} disabled={working} onClick={() => void deleteMemory(memory.id)}><Trash2 size={14} /></IconButton></div><small>Ajouté le {shortDate(memory.created_at)}</small></li>)}</ul> : <div className="memory-empty"><Brain size={23} strokeWidth={1.3} /><p>Votre mémoire est encore une page blanche.</p></div>}<p className="context-explainer"><CircleAlert size={14} />Ces informations sont envoyées au modèle dans vos conversations. Vous pouvez les supprimer à tout moment.</p></div>}
         </aside>}
       </div>
     </main>
@@ -3075,8 +3453,11 @@ export function ChatApp() {
         isOpen={studyModalOpen}
         conversation={conversation}
         initialKind={studyModalKind}
-        initialCourseText={draft.trim()}
-        onClose={() => setStudyModalOpen(false)}
+        initialCourseText={studyModalCourseText || draft.trim()}
+        onClose={() => {
+          setStudyModalOpen(false);
+          setStudyModalCourseText("");
+        }}
         onSendToChat={(content) => {
           setDraft((prev) => (prev ? `${prev}\n\n${content}` : content));
           textareaRef.current?.focus();
@@ -3128,8 +3509,190 @@ export function ChatApp() {
         textareaRef.current?.focus();
       }}
     />
+    <ToolsModal
+      isOpen={toolsModalOpen}
+      onClose={() => setToolsModalOpen(false)}
+      onOpenDeepSearch={() => {
+        setDeepSearchModalQuestion(draft.trim());
+        setDeepSearchModalTab("reports");
+        setDeepSearchModalReportId(null);
+        setDeepSearchModalOpen(true);
+      }}
+      onOpenLearn={() => {
+        setLearnModalQuestion(draft.trim());
+        setLearnModalTab("reports");
+        setLearnModalReportId(null);
+        setLearnModalOpen(true);
+      }}
+      onOpenBlog={() => openBlogModal("")}
+      onOpenCanvas={() => {
+        setCanvasOpen(old => {
+          const next = !old;
+          if (next) {
+            setContextOpen(false);
+            setSkillsOpen(false);
+          }
+          return next;
+        });
+      }}
+      onOpenImageStudio={() => openImageStudio(draft.trim())}
+      onOpenSoundStudio={() => openSoundStudio(draft.trim())}
+      onOpenMultiAgent={() => setShowMultiAgentModal(true)}
+      onOpenStudy={() => openStudyModal("all")}
+      onOpenFinance={() => openFinanceModal()}
+      onOpenWebPages={() => openWebPagesModal()}
+      canvasFilesCount={canvasFiles.length}
+      isMultiAgentActive={multiAgentActive}
+      autoMemoryEnabled={autoMemoryActive}
+      onToggleAutoMemory={() => void toggleAutoMemory()}
+    />
     {dialog && <div className="modal-backdrop" onClick={event => { if (event.target === event.currentTarget && !working) setDialog(null); }}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="dialog-title" onKeyDown={event => { if (event.key === "Escape" && !working) setDialog(null); if (event.key === "Tab") { const elements = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled)')); if (!elements.length) return; const first = elements[0]; const last = elements[elements.length - 1]; if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); } else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); } } }}><form onSubmit={event => void submitDialog(event)}><div className="modal-header"><span className="modal-icon">{dialog.type === "delete" ? <Trash2 size={20} /> : <Pencil size={20} />}</span><IconButton label="Fermer" disabled={working} onClick={() => setDialog(null)}><X size={18} /></IconButton></div><h2 id="dialog-title">{dialog.type === "delete" ? "Supprimer cette conversation ?" : "Organiser la discussion"}</h2>{dialog.type === "delete" ? <p>« {dialog.conversation.title} » et ses messages seront supprimés. Cette action est définitive.</p> : <div className="modal-fields"><div className="modal-field-header"><label htmlFor="rename-input">Titre de la conversation</label><button type="button" className="modal-ai-generate-btn" disabled={working} onClick={() => void classifyConversation(dialog.conversation.id, true)} title="Générer titre, thème et mots-clés avec Mistral Small">{busy === "classify" ? <LoaderCircle size={12} className="spin" /> : <WandSparkles size={12} />}<span>Générer en auto (IA)</span></button></div><input id="rename-input" value={renameValue} onChange={event => setRenameValue(event.target.value)} maxLength={200} autoFocus disabled={working} /><label htmlFor="theme-select">Thème</label><select id="theme-select" className="modal-select" value={renameTheme} onChange={event => setRenameTheme(event.target.value)} disabled={working}>{availableThemes.map(t => <option key={t} value={t}>{t}</option>)}</select><label htmlFor="keywords-input">Mots-clés (2 ou 3, séparés par des virgules)</label><input id="keywords-input" value={renameKeywords} onChange={event => setRenameKeywords(event.target.value)} placeholder="ex. santé, sommeil, récupération" maxLength={160} disabled={working} /></div>}<div className="modal-actions"><button type="button" className="secondary-button" disabled={working} onClick={() => setDialog(null)}>Annuler</button><button type="submit" className={dialog.type === "delete" ? "danger-button" : "primary-button"} disabled={working || (dialog.type === "rename" && !renameValue.trim())}>{working ? <LoaderCircle className="spin" size={15} /> : null}{dialog.type === "delete" ? "Supprimer" : "Enregistrer"}</button></div></form></section></div>}
     {showUrlModal && <div className="modal-backdrop" onClick={event => { if (event.target === event.currentTarget && !urlLoading) setShowUrlModal(false); }}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="url-dialog-title" onKeyDown={event => { if (event.key === "Escape" && !urlLoading) setShowUrlModal(false); }}><form onSubmit={event => void handleAttachUrl(event)}><div className="modal-header"><span className="modal-icon" style={{ background: "#fef2f2", color: "#dc2626" }}><SquarePlay size={20} /></span><IconButton label="Fermer" disabled={urlLoading} onClick={() => setShowUrlModal(false)}><X size={18} /></IconButton></div><h2 id="url-dialog-title">Analyser un lien web ou YouTube</h2><p>Entrez l’adresse d’un article, d’une page web ou d’une vidéo YouTube. Pour YouTube, les propos tenus dans la vidéo seront transcrits et analysés par l’assistant.</p><div className="modal-fields"><label htmlFor="url-input">Adresse URL</label><input id="url-input" type="url" value={urlInputValue} onChange={event => setUrlInputValue(event.target.value)} placeholder="https://exemple.fr/article ou https://youtu.be/..." autoFocus disabled={urlLoading} required /></div>{urlError && <div className="url-error-msg" role="alert"><CircleAlert size={14} /><span>{urlError}</span></div>}<div className="modal-actions"><button type="button" className="secondary-button" disabled={urlLoading} onClick={() => setShowUrlModal(false)}>Annuler</button><button type="submit" className="primary-button" disabled={urlLoading || !urlInputValue.trim()} style={{ background: "linear-gradient(135deg, #dc2626 0%, #b91c1c 100%)" }}>{urlLoading ? <LoaderCircle className="spin" size={15} /> : null}{urlLoading ? "Extraction en cours…" : "Extraire et joindre"}</button></div></form></section></div>}
+
+    <TopicModal
+      open={topicModalOpen}
+      topicId={topicModalId}
+      onClose={() => setTopicModalOpen(false)}
+      onOpenConversation={(convId) => {
+        void openConversation(convId);
+      }}
+      onStartNewConversation={(tId) => {
+        void newConversation(tId);
+      }}
+      onStartCustomChat={(tId, promptText) => {
+        void newConversation(tId);
+        setDraft(promptText);
+        textareaRef.current?.focus();
+      }}
+      onOpenStudyModal={(tId, initialKind, courseText) => {
+        setTopicModalOpen(false);
+        openStudyModal(initialKind, courseText);
+      }}
+      onTopicsChanged={() => {
+        void refreshTopics();
+        void refreshConversations();
+      }}
+    />
+
+    <WebPageModal
+      isOpen={webPagesModalOpen}
+      onClose={() => setWebPagesModalOpen(false)}
+      conversationId={conversation?.id}
+      conversationTitle={conversation?.title}
+      initialPrompt={webPagesModalPrompt}
+      models={config?.models ?? []}
+      currentModel={model}
+    />
+
+    {linkTopicDialogOpen && conversation && (
+      <div className="modal-backdrop" onClick={e => { if (e.target === e.currentTarget && !working) setLinkTopicDialogOpen(false); }}>
+        <section className="modal" role="dialog" aria-modal="true" aria-labelledby="link-topic-title" style={{ maxWidth: 440 }}>
+          <div className="modal-header">
+            <span className="modal-icon" style={{ background: "#eff6ff", color: "#2563eb" }}>
+              <FolderKanban size={20} />
+            </span>
+            <IconButton label="Fermer" disabled={working} onClick={() => setLinkTopicDialogOpen(false)}>
+              <X size={18} />
+            </IconButton>
+          </div>
+          <h2 id="link-topic-title">Associer à un espace thématique</h2>
+          <p>
+            Rattacher « {conversation.title} » à un espace permet de mutualiser sa mémoire, son suivi et ses acquis.
+          </p>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: "8px", margin: "16px 0" }}>
+            {conversation.topic_space_id && (
+              <button
+                type="button"
+                className="secondary-button"
+                style={{ justifyContent: "flex-start", color: "#dc2626" }}
+                disabled={working}
+                onClick={async () => {
+                  try {
+                    await unlinkConversationFromTopic(conversation.topic_space_id!, conversation.id);
+                    await refreshConversations();
+                    await refreshTopics();
+                    const updated = await api<Conversation>(`/conversations/${conversation.id}`);
+                    setConversation(updated);
+                    setLinkTopicDialogOpen(false);
+                  } catch (err) {
+                    setError(errorMessage(err));
+                  }
+                }}
+              >
+                <Unlink size={15} />
+                <span>Détacher de l&apos;espace actuel</span>
+              </button>
+            )}
+
+            {topics.length > 0 && (
+              <div>
+                <label style={{ display: "block", fontSize: "11px", fontWeight: 600, color: "var(--text-secondary, #64748b)", marginBottom: "6px" }}>
+                  Choisir un espace existant :
+                </label>
+                <div style={{ display: "flex", flexDirection: "column", gap: "6px", maxHeight: "180px", overflowY: "auto" }}>
+                  {topics.map(t => {
+                    const isSelected = conversation.topic_space_id === t.id;
+                    return (
+                      <button
+                        key={t.id}
+                        type="button"
+                        className="secondary-button"
+                        style={{
+                          justifyContent: "space-between",
+                          padding: "8px 12px",
+                          border: isSelected ? "2px solid #2563eb" : undefined,
+                          background: isSelected ? "rgba(37,99,235,0.08)" : undefined,
+                        }}
+                        disabled={working || isSelected}
+                        onClick={async () => {
+                          try {
+                            await linkConversationToTopic(t.id, conversation.id);
+                            await refreshConversations();
+                            await refreshTopics();
+                            const updated = await api<Conversation>(`/conversations/${conversation.id}`);
+                            setConversation(updated);
+                            setLinkTopicDialogOpen(false);
+                          } catch (err) {
+                            setError(errorMessage(err));
+                          }
+                        }}
+                      >
+                        <span style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                          <span>{t.icon || "📌"}</span>
+                          <strong style={{ fontSize: "12px" }}>{t.title}</strong>
+                        </span>
+                        {isSelected && <span style={{ fontSize: "11px", color: "#2563eb" }}>✓ Actif</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            <button
+              type="button"
+              className="primary-button"
+              style={{ marginTop: "8px", justifyContent: "center" }}
+              onClick={() => {
+                setLinkTopicDialogOpen(false);
+                setTopicModalId(null);
+                setTopicModalOpen(true);
+              }}
+            >
+              <Plus size={15} />
+              <span>Créer un nouvel espace</span>
+            </button>
+          </div>
+
+          <div className="modal-actions">
+            <button type="button" className="secondary-button" onClick={() => setLinkTopicDialogOpen(false)}>
+              Fermer
+            </button>
+          </div>
+        </section>
+      </div>
+    )}
 
   </div>;
 }

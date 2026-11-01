@@ -1,3 +1,4 @@
+import secrets
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -75,6 +76,8 @@ class Conversation(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     summary: Mapped[str] = mapped_column(Text, default="")
     summary_through: Mapped[int] = mapped_column(Integer, default=0)
+    topic_space_id: Mapped[str | None] = mapped_column(ForeignKey("topic_spaces.id", ondelete="SET NULL"), nullable=True, index=True)
+    topic_space: Mapped["TopicSpace | None"] = relationship(back_populates="conversations")
     messages: Mapped[list["Message"]] = relationship(back_populates="conversation", cascade="all, delete-orphan", order_by="Message.created_at")
     skill_links: Mapped[list["ConversationSkill"]] = relationship(
         back_populates="conversation", cascade="all, delete-orphan", order_by="ConversationSkill.position",
@@ -248,6 +251,109 @@ class AgentTeam(Base):
     agents: Mapped[list] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
+class TopicSpace(Base):
+    __tablename__ = "topic_spaces"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    title: Mapped[str] = mapped_column(String(120))
+    icon: Mapped[str] = mapped_column(String(16), default="📌")
+    topic_type: Mapped[str] = mapped_column(String(30), default="learning")  # learning, project, interest, personal
+    objective: Mapped[str] = mapped_column(Text, default="")
+    current_resume_context: Mapped[str] = mapped_column(Text, default="")
+    suggested_next_step: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+    conversations: Mapped[list["Conversation"]] = relationship(back_populates="topic_space")
+    memories: Mapped[list["TopicMemory"]] = relationship(back_populates="topic_space", cascade="all, delete-orphan", order_by="TopicMemory.created_at.desc()")
+    events: Mapped[list["TopicEvent"]] = relationship(back_populates="topic_space", cascade="all, delete-orphan", order_by="TopicEvent.created_at.desc()")
+    resources: Mapped[list["TopicResource"]] = relationship(back_populates="topic_space", cascade="all, delete-orphan", order_by="TopicResource.created_at.desc()")
+
+
+class TopicResource(Base):
+    __tablename__ = "topic_resources"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    topic_space_id: Mapped[str] = mapped_column(ForeignKey("topic_spaces.id", ondelete="CASCADE"), index=True)
+    title: Mapped[str] = mapped_column(String(200))
+    resource_type: Mapped[str] = mapped_column(String(30), default="link")  # link, document, note
+    url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    content: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+    topic_space: Mapped[TopicSpace] = relationship(back_populates="resources")
+
+
+class TopicMemory(Base):
+    __tablename__ = "topic_memories"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    topic_space_id: Mapped[str] = mapped_column(ForeignKey("topic_spaces.id", ondelete="CASCADE"), index=True)
+    fact: Mapped[str] = mapped_column(Text)
+    category: Mapped[str] = mapped_column(String(50), default="general")
+    status: Mapped[str] = mapped_column(String(30), default="discussed")  # discussed, in_progress, needs_review, provisional_mastery, validated
+    confidence: Mapped[float] = mapped_column(Float, default=1.0)
+    source_message_id: Mapped[str | None] = mapped_column(ForeignKey("messages.id", ondelete="SET NULL"), nullable=True, index=True)
+    user_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_archived: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+    topic_space: Mapped[TopicSpace] = relationship(back_populates="memories")
+
+
+class TopicEvent(Base):
+    __tablename__ = "topic_events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    topic_space_id: Mapped[str] = mapped_column(ForeignKey("topic_spaces.id", ondelete="CASCADE"), index=True)
+    event_type: Mapped[str] = mapped_column(String(40))  # exercise_result, decision_taken, topic_introduced, session_recap
+    title: Mapped[str] = mapped_column(String(200))
+    details: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+    topic_space: Mapped[TopicSpace] = relationship(back_populates="events")
+
+
+def short_token() -> str:
+    return secrets.token_urlsafe(12)
+
+
+class WebPage(Base):
+    __tablename__ = "web_pages"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    title: Mapped[str] = mapped_column(String(200), default="Page Web cLAIr")
+    slug: Mapped[str] = mapped_column(String(200), default="page-web")
+    public_token: Mapped[str] = mapped_column(String(32), unique=True, index=True, default=short_token)
+    is_published: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+    user: Mapped["User"] = relationship()
+    versions: Mapped[list["WebPageVersion"]] = relationship(
+        back_populates="page", cascade="all, delete-orphan", order_by="WebPageVersion.version_number.desc()"
+    )
+
+
+class WebPageVersion(Base):
+    __tablename__ = "web_page_versions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    page_id: Mapped[str] = mapped_column(ForeignKey("web_pages.id", ondelete="CASCADE"), index=True)
+    version_number: Mapped[int] = mapped_column(Integer, default=1)
+    prompt_used: Mapped[str] = mapped_column(Text, default="")
+    html_content: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+    page: Mapped[WebPage] = relationship(back_populates="versions")
+
+
 
 
 

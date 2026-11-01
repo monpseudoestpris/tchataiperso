@@ -71,6 +71,7 @@ def new_conversation(
 ):
     model = body.model or settings.default_model
     check_model(settings, model)
+    topic_id = body.topic_space_id.strip() if body.topic_space_id else None
     with sessions() as db:
         item = Conversation(
             user_id=user.id,
@@ -78,6 +79,7 @@ def new_conversation(
             model=model,
             theme=(body.theme or "").strip(),
             keywords=[k.strip().lstrip("#") for k in (body.keywords or []) if k.strip()][:5],
+            topic_space_id=topic_id,
         )
         db.add(item)
         db.commit()
@@ -219,6 +221,8 @@ def edit_conversation(
             item.theme = body.theme.strip()[:80]
         if body.keywords is not None:
             item.keywords = body.keywords[:5]
+        if body.topic_space_id is not None:
+            item.topic_space_id = body.topic_space_id.strip() or None
         item.updated_at = now()
         db.commit()
         return conversation_json(item, True)

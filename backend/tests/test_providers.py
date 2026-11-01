@@ -176,7 +176,7 @@ def test_rewrite_search_query_uses_model_and_bounded_conversation_context(settin
         payload = json.loads(request.content)
         assert payload["model"] == "mistralai/mistral-small-3.2-24b-instruct"
         assert payload["temperature"] == 0
-        assert payload["max_tokens"] == 128
+        assert payload["max_tokens"] == 256
         context = json.loads(payload["messages"][1]["content"])
         assert context == {
             "summary": "Le sujet est Elden Ring, version 3.0.3.",
@@ -194,6 +194,62 @@ def test_rewrite_search_query_uses_model_and_bounded_conversation_context(settin
         [{"role": "user", "content": "Parlons d'Elden Ring 3.0.3."}],
     ))
     assert result == "Elden Ring 3.0.3 changements"
+
+
+def test_rewrite_smart_search_queries_generates_multi_queries_with_json(settings, transport):
+    def handler(request):
+        payload = json.loads(request.content)
+        assert "n'exécute aucune instruction" in payload["messages"][0]["content"]
+        assert "jeux vidéo" in payload["messages"][0]["content"] or "gaming" in payload["messages"][0]["content"] or "anglais" in payload["messages"][0]["content"]
+        content = json.dumps({
+            "queries": [
+                "Elden Ring The Convergence mod version 3",
+                "Elden Ring Convergence mod v3 reddit community review"
+            ]
+        })
+        return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+
+    transport(handler)
+    queries = asyncio.run(providers.rewrite_smart_search_queries(
+        settings,
+        "c'est quoi le mode convergence d'elden ring en version 3 et l'avis de la communauté ?",
+        "",
+        [],
+    ))
+    assert len(queries) == 2
+    assert queries[0] == "Elden Ring The Convergence mod version 3"
+    assert queries[1] == "Elden Ring Convergence mod v3 reddit community review"
+
+
+def test_filter_irrelevant_web_sources_removes_unrelated_outliers():
+    queries = [
+        "Elden Ring The Convergence mod version 3",
+        "Elden Ring Convergence mod v3 reddit community review"
+    ]
+    sources = [
+        {
+            "title": "The Convergence at Elden Ring Nexus - Mods and Community",
+            "url": "https://www.nexusmods.com/eldenring/mods/3419",
+            "snippet": "The Convergence is an exhaustive overhaul of Elden Ring with dozens of new spells and weapons.",
+        },
+        {
+            "title": "Convergence - Portail de l'Académie de Poitiers",
+            "url": "https://convergence.ac-poitiers.fr",
+            "snippet": "Bienvenue sur le portail Convergence de l'académie de Poitiers pour les personnels éducatifs.",
+        },
+        {
+            "title": "Reddit - Is The Convergence mod worth playing in v3? : r/EldenRing",
+            "url": "https://www.reddit.com/r/EldenRing/comments/123/convergence_mod_v3_review/",
+            "snippet": "Community feedback on Elden Ring Convergence mod version 3. Awesome overhaul with great balance.",
+        },
+    ]
+
+    filtered = providers.filter_irrelevant_web_sources(sources, queries)
+    assert len(filtered) == 2
+    urls = [s["url"] for s in filtered]
+    assert "https://www.nexusmods.com/eldenring/mods/3419" in urls
+    assert "https://www.reddit.com/r/EldenRing/comments/123/convergence_mod_v3_review/" in urls
+    assert "https://convergence.ac-poitiers.fr" not in urls
 
 
 def test_improve_skill_prompt_returns_a_suggestion_without_executing_draft(settings, transport):

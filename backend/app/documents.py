@@ -115,19 +115,33 @@ def extraction_text(extraction: dict | DocumentExtraction, limit: int | None = N
 
 def render_pdf_page(content: bytes, index: int) -> bytes:
     try:
-        with _PDF_RENDER_LOCK, pdfium.PdfDocument(content) as document:
-            with closing(document[index]) as page:
-                width, height = page.get_size()
-                if min(width, height) <= 0 or max(width, height) / min(width, height) > 100:
-                    raise ValueError
-                bitmap = page.render(scale=min(2, 2048 / max(width, height)))
+        with _PDF_RENDER_LOCK:
+            document = pdfium.PdfDocument(content)
+            try:
+                page = document[index]
                 try:
-                    with bitmap.to_pil() as image:
-                        output = io.BytesIO()
-                        image.save(output, format="PNG")
-                        return output.getvalue()
+                    width, height = page.get_size()
+                    if min(width, height) <= 0 or max(width, height) / min(width, height) > 100:
+                        raise ValueError
+                    bitmap = page.render(scale=min(2, 2048 / max(width, height)))
+                    try:
+                        image = bitmap.to_pil()
+                        try:
+                            output = io.BytesIO()
+                            image.save(output, format="PNG")
+                            return output.getvalue()
+                        finally:
+                            if hasattr(image, "close"):
+                                image.close()
+                    finally:
+                        if hasattr(bitmap, "close"):
+                            bitmap.close()
                 finally:
-                    bitmap.close()
+                    if hasattr(page, "close"):
+                        page.close()
+            finally:
+                if hasattr(document, "close"):
+                    document.close()
     except Exception:
         raise HTTPException(422, "Impossible de rendre cette page PDF pour la vision.") from None
 
@@ -168,8 +182,10 @@ async def extract_document(settings: Settings, content: bytes, filename: str, mo
             else:
                 image = await asyncio.to_thread(normalize_vision_image, content)
                 image_mime = "image/jpeg"
-            async with asyncio.timeout(300):
-                description = await providers.describe_image(settings, image, image_mime)
+            description = await asyncio.wait_for(
+                providers.describe_image(settings, image, image_mime),
+                timeout=300,
+            )
             extraction = DocumentExtraction(
                 model=settings.vision_model,
                 pages=[ExtractedPage(index=0, markdown="", vision_description=description, method="vision")],
@@ -190,9 +206,9 @@ async def extract_document(settings: Settings, content: bytes, filename: str, mo
         if not settings.enabled(settings.mistral_api_key):
             raise HTTPException(422, "Configurez MISTRAL_API_KEY pour analyser les PDF et images avec OCR 4.1.")
         page_count = await asyncio.to_thread(lambda: len(PdfReader(io.BytesIO(content)).pages)) if mime == "application/pdf" else 1
-        async with asyncio.timeout(600):
-            extraction = await providers.extract_ocr(settings, content, mime, page_count=page_count)
-            for page in extraction.pages:
+        async def _do_ocr():
+            ext = await providers.extract_ocr(settings, content, mime, page_count=page_count)
+            for page in ext.pages:
                 readable = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", page.markdown)
                 if not any(character.isalnum() for character in readable):
                     if mime == "application/pdf":
@@ -203,8 +219,11 @@ async def extract_document(settings: Settings, content: bytes, filename: str, mo
                         image_mime = "image/jpeg"
                     page.vision_description = await providers.describe_image(settings, image, image_mime)
                     page.method = "vision"
-            if len(extraction.model_dump_json().encode("utf-8")) > 4 * 1024 * 1024:
-                raise providers.ProviderError("L'extraction dépasse la limite de stockage de 4 Mo.")
-            return mime, extraction_text(extraction), extraction.model_dump()
+            return ext
+
+        extraction = await asyncio.wait_for(_do_ocr(), timeout=600)
+        if len(extraction.model_dump_json().encode("utf-8")) > 4 * 1024 * 1024:
+            raise providers.ProviderError("L'extraction dépasse la limite de stockage de 4 Mo.")
+        return mime, extraction_text(extraction), extraction.model_dump()
     except TimeoutError:
         raise providers.ProviderError("L'analyse du document dépasse le délai global de 10 minutes.") from None

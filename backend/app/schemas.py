@@ -138,6 +138,7 @@ class CreateConversation(BaseModel):
     model: str | None = None
     theme: str | None = Field(default=None, max_length=80)
     keywords: list[str] | None = Field(default=None, max_length=5)
+    topic_space_id: str | None = None
 
 
 class UpdateConversation(BaseModel):
@@ -145,6 +146,7 @@ class UpdateConversation(BaseModel):
     model: str | None = None
     theme: str | None = Field(default=None, max_length=80)
     keywords: list[str] | None = Field(default=None, max_length=5)
+    topic_space_id: str | None = None
 
     @field_validator("theme")
     @classmethod
@@ -262,6 +264,7 @@ class SendMessage(BaseModel):
     stage_models: StageModelsConfig | None = None
     interaction_id: str | None = Field(default=None, max_length=500)
     plan_feedback: str | None = Field(default=None, max_length=20000)
+    auto_memory_enabled: bool | None = None
 
     @field_validator("attachment_ids")
     @classmethod
@@ -653,6 +656,103 @@ class UpdateUserSettingsRequest(BaseModel):
     system_prompt: str | None = Field(default=None, max_length=12000)
     prompt_cache_enabled: bool | None = None
     auto_memory_enabled: bool | None = None
+
+
+class CreateTopicSpace(BaseModel):
+    title: str = Field(min_length=1, max_length=120)
+    icon: str = Field(default="📌", max_length=16)
+    topic_type: Literal["learning", "project", "interest", "personal"] = "learning"
+    objective: str = Field(default="", max_length=2000)
+
+
+class UpdateTopicSpace(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=120)
+    icon: str | None = Field(default=None, max_length=16)
+    topic_type: Literal["learning", "project", "interest", "personal"] | None = None
+    objective: str | None = Field(default=None, max_length=2000)
+    current_resume_context: str | None = Field(default=None, max_length=4000)
+    suggested_next_step: str | None = Field(default=None, max_length=1000)
+
+
+class CreateTopicMemory(BaseModel):
+    fact: str = Field(min_length=1, max_length=2000)
+    category: str = Field(default="general", max_length=50)
+    status: Literal["discussed", "in_progress", "needs_review", "provisional_mastery", "validated"] = "discussed"
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    source_message_id: str | None = None
+
+
+class UpdateTopicMemory(BaseModel):
+    fact: str | None = Field(default=None, min_length=1, max_length=2000)
+    category: str | None = Field(default=None, max_length=50)
+    status: Literal["discussed", "in_progress", "needs_review", "provisional_mastery", "validated"] | None = None
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    user_verified: bool | None = None
+    is_archived: bool | None = None
+
+
+class CreateTopicEvent(BaseModel):
+    event_type: str = Field(default="session_recap", max_length=40)
+    title: str = Field(min_length=1, max_length=200)
+    details: dict = Field(default_factory=dict)
+
+
+class CreateTopicResource(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    resource_type: Literal["link", "document", "note"] = "link"
+    url: str | None = Field(default=None, max_length=1000)
+    content: str = Field(default="", max_length=50000)
+
+
+class UpdateTopicResource(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    resource_type: Literal["link", "document", "note"] | None = None
+    url: str | None = Field(default=None, max_length=1000)
+    content: str | None = Field(default=None, max_length=50000)
+
+
+class CreateWebPage(BaseModel):
+    prompt: str = Field(default="", max_length=15000)
+    title: str | None = Field(default=None, max_length=200)
+    conversation_id: str | None = Field(default=None, max_length=36)
+    model: str | None = Field(default=None, max_length=200)
+    page_type: str = Field(default="auto", max_length=50)
+    target_audience: str = Field(default="general", max_length=50)
+    creative_freedom: Literal["low", "medium", "high"] = "medium"
+    orientation: Literal["portrait", "landscape"] = "portrait"
+    layout_style: Literal["tabs", "single_page", "print_sheet", "auto"] = "auto"
+    text_density: int = Field(default=5, ge=1, le=10)
+    interactivity: Literal["auto", "high", "none"] = "auto"
+    include_quiz: bool = True
+    include_svg: bool = True
+    theme_palette: str = Field(default="ocean", max_length=40)
+    visual_style: str = Field(default="auto", max_length=50)
+
+    @field_validator("prompt")
+    @classmethod
+    def trim_prompt(cls, value: str) -> str:
+        return value.strip()
+
+
+class RefineWebPage(BaseModel):
+    instruction: str = Field(min_length=1, max_length=10000)
+    model: str | None = Field(default=None, max_length=200)
+
+    @field_validator("instruction")
+    @classmethod
+    def trim_instruction(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("L'instruction de modification ne peut pas être vide")
+        return cleaned
+
+
+class UpdateWebPage(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    is_published: bool | None = None
+
+
+
 
 
 

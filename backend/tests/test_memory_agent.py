@@ -233,3 +233,53 @@ def test_stream_message_triggers_memory_retention(tmp_path):
         memories = mem_res.json()
         assert len(memories) >= 1
         assert any("Strasbourg" in m["content"] for m in memories)
+
+
+def test_stream_message_honors_disabled_auto_memory(tmp_path):
+    import json
+    from starlette.testclient import TestClient
+    from app.config import Settings
+    from app.auth import hash_password
+    from app.main import create_app
+    from app.models import Base
+
+    database_url = f"sqlite:///{tmp_path / 'stream_memory_disabled_test.db'}"
+    settings = Settings(_env_file=None, app_data_dir=tmp_path, database_url=database_url, demo_mode=True)
+    app = create_app(settings)
+    origin = settings.origins[0]
+
+    Base.metadata.create_all(app.state.engine)
+    with app.state.sessions() as db:
+        user = User(
+            username="nomemoryuser",
+            password_hash=hash_password("adminpassword123"),
+            is_admin=True,
+            active=True,
+            auto_memory_enabled=False,
+        )
+        db.add(user)
+        db.commit()
+
+    with TestClient(app, base_url=origin, headers={"Origin": origin}) as client:
+        login_res = client.post("/api/auth/login", json={"username": "nomemoryuser", "password": "adminpassword123"})
+        assert login_res.status_code == 200
+
+        conv_res = client.post("/api/conversations", json={})
+        assert conv_res.status_code == 201
+        conv_id = conv_res.json()["id"]
+
+        # Send implicit statement with auto_memory_enabled=False
+        msg_res = client.post(
+            f"/api/conversations/{conv_id}/messages",
+            json={
+                "content": "Je m'appelle Thomas et je suis végétarien",
+                "auto_memory_enabled": False,
+            },
+        )
+        assert msg_res.status_code == 200
+
+        # No memory should have been captured
+        mem_res = client.get("/api/memories")
+        assert mem_res.status_code == 200
+        assert len(mem_res.json()) == 0
+

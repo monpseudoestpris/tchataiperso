@@ -4,7 +4,26 @@ import unicodedata
 from datetime import timezone
 
 from .blog import parse_cards_from_content
-from .models import AgentTeam, Attachment, Blog, BlogPost, Conversation, DeepSearchReport, GeneratedImage, GeneratedSound, LearnReport, Message, Skill, User
+from .models import (
+    AgentTeam,
+    Attachment,
+    Blog,
+    BlogPost,
+    Conversation,
+    DeepSearchReport,
+    GeneratedImage,
+    GeneratedSound,
+    LearnReport,
+    Message,
+    Skill,
+    TopicEvent,
+    TopicMemory,
+    TopicResource,
+    TopicSpace,
+    User,
+    WebPage,
+    WebPageVersion,
+)
 
 
 MAX_SKILL_COUNT = 100
@@ -239,6 +258,7 @@ def conversation_json(item: Conversation, detail: bool = False) -> dict:
         "model": item.model,
         "theme": (item.theme or "").strip(),
         "keywords": keywords,
+        "topic_space_id": getattr(item, "topic_space_id", None),
         "created_at": stamp(item.created_at),
         "updated_at": stamp(item.updated_at),
         "summary": item.summary,
@@ -247,6 +267,74 @@ def conversation_json(item: Conversation, detail: bool = False) -> dict:
         result["messages"] = [message_json(message) for message in item.messages]
         result["skills"] = [skill_json(link.skill) for link in item.skill_links]
     return result
+
+
+def topic_memory_json(item: TopicMemory) -> dict:
+    return {
+        "id": item.id,
+        "topic_space_id": item.topic_space_id,
+        "fact": item.fact,
+        "category": item.category,
+        "status": item.status,
+        "confidence": item.confidence,
+        "source_message_id": item.source_message_id,
+        "user_verified": item.user_verified,
+        "is_archived": item.is_archived,
+        "created_at": stamp(item.created_at),
+        "updated_at": stamp(item.updated_at),
+    }
+
+
+def topic_event_json(item: TopicEvent) -> dict:
+    return {
+        "id": item.id,
+        "topic_space_id": item.topic_space_id,
+        "event_type": item.event_type,
+        "title": item.title,
+        "details": item.details or {},
+        "created_at": stamp(item.created_at),
+    }
+
+
+def topic_resource_json(item: TopicResource) -> dict:
+    return {
+        "id": item.id,
+        "topic_space_id": item.topic_space_id,
+        "title": item.title,
+        "resource_type": item.resource_type,
+        "url": item.url,
+        "content": item.content or "",
+        "created_at": stamp(item.created_at),
+        "updated_at": stamp(item.updated_at),
+    }
+
+
+def topic_space_json(item: TopicSpace, detail: bool = False) -> dict:
+    convs = item.conversations or []
+    memories = [m for m in (item.memories or []) if not m.is_archived]
+    resources = item.resources or []
+    data = {
+        "id": item.id,
+        "user_id": item.user_id,
+        "title": item.title,
+        "icon": item.icon or "📌",
+        "topic_type": item.topic_type or "learning",
+        "objective": item.objective or "",
+        "current_resume_context": item.current_resume_context or "",
+        "suggested_next_step": item.suggested_next_step or "",
+        "created_at": stamp(item.created_at),
+        "updated_at": stamp(item.updated_at),
+        "conversations_count": len(convs),
+        "memories_count": len(memories),
+        "resources_count": len(resources),
+    }
+    if detail:
+        data["conversations"] = [conversation_json(c) for c in convs]
+        data["memories"] = [topic_memory_json(m) for m in (item.memories or [])]
+        data["events"] = [topic_event_json(e) for e in (item.events or [])]
+        data["resources"] = [topic_resource_json(r) for r in resources]
+    return data
+
 
 
 def sse(name: str, value: dict) -> str:
@@ -292,5 +380,42 @@ def agent_team_json(team: AgentTeam) -> dict:
         "created_at": team.created_at.isoformat() if team.created_at else None,
         "updated_at": team.updated_at.isoformat() if team.updated_at else None,
     }
+
+
+def web_page_version_json(version: WebPageVersion, include_html: bool = True) -> dict:
+    data = {
+        "id": version.id,
+        "page_id": version.page_id,
+        "version_number": version.version_number,
+        "prompt_used": version.prompt_used,
+        "created_at": stamp(version.created_at),
+    }
+    if include_html:
+        data["html_content"] = version.html_content
+    return data
+
+
+def web_page_json(page: WebPage, include_versions: bool = False, include_latest_html: bool = True) -> dict:
+    versions = page.versions or []
+    latest = versions[0] if versions else None
+    data = {
+        "id": page.id,
+        "user_id": page.user_id,
+        "title": page.title,
+        "slug": page.slug,
+        "public_token": page.public_token,
+        "is_published": page.is_published,
+        "created_at": stamp(page.created_at),
+        "updated_at": stamp(page.updated_at),
+        "versions_count": len(versions),
+        "latest_version_number": latest.version_number if latest else 0,
+    }
+    if include_latest_html and latest:
+        data["latest_html"] = latest.html_content
+        data["latest_prompt"] = latest.prompt_used
+    if include_versions:
+        data["versions"] = [web_page_version_json(v, include_html=True) for v in versions]
+    return data
+
 
 

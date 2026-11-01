@@ -14,6 +14,7 @@ from sqlalchemy.orm import sessionmaker
 from .. import providers
 from ..base_prompt import BASE_USER_PROMPT
 from ..config import Settings
+from ..chat_memory import evaluate_context_compression, get_model_context_limit
 from ..context import build_context
 from ..deep_search import execute_deep_search
 from ..source_registry import SourceRegistry
@@ -32,9 +33,22 @@ from ..deps import check_model, claim, current_user, get_conversation, get_sessi
 from ..documents import extraction_text
 from ..finance import process_message_finance_inquiries
 from ..memory_agent import process_memory_turn
-from ..models import Attachment, Conversation, DeepSearchReport, LearnReport, Message, Memory, Skill, User, now
+from ..models import (
+    Attachment,
+    Conversation,
+    DeepSearchReport,
+    LearnReport,
+    Message,
+    Memory,
+    Skill,
+    TopicMemory,
+    TopicSpace,
+    User,
+    now,
+)
 from ..schemas import DeepSearchPlanResponse, LearnModePlanResponse, PlanDeepSearch, PlanLearnMode, SendMessage
 from ..serializers import conversation_json, deep_search_report_json, extract_mentioned_skills, learn_report_json, message_json, sse
+from ..topic_agent import build_topic_prompt_context, process_topic_turn
 from ..web import fetch_and_parse_web_url
 
 
@@ -44,6 +58,7 @@ _DEFAULT_STREAM_CHAT = providers.stream_chat
 _DEFAULT_PLAN_REPORT_OUTLINE = providers.plan_report_outline
 _DEFAULT_CLASSIFY_CONVERSATION = providers.classify_conversation
 _DEFAULT_REWRITE_SEARCH_QUERY = providers.rewrite_search_query
+_DEFAULT_REWRITE_SMART_SEARCH_QUERIES = getattr(providers, "rewrite_smart_search_queries", None)
 _DEFAULT_SEARCH_WEB = providers.search_web
 _DEFAULT_SEARCH_WEB_IMAGES = providers.search_web_images
 _DEFAULT_EXECUTE_DEEP_SEARCH = execute_deep_search
@@ -610,32 +625,77 @@ async def send_message(
                             {"role": item.role, "content": item.content}
                             for item in conversation.messages[:-1][-4:]
                         ]
+                    queries = [query]
                     if (
                         providers.stream_chat is _DEFAULT_STREAM_CHAT
                         or providers.rewrite_search_query is not _DEFAULT_REWRITE_SEARCH_QUERY
+                        or getattr(providers, "rewrite_smart_search_queries", None) is not _DEFAULT_REWRITE_SMART_SEARCH_QUERIES
                     ):
-                        yield sse("status", {"message": "Reformulation de la recherche…"})
+                        yield sse("status", {"message": "Reformulation intelligente de la recherche…"})
                         try:
-                            query = await providers.rewrite_search_query(
-                                settings, query, search_summary, search_context,
-                            )
+                            if providers.rewrite_search_query is not _DEFAULT_REWRITE_SEARCH_QUERY:
+                                q_rewritten = await providers.rewrite_search_query(
+                                    settings, query, search_summary, search_context,
+                                )
+                                queries = [q_rewritten] if isinstance(q_rewritten, str) else list(q_rewritten)
+                            else:
+                                queries = await providers.rewrite_smart_search_queries(
+                                    settings, query, search_summary, search_context,
+                                )
                         except providers.ProviderError as exc:
                             _logger.warning("Reformulation de recherche indisponible; question originale conservée: %s", exc)
-                            query = (body.content.strip() or effective_user_query)[:1000]
+                            queries = [(body.content.strip() or effective_user_query)[:1000]]
                             yield sse("status", {"message": "Reformulation indisponible; recherche avec la question originale…"})
-                    yield sse("status", {"message": "Recherche web & images SearXNG en cours…" if should_fetch_images else "Recherche web en cours…"})
+
+                    primary_query = queries[0] if queries else query
+                    queries_label = " & ".join(f"« {q} »" for q in queries[:2])
+                    yield sse(
+                        "status",
+                        {"message": f"Recherche web & images : {queries_label}…" if should_fetch_images else f"Recherche web en cours : {queries_label}…"},
+                    )
                     if should_fetch_images:
-                        text_res, img_res = await asyncio.gather(
-                            providers.search_web(settings, query),
-                            providers.search_web_images(settings, query, limit=6),
-                            return_exceptions=True,
-                        )
-                        if isinstance(text_res, BaseException):
-                            raise text_res
-                        sources = list(text_res)
-                        web_imgs = list(img_res) if isinstance(img_res, list) else []
+                        if len(queries) > 1:
+                            text_runs = [providers.search_web(settings, q, limit=4) for q in queries[:2]]
+                            all_runs = await asyncio.gather(
+                                *text_runs,
+                                providers.search_web_images(settings, primary_query, limit=6),
+                                return_exceptions=True,
+                            )
+                            img_res = all_runs[-1]
+                            raw_sources = []
+                            for r in all_runs[:-1]:
+                                if isinstance(r, list):
+                                    raw_sources = providers.merge_web_sources(raw_sources, r, limit=8)
+                                elif isinstance(r, BaseException) and not raw_sources:
+                                    raise r
+                            sources = providers.filter_irrelevant_web_sources(raw_sources, queries)
+                            web_imgs = list(img_res) if isinstance(img_res, list) else []
+                        else:
+                            text_res, img_res = await asyncio.gather(
+                                providers.search_web(settings, primary_query),
+                                providers.search_web_images(settings, primary_query, limit=6),
+                                return_exceptions=True,
+                            )
+                            if isinstance(text_res, BaseException):
+                                raise text_res
+                            sources = providers.filter_irrelevant_web_sources(list(text_res), queries)
+                            web_imgs = list(img_res) if isinstance(img_res, list) else []
                     else:
-                        sources = await providers.search_web(settings, query)
+                        if len(queries) > 1:
+                            search_results = await asyncio.gather(
+                                *[providers.search_web(settings, q, limit=4) for q in queries[:2]],
+                                return_exceptions=True,
+                            )
+                            raw_sources = []
+                            for r in search_results:
+                                if isinstance(r, list):
+                                    raw_sources = providers.merge_web_sources(raw_sources, r, limit=8)
+                                elif isinstance(r, BaseException) and not raw_sources:
+                                    raise r
+                            sources = providers.filter_irrelevant_web_sources(raw_sources, queries)
+                        else:
+                            raw_sources = await providers.search_web(settings, primary_query)
+                            sources = providers.filter_irrelevant_web_sources(raw_sources, queries)
                         web_imgs = []
                     if auto_search_reason and sources:
                         for s in sources:
@@ -656,36 +716,20 @@ async def send_message(
                         yield sse("status", {"message": "Aucune source externe trouvée ; réponse basée sur les connaissances internes…"})
                     elif notice := sources[0].get("search_notice"):
                         yield sse("status", {"message": notice})
-            # Summarize old turns, retaining the complete persisted history.
+            # Mémorisation par seuil de contexte en tokens et compression par bloc
             with sessions() as db:
                 conversation = get_conversation(db, conversation_id, user.id)
                 history = conversation.messages
-                cutoff = max(0, len(history) - 6)
-                should_summarize = (
-                    len(history) - conversation.summary_through >= settings.summary_every_messages
-                    and cutoff > conversation.summary_through
-                )
                 previous_summary = conversation.summary
-                transcript_parts = []
-                transcript_size = 0
-                summary_cutoff = conversation.summary_through
-                for item in history[conversation.summary_through:cutoff]:
-                    item_text = f"{item.role}: {item.content[:4000]}"
-                    for attachment in item.attachments:
-                        attachment_text = (
-                            extraction_text(attachment.extraction, 4000)
-                            if attachment.extraction
-                            else attachment.extracted_text[:4000]
-                        )
-                        item_text += f"\n[Pièce jointe : {attachment.filename}]\n{attachment_text}"
-                    item_text = item_text[:12000]
-                    if transcript_parts and transcript_size + len(item_text) > 24000:
-                        break
-                    transcript_parts.append(item_text)
-                    transcript_size += len(item_text)
-                    summary_cutoff += 1
-                transcript = "\n".join(transcript_parts)
-            if should_summarize:
+                limit_tokens = get_model_context_limit(settings, model_info)
+                should_summarize, summary_cutoff, transcript = evaluate_context_compression(
+                    history=history,
+                    summary_through=conversation.summary_through,
+                    current_summary=previous_summary,
+                    limit_tokens=limit_tokens,
+                    settings=settings,
+                )
+            if should_summarize and transcript:
                 yield sse("status", {"message": "Mise à jour du résumé de la conversation…"})
                 try:
                     if settings.demo_mode:
@@ -706,6 +750,13 @@ async def send_message(
                     yield sse("status", {"message": "Résumé temporairement indisponible ; utilisation des messages récents dans la limite du contexte."})
             with sessions() as db:
                 conversation = get_conversation(db, conversation_id, user.id)
+                topic_space_id = conversation.topic_space_id
+                topic_context_text = None
+                if topic_space_id:
+                    t_space = db.scalar(select(TopicSpace).where(TopicSpace.id == topic_space_id, TopicSpace.user_id == user.id))
+                    if t_space:
+                        t_mems = list(db.scalars(select(TopicMemory).where(TopicMemory.topic_space_id == t_space.id)))
+                        topic_context_text = build_topic_prompt_context(t_space, t_mems)
                 memories = [
                     item.content
                     for item in db.scalars(select(Memory).where(Memory.user_id == user.id).order_by(Memory.created_at))
@@ -864,6 +915,8 @@ async def send_message(
                     learn_mode=body.learn_mode,
                     user_system_prompt=user_general_prompt,
                     prompt_cache_enabled=user_prompt_cache,
+                    topic_context=topic_context_text,
+                    max_context_tokens=limit_tokens,
                 )
                 use_two_step_section_writer = (
                     (body.deep_search or body.learn_mode)
@@ -1293,10 +1346,23 @@ async def send_message(
                     user_id=user.id,
                     user_text=body.content.strip(),
                     assistant_text=accumulated,
-                    auto_memory_enabled=getattr(user, "auto_memory_enabled", True),
+                    auto_memory_enabled=body.auto_memory_enabled if body.auto_memory_enabled is not None else getattr(user, "auto_memory_enabled", True),
                 )
             except Exception as m_exc:
                 _logger.warning("Échec traitement mémoire agent: %s", m_exc)
+
+            topic_result = None
+            if topic_space_id:
+                try:
+                    topic_result = await process_topic_turn(
+                        sessions=sessions,
+                        topic_space_id=topic_space_id,
+                        user_message=body.content.strip(),
+                        assistant_message=accumulated,
+                        settings=settings,
+                    )
+                except Exception as t_exc:
+                    _logger.warning("Échec traitement mémoire espace thématique: %s", t_exc)
 
             yield sse("done", {
                 "message": final_msg_json,
@@ -1306,6 +1372,14 @@ async def send_message(
                 "memories": memory_result.get("all_memories"),
                 "new_memories": memory_result.get("new_memories", []),
                 "deleted_memories": memory_result.get("deleted_memories", []),
+                "topic_space_update": {
+                    "topic_id": topic_space_id,
+                    "title": topic_result.get("topic_title"),
+                    "icon": topic_result.get("topic_icon"),
+                    "new_memories": topic_result.get("added_memories", []),
+                    "resume_context": topic_result.get("new_resume_context"),
+                    "suggested_next_step": topic_result.get("suggested_next_step"),
+                } if topic_space_id and topic_result else None,
             })
         except asyncio.CancelledError:
             raise

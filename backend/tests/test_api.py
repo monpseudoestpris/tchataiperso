@@ -605,11 +605,15 @@ def test_stream_failure_is_explicit_unlocks_and_preserves_user(client, settings,
 
 
 def test_summary_retains_complete_history_and_excludes_global_memory(client, settings):
-    settings.summary_every_messages = 8
+    settings.context_window_tokens = 2000
+    settings.summary_trigger_ratio = 0.8
     client.post("/api/memories", json={"content": "GLOBAL_PRIVATE_MEMORY"})
     item = conversation(client)
     for index in range(5):
-        response = client.post(f"/api/conversations/{item}/messages", json={"content": f"Échange numéro {index}"})
+        response = client.post(
+            f"/api/conversations/{item}/messages",
+            json={"content": f"Échange volumineux numéro {index} avec informations de contexte détaillées. " * 30},
+        )
         assert events(response)[-1][0] == "done"
     detail = client.get(f"/api/conversations/{item}").json()
     assert len(detail["messages"]) == 10

@@ -234,6 +234,10 @@ class Settings(BaseSettings):
     invitation_days: int = 2
     max_upload_mb: int = 40
     max_context_chars: int = 60000
+    context_window_tokens: int = 12000
+    summary_trigger_ratio: float = 0.8
+    summary_target_ratio: float = 0.4
+    summary_min_recent_tokens: int = 2500
     summary_every_messages: int = 12
     max_summary_chars: int = 6000
     llm_temperature: float = 0.2
@@ -243,7 +247,7 @@ class Settings(BaseSettings):
     deep_search_max_tokens: int = 131072
     learn_mode_max_tokens: int = 98304
     summary_model: str = "openai/gpt-4o-mini"
-    search_query_model: str = "mistralai/mistral-small-3.2-24b-instruct"
+    search_query_model: str = "google/gemini-3.8-flash"
     web_search_decision_model: str = "google/gemini-3.5-flash-lite"
     deep_search_plan_model: str = "google/gemini-4-argon"
     deep_search_synthesis_model: str = "google/gemini-3.8-flash"
@@ -251,6 +255,7 @@ class Settings(BaseSettings):
     deep_search_engine: str = "sonar"
     deep_search_model: str = "perplexity/sonar-deep-research"
     blog_model: str = "google/gemini-3.5-flash-lite"
+    page_model: str = "google/gemini-2.5-flash"
     presentation_model: str = "google/gemini-2.5-flash-lite"
     image_prompt_model: str = "openai/gpt-6-luna"
     image_models: str = ""
@@ -356,6 +361,34 @@ class Settings(BaseSettings):
     def valid_summary_limit(cls, value: int) -> int:
         if not 1000 <= value <= 10000:
             raise ValueError("MAX_SUMMARY_CHARS doit être compris entre 1000 et 10000")
+        return value
+
+    @field_validator("context_window_tokens")
+    @classmethod
+    def valid_context_tokens(cls, value: int) -> int:
+        if not 2000 <= value <= 2000000:
+            raise ValueError("CONTEXT_WINDOW_TOKENS doit être compris entre 2000 et 2000000")
+        return value
+
+    @field_validator("summary_trigger_ratio")
+    @classmethod
+    def valid_trigger_ratio(cls, value: float) -> float:
+        if not 0.5 <= value <= 0.95:
+            raise ValueError("SUMMARY_TRIGGER_RATIO doit être compris entre 0.5 et 0.95")
+        return value
+
+    @field_validator("summary_target_ratio")
+    @classmethod
+    def valid_target_ratio(cls, value: float) -> float:
+        if not 0.1 <= value <= 0.7:
+            raise ValueError("SUMMARY_TARGET_RATIO doit être compris entre 0.1 et 0.7")
+        return value
+
+    @field_validator("summary_min_recent_tokens")
+    @classmethod
+    def valid_min_recent_tokens(cls, value: int) -> int:
+        if not 500 <= value <= 30000:
+            raise ValueError("SUMMARY_MIN_RECENT_TOKENS doit être compris entre 500 et 30000")
         return value
 
     @property
@@ -525,7 +558,7 @@ class Settings(BaseSettings):
                 cleaned = _clean_api_key(raw_val)
                 if cleaned or force is False:
                     setattr(self, field_name, SecretStr(cleaned))
-        str_fields = ("llm_base_url", "ocr_model", "vision_model", "default_model", "llm_models", "summary_model", "search_query_model", "web_search_decision_model", "deep_search_plan_model", "deep_search_synthesis_model", "deep_search_engine", "deep_search_model", "blog_model", "presentation_model", "image_prompt_model", "image_models", "default_image_model")
+        str_fields = ("llm_base_url", "ocr_model", "vision_model", "default_model", "llm_models", "summary_model", "search_query_model", "web_search_decision_model", "deep_search_plan_model", "deep_search_synthesis_model", "deep_search_engine", "deep_search_model", "blog_model", "page_model", "presentation_model", "image_prompt_model", "image_models", "default_image_model")
         for field_name in str_fields:
             if field_name in self._explicit_fields:
                 continue

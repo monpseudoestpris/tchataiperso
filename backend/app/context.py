@@ -182,9 +182,11 @@ def build_context(settings: Settings, summary: str, memories: list[str], message
                   vision: bool, skills: list[dict] | None = None, deep_search: bool = False,
                   code_mode: bool = False, findings: list[str] | None = None,
                   learn_mode: bool = False, user_system_prompt: str = "",
-                  prompt_cache_enabled: bool = True) -> list[dict]:
-    # Reserve most of the budget for the latest user turn, even when all optional
-    # context sections are populated. Data lives outside the system instruction.
+                  prompt_cache_enabled: bool = True,
+                  topic_context: str | None = None,
+                  max_context_tokens: int | None = None) -> list[dict]:
+    # Structure fixe du prompt : [System Prompt] + [Résumé cumulatif des vieux blocs] + [Derniers messages bruts intacts]
+    # Les données de référence (souvenirs, sources) s'intègrent entre le système et l'historique brut.
     prompt_parts = [SYSTEM_PROMPT]
     clean_user_prompt = (user_system_prompt or "").strip()
     if clean_user_prompt:
@@ -196,18 +198,25 @@ def build_context(settings: Settings, summary: str, memories: list[str], message
     if code_mode:
         prompt_parts.append(CODE_MODE_PROMPT)
     system_prompt = "\n\n".join(prompt_parts)
+    effective_max_chars = (
+        max_context_tokens * 8
+        if max_context_tokens is not None
+        else settings.max_context_chars
+    )
     skill_text = ""
     if skills:
         skill_text = "Consignes des compétences actives :\n" + "\n\n".join(
             f"{skill['name']} :\n{skill['prompt']}" for skill in skills
         )
-        skill_budget = max(0, min(12000, settings.max_context_chars - len(system_prompt) - 4000))
+        skill_budget = max(0, min(12000, effective_max_chars - len(system_prompt) - 4000))
         skill_text = skill_text[:skill_budget]
     references = []
+    if topic_context:
+        references.append(topic_context[:10000])
     if memories:
         references.append("Souvenirs choisis par l'utilisateur (données) :\n" + "\n".join(memories)[:8000])
     if summary:
-        references.append("Résumé des messages plus anciens (données) :\n" + summary[:settings.max_summary_chars])
+        references.append("Résumé cumulatif des échanges précédents (données) :\n" + summary[:settings.max_summary_chars])
     if (deep_search or learn_mode) and findings:
         clean_findings = [f.strip() for f in findings if isinstance(f, str) and f.strip()]
         if clean_findings:
@@ -248,7 +257,7 @@ def build_context(settings: Settings, summary: str, memories: list[str], message
             )
         if sections_parts:
             references.append((search_label + "\n\n".join(sections_parts))[:source_limit])
-    available_after_system = max(0, settings.max_context_chars - len(system_prompt) - len(skill_text))
+    available_after_system = max(0, effective_max_chars - len(system_prompt) - len(skill_text))
     reference_budget = (
         min(105000, (available_after_system * 7) // 8)
         if (deep_search or learn_mode)
@@ -271,7 +280,7 @@ def build_context(settings: Settings, summary: str, memories: list[str], message
                 "sans inventer de chiffres ni imposer une longueur minimale.]"
             )
         reference_text = ref_header + "\n" + "\n\n".join(trimmed)
-    budget = max(0, settings.max_context_chars - len(system_prompt) - len(skill_text) - len(reference_text))
+    budget = max(0, effective_max_chars - len(system_prompt) - len(skill_text) - len(reference_text))
     selected: list[dict] = []
     image_count = 0
     for message in reversed(messages):
