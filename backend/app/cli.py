@@ -52,6 +52,7 @@ def prepare_schema(settings: Settings) -> None:
         "0014_add_user_settings",
         "0015_add_auto_memory",
         "0016_add_agent_teams",
+        "0017_add_blog_categories",
     }:
         raise SystemExit(f"Révision de base non reconnue : {current}")
 

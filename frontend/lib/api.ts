@@ -241,6 +241,10 @@ export type BlogCard = {
   source_name: string;
   tag: string;
   color: "blue" | "emerald" | "purple" | "amber" | "rose" | "cyan" | string;
+  category?: "news" | "facts" | "images" | "videos" | "tips" | "stats" | "quotes" | "concepts" | string;
+  image_url?: string;
+  video_url?: string;
+  video_embed_url?: string;
 };
 export type BlogPost = {
   id: string;
@@ -258,6 +262,7 @@ export type Blog = {
   prompt: string;
   auto_refresh: boolean;
   theme?: string;
+  categories?: string[];
   created_at: string;
   updated_at: string;
   posts_count: number;
@@ -566,7 +571,13 @@ export async function fetchBlog(blogId: string): Promise<Blog> {
   return api<Blog>(`/blogs/${blogId}`);
 }
 
-export async function createBlog(body: { prompt: string; title?: string; auto_refresh?: boolean; theme?: string }): Promise<Blog> {
+export async function createBlog(body: {
+  prompt: string;
+  title?: string;
+  auto_refresh?: boolean;
+  theme?: string;
+  categories?: string[];
+}): Promise<Blog> {
   return api<Blog>("/blogs", {
     method: "POST",
     body: JSON.stringify(body),
@@ -575,7 +586,7 @@ export async function createBlog(body: { prompt: string; title?: string; auto_re
 
 export async function updateBlog(
   blogId: string,
-  body: { title?: string; prompt?: string; auto_refresh?: boolean; theme?: string },
+  body: { title?: string; prompt?: string; auto_refresh?: boolean; theme?: string; categories?: string[] },
 ): Promise<Blog> {
   return api<Blog>(`/blogs/${blogId}`, {
     method: "PATCH",
@@ -600,6 +611,40 @@ export async function refreshBlog(
 export async function deleteBlogPost(blogId: string, postId: string): Promise<void> {
   return api<void>(`/blogs/${blogId}/posts/${postId}`, {
     method: "DELETE",
+  });
+}
+
+export type SearxngImageResult = {
+  title: string;
+  img_src: string;
+  thumbnail_src: string;
+  url: string;
+  source: string;
+};
+
+export async function searchBlogImages(query: string): Promise<SearxngImageResult[]> {
+  return api<SearxngImageResult[]>(`/blogs/search-images?q=${encodeURIComponent(query)}`);
+}
+
+export type SearxngVideoResult = {
+  title: string;
+  url: string;
+  video_url: string;
+  video_embed_url: string;
+  thumbnail_url: string;
+  image_url: string;
+  content: string;
+  source: string;
+};
+
+export async function searchBlogVideos(query: string): Promise<SearxngVideoResult[]> {
+  return api<SearxngVideoResult[]>(`/blogs/search-videos?q=${encodeURIComponent(query)}`);
+}
+
+export async function updateBlogPostCards(blogId: string, postId: string, cards: BlogCard[]): Promise<BlogPost> {
+  return api<BlogPost>(`/blogs/${blogId}/posts/${postId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ cards }),
   });
 }
 
@@ -962,8 +1007,30 @@ export type FinancialDashboardData = {
   url_yahoo: string;
 };
 
-export async function fetchFinanceDetails(query: string): Promise<FinancialDashboardData> {
-  return api<FinancialDashboardData>(`/finance/details?query=${encodeURIComponent(query)}`);
+export type StatementRow = { key: string; label: string; values: (number | null)[] };
+export type StatementRatio = StatementRow & { format: "pct" | "x" };
+export type StatementPeriod = {
+  dates: string[];
+  income: StatementRow[];
+  balance: StatementRow[];
+  cashflow: StatementRow[];
+  ratios: StatementRatio[];
+};
+export type FinancialStatements = { symbol: string; annual: StatementPeriod; quarterly: StatementPeriod };
+
+export async function fetchFinanceStatements(symbol: string): Promise<FinancialStatements> {
+  return api<FinancialStatements>(`/finance/statements?symbol=${encodeURIComponent(symbol)}`);
+}
+
+export type FinanceRange = "1d" | "1w" | "1m" | "3m" | "6m" | "1y" | "2y" | "5y" | "max";
+
+export async function fetchFinanceDetails(
+  query: string,
+  range: FinanceRange = "1m",
+): Promise<FinancialDashboardData> {
+  return api<FinancialDashboardData>(
+    `/finance/details?query=${encodeURIComponent(query)}&range=${range}`,
+  );
 }
 
 export async function fetchTopics(): Promise<TopicSpace[]> {

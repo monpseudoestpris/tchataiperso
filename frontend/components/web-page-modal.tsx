@@ -13,6 +13,7 @@ import {
   Globe,
   Globe2,
   History,
+  Image as ImageIcon,
   Laptop,
   LoaderCircle,
   Maximize2,
@@ -44,6 +45,7 @@ import {
   type WebPageVersion,
 } from "@/lib/api";
 import { ModelPickerModal } from "./model-picker-modal";
+import { toJpeg, toPng } from "html-to-image";
 import styles from "./web-page-modal.module.css";
 
 export type WebPageModalProps = {
@@ -200,6 +202,26 @@ export function WebPageModal({
   const [copiedCode, setCopiedCode] = useState(false);
   const [refineInstruction, setRefineInstruction] = useState("");
   const [previewNonce, setPreviewNonce] = useState(0);
+  const [isExportingImage, setIsExportingImage] = useState(false);
+  const [showImageExportMenu, setShowImageExportMenu] = useState(false);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const imageExportMenuRef = useRef<HTMLDivElement>(null);
+
+  // Click outside listener for image export menu
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (
+        imageExportMenuRef.current &&
+        !imageExportMenuRef.current.contains(event.target as Node)
+      ) {
+        setShowImageExportMenu(false);
+      }
+    }
+    if (showImageExportMenu) {
+      document.addEventListener("mousedown", handleClickOutside);
+      return () => document.removeEventListener("mousedown", handleClickOutside);
+    }
+  }, [showImageExportMenu]);
 
   // Load pages list on open
   useEffect(() => {
@@ -338,6 +360,53 @@ export function WebPageModal({
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1500);
+  }
+
+  // Export rendered page as PNG or JPEG image
+  async function handleExportImage(format: "png" | "jpeg" = "png") {
+    if (!selectedPage || !activeHtml) return;
+    setIsExportingImage(true);
+    setShowImageExportMenu(false);
+    setError(null);
+
+    try {
+      const iframe = iframeRef.current;
+      const doc = iframe?.contentDocument;
+      if (!doc || !doc.body) {
+        throw new Error("L'aperçu de la page n'est pas encore prêt pour l'export.");
+      }
+
+      const options = {
+        pixelRatio: 2,
+        quality: format === "jpeg" ? 0.92 : undefined,
+        filter: (node: HTMLElement) => {
+          if (node.classList && node.classList.contains("no-print")) {
+            return false;
+          }
+          return true;
+        },
+      };
+
+      let dataUrl: string;
+      if (format === "jpeg") {
+        dataUrl = await toJpeg(doc.body, { ...options, backgroundColor: "#0f172a" });
+      } else {
+        dataUrl = await toPng(doc.body, options);
+      }
+
+      const filename = `${selectedPage.slug || "page"}.${format === "jpeg" ? "jpg" : "png"}`;
+      const a = document.createElement("a");
+      a.href = dataUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    } catch (err) {
+      console.error("Export image error:", err);
+      setError("Erreur lors de l'export d'image : " + errorMessage(err));
+    } finally {
+      setIsExportingImage(false);
+    }
   }
 
   // Toggle publication
@@ -494,6 +563,64 @@ export function WebPageModal({
                   <Download size={14} />
                   <span>Télécharger .html</span>
                 </button>
+
+                {/* Export Image button & dropdown */}
+                <div style={{ position: "relative" }} ref={imageExportMenuRef}>
+                  <button
+                    type="button"
+                    className={styles.btn}
+                    onClick={() => setShowImageExportMenu((v) => !v)}
+                    disabled={isExportingImage}
+                    title="Exporter la page sous forme d'image (PNG Haute Définition ou JPEG)"
+                  >
+                    {isExportingImage ? (
+                      <LoaderCircle size={13} className="spin" />
+                    ) : (
+                      <ImageIcon size={13} />
+                    )}
+                    <span>{isExportingImage ? "Export..." : "Image"}</span>
+                    <ChevronDown size={11} />
+                  </button>
+
+                  {showImageExportMenu && (
+                    <div
+                      style={{
+                        position: "absolute",
+                        top: "calc(100% + 5px)",
+                        right: 0,
+                        zIndex: 60,
+                        backgroundColor: "var(--bg-surface, #ffffff)",
+                        border: "1px solid var(--border-color, #cbd5e1)",
+                        borderRadius: "8px",
+                        boxShadow: "0 10px 25px -5px rgba(0, 0, 0, 0.25)",
+                        minWidth: "210px",
+                        padding: "0.35rem",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: "0.2rem",
+                      }}
+                    >
+                      <button
+                        type="button"
+                        className={styles.btn}
+                        style={{ width: "100%", justifyContent: "flex-start", border: "none" }}
+                        onClick={() => void handleExportImage("png")}
+                      >
+                        <ImageIcon size={13} color="#0284c7" />
+                        <span>PNG Haute Définition (x2)</span>
+                      </button>
+                      <button
+                        type="button"
+                        className={styles.btn}
+                        style={{ width: "100%", justifyContent: "flex-start", border: "none" }}
+                        onClick={() => void handleExportImage("jpeg")}
+                      >
+                        <ImageIcon size={13} color="#ea580c" />
+                        <span>JPEG Web compressé</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
 
                 {/* Publish toggle & URL */}
                 <button
@@ -1125,10 +1252,11 @@ export function WebPageModal({
                       }
                     >
                       <iframe
+                        ref={iframeRef}
                         key={`${selectedPage.id}-${selectedVersionId}-${previewNonce}`}
                         className={styles.iframe}
                         title={selectedPage.title}
-                        sandbox="allow-scripts allow-forms allow-modals"
+                        sandbox="allow-scripts allow-forms allow-modals allow-same-origin"
                         srcDoc={activeHtml}
                       />
                     </div>

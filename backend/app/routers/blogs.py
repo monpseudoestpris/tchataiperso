@@ -3,7 +3,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import sessionmaker
 
 from .. import providers
-from ..blog import generate_blog_edition
+from ..blog import generate_blog_edition, search_web_videos
 from ..config import Settings
 from ..deps import current_user, get_sessions, get_settings
 from ..models import Blog, BlogPost, User, now
@@ -43,9 +43,10 @@ async def create_blog(
             raise HTTPException(422, "Nombre maximal de blogs atteint (50)")
 
     blog_title = body.title or (body.prompt[:60].strip().capitalize())
+    categories = body.categories or ["news"]
     try:
         post_title, post_summary, post_content, sources = await generate_blog_edition(
-            settings, body.prompt, blog_title=blog_title
+            settings, body.prompt, blog_title=blog_title, categories=categories
         )
     except providers.ProviderError as exc:
         raise HTTPException(502, f"Erreur lors de la génération du blog : {exc}") from exc
@@ -58,6 +59,7 @@ async def create_blog(
             prompt=body.prompt,
             auto_refresh=body.auto_refresh,
             theme=body.theme or "sunset",
+            categories=categories,
         )
         db.add(blog)
         db.flush()
@@ -74,6 +76,48 @@ async def create_blog(
         db.commit()
         db.refresh(blog)
         return blog_json(blog, include_posts=True)
+
+
+@router.get("/api/blogs/search-images")
+async def search_blog_images_endpoint(
+    q: str,
+    user: User = Depends(current_user),
+    settings: Settings = Depends(get_settings),
+):
+    query = q.strip()[:300]
+    if not query:
+        return []
+    try:
+        images = await providers.search_web_images(settings, query, limit=12)
+        return [
+            {
+                "title": img.get("title", ""),
+                "img_src": img.get("img_src", ""),
+                "thumbnail_src": img.get("thumbnail_src", ""),
+                "url": img.get("url", ""),
+                "source": img.get("image_source", ""),
+            }
+            for img in images
+            if img.get("img_src") or img.get("thumbnail_src")
+        ]
+    except Exception as exc:
+        raise HTTPException(502, f"Erreur lors de la recherche d'images SearXNG : {exc}") from exc
+
+
+@router.get("/api/blogs/search-videos")
+async def search_blog_videos_endpoint(
+    q: str,
+    user: User = Depends(current_user),
+    settings: Settings = Depends(get_settings),
+):
+    query = q.strip()[:300]
+    if not query:
+        return []
+    try:
+        videos = await search_web_videos(settings, query, limit=12)
+        return videos
+    except Exception as exc:
+        raise HTTPException(502, f"Erreur lors de la recherche de vidéos SearXNG : {exc}") from exc
 
 
 @router.get("/api/blogs/{blog_id}")
@@ -108,6 +152,8 @@ def update_blog(
             blog.auto_refresh = body.auto_refresh
         if body.theme is not None:
             blog.theme = body.theme
+        if body.categories is not None:
+            blog.categories = body.categories
         blog.updated_at = now()
         db.commit()
         db.refresh(blog)
@@ -142,10 +188,11 @@ async def refresh_blog(
             raise HTTPException(404, "Blog introuvable")
         prompt = blog.prompt
         title = blog.title
+        categories = getattr(blog, "categories", None) or ["news"]
 
     try:
         post_title, post_summary, post_content, sources = await generate_blog_edition(
-            settings, prompt, blog_title=title
+            settings, prompt, blog_title=title, categories=categories
         )
     except providers.ProviderError as exc:
         raise HTTPException(502, f"Erreur lors de l'actualisation du blog : {exc}") from exc
@@ -188,4 +235,33 @@ def delete_blog_post(
         db.delete(post)
         db.commit()
     return Response(status_code=204)
+
+
+@router.patch("/api/blogs/{blog_id}/posts/{post_id}")
+def update_blog_post_endpoint(
+    blog_id: str,
+    post_id: str,
+    body: dict,
+    user: User = Depends(current_user),
+    sessions: sessionmaker = Depends(get_sessions),
+):
+    with sessions() as db:
+        blog = db.scalar(select(Blog).where(Blog.id == blog_id, Blog.user_id == user.id))
+        if not blog:
+            raise HTTPException(404, "Blog introuvable")
+        post = db.scalar(select(BlogPost).where(BlogPost.id == post_id, BlogPost.blog_id == blog.id))
+        if not post:
+            raise HTTPException(404, "Édition introuvable")
+        if "cards" in body and isinstance(body["cards"], list):
+            import json
+            current_payload = {}
+            try:
+                current_payload = json.loads(post.content)
+            except Exception:
+                pass
+            current_payload["cards"] = body["cards"]
+            post.content = json.dumps(current_payload, ensure_ascii=False)
+            db.commit()
+            db.refresh(post)
+        return blog_post_json(post)
 

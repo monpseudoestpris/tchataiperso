@@ -501,11 +501,15 @@ class ImproveSoundPrompt(BaseModel):
         return cleaned or None
 
 
+VALID_BLOG_CATEGORIES = {"news", "facts", "images", "videos", "tips", "stats", "quotes", "concepts"}
+
+
 class CreateBlog(BaseModel):
     prompt: str = Field(min_length=1, max_length=2000)
     title: str | None = Field(default=None, max_length=200)
     auto_refresh: bool = False
     theme: str = Field(default="sunset", max_length=50)
+    categories: list[str] = Field(default_factory=lambda: ["news"])
 
     @field_validator("prompt")
     @classmethod
@@ -523,12 +527,23 @@ class CreateBlog(BaseModel):
         value = value.strip()
         return value or None
 
+    @field_validator("categories")
+    @classmethod
+    def validate_categories(cls, value: list[str]) -> list[str]:
+        valid = [c.strip().lower() for c in value if isinstance(c, str) and c.strip().lower() in VALID_BLOG_CATEGORIES]
+        seen = []
+        for v in valid:
+            if v not in seen:
+                seen.append(v)
+        return seen or ["news"]
+
 
 class UpdateBlog(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=200)
     prompt: str | None = Field(default=None, min_length=1, max_length=2000)
     auto_refresh: bool | None = None
     theme: str | None = Field(default=None, max_length=50)
+    categories: list[str] | None = None
 
     @field_validator("title", "prompt")
     @classmethod
@@ -539,6 +554,18 @@ class UpdateBlog(BaseModel):
         if not value:
             raise ValueError("Ce champ ne peut pas être vide")
         return value
+
+    @field_validator("categories")
+    @classmethod
+    def validate_optional_categories(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        valid = [c.strip().lower() for c in value if isinstance(c, str) and c.strip().lower() in VALID_BLOG_CATEGORIES]
+        seen = []
+        for v in valid:
+            if v not in seen:
+                seen.append(v)
+        return seen or ["news"]
 
 
 class FlashcardItem(BaseModel):

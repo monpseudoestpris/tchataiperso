@@ -232,3 +232,136 @@ def test_blog_multi_user_isolation(settings):
         assert client_b.patch(f"/api/blogs/{blog_a_id}", json={"title": "Hacked"}).status_code == 404
         assert client_b.post(f"/api/blogs/{blog_a_id}/refresh").status_code == 404
         assert client_b.delete(f"/api/blogs/{blog_a_id}").status_code == 404
+
+
+def test_generate_blog_edition_categories(settings):
+    # Test single category: facts
+    title, summary, content, sources = asyncio.run(
+        generate_blog_edition(settings, "culture générale", blog_title="Curiosités du Monde", categories=["facts"])
+    )
+    assert "Curiosités du Monde" in title
+    cards = parse_cards_from_content(content)
+    assert len(cards) >= 10
+    assert any(c.get("category") == "facts" for c in cards)
+
+    # Test mixed categories: news, facts, images, tips
+    title_mix, summary_mix, content_mix, _ = asyncio.run(
+        generate_blog_edition(
+            settings,
+            "sciences et espace",
+            blog_title="Magazine Espace",
+            categories=["news", "facts", "images", "tips"],
+        )
+    )
+    assert "Magazine Espace" in title_mix
+    cards_mix = parse_cards_from_content(content_mix)
+    assert len(cards_mix) >= 10
+    categories_present = {c.get("category") for c in cards_mix}
+    assert "facts" in categories_present or "images" in categories_present or "news" in categories_present
+
+
+def test_blog_api_categories_crud(settings):
+    app = create_app(settings)
+
+    with auth_client_for_user(app, settings, "cat_blogger") as client:
+        # Create blog with specific categories
+        create_resp = client.post(
+            "/api/blogs",
+            json={
+                "title": "Culture G & Faits Insolites",
+                "prompt": "faits insolites et culture générale",
+                "categories": ["facts", "images", "tips"],
+            },
+        )
+        assert create_resp.status_code == 201
+        blog = create_resp.json()
+        assert blog["categories"] == ["facts", "images", "tips"]
+        first_post = blog["posts"][0]
+        assert len(first_post["cards"]) >= 10
+
+        # Patch categories
+        patch_resp = client.patch(
+            f"/api/blogs/{blog['id']}",
+            json={"categories": ["facts", "quotes", "concepts"]},
+        )
+        assert patch_resp.status_code == 200
+        assert patch_resp.json()["categories"] == ["facts", "quotes", "concepts"]
+
+        # Refresh with updated categories
+        refresh_resp = client.post(f"/api/blogs/{blog['id']}/refresh")
+        assert refresh_resp.status_code == 200
+        refreshed = refresh_resp.json()
+        assert refreshed["blog"]["categories"] == ["facts", "quotes", "concepts"]
+        assert len(refreshed["new_post"]["cards"]) >= 10
+
+
+def test_generate_blog_edition_videos_category(settings):
+    title, summary, content, sources = asyncio.run(
+        generate_blog_edition(
+            settings,
+            "documentaires et conférences espace",
+            blog_title="Vidéos Documentaires Espace",
+            categories=["videos", "news"],
+        )
+    )
+    assert "Vidéos Documentaires Espace" in title
+    cards = parse_cards_from_content(content)
+    assert len(cards) >= 10
+    video_cards = [c for c in cards if c.get("category") == "videos" or c.get("video_embed_url")]
+    assert len(video_cards) >= 1
+    sample = video_cards[0]
+    assert sample.get("video_url")
+    assert sample.get("video_embed_url")
+    assert sample.get("image_url")
+
+
+def test_search_blog_videos_endpoint(settings):
+    app = create_app(settings)
+
+    mock_videos = [
+        {
+            "title": "Documentaire sur l'Univers",
+            "url": "https://www.youtube.com/watch?v=mock123",
+            "video_url": "https://www.youtube.com/watch?v=mock123",
+            "video_embed_url": "https://www.youtube-nocookie.com/embed/mock123",
+            "thumbnail_url": "https://i.ytimg.com/vi/mock123/hqdefault.jpg",
+            "image_url": "https://i.ytimg.com/vi/mock123/hqdefault.jpg",
+            "content": "Super documentaire sur les nébuleuses.",
+            "source": "Astronomie France",
+        }
+    ]
+
+    with patch("app.routers.blogs.search_web_videos", new=AsyncMock(return_value=mock_videos)):
+        with auth_client_for_user(app, settings, "videouser") as client:
+            resp = client.get("/api/blogs/search-videos?q=astronomie")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert len(data) == 1
+            assert data[0]["title"] == "Documentaire sur l'Univers"
+            assert "mock123" in data[0]["video_embed_url"]
+
+
+def test_search_blog_images_endpoint(settings):
+    app = create_app(settings)
+
+    mock_images = [
+        {
+            "title": "Nébuleuse d'Orion",
+            "img_src": "https://example.com/orion.jpg",
+            "thumbnail_src": "https://example.com/orion_thumb.jpg",
+            "url": "https://example.com/page",
+            "image_source": "NASA",
+        }
+    ]
+
+    with patch("app.routers.blogs.providers.search_web_images", new=AsyncMock(return_value=mock_images)):
+        with auth_client_for_user(app, settings, "imguser") as client:
+            resp = client.get("/api/blogs/search-images?q=orion")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert len(data) == 1
+            assert data[0]["title"] == "Nébuleuse d'Orion"
+            assert data[0]["img_src"] == "https://example.com/orion.jpg"
+
+
+

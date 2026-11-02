@@ -5,7 +5,7 @@ use_default_settings:
       - duckduckgo
       - google
       - qwant
-      - bing
+      - wikipedia
 
       # Recherche scientifique & académique
       - arxiv
@@ -20,8 +20,19 @@ use_default_settings:
       # Actualités
       - reuters
 
+      # Images
+      - bing images
+      - duckduckgo images
+      - google images
+      - qwant images
+      - unsplash
+
+      # Vidéos
+      - youtube
+
 search:
-  default_lang: auto
+  default_lang: fr-FR
+  safe_search: 1
   formats:
     - html
     - json
@@ -45,9 +56,9 @@ engines:
     disabled: false
     weight: 0.7
 
-  - name: bing
+  - name: wikipedia
     disabled: false
-    weight: 0.8
+    weight: 0.9
 
   - name: arxiv
     disabled: false
@@ -70,4 +81,23 @@ engines:
   - name: reuters
     disabled: false
 
-    disabled: true
+  # Images
+  - name: bing images
+    disabled: false
+
+  - name: duckduckgo images
+    disabled: false
+
+  - name: google images
+    disabled: false
+
+  - name: qwant images
+    disabled: false
+
+  - name: unsplash
+    disabled: false
+
+  # Vidéos
+  - name: youtube
+    engine: youtube_noapi
+    disabled: false

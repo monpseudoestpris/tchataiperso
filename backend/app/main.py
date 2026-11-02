@@ -105,6 +105,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     conn.execute(text("ALTER TABLE generated_sounds ADD COLUMN instrumental BOOLEAN"))
                 if "model_id" not in sound_columns:
                     conn.execute(text("ALTER TABLE generated_sounds ADD COLUMN model_id VARCHAR(50)"))
+        if "blogs" in inspector.get_table_names():
+            blog_columns = {column["name"] for column in inspector.get_columns("blogs")}
+            with engine.begin() as conn:
+                if "categories" not in blog_columns:
+                    conn.execute(text("ALTER TABLE blogs ADD COLUMN categories JSON NOT NULL DEFAULT '[\"news\"]'"))
         for table in ("conversations", "attachments", "memories"):
             if "user_id" not in {column["name"] for column in inspector.get_columns(table)}:
                 raise RuntimeError("Base non migrée; exécutez les étapes `migrate-schema`, `create-admin` et `migrate-legacy` du README.")

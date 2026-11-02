@@ -2,6 +2,7 @@ import pytest
 from app.config import Settings
 from app.page_generator import extract_html, extract_title_from_html, generate_fallback_page, slugify
 from app.svg_assets import THEMATIC_ILLUSTRATIONS, inject_svg_placeholders, render_svg_asset
+from app.text_fx import inject_text_fx_placeholders, render_curved_text
 
 try:
     from test_api import authenticated_client
@@ -233,6 +234,42 @@ def test_svg_assets_and_placeholders():
     # 7. Path traversal security
     assert render_svg_asset("../../etc/passwd") is None
     assert render_svg_asset("tabler/../../config") is None
+
+
+def test_text_fx_typography():
+    # 1. Curved text generation (xsvg inspiration)
+    wave_curved = render_curved_text("Comprendre la science", curve="wave")
+    assert "<textPath" in wave_curved
+    assert "Comprendre la science" in wave_curved
+    assert "xsvg-curved-wrap" in wave_curved
+
+    arc_curved = render_curved_text("Devise didactique", curve="arc")
+    assert "<textPath" in arc_curved
+    assert "Devise didactique" in arc_curved
+
+    # 2. Tag substitution <clair-curved-text ... />
+    html_sample = """<!DOCTYPE html><html><head><style>body { color: #fff; }</style></head>
+<body><h1 class="charming" data-fx="wave">Titre</h1>
+<clair-curved-text text="Exploration didactique" curve="wave" />
+<h2 class="pretext-fit">TITRE LARGE</h2>
+<script>console.log('ok');</script></body></html>"""
+
+    processed = inject_text_fx_placeholders(html_sample)
+    assert "<clair-curved-text" not in processed
+    assert "xsvg-curved-wrap" in processed
+    assert "<textPath" in processed
+    # Ensures CSS and JS are injected when charming / pretext / xsvg are present
+    assert "charWave" in processed
+    assert "initCharmingTypography" in processed
+    assert "initPretextAutoFit" in processed
+
+    # 3. Fallback page includes typography enhancements
+    fallback = generate_fallback_page("Physique Quantique", "Guide didactique")
+    assert "charming" in fallback
+    assert "charWave" in fallback
+    assert "initCharmingTypography" in fallback
+    assert "xsvg-curved-wrap" in fallback
+
 
 
 

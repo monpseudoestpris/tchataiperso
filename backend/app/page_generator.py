@@ -10,6 +10,7 @@ import httpx
 from .config import Settings
 from .providers import ProviderError, _check_response, _json, _key
 from .svg_assets import inject_svg_placeholders, render_svg_asset
+from .text_fx import TEXT_FX_CSS, TEXT_FX_JS, inject_text_fx_placeholders, render_curved_text
 
 _logger = logging.getLogger("uvicorn.error")
 
@@ -119,7 +120,27 @@ RÈGLES D'OR ABSOLUES D'AUTONOMIE (TRÈS STRICT) :
      * Quiz interactif ou simulation/calculateur interactif avec curseurs <input type="range"> selon le sujet.
      * Bouton "Copier le résumé" ou calcul de score immédiat.
    - Le JavaScript doit être propre, robuste, sans erreur console et sans bibliothèque externe.
-7. FORMAT DE SORTIE :
+7. TYPOGRAPHIE EXPRESSIVE & TEXTE QUI PREND FORME (Inspirations Charming.js, Pretext, xsvg) :
+   Ne laisse pas le texte uniquement plat et statique ! C'est TOI qui choisis judicieusement l'effet selon la tonalité du sujet :
+   * EFFETS CHARMING.JS (Lettre-par-lettre, cinétique & micro-interactions) :
+     - <h1 class="charming" data-fx="wave">Titre Ondulant</h1> : ondulation sinusoïdale fluide au fil des lettres.
+     - <h1 class="charming" data-fx="gradient">Titre Lumineux</h1> : dégradé chromatique animé le long des lettres.
+     - <span class="charming" data-fx="glow">Mot Clé</span> : halo lumineux doux sur une notion centrale.
+     - <span class="charming" data-fx="bounce">Survolez-moi</span> : micro-interaction pop au survol des lettres.
+     - <h2 class="charming" data-fx="stagger">Sous-titre en cascade</h2> : apparition séquentielle dynamique des lettres.
+   * EFFET PRETEXT (Titres monumentaux auto-ajustés sans reflow) :
+     - <h1 class="pretext-fit">TITRE MAJESTUEUX</h1> : calcule géométriquement la taille idéale de police pour remplir exactement 100% de la largeur du conteneur façon titre de magazine ou affiche d'exposition.
+   * EFFET XSVG (Texte vectoriel qui épouse une forme ou une courbe) :
+     - <clair-curved-text text="Une citation qui prend la forme d'une onde" curve="wave" />
+     - <clair-curved-text text="Comprendre pour mieux agir" curve="arc" />
+     - Épouse harmonieusement des trajectoires SVG courbes avec dégradé lié aux couleurs de la page.
+   * CRITÈRES DE DÉCISION DU LLM :
+     - *Sujet Scientifique / Technique* : Typographie rigoureuse, effet 'gradient' ou 'glow' subtil sur les équations ou mots-clés, cartouches précis.
+     - *Fiche de Révision / Scolaire* : Titre 'stagger' ou 'wave', notions importantes avec 'bounce' au survol pour stimuler l'interaction.
+     - *Article de Presse / Éditorial* : Grand titre avec 'pretext-fit' monumental, devises avec 'clair-curved-text'.
+     - *Créativité Élevée* : Utilise pleinement 'wave', 'gradient' et 'clair-curved-text' pour rompre avec la rigidité des pages web classiques.
+     - *Lisibilité absolue* : Ne transforme JAMAIS un paragraphe de lecture entier en texte cinétique. Réserve ces effets aux titres (h1, h2), aux mots-clés ou aux bandeaux d'accroche !
+8. FORMAT DE SORTIE :
    - Retourne UNIQUEMENT le document HTML5 complet, sans texte d'introduction ni de conclusion, sans backticks markdown si possible.
 """
 
@@ -658,6 +679,7 @@ def generate_fallback_page(
         display: none !important;
       }}
     }}
+    {TEXT_FX_CSS}
   </style>
 </head>
 <body>
@@ -678,8 +700,9 @@ def generate_fallback_page(
 
   <main>
     <section class="hero">
-      <h1>{safe_title}</h1>
+      <h1 class="charming" data-fx="wave">{safe_title}</h1>
       <p>{safe_topic}</p>
+      <clair-curved-text text="Synthèse didactique & exploration visuelle" curve="wave" />
     </section>
 
     <!-- Haikei-inspired organic wave transition -->
@@ -788,10 +811,11 @@ def generate_fallback_page(
         }}
       }});
     }});
+    {TEXT_FX_JS}
   </script>
 </body>
 </html>"""
-    return inject_svg_placeholders(full_page)
+    return inject_text_fx_placeholders(inject_svg_placeholders(full_page))
 
 
 async def generate_page_html(
@@ -1007,7 +1031,7 @@ async def generate_page_html(
                 creative_freedom=creative_freedom,
             )
 
-        html_code = inject_svg_placeholders(html_code)
+        html_code = inject_text_fx_placeholders(inject_svg_placeholders(html_code))
         resolved_title = title or extract_title_from_html(html_code, fallback=clean_prompt[:60])
         return resolved_title, html_code
 
@@ -1088,7 +1112,7 @@ async def refine_page_html(
         if not updated_html or "<html" not in updated_html.lower():
             return current_html
 
-        return inject_svg_placeholders(updated_html)
+        return inject_text_fx_placeholders(inject_svg_placeholders(updated_html))
 
     except Exception as exc:
         _logger.warning("Erreur lors de l'affinage de page HTML par IA: %s", exc)

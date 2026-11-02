@@ -234,6 +234,7 @@ def blog_json(item: Blog, include_posts: bool = False) -> dict:
         "prompt": item.prompt,
         "auto_refresh": item.auto_refresh,
         "theme": getattr(item, "theme", None) or "sunset",
+        "categories": getattr(item, "categories", None) or ["news"],
         "created_at": stamp(item.created_at),
         "updated_at": stamp(item.updated_at),
         "posts_count": len(posts),

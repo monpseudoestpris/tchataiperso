@@ -77,11 +77,11 @@ export function SkillsPanel({ conversation, model, config, onClose, onConversati
         method: editingId ? "PATCH" : "POST",
         body: JSON.stringify({ name: name.trim(), prompt: prompt.trim() }),
       });
-      setSkills(current => {
-        const next = editingId ? current.map(item => item.id === saved.id ? saved : item) : [...current, saved];
-        onSkillsChange?.(next);
-        return next;
-      });
+      const next = editingId
+        ? skills.map(item => item.id === saved.id ? saved : item)
+        : [...skills, saved];
+      setSkills(next);
+      onSkillsChange?.(next);
       if (editingId && conversation?.skills?.some(item => item.id === saved.id)) {
         onConversationChange({ ...conversation, skills: conversation.skills.map(item => item.id === saved.id ? saved : item) });
       }
@@ -135,11 +135,9 @@ export function SkillsPanel({ conversation, model, config, onClose, onConversati
     setBusy("delete"); setError("");
     try {
       await api(`/skills/${skill.id}`, { method: "DELETE" });
-      setSkills(current => {
-        const next = current.filter(item => item.id !== skill.id);
-        onSkillsChange?.(next);
-        return next;
-      });
+      const next = skills.filter(item => item.id !== skill.id);
+      setSkills(next);
+      onSkillsChange?.(next);
       if (conversation?.skills?.some(item => item.id === skill.id)) {
         onConversationChange({ ...conversation, skills: conversation.skills.filter(item => item.id !== skill.id) });
       }

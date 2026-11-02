@@ -13,6 +13,7 @@ import httpx
 from fastapi import HTTPException
 
 from .config import Settings
+from .finance_ranges import CHART_RANGES, DEFAULT_CHART_RANGE
 from .documents import MAX_EXTRACTED_CHARS
 from .models import Attachment
 from .schemas import DocumentAnnotation, DocumentExtraction, ExtractedPage
@@ -1421,6 +1422,7 @@ async def get_financial_dashboard_data(
     settings: Settings,
     query: str,
     limit_bars: int = 30,
+    chart_range: str = DEFAULT_CHART_RANGE,
 ) -> dict[str, Any]:
     """
     Builds a complete financial dashboard data payload for the Finance Modal,
@@ -1428,6 +1430,10 @@ async def get_financial_dashboard_data(
     financial statements, analyst consensus, and company profile from Yahoo Finance.
     """
     clean_target = query.strip()
+    y_range, y_interval, intraday = CHART_RANGES.get(chart_range, CHART_RANGES[DEFAULT_CHART_RANGE])
+    # Plage par défaut : comportement historique (barres EODHD en priorité).
+    # Autres plages : la courbe provient du graphique Yahoo (granularité adaptée).
+    prefer_yahoo_bars = chart_range != DEFAULT_CHART_RANGE
     eod_key = (
         settings.eod_historical_data_key.get_secret_value()
         if settings.enabled(settings.eod_historical_data_key)
@@ -1496,7 +1502,7 @@ async def get_financial_dashboard_data(
                     t = lookup.upper().strip("$")
 
                 summary = await fetch_yahoo_quote_summary(client, t, crumb=crumb)
-                chart = await fetch_yahoo_chart(client, t, range_period="1mo", interval="1d")
+                chart = await fetch_yahoo_chart(client, t, range_period=y_range, interval=y_interval)
                 return top_q, summary, chart, t
             finally:
                 await client.aclose()
@@ -1574,7 +1580,7 @@ async def get_financial_dashboard_data(
     isin = eod_item.get("ISIN") if eod_item else None
 
     chronological_bars = []
-    if eod_bars:
+    if eod_bars and not (prefer_yahoo_bars and yahoo_chart and yahoo_chart.get("timestamp")):
         for b in reversed(eod_bars):
             if b.get("date"):
                 chronological_bars.append({
@@ -1594,10 +1600,14 @@ async def get_financial_dashboard_data(
         c_lows = q_ind.get("low", [])
         c_closes = q_ind.get("close", [])
         c_vols = q_ind.get("volume", [])
+        tz_offset = int((yahoo_chart.get("meta") or {}).get("gmtoffset") or 0) if intraday else 0
+        date_fmt = "%Y-%m-%d %H:%M" if intraday else "%Y-%m-%d"
         for i in range(len(ts)):
             c_val = c_closes[i] if i < len(c_closes) else None
             if c_val is not None:
-                d_str = datetime.datetime.fromtimestamp(ts[i], datetime.timezone.utc).strftime("%Y-%m-%d")
+                d_str = datetime.datetime.fromtimestamp(
+                    ts[i] + tz_offset, datetime.timezone.utc
+                ).strftime(date_fmt)
                 chronological_bars.append({
                     "date": d_str,
                     "open": _safe_float(c_opens[i] if i < len(c_opens) else None),

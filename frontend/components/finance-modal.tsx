@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { FinanceStatements } from "@/components/finance-statements";
+import { FinanceTvChart } from "@/components/finance-tv-chart";
 import {
   ArrowDownRight,
   ArrowUpRight,
@@ -24,6 +26,7 @@ import {
 } from "lucide-react";
 import {
   fetchFinanceDetails,
+  type FinanceRange,
   type EodBar,
   type FinancialDashboardData,
   type FinancialStats,
@@ -50,6 +53,34 @@ const QUICK_SUGGESTIONS = [
   "Microsoft",
 ];
 
+const TIMEFRAME_LABELS: Record<FinanceRange, string> = {
+  "1d": "1 J",
+  "1w": "1 Sem.",
+  "1m": "1 Mois",
+  "3m": "3 Mois",
+  "6m": "6 Mois",
+  "1y": "1 An",
+  "2y": "2 Ans",
+  "5y": "5 Ans",
+  max: "Max",
+};
+
+function formatAnalystRecommendation(rec?: string | null): {
+  label: string;
+  tone: "buy" | "hold" | "sell" | "neutral";
+} {
+  if (!rec || rec === "NONE" || rec === "N/A" || rec.trim() === "") {
+    return { label: "Non disponible", tone: "neutral" };
+  }
+  const upper = rec.toUpperCase();
+  if (upper.includes("STRONG_BUY")) return { label: "Achat Fort", tone: "buy" };
+  if (upper.includes("BUY")) return { label: "Achat", tone: "buy" };
+  if (upper.includes("HOLD")) return { label: "Conserver", tone: "hold" };
+  if (upper.includes("UNDERPERFORM")) return { label: "Sous-pondérer", tone: "sell" };
+  if (upper.includes("SELL")) return { label: "Vente", tone: "sell" };
+  return { label: upper, tone: "neutral" };
+}
+
 export function FinanceModal({
   isOpen,
   onClose,
@@ -62,7 +93,9 @@ export function FinanceModal({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<ActiveTab>("valuation");
-  const [timeframe, setTimeframe] = useState<"1S" | "2S" | "1M" | "ALL">("1M");
+  const [timeframe, setTimeframe] = useState<FinanceRange>("1m");
+  const [rangeLoading, setRangeLoading] = useState(false);
+  const [chartView, setChartView] = useState<"line" | "advanced">("line");
   const [hoveredBarIndex, setHoveredBarIndex] = useState<number | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -104,7 +137,7 @@ export function FinanceModal({
     setLoading(true);
     setError(null);
     try {
-      const res = await fetchFinanceDetails(q);
+      const res = await fetchFinanceDetails(q, timeframe);
       setData(res);
     } catch (err: any) {
       setError(err?.message || "Impossible de charger les données financières pour cette action.");
@@ -123,12 +156,26 @@ export function FinanceModal({
   // Filter bars according to selected timeframe
   const filteredBars = useMemo(() => {
     if (!data?.eod_bars || data.eod_bars.length === 0) return [];
-    const all = data.eod_bars;
-    if (timeframe === "1S") return all.slice(-5);
-    if (timeframe === "2S") return all.slice(-10);
-    if (timeframe === "1M") return all.slice(-22);
-    return all;
-  }, [data?.eod_bars, timeframe]);
+    return data.eod_bars;
+  }, [data?.eod_bars]);
+
+  // Recharge uniquement la courbe quand la durée d'affichage change
+  async function changeTimeframe(tf: FinanceRange) {
+    if (tf === timeframe || !data) return;
+    const previous = timeframe;
+    setTimeframe(tf);
+    setHoveredBarIndex(null);
+    setRangeLoading(true);
+    try {
+      const res = await fetchFinanceDetails(data.yahoo_symbol || data.symbol, tf);
+      setData(prev => (prev ? { ...prev, eod_bars: res.eod_bars } : res));
+    } catch (err: any) {
+      setTimeframe(previous);
+      setError(err?.message || "Impossible de charger cette durée d'affichage.");
+    } finally {
+      setRangeLoading(false);
+    }
+  }
 
   // Timeframe stats calculation
   const timeframeStats = useMemo(() => {
@@ -296,6 +343,38 @@ export function FinanceModal({
               {/* Live Quote Hero Banner */}
               <div className="finance-hero-banner">
                 <div className="finance-hero-left">
+                  {/* Nom de l'action affichée + tickers */}
+                  <div className="finance-hero-identity">
+                    <div className="finance-hero-title-row">
+                      <h3 className="finance-hero-company-name">
+                        {data.long_name || data.short_name || data.symbol}
+                      </h3>
+                      <div className="finance-hero-tags">
+                        <span className="finance-symbol-tag" title="Symbole boursier principal">
+                          {data.symbol}
+                        </span>
+                        {data.yahoo_symbol && data.yahoo_symbol !== data.symbol && (
+                          <span className="finance-symbol-tag is-alt" title="Ticker Yahoo Finance">
+                            Yahoo: {data.yahoo_symbol}
+                          </span>
+                        )}
+                        {data.exchange && (
+                          <span className="finance-exchange-tag" title="Place boursière">
+                            {data.exchange}
+                          </span>
+                        )}
+                        {data.isin && (
+                          <span className="finance-isin-tag" title="Code ISIN">
+                            ISIN: {data.isin}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    {data.short_name && data.long_name && data.short_name !== data.long_name && (
+                      <p className="finance-hero-company-sub">{data.short_name}</p>
+                    )}
+                  </div>
+
                   <div className="finance-price-row">
                     <span className="finance-hero-price">
                       {data.price != null ? data.price.toFixed(2) : "N/A"}{" "}
@@ -348,31 +427,48 @@ export function FinanceModal({
                 </div>
 
                 <div className="finance-hero-right">
-                  <div className="finance-analyst-badge-hero">
-                    <span className="finance-analyst-hero-label">Consensus Analystes</span>
-                    <strong className="finance-analyst-hero-rec">
-                      {data.financial_stats.analysts.recommendation || "N/A"}
-                    </strong>
-                    {data.financial_stats.analysts.target_mean && (
-                      <span className="finance-analyst-hero-target">
-                        Obj. : {data.financial_stats.analysts.target_mean} {data.currency}
-                        {data.financial_stats.analysts.upside_potential_pct != null && (
-                          <small
-                            className={
-                              data.financial_stats.analysts.upside_potential_pct >= 0
-                                ? "text-emerald"
-                                : "text-rose"
-                            }
-                          >
-                            {" "}
-                            (
-                            {data.financial_stats.analysts.upside_potential_pct >= 0 ? "+" : ""}
-                            {data.financial_stats.analysts.upside_potential_pct.toFixed(1)}%)
-                          </small>
-                        )}
-                      </span>
-                    )}
-                  </div>
+                  {(() => {
+                    const recInfo = formatAnalystRecommendation(data.financial_stats.analysts.recommendation);
+                    const rawTarget = data.financial_stats.analysts.target_mean;
+                    const hasValidTarget = rawTarget && rawTarget !== "N/A" && rawTarget.trim() !== "";
+                    const hasOpinions = !!data.financial_stats.analysts.opinions_count;
+                    return (
+                      <div className="finance-analyst-badge-hero">
+                        <div className="finance-analyst-hero-header">
+                          <span className="finance-analyst-hero-label">Consensus Analystes</span>
+                          {hasOpinions && (
+                            <span className="finance-analyst-hero-count">
+                              ({data.financial_stats.analysts.opinions_count} avis)
+                            </span>
+                          )}
+                        </div>
+                        <div className="finance-analyst-hero-body">
+                          <span className={`finance-rec-pill tone-${recInfo.tone}`}>
+                            {recInfo.label}
+                          </span>
+                          {hasValidTarget ? (
+                            <div className="finance-analyst-hero-target-wrap">
+                              <span className="finance-analyst-hero-target">
+                                Obj. moyen : <strong>{data.financial_stats.analysts.target_mean} {data.currency}</strong>
+                              </span>
+                              {data.financial_stats.analysts.upside_potential_pct != null && (
+                                <span
+                                  className={`finance-upside-chip ${
+                                    data.financial_stats.analysts.upside_potential_pct >= 0 ? "is-up" : "is-down"
+                                  }`}
+                                >
+                                  {data.financial_stats.analysts.upside_potential_pct >= 0 ? "+" : ""}
+                                  {data.financial_stats.analysts.upside_potential_pct.toFixed(1)}%
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="finance-analyst-hero-no-target">Objectif non renseigné</span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
 
@@ -386,7 +482,7 @@ export function FinanceModal({
                     <div>
                       <strong>Courbe du cours (EOD Historical Data)</strong>
                       <small>
-                        {filteredBars.length} séances journalières ·{" "}
+                        {filteredBars.length} points · {TIMEFRAME_LABELS[timeframe]} ·{" "}
                         {timeframeStats ? (
                           <span className={timeframeStats.isPositive ? "text-emerald" : "text-rose"}>
                             {timeframeStats.diff >= 0 ? "+" : ""}
@@ -402,30 +498,42 @@ export function FinanceModal({
                   </div>
 
                   <div className="finance-timeframe-selector">
-                    {(["1S", "2S", "1M", "ALL"] as const).map(tf => (
+                    {(Object.keys(TIMEFRAME_LABELS) as FinanceRange[]).map(tf => (
                       <button
                         key={tf}
                         type="button"
+                        disabled={rangeLoading}
                         className={`finance-tf-btn ${timeframe === tf ? "active" : ""}`}
-                        onClick={() => {
-                          setTimeframe(tf);
-                          setHoveredBarIndex(null);
-                        }}
+                        onClick={() => void changeTimeframe(tf)}
                       >
-                        {tf === "1S"
-                          ? "1 Sem."
-                          : tf === "2S"
-                          ? "2 Sem."
-                          : tf === "1M"
-                          ? "1 Mois"
-                          : "Max"}
+                        {TIMEFRAME_LABELS[tf]}
                       </button>
                     ))}
                   </div>
                 </div>
 
+                <div className="finance-timeframe-selector finance-chart-view-toggle">
+                  {(["line", "advanced"] as const).map(v => (
+                    <button
+                      key={v}
+                      type="button"
+                      className={`finance-tf-btn ${chartView === v ? "active" : ""}`}
+                      onClick={() => setChartView(v)}
+                    >
+                      {v === "line" ? "Courbe" : "Analyse technique"}
+                    </button>
+                  ))}
+                </div>
+
+                {chartView === "advanced" && (
+                  <FinanceTvChart
+                    bars={filteredBars}
+                    dark={typeof document !== "undefined" && document.documentElement.dataset.theme === "dark"}
+                  />
+                )}
+
                 {/* SVG Price Chart */}
-                <div className="finance-svg-chart-container">
+                <div className="finance-svg-chart-container" hidden={chartView === "advanced"}>
                   {filteredBars.length >= 2 ? (
                     <InteractivePriceChart
                       bars={filteredBars}
@@ -714,8 +822,9 @@ export function FinanceModal({
                         </tbody>
                       </table>
                     </div>
+                  <FinanceStatements symbol={data.yahoo_symbol || data.symbol} currency={data.currency} />
                   </div>
-                )}
+                  )}
 
                 {/* Tab 4: Consensus Analystes */}
                 {activeTab === "analysts" && (
@@ -724,7 +833,14 @@ export function FinanceModal({
                       <div className="finance-analyst-card-highlight">
                         <span className="card-kpi-label">Recommandation du Marché</span>
                         <div className="card-kpi-badge-row">
-                          <span className="recommendation-badge">{data.financial_stats.analysts.recommendation || "N/A"}</span>
+                          {(() => {
+                            const recInfo = formatAnalystRecommendation(data.financial_stats.analysts.recommendation);
+                            return (
+                              <span className={`recommendation-badge tone-${recInfo.tone}`}>
+                                {recInfo.label}
+                              </span>
+                            );
+                          })()}
                           {data.financial_stats.analysts.opinions_count && (
                             <small className="analysts-count-tag">{data.financial_stats.analysts.opinions_count} analystes suivis</small>
                           )}
@@ -784,7 +900,7 @@ export function FinanceModal({
                               <td colSpan={7} className="text-center">Aucun historique disponible</td>
                             </tr>
                           ) : (
-                            [...data.eod_bars].reverse().map((bar, idx, arr) => {
+                            data.eod_bars.slice(-60).reverse().map((bar, idx, arr) => {
                               const prevClose = idx + 1 < arr.length ? arr[idx + 1].close : null;
                               const diff = bar.close != null && prevClose != null ? bar.close - prevClose : null;
                               const diffPct = diff != null && prevClose ? (diff / prevClose) * 100 : null;

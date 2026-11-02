@@ -11,25 +11,34 @@ import {
   Clock,
   Compass,
   Copy,
+  Download,
   ExternalLink,
   FileText,
+  Film,
   Globe2,
+  Image as ImageIcon,
+  Layers,
   LayoutGrid,
   LoaderCircle,
+  Maximize2,
   Newspaper,
   Palette,
   Pencil,
+  Play,
   Plus,
   RefreshCw,
   Search,
   Sparkles,
   Trash2,
+  Video,
   X,
 } from "lucide-react";
+import { VISUAL_STYLES_LIST } from "./web-page-modal";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeKatex from "rehype-katex";
 import {
+  api,
   createBlog,
   deleteBlog,
   deleteBlogPost,
@@ -37,9 +46,15 @@ import {
   fetchBlog,
   fetchBlogs,
   refreshBlog,
+  searchBlogImages,
+  searchBlogVideos,
   updateBlog,
+  updateBlogPostCards,
   type Blog,
+  type BlogCard,
   type BlogPost,
+  type SearxngImageResult,
+  type SearxngVideoResult,
   type Source,
 } from "@/lib/api";
 
@@ -48,31 +63,115 @@ type BlogModalProps = {
   initialPrompt?: string;
 };
 
+export type BlogCategoryDef = {
+  id: string;
+  label: string;
+  emoji: string;
+  tag: string;
+  description: string;
+};
+
+export const BLOG_CATEGORIES: BlogCategoryDef[] = [
+  {
+    id: "news",
+    label: "Actualités & Veille",
+    emoji: "📰",
+    tag: "Actualité",
+    description: "Dernières actualités, annonces récentes et veille internationale",
+  },
+  {
+    id: "facts",
+    label: "Faits & Culture G",
+    emoji: "🧠",
+    tag: "💡 Le saviez-vous ?",
+    description: "Anecdotes insolites, curiosités scientifiques et savoirs vérifiés",
+  },
+  {
+    id: "images",
+    label: "Galerie & Visuels",
+    emoji: "🖼️",
+    tag: "🖼️ Galerie visuelle",
+    description: "Images documentées et photographies avec explications détaillées",
+  },
+  {
+    id: "videos",
+    label: "Vidéos documentaires",
+    emoji: "🎬",
+    tag: "🎬 Vidéo",
+    description: "Vidéos, reportages et tutoriels avec lecteur intégré et lien direct",
+  },
+  {
+    id: "tips",
+    label: "Astuces & Guides",
+    emoji: "⚡",
+    tag: "⚡ Astuce pratique",
+    description: "Conseils pratiques, fiches réflexes, étapes et méthodes actionnables",
+  },
+  {
+    id: "stats",
+    label: "Chiffres & Records",
+    emoji: "📊",
+    tag: "📊 Chiffre clé",
+    description: "Statistiques marquantes, pourcentages clés et données percutantes",
+  },
+  {
+    id: "quotes",
+    label: "Citations & Pensées",
+    emoji: "💬",
+    tag: "💬 Citation marquante",
+    description: "Grandes citations inspirantes avec leur contexte historique",
+  },
+  {
+    id: "concepts",
+    label: "Décryptage de notions",
+    emoji: "🔬",
+    tag: "🔬 Décryptage",
+    description: "Vulgarisation didactique et analogies simples de concepts clés",
+  },
+];
+
 const SUGGESTIONS = [
   {
     topic: "Les dernières actualités et avancées en intelligence artificielle",
     label: "Actualités IA & LLM",
     icon: "🤖",
+    categories: ["news", "tips", "stats"],
   },
   {
-    topic: "Cybersécurité, failles critiques et attaques récentes",
+    topic: "Curiosités du monde, science insolite et faits historiques méconnus",
+    label: "Faits & Culture Générale",
+    icon: "🧠",
+    categories: ["facts", "concepts", "stats"],
+  },
+  {
+    topic: "Exploration spatiale, télescopes, nébuleuses et découvertes astronomiques",
+    label: "Merveilles de l'Espace",
+    icon: "🚀",
+    categories: ["images", "facts", "news"],
+  },
+  {
+    topic: "Cybersécurité, failles critiques et bonnes pratiques de protection",
     label: "Cybersécurité & Failles",
     icon: "🛡️",
+    categories: ["news", "tips", "concepts"],
   },
   {
-    topic: "Innovations en énergie propre, climat et fusion nucléaire",
+    topic: "Innovations en énergie propre, climat et transition écologique",
     label: "Énergie & Climat",
     icon: "⚡",
+    categories: ["news", "stats", "facts"],
   },
   {
     topic: "Actualités open-source, langages et développement logiciel",
     label: "Open Source & Dév",
     icon: "💻",
+    categories: ["news", "tips", "quotes"],
   },
   {
-    topic: "Exploration spatiale, missions de la NASA et découvertes astronomie",
-    label: "Espace & Astronomie",
-    icon: "🚀",
+    topic: "Grands documentaires scientifiques, reportages d'investigation et cours vidéo",
+    label: "Documentaires & Vidéos",
+    icon: "🎬",
+    categories: ["videos", "concepts", "facts"],
   },
 ];
 
@@ -107,9 +206,13 @@ function formatMarkdownFromPost(post: BlogPost): string {
   if (post.cards && post.cards.length > 0) {
     const lines = [`# ${post.title}\n`, `> ${post.summary}\n`];
     for (const c of post.cards) {
+      const catMeta = BLOG_CATEGORIES.find(cat => cat.id === c.category);
+      const catLabel = catMeta ? `${catMeta.emoji} ${catMeta.label}` : c.category || "Actualité";
+      const imgLine = c.image_url ? `\n![${c.title}](${c.image_url})\n` : "";
+      const videoLine = c.video_url ? `\n[🎬 Voir la vidéo en ligne](${c.video_url})\n` : "";
       lines.push(
         `### [${c.title}](${c.url})\n` +
-        `*Source : ${c.source_name} | Thématique : ${c.tag}*\n\n` +
+        `*Source : ${c.source_name} | Type : ${catLabel} | Thématique : ${c.tag}*${imgLine}${videoLine}\n\n` +
         `${c.text}\n`
       );
     }
@@ -174,6 +277,17 @@ export function BlogModal({ onClose, initialPrompt = "" }: BlogModalProps) {
   const [createTitle, setCreateTitle] = useState("");
   const [createAutoRefresh, setCreateAutoRefresh] = useState(false);
   const [createTheme, setCreateTheme] = useState("sunset");
+  const [createCategories, setCreateCategories] = useState<string[]>(["news", "facts"]);
+
+  // Category filter state for reader
+  const [categoryFilter, setCategoryFilter] = useState<string>("all");
+
+  // Edit categories inline
+  const [editingCategories, setEditingCategories] = useState(false);
+  const [categoriesDraft, setCategoriesDraft] = useState<string[]>([]);
+
+  // Style visuel (mêmes styles que les pages web), mémorisé par blog dans le navigateur
+  const [visualStyle, setVisualStyle] = useState("");
 
   // Theme selection state for viewer
   const [isThemePickerOpen, setIsThemePickerOpen] = useState(false);
@@ -195,8 +309,193 @@ export function BlogModal({ onClose, initialPrompt = "" }: BlogModalProps) {
   const [viewMode, setViewMode] = useState<"cards" | "text">("cards");
   const [copiedCardIdx, setCopiedCardIdx] = useState<number | null>(null);
 
+  // Lightbox modal state for viewing images in full screen
+  const [lightboxCard, setLightboxCard] = useState<BlogCard | null>(null);
+
+  // Active playing video inline index
+  const [activePlayingVideoIdx, setActivePlayingVideoIdx] = useState<number | null>(null);
+
+  // Fullscreen video player modal
+  const [videoModalCard, setVideoModalCard] = useState<BlogCard | null>(null);
+
+  // SearXNG web image search modal state
+  const [searxngModal, setSearxngModal] = useState<{
+    cardIdx: number;
+    query: string;
+    results: SearxngImageResult[];
+    loading: boolean;
+  } | null>(null);
+
+  // SearXNG web video search modal state
+  const [searxngVideoModal, setSearxngVideoModal] = useState<{
+    cardIdx: number;
+    query: string;
+    results: SearxngVideoResult[];
+    loading: boolean;
+  } | null>(null);
+
   // Deletion confirmation modal
   const [blogToDelete, setBlogToDelete] = useState<Blog | null>(null);
+
+  async function handleOpenSearxngImageSearch(card: BlogCard, cardIdx: number) {
+    const q = card.title.replace(/[^\w\sà-üÀ-Ü-]/g, " ").trim().slice(0, 80) || activeBlog?.prompt || "";
+    setSearxngModal({
+      cardIdx,
+      query: q,
+      results: [],
+      loading: true,
+    });
+    try {
+      const items = await searchBlogImages(q);
+      setSearxngModal(curr => (curr && curr.cardIdx === cardIdx ? { ...curr, results: items, loading: false } : curr));
+    } catch (err) {
+      setError(errorMessage(err));
+      setSearxngModal(curr => (curr && curr.cardIdx === cardIdx ? { ...curr, loading: false } : curr));
+    }
+  }
+
+  async function handleExecuteSearxngImageSearch(newQuery: string) {
+    if (!searxngModal || !newQuery.trim()) return;
+    setSearxngModal(curr => (curr ? { ...curr, query: newQuery, loading: true } : null));
+    try {
+      const items = await searchBlogImages(newQuery.trim());
+      setSearxngModal(curr => (curr ? { ...curr, results: items, loading: false } : null));
+    } catch (err) {
+      setError(errorMessage(err));
+      setSearxngModal(curr => (curr ? { ...curr, loading: false } : null));
+    }
+  }
+
+  async function handleSelectSearxngImage(img: SearxngImageResult) {
+    if (!searxngModal || !activePost || !activeBlog) return;
+    const { cardIdx } = searxngModal;
+    const imgUrl = img.img_src || img.thumbnail_src;
+    if (!imgUrl) return;
+
+    const updatedCards = (activePost.cards || []).map((c, i) =>
+      i === cardIdx
+        ? {
+            ...c,
+            image_url: imgUrl,
+            category: c.category || "images",
+            source_name: img.source || c.source_name,
+            url: img.url && img.url !== "#" ? img.url : c.url,
+          }
+        : c
+    );
+
+    const updatedPost = { ...activePost, cards: updatedCards };
+    const updatedPosts = activeBlog.posts?.map(p => (p.id === activePost.id ? updatedPost : p));
+    setActiveBlog({ ...activeBlog, posts: updatedPosts });
+    setSearxngModal(null);
+    showToast("Image web SearXNG associée à l'article !");
+
+    try {
+      await updateBlogPostCards(activeBlog.id, activePost.id, updatedCards);
+    } catch (err) {
+      console.warn("Could not persist updated card image:", err);
+    }
+  }
+
+  async function handleOpenSearxngVideoSearch(card: BlogCard, cardIdx: number) {
+    const q = card.title.replace(/[^\w\sà-üÀ-Ü-]/g, " ").trim().slice(0, 80) || activeBlog?.prompt || "";
+    setSearxngVideoModal({
+      cardIdx,
+      query: q,
+      results: [],
+      loading: true,
+    });
+    try {
+      const items = await searchBlogVideos(q);
+      setSearxngVideoModal(curr => (curr && curr.cardIdx === cardIdx ? { ...curr, results: items, loading: false } : curr));
+    } catch (err) {
+      setError(errorMessage(err));
+      setSearxngVideoModal(curr => (curr && curr.cardIdx === cardIdx ? { ...curr, loading: false } : curr));
+    }
+  }
+
+  async function handleExecuteSearxngVideoSearch(newQuery: string) {
+    if (!searxngVideoModal || !newQuery.trim()) return;
+    setSearxngVideoModal(curr => (curr ? { ...curr, query: newQuery, loading: true } : null));
+    try {
+      const items = await searchBlogVideos(newQuery.trim());
+      setSearxngVideoModal(curr => (curr ? { ...curr, results: items, loading: false } : null));
+    } catch (err) {
+      setError(errorMessage(err));
+      setSearxngVideoModal(curr => (curr ? { ...curr, loading: false } : null));
+    }
+  }
+
+  async function handleSelectSearxngVideo(vid: SearxngVideoResult) {
+    if (!searxngVideoModal || !activePost || !activeBlog) return;
+    const { cardIdx } = searxngVideoModal;
+    const vidUrl = vid.video_url || vid.url;
+    if (!vidUrl) return;
+
+    const updatedCards = (activePost.cards || []).map((c, i) =>
+      i === cardIdx
+        ? {
+            ...c,
+            title: vid.title || c.title,
+            category: "videos",
+            video_url: vidUrl,
+            video_embed_url: vid.video_embed_url || vidUrl,
+            image_url: vid.image_url || vid.thumbnail_url || c.image_url,
+            source_name: vid.source || c.source_name || "YouTube",
+            tag: "🎬 Vidéo",
+            url: vidUrl,
+          }
+        : c
+    );
+
+    const updatedPost = { ...activePost, cards: updatedCards };
+    const updatedPosts = activeBlog.posts?.map(p => (p.id === activePost.id ? updatedPost : p));
+    setActiveBlog({ ...activeBlog, posts: updatedPosts });
+    setSearxngVideoModal(null);
+    showToast("Vidéo web SearXNG associée à l'article !");
+
+    try {
+      await updateBlogPostCards(activeBlog.id, activePost.id, updatedCards);
+    } catch (err) {
+      console.warn("Could not persist updated card video:", err);
+    }
+  }
+
+  function toggleCreateCategory(catId: string) {
+    setCreateCategories(current => {
+      if (current.includes(catId)) {
+        if (current.length === 1) return current;
+        return current.filter(id => id !== catId);
+      }
+      return [...current, catId];
+    });
+  }
+
+  function toggleDraftCategory(catId: string) {
+    setCategoriesDraft(current => {
+      if (current.includes(catId)) {
+        if (current.length === 1) return current;
+        return current.filter(id => id !== catId);
+      }
+      return [...current, catId];
+    });
+  }
+
+  async function handleSaveCategories() {
+    if (!activeBlog || busy || categoriesDraft.length === 0) return;
+    setBusy("update");
+    try {
+      const updated = await updateBlog(activeBlog.id, { categories: categoriesDraft });
+      setActiveBlog(updated);
+      setBlogs(current => current.map(b => (b.id === activeBlog.id ? updated : b)));
+      setEditingCategories(false);
+      showToast("Catégories du blog mises à jour avec succès !");
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy("");
+    }
+  }
 
   function handleCopyCard(text: string, idx: number) {
     navigator.clipboard.writeText(text).then(() => {
@@ -228,6 +527,28 @@ export function BlogModal({ onClose, initialPrompt = "" }: BlogModalProps) {
       });
     return () => controller.abort();
   }, [initialPrompt]);
+
+  // Restore the saved visual style for the selected blog
+  useEffect(() => {
+    if (!selectedBlogId) return;
+    try {
+      const saved = window.localStorage.getItem(`blog-vstyle:${selectedBlogId}`) ?? "";
+      setVisualStyle(VISUAL_STYLES_LIST.some(s => s.id === saved) ? saved : "");
+    } catch {
+      setVisualStyle("");
+    }
+  }, [selectedBlogId]);
+
+  function changeVisualStyle(value: string) {
+    setVisualStyle(value);
+    if (!selectedBlogId) return;
+    try {
+      if (value) window.localStorage.setItem(`blog-vstyle:${selectedBlogId}`, value);
+      else window.localStorage.removeItem(`blog-vstyle:${selectedBlogId}`);
+    } catch {
+      /* stockage indisponible : le style reste valable pour la session */
+    }
+  }
 
   // Load selected blog details & check auto-refresh
   useEffect(() => {
@@ -296,11 +617,22 @@ export function BlogModal({ onClose, initialPrompt = "" }: BlogModalProps) {
     setTimeout(() => setToast(null), 4500);
   }
 
+  // Reset category filter when blog or post changes
+  useEffect(() => {
+    setCategoryFilter("all");
+    setEditingCategories(false);
+    setActivePlayingVideoIdx(null);
+  }, [selectedBlogId, selectedPostId]);
+
   // Handle create blog
   async function handleCreate(e: FormEvent) {
     e.preventDefault();
     const prompt = createPrompt.trim();
     if (!prompt || busy) return;
+    if (createCategories.length === 0) {
+      setError("Veuillez sélectionner au moins une catégorie de contenu pour votre blog.");
+      return;
+    }
     setBusy("create");
     setError("");
 
@@ -310,6 +642,7 @@ export function BlogModal({ onClose, initialPrompt = "" }: BlogModalProps) {
         title: createTitle.trim() || undefined,
         auto_refresh: createAutoRefresh,
         theme: createTheme,
+        categories: createCategories,
       });
 
       lastAutoRefreshRef.current[created.id] = Date.now();
@@ -322,6 +655,7 @@ export function BlogModal({ onClose, initialPrompt = "" }: BlogModalProps) {
       setIsCreating(false);
       setCreatePrompt("");
       setCreateTitle("");
+      setCreateCategories(["news", "facts"]);
       showToast("Blog créé et première édition rédigée avec succès !");
     } catch (err) {
       setError(errorMessage(err));
@@ -454,6 +788,15 @@ export function BlogModal({ onClose, initialPrompt = "" }: BlogModalProps) {
   const activePost: BlogPost | null =
     activeBlog?.posts?.find(p => p.id === selectedPostId) ??
     (activeBlog?.posts && activeBlog.posts.length > 0 ? activeBlog.posts[0] : null);
+
+  const categoriesPresent = Array.from(
+    new Set((activePost?.cards || []).map(c => c.category || "news"))
+  );
+
+  const visibleCards = (activePost?.cards || []).filter(c => {
+    if (categoryFilter === "all") return true;
+    return (c.category || "news") === categoryFilter;
+  });
 
   return (
     <div
@@ -644,12 +987,92 @@ export function BlogModal({ onClose, initialPrompt = "" }: BlogModalProps) {
                           onClick={() => {
                             setCreatePrompt(s.topic);
                             if (!createTitle) setCreateTitle(s.label);
+                            if (s.categories) setCreateCategories(s.categories);
                           }}
                         >
                           <span>{s.icon}</span>
                           <span>{s.label}</span>
                         </button>
                       ))}
+                    </div>
+                  </div>
+
+                  <div className="blog-form-group">
+                    <div className="blog-categories-header-row">
+                      <label>
+                        <Layers size={13} style={{ display: "inline", verticalAlign: "middle", marginRight: 5 }} />
+                        Types de contenus & rubriques ({createCategories.length} sélectionnée{createCategories.length > 1 ? "s" : ""})
+                      </label>
+                      <div className="blog-categories-quick-actions">
+                        <button
+                          type="button"
+                          className="blog-quick-cat-btn"
+                          disabled={busy === "create"}
+                          onClick={() => setCreateCategories(BLOG_CATEGORIES.map(c => c.id))}
+                        >
+                          ✨ Tout cocher (Mixte)
+                        </button>
+                        <button
+                          type="button"
+                          className="blog-quick-cat-btn"
+                          disabled={busy === "create"}
+                          onClick={() => setCreateCategories(["news"])}
+                        >
+                          📰 News
+                        </button>
+                        <button
+                          type="button"
+                          className="blog-quick-cat-btn"
+                          disabled={busy === "create"}
+                          onClick={() => setCreateCategories(["facts"])}
+                        >
+                          🧠 Faits
+                        </button>
+                        <button
+                          type="button"
+                          className="blog-quick-cat-btn"
+                          disabled={busy === "create"}
+                          onClick={() => setCreateCategories(["images"])}
+                        >
+                          🖼️ Images
+                        </button>
+                        <button
+                          type="button"
+                          className="blog-quick-cat-btn"
+                          disabled={busy === "create"}
+                          onClick={() => setCreateCategories(["videos", "news"])}
+                        >
+                          🎬 Vidéos
+                        </button>
+                      </div>
+                    </div>
+                    <p className="blog-categories-hint">
+                      Cochez les catégories souhaitées. L&apos;IA composera un magazine varié mixant ces différents types d&apos;encarts.
+                    </p>
+                    <div className="blog-create-categories-grid">
+                      {BLOG_CATEGORIES.map(cat => {
+                        const isChecked = createCategories.includes(cat.id);
+                        return (
+                          <button
+                            key={cat.id}
+                            type="button"
+                            className={`blog-category-checkbox-card ${isChecked ? "is-checked" : ""}`}
+                            disabled={busy === "create"}
+                            onClick={() => toggleCreateCategory(cat.id)}
+                          >
+                            <span className="blog-category-check-indicator">
+                              {isChecked && <Check size={12} strokeWidth={3} />}
+                            </span>
+                            <div className="blog-category-card-body">
+                              <span className="blog-category-card-title">
+                                <span>{cat.emoji}</span>
+                                <span>{cat.label}</span>
+                              </span>
+                              <span className="blog-category-card-desc">{cat.description}</span>
+                            </div>
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
 
@@ -762,7 +1185,10 @@ export function BlogModal({ onClose, initialPrompt = "" }: BlogModalProps) {
               </div>
             ) : activeBlog ? (
               /* --- BLOG VIEWER --- */
-              <div className={`blog-reader-view blog-theme-${getBlogTheme(activeBlog.theme).id}`}>
+              <div
+                className={`blog-reader-view blog-theme-${getBlogTheme(activeBlog.theme).id}`}
+                data-vstyle={visualStyle || undefined}
+              >
                 {/* Blog Header & Controls */}
                 <header className="blog-reader-header">
                   <div className="blog-reader-title-area">
@@ -818,6 +1244,80 @@ export function BlogModal({ onClose, initialPrompt = "" }: BlogModalProps) {
                         <span>Dernière mise à jour : {relativeTime(activeBlog.updated_at)}</span>
                       </span>
                     </div>
+
+                    <div className="blog-categories-pills-row">
+                      {(activeBlog.categories || ["news"]).map(cid => {
+                        const meta = BLOG_CATEGORIES.find(c => c.id === cid);
+                        return (
+                          <span key={cid} className="blog-active-cat-badge">
+                            <span>{meta?.emoji || "📌"}</span>
+                            <span>{meta?.label || cid}</span>
+                          </span>
+                        );
+                      })}
+                      <button
+                        type="button"
+                        className="blog-edit-cats-btn"
+                        title="Modifier les catégories pour les prochaines éditions"
+                        onClick={() => {
+                          setCategoriesDraft(activeBlog.categories || ["news"]);
+                          setEditingCategories(open => !open);
+                        }}
+                      >
+                        <Pencil size={11} />
+                        <span>Rubriques</span>
+                      </button>
+                    </div>
+
+                    {editingCategories && (
+                      <div className="blog-edit-categories-box">
+                        <div className="blog-edit-categories-header">
+                          <span>Catégories actives pour les prochaines éditions :</span>
+                          <button
+                            type="button"
+                            className="icon-button-subtle"
+                            onClick={() => setEditingCategories(false)}
+                            aria-label="Fermer"
+                          >
+                            <X size={13} />
+                          </button>
+                        </div>
+                        <div className="blog-edit-categories-chips">
+                          {BLOG_CATEGORIES.map(cat => {
+                            const isSelected = categoriesDraft.includes(cat.id);
+                            return (
+                              <button
+                                key={cat.id}
+                                type="button"
+                                className={`blog-category-chip-btn ${isSelected ? "is-selected" : ""}`}
+                                onClick={() => toggleDraftCategory(cat.id)}
+                              >
+                                <span>{cat.emoji}</span>
+                                <span>{cat.label}</span>
+                                {isSelected && <Check size={11} strokeWidth={3} />}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <div className="blog-edit-categories-actions">
+                          <button
+                            type="button"
+                            className="primary-button small-btn"
+                            disabled={busy === "update" || categoriesDraft.length === 0}
+                            onClick={handleSaveCategories}
+                          >
+                            {busy === "update" ? "Enregistrement…" : "Enregistrer"}
+                          </button>
+                          <button
+                            type="button"
+                            className="secondary-button small-btn"
+                            onClick={() => setEditingCategories(false)}
+                          >
+                            Annuler
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   <div className="blog-reader-actions">
@@ -885,6 +1385,21 @@ export function BlogModal({ onClose, initialPrompt = "" }: BlogModalProps) {
                         </div>
                       )}
                     </div>
+
+                    {/* Visual style (same styles as generated web pages) */}
+                    <label className="blog-vstyle-trigger" title="Style visuel (identique aux pages web)">
+                      <Sparkles size={13} />
+                      <select
+                        value={visualStyle}
+                        onChange={e => changeVisualStyle(e.target.value)}
+                        aria-label="Style visuel du blog"
+                      >
+                        <option value="">Style classique</option>
+                        {VISUAL_STYLES_LIST.map(st => (
+                          <option key={st.id} value={st.id}>{st.icon} {st.name}</option>
+                        ))}
+                      </select>
+                    </label>
 
                     {/* Manual Refresh Button */}
                     <button
@@ -1020,23 +1535,139 @@ export function BlogModal({ onClose, initialPrompt = "" }: BlogModalProps) {
                         <header className="blog-lead-banner">
                           <div className="blog-lead-badge">
                             <Globe2 size={13} />
-                            <span>Veille internationale · {activePost.cards.length} actualités mondiales traduites en français</span>
+                            <span>
+                              {categoriesPresent.length > 1
+                                ? `Magazine Mixte · ${activePost.cards.length} encarts (${categoriesPresent.map(cid => BLOG_CATEGORIES.find(c => c.id === cid)?.label || cid).join(" · ")})`
+                                : `${BLOG_CATEGORIES.find(c => c.id === categoriesPresent[0])?.label || "Veille"} · ${activePost.cards.length} encarts documentés`}
+                            </span>
                           </div>
                           <h1 className="blog-lead-title">{activePost.title}</h1>
                           {activePost.summary && <p className="blog-lead-summary">{activePost.summary}</p>}
                         </header>
 
+                        {/* Category Filter Tabs Bar if multiple categories present */}
+                        {categoriesPresent.length > 1 && (
+                          <nav className="blog-filter-tabs-bar" aria-label="Filtrer par catégorie">
+                            <button
+                              type="button"
+                              className={`blog-filter-tab ${categoryFilter === "all" ? "is-active" : ""}`}
+                              onClick={() => setCategoryFilter("all")}
+                            >
+                              <span>Tout afficher</span>
+                              <span className="blog-filter-tab-count">{activePost.cards.length}</span>
+                            </button>
+                            {categoriesPresent.map(cid => {
+                              const meta = BLOG_CATEGORIES.find(c => c.id === cid);
+                              const count = activePost.cards!.filter(c => (c.category || "news") === cid).length;
+                              return (
+                                <button
+                                  key={cid}
+                                  type="button"
+                                  className={`blog-filter-tab ${categoryFilter === cid ? "is-active" : ""}`}
+                                  onClick={() => setCategoryFilter(cid)}
+                                >
+                                  <span>{meta?.emoji || "📌"} {meta?.label || cid}</span>
+                                  <span className="blog-filter-tab-count">{count}</span>
+                                </button>
+                              );
+                            })}
+                          </nav>
+                        )}
+
                         {/* Responsive Colored Cards Grid */}
                         <div className="blog-cards-grid">
-                          {activePost.cards.map((card, idx) => {
+                          {visibleCards.map((card, idx) => {
                             const colorClass = `theme-${card.color || "blue"}`;
+                            const catMeta = BLOG_CATEGORIES.find(c => c.id === card.category);
+                            const isVideoCard = card.category === "videos" || Boolean(card.video_embed_url || card.video_url);
+                            const isPlayingInline = activePlayingVideoIdx === idx;
                             return (
-                              <article key={idx} className={`blog-card ${colorClass}`}>
+                              <article key={idx} className={`blog-card ${colorClass} ${isVideoCard ? "is-video-card" : ""}`}>
+                                {isVideoCard ? (
+                                  isPlayingInline ? (
+                                    <div className="blog-card-video-player-wrap">
+                                      <iframe
+                                        src={card.video_embed_url || card.video_url}
+                                        title={card.title}
+                                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                                        allowFullScreen
+                                        className="blog-card-video-iframe"
+                                      />
+                                      <button
+                                        type="button"
+                                        className="blog-card-video-player-close"
+                                        onClick={e => {
+                                          e.stopPropagation();
+                                          setActivePlayingVideoIdx(null);
+                                        }}
+                                        title="Fermer le lecteur vidéo"
+                                      >
+                                        <X size={13} />
+                                        <span>Fermer le lecteur</span>
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <div
+                                      className="blog-card-media-wrap is-clickable blog-card-video-thumb-wrap"
+                                      onClick={() => setActivePlayingVideoIdx(idx)}
+                                      title="Cliquer pour lancer la vidéo dans le lecteur intégré"
+                                    >
+                                      {card.image_url ? (
+                                        <img
+                                          src={card.image_url}
+                                          alt={card.title}
+                                          className="blog-card-img"
+                                          loading="lazy"
+                                        />
+                                      ) : (
+                                        <div className="blog-card-video-placeholder-bg">
+                                          <Film size={36} />
+                                        </div>
+                                      )}
+                                      <div className="blog-card-play-overlay">
+                                        <div className="blog-card-play-btn">
+                                          <Play size={22} fill="currentColor" />
+                                        </div>
+                                        <span className="blog-card-play-label">Lire la vidéo</span>
+                                      </div>
+                                    </div>
+                                  )
+                                ) : (
+                                  card.image_url && (
+                                    <div
+                                      className="blog-card-media-wrap is-clickable"
+                                      onClick={() => setLightboxCard(card)}
+                                      title="Cliquer pour afficher l'image en plein écran"
+                                    >
+                                      <img
+                                        src={card.image_url}
+                                        alt={card.title}
+                                        className="blog-card-img"
+                                        loading="lazy"
+                                        onError={e => {
+                                          (e.currentTarget.parentElement as HTMLElement)?.classList.add("hidden");
+                                        }}
+                                      />
+                                      <div className="blog-card-media-hover-overlay">
+                                        <Maximize2 size={16} />
+                                        <span>Agrandir l&apos;image</span>
+                                      </div>
+                                    </div>
+                                  )
+                                )}
                                 <div className="blog-card-top-bar">
-                                  <span className="blog-card-tag">{card.tag || "Actualité"}</span>
+                                  <div className="blog-card-badges">
+                                    {catMeta && (
+                                      <span className="blog-card-category-badge" title={`Rubrique : ${catMeta.label}`}>
+                                        <span>{catMeta.emoji}</span>
+                                        <span>{catMeta.label}</span>
+                                      </span>
+                                    )}
+                                    <span className="blog-card-tag">{card.tag || (isVideoCard ? "🎬 Vidéo" : "Actualité")}</span>
+                                  </div>
                                   <span className="blog-card-source" title={`Source média : ${card.source_name}`}>
                                     <Globe2 size={11} />
-                                    <span>{card.source_name || "Média web"}</span>
+                                    <span>{card.source_name || (isVideoCard ? "YouTube" : "Média web")}</span>
                                   </span>
                                 </div>
 
@@ -1045,22 +1676,99 @@ export function BlogModal({ onClose, initialPrompt = "" }: BlogModalProps) {
                                 <p className="blog-card-text">{card.text}</p>
 
                                 <div className="blog-card-actions">
-                                  <a
-                                    href={card.url}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="blog-card-link-btn"
-                                    title={`Consulter l'article original sur ${card.source_name}`}
-                                  >
-                                    <span>Consulter la source</span>
-                                    <ArrowUpRight size={14} />
-                                  </a>
+                                  {isVideoCard ? (
+                                    <>
+                                      <button
+                                        type="button"
+                                        className={`blog-card-action-btn blog-card-play-toggle-btn ${isPlayingInline ? "is-active" : ""}`}
+                                        onClick={() => setActivePlayingVideoIdx(isPlayingInline ? null : idx)}
+                                        title={isPlayingInline ? "Masquer le lecteur vidéo intégré" : "Lancer le lecteur vidéo intégré"}
+                                      >
+                                        <Play size={13} fill={isPlayingInline ? "none" : "currentColor"} />
+                                        <span>{isPlayingInline ? "Masquer" : "Lecteur"}</span>
+                                      </button>
+
+                                      {(card.video_url || card.url) && (
+                                        <a
+                                          href={card.video_url || card.url}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="blog-card-link-btn"
+                                          title={`Voir la vidéo sur ${card.source_name || "la plateforme"}`}
+                                        >
+                                          <span>Voir la vidéo</span>
+                                          <ArrowUpRight size={14} />
+                                        </a>
+                                      )}
+
+                                      <button
+                                        type="button"
+                                        className="blog-card-action-btn"
+                                        onClick={() => setVideoModalCard(card)}
+                                        title="Ouvrir le lecteur vidéo grand format"
+                                      >
+                                        <Maximize2 size={13} />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="blog-card-action-btn"
+                                        onClick={() => handleOpenSearxngVideoSearch(card, idx)}
+                                        title="Changer la vidéo via SearXNG"
+                                      >
+                                        <Film size={13} />
+                                      </button>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <a
+                                        href={card.url}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="blog-card-link-btn"
+                                        title={`Consulter l'article original sur ${card.source_name}`}
+                                      >
+                                        <span>Consulter la source</span>
+                                        <ArrowUpRight size={14} />
+                                      </a>
+
+                                      {card.image_url ? (
+                                        <>
+                                          <button
+                                            type="button"
+                                            className="blog-card-action-btn"
+                                            onClick={() => setLightboxCard(card)}
+                                            title="Voir l'image en plein écran"
+                                          >
+                                            <Maximize2 size={13} />
+                                          </button>
+                                          <button
+                                            type="button"
+                                            className="blog-card-action-btn"
+                                            onClick={() => handleOpenSearxngImageSearch(card, idx)}
+                                            title="Changer l'image web via SearXNG"
+                                          >
+                                            <ImageIcon size={13} />
+                                          </button>
+                                        </>
+                                      ) : (
+                                        <button
+                                          type="button"
+                                          className="blog-card-action-btn"
+                                          onClick={() => handleOpenSearxngImageSearch(card, idx)}
+                                          title="Rechercher une image web via SearXNG"
+                                        >
+                                          <ImageIcon size={13} />
+                                        </button>
+                                      )}
+                                    </>
+                                  )}
+
                                   <button
                                     type="button"
                                     className="blog-card-action-btn"
                                     onClick={() =>
                                       handleCopyCard(
-                                        `${card.title}\n\n${card.text}\n\nSource (${card.source_name}) : ${card.url}`,
+                                        `${card.title}\n\n${card.text}\n\nSource (${card.source_name}) : ${card.video_url || card.url}`,
                                         idx
                                       )
                                     }
@@ -1218,6 +1926,416 @@ export function BlogModal({ onClose, initialPrompt = "" }: BlogModalProps) {
                       <span>Oui, supprimer le blog</span>
                     </>
                   )}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Lightbox / Fullscreen Image Viewer Modal */}
+        {lightboxCard && lightboxCard.image_url && (
+          <div
+            className="blog-lightbox-backdrop"
+            onClick={e => {
+              if (e.target === e.currentTarget) setLightboxCard(null);
+            }}
+          >
+            <div className="blog-lightbox-content" role="dialog" aria-modal="true" aria-label="Agrandissement de l'image">
+              <button
+                type="button"
+                className="blog-lightbox-close"
+                onClick={() => setLightboxCard(null)}
+                aria-label="Fermer l'agrandissement"
+              >
+                <X size={20} />
+              </button>
+
+              <div className="blog-lightbox-image-wrap">
+                <img
+                  src={lightboxCard.image_url}
+                  alt={lightboxCard.title}
+                  className="blog-lightbox-img"
+                />
+              </div>
+
+              <div className="blog-lightbox-footer">
+                <div className="blog-lightbox-text">
+                  <div className="blog-lightbox-meta">
+                    <span className="blog-card-category-badge">
+                      <span>🖼️ Article Visuel</span>
+                    </span>
+                    <span className="blog-card-source">
+                      <Globe2 size={12} />
+                      <span>{lightboxCard.source_name}</span>
+                    </span>
+                  </div>
+                  <h3>{lightboxCard.title}</h3>
+                  <p>{lightboxCard.text}</p>
+                </div>
+                <div className="blog-lightbox-actions">
+                  <a
+                    href={lightboxCard.image_url}
+                    download={`${lightboxCard.title.slice(0, 30)}.jpg`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="primary-button small-btn"
+                  >
+                    <Download size={14} />
+                    <span>Télécharger l&apos;image</span>
+                  </a>
+                  {lightboxCard.url && lightboxCard.url !== "#" && (
+                    <a
+                      href={lightboxCard.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="secondary-button small-btn"
+                    >
+                      <ArrowUpRight size={14} />
+                      <span>Source originale</span>
+                    </a>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+        {/* SearXNG Web Image Search Modal */}
+        {searxngModal && (
+          <div
+            className="blog-confirm-overlay"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="searxng-modal-title"
+            onClick={e => {
+              if (e.target === e.currentTarget) setSearxngModal(null);
+            }}
+          >
+            <div className="blog-searxng-modal-card">
+              <div className="blog-searxng-modal-header">
+                <div className="blog-searxng-modal-title-group">
+                  <div className="blog-searxng-title-icon-box">
+                    <ImageIcon size={18} className="text-blue-500" />
+                  </div>
+                  <div>
+                    <h3 id="searxng-modal-title">Recherche d&apos;images web (SearXNG)</h3>
+                    <p>Sélectionnez une image trouvée sur le web pour illustrer cet article</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="blog-icon-btn"
+                  onClick={() => setSearxngModal(null)}
+                  aria-label="Fermer"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <form
+                className="blog-searxng-search-form"
+                onSubmit={e => {
+                  e.preventDefault();
+                  const form = e.currentTarget;
+                  const input = (form.elements.namedItem("searchQuery") as HTMLInputElement)?.value;
+                  if (input) handleExecuteSearxngImageSearch(input);
+                }}
+              >
+                <div className="blog-searxng-input-wrap">
+                  <Search size={15} className="blog-searxng-search-icon" />
+                  <input
+                    type="text"
+                    name="searchQuery"
+                    defaultValue={searxngModal.query}
+                    placeholder="Mots-clés de recherche d'images web..."
+                    className="blog-searxng-input"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  className="primary-button small-btn"
+                  disabled={searxngModal.loading}
+                >
+                  {searxngModal.loading ? (
+                    <>
+                      <LoaderCircle size={14} className="spin" />
+                      <span>Recherche…</span>
+                    </>
+                  ) : (
+                    <>
+                      <Search size={14} />
+                      <span>Rechercher</span>
+                    </>
+                  )}
+                </button>
+              </form>
+
+              <div className="blog-searxng-results-container">
+                {searxngModal.loading ? (
+                  <div className="blog-searxng-loading">
+                    <LoaderCircle size={30} className="spin text-blue-500" />
+                    <p>Recherche d&apos;images sur le web via SearXNG en cours…</p>
+                  </div>
+                ) : searxngModal.results.length === 0 ? (
+                  <div className="blog-searxng-empty">
+                    <ImageIcon size={32} strokeWidth={1.4} />
+                    <p>Aucune image web trouvée pour « {searxngModal.query} ».</p>
+                    <span>Essayez une formulation plus simple ou des mots-clés en anglais.</span>
+                  </div>
+                ) : (
+                  <div className="blog-searxng-grid">
+                    {searxngModal.results.map((res, rIdx) => {
+                      const displayUrl = res.thumbnail_src || res.img_src;
+                      return (
+                        <div
+                          key={rIdx}
+                          className="blog-searxng-item"
+                          onClick={() => handleSelectSearxngImage(res)}
+                          title={`${res.title || "Image web"} (cliquer pour associer)`}
+                          role="button"
+                          tabIndex={0}
+                          onKeyDown={e => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              handleSelectSearxngImage(res);
+                            }
+                          }}
+                        >
+                          <img
+                            src={displayUrl}
+                            alt={res.title || "Image web"}
+                            loading="lazy"
+                            onError={e => {
+                              (e.currentTarget.parentElement as HTMLElement)?.classList.add("hidden");
+                            }}
+                          />
+                          <div className="blog-searxng-item-info">
+                            <span className="blog-searxng-item-source">{res.source || "Source web"}</span>
+                            {res.title && <span className="blog-searxng-item-title">{res.title}</span>}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div className="blog-searxng-modal-footer">
+                <span className="blog-searxng-disclaimer">
+                  Images sourcées en direct via SearXNG (aucune IA générative).
+                </span>
+                <button
+                  type="button"
+                  className="secondary-button small-btn"
+                  onClick={() => setSearxngModal(null)}
+                >
+                  Fermer
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Lightbox / Fullscreen Video Viewer Modal */}
+        {videoModalCard && (
+          <div
+            className="blog-lightbox-backdrop"
+            onClick={e => {
+              if (e.target === e.currentTarget) setVideoModalCard(null);
+            }}
+          >
+            <div className="blog-lightbox-content blog-video-lightbox-content" role="dialog" aria-modal="true" aria-label="Lecteur vidéo grand format">
+              <button
+                type="button"
+                className="blog-lightbox-close"
+                onClick={() => setVideoModalCard(null)}
+                aria-label="Fermer le lecteur vidéo"
+              >
+                <X size={20} />
+              </button>
+
+              <div className="blog-lightbox-video-wrap">
+                <iframe
+                  src={videoModalCard.video_embed_url || videoModalCard.video_url}
+                  title={videoModalCard.title}
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                  allowFullScreen
+                  className="blog-lightbox-video-iframe"
+                />
+              </div>
+
+              <div className="blog-lightbox-footer">
+                <div className="blog-lightbox-text">
+                  <div className="blog-lightbox-meta">
+                    <span className="blog-card-category-badge">
+                      <span>🎬 Vidéo documentaire</span>
+                    </span>
+                    <span className="blog-card-source">
+                      <Globe2 size={12} />
+                      <span>{videoModalCard.source_name || "YouTube"}</span>
+                    </span>
+                  </div>
+                  <h3>{videoModalCard.title}</h3>
+                  <p>{videoModalCard.text}</p>
+                </div>
+                <div className="blog-lightbox-actions">
+                  {(videoModalCard.video_url || videoModalCard.url) && (
+                    <a
+                      href={videoModalCard.video_url || videoModalCard.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="primary-button small-btn"
+                    >
+                      <ArrowUpRight size={14} />
+                      <span>Voir sur {videoModalCard.source_name || "YouTube"}</span>
+                    </a>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* SearXNG Web Video Search Modal */}
+        {searxngVideoModal && (
+          <div
+            className="blog-confirm-overlay"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="searxng-video-modal-title"
+            onClick={e => {
+              if (e.target === e.currentTarget) setSearxngVideoModal(null);
+            }}
+          >
+            <div className="blog-confirm-modal blog-searxng-modal blog-searxng-modal-card">
+              <div className="blog-searxng-modal-header">
+                <div className="blog-searxng-modal-title-group">
+                  <div className="blog-searxng-title-icon-box" style={{ background: "rgba(239, 68, 68, 0.12)", color: "#ef4444" }}>
+                    <Film size={20} />
+                  </div>
+                  <div>
+                    <h3 id="searxng-video-modal-title">Recherche de vidéos web (SearXNG)</h3>
+                    <p>Sélectionnez une vidéo YouTube / web pour l&apos;intégrer à cet encart</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="icon-button-subtle"
+                  onClick={() => setSearxngVideoModal(null)}
+                  aria-label="Fermer"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+
+              <form
+                onSubmit={e => {
+                  e.preventDefault();
+                  const form = e.currentTarget;
+                  const input = form.elements.namedItem("searchQuery") as HTMLInputElement;
+                  if (input && input.value.trim()) {
+                    handleExecuteSearxngVideoSearch(input.value.trim());
+                  }
+                }}
+                className="blog-searxng-search-form"
+              >
+                <div className="blog-searxng-input-wrap">
+                  <Search size={15} className="blog-searxng-search-icon" />
+                  <input
+                    type="text"
+                    name="searchQuery"
+                    defaultValue={searxngVideoModal.query}
+                    placeholder="Mots-clés de recherche de vidéos…"
+                    className="blog-searxng-input"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  className="primary-button small-btn"
+                  disabled={searxngVideoModal.loading}
+                >
+                  {searxngVideoModal.loading ? (
+                    <>
+                      <LoaderCircle size={14} className="spin" />
+                      <span>Recherche…</span>
+                    </>
+                  ) : (
+                    <>
+                      <Search size={14} />
+                      <span>Rechercher</span>
+                    </>
+                  )}
+                </button>
+              </form>
+
+              <div className="blog-searxng-results-container">
+                {searxngVideoModal.loading ? (
+                  <div className="blog-searxng-loading">
+                    <LoaderCircle size={30} className="spin text-red-500" />
+                    <p>Recherche de vidéos sur le web via SearXNG en cours…</p>
+                  </div>
+                ) : searxngVideoModal.results.length === 0 ? (
+                  <div className="blog-searxng-empty">
+                    <Film size={32} strokeWidth={1.4} />
+                    <p>Aucune vidéo web trouvée pour « {searxngVideoModal.query} ».</p>
+                    <span>Essayez une formulation plus courte ou d&apos;autres mots-clés.</span>
+                  </div>
+                ) : (
+                  <div className="blog-searxng-grid">
+                    {searxngVideoModal.results.map((res, rIdx) => {
+                      const displayUrl = res.thumbnail_url || res.image_url;
+                      return (
+                        <div
+                          key={rIdx}
+                          className="blog-searxng-item blog-searxng-video-item"
+                          onClick={() => handleSelectSearxngVideo(res)}
+                          title={`${res.title || "Vidéo web"} (cliquer pour associer)`}
+                          role="button"
+                          tabIndex={0}
+                          onKeyDown={e => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              handleSelectSearxngVideo(res);
+                            }
+                          }}
+                        >
+                          {displayUrl ? (
+                            <img
+                              src={displayUrl}
+                              alt={res.title || "Vidéo web"}
+                              loading="lazy"
+                              onError={e => {
+                                (e.currentTarget.parentElement as HTMLElement)?.classList.add("hidden");
+                              }}
+                            />
+                          ) : (
+                            <div className="blog-searxng-thumb-placeholder">
+                              <Film size={26} />
+                            </div>
+                          )}
+                          <div className="blog-searxng-video-play-badge">
+                            <Play size={12} fill="currentColor" />
+                          </div>
+                          <div className="blog-searxng-item-info">
+                            <span className="blog-searxng-item-source">{res.source || "YouTube"}</span>
+                            {res.title && <span className="blog-searxng-item-title">{res.title}</span>}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div className="blog-searxng-modal-footer">
+                <span className="blog-searxng-disclaimer">
+                  Vidéos sourcées en direct via le moteur YouTube de SearXNG.
+                </span>
+                <button
+                  type="button"
+                  className="secondary-button small-btn"
+                  onClick={() => setSearxngVideoModal(null)}
+                >
+                  Fermer
                 </button>
               </div>
             </div>

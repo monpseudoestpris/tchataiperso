@@ -252,6 +252,34 @@ def test_filter_irrelevant_web_sources_removes_unrelated_outliers():
     assert "https://convergence.ac-poitiers.fr" not in urls
 
 
+def test_filter_irrelevant_web_sources_discards_junk_media_and_unrelated_sources():
+    queries = [
+        "surcotisation retraite CNRACL infirmière fonctionnaire",
+        "calcul pension retraite CNRACL temps partiel",
+    ]
+    sources = [
+        {"title": "YouTube", "url": "https://www.youtube.com/?gl=FR&hl=fr", "snippet": "Profitez des vidéos et de la musique..."},
+        {"title": "YouTube Music", "url": "https://music.youtube.com/%EF%BB%BF", "snippet": "Écoutez des millions de titres..."},
+        {"title": "YouTube App", "url": "https://play.google.com/store/apps/details?id=com.google.android.youtube", "snippet": "Application"},
+        {"title": "Calculatrice en ligne", "url": "https://www.calculatrice.fr/", "snippet": "Effectuez tous vos calculs..."},
+        {"title": "CALCULER UN POURCENTAGE", "url": "https://www.calculerpourcentage.fr/", "snippet": "Chaque outil permet d'effectuer un calcul..."},
+    ]
+    # Aucune source ne porte sur la retraite CNRACL ou la fonction publique : elles doivent toutes être éliminées
+    filtered = providers.filter_irrelevant_web_sources(sources, queries)
+    assert filtered == []
+
+
+def test_filter_irrelevant_web_sources_allows_media_when_query_requests_it():
+    queries = ["écouter musique relaxing lofi playlist"]
+    sources = [
+        {"title": "Lofi Chill Playlist", "url": "https://music.youtube.com/playlist?id=123", "snippet": "Lofi hip hop relax music playlist"},
+        {"title": "Portail Académie", "url": "https://convergence.ac-poitiers.fr", "snippet": "Bienvenue sur le portail"},
+    ]
+    filtered = providers.filter_irrelevant_web_sources(sources, queries)
+    assert len(filtered) == 1
+    assert filtered[0]["url"] == "https://music.youtube.com/playlist?id=123"
+
+
 def test_improve_skill_prompt_returns_a_suggestion_without_executing_draft(settings, transport):
     def handler(request):
         payload = json.loads(request.content)
@@ -1015,6 +1043,8 @@ def test_plan_deep_search_queries_and_followup_and_deduplication(settings, trans
     assert len(capped) == 100
     uncapped = providers.merge_web_sources([], many, query="test", max_total=None)
     assert len(uncapped) == 120
+    limited = providers.merge_web_sources([], many, query="test", limit=8)
+    assert len(limited) == 8
 
 
 def test_parse_query_list_formatting_and_quotes():

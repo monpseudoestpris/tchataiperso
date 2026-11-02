@@ -188,6 +188,7 @@ class Blog(Base):
     prompt: Mapped[str] = mapped_column(Text)
     auto_refresh: Mapped[bool] = mapped_column(Boolean, default=False)
     theme: Mapped[str] = mapped_column(String(50), default="sunset")
+    categories: Mapped[list[str]] = mapped_column(JSON, default=lambda: ["news"])
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
