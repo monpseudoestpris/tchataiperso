@@ -1,15 +1,16 @@
 import re
 import unicodedata
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
 from .. import providers
 from ..chat_export_html import generate_chat_export_html
+from ..chat_site_store import get_or_create_chat_site
 from ..presentation_html import generate_chat_presentation_html
 from ..config import Settings
 from ..deps import check_model, current_user, get_conversation, get_sessions, get_settings, get_upload_dir
-from ..models import Conversation, User, now
+from ..models import ChatSite, Conversation, User, now
 from ..schemas import (
     ClassifyConversationRequest,
     CreateConversation,
@@ -17,7 +18,7 @@ from ..schemas import (
     StudyMaterialResponse,
     UpdateConversation,
 )
-from ..serializers import conversation_json
+from ..serializers import conversation_json, stamp
 
 
 router = APIRouter(tags=["conversations"])
@@ -255,9 +256,12 @@ def delete_conversation(
 
 
 @router.get("/api/conversations/{conversation_id}/html")
-def get_conversation_html(
+async def get_conversation_html(
     conversation_id: str,
     download: bool = False,
+    pdf: bool = False,
+    print_mode: bool = Query(False, alias="print"),
+    settings: Settings = Depends(get_settings),
     user: User = Depends(current_user),
     sessions: sessionmaker = Depends(get_sessions),
 ):
@@ -282,6 +286,8 @@ def get_conversation_html(
             created_at_str=conv.created_at.strftime("%d/%m/%Y") if conv.created_at else None,
             summary=conv.summary or "",
         )
+        if not (pdf or print_mode):
+            html_doc = await get_or_create_chat_site(db, settings, conv.id, title, messages_data, "conversation")
         headers = {}
         if download:
             clean_ascii = unicodedata.normalize("NFKD", title).encode("ascii", "ignore").decode("ascii")
@@ -432,3 +438,37 @@ async def generate_study_material_direct(
 
 
 
+
+
+@router.get("/api/conversations/{conversation_id}/sites")
+def list_conversation_sites(
+    conversation_id: str,
+    user: User = Depends(current_user),
+    sessions: sessionmaker = Depends(get_sessions),
+):
+    with sessions() as db:
+        get_conversation(db, conversation_id, user.id)
+        sites = db.scalars(select(ChatSite).where(
+            ChatSite.conversation_id == conversation_id,
+        ).order_by(ChatSite.created_at.desc()))
+        return [{"id": site.id, "title": site.title, "scope": site.scope,
+                 "created_at": stamp(site.created_at),
+                 "url": f"/api/conversations/{conversation_id}/sites/{site.id}"} for site in sites]
+
+
+@router.get("/api/conversations/{conversation_id}/sites/{site_id}")
+def get_conversation_site(
+    conversation_id: str,
+    site_id: str,
+    user: User = Depends(current_user),
+    sessions: sessionmaker = Depends(get_sessions),
+):
+    with sessions() as db:
+        get_conversation(db, conversation_id, user.id)
+        site = db.scalar(select(ChatSite).where(
+            ChatSite.id == site_id, ChatSite.conversation_id == conversation_id,
+        ))
+        if site is None:
+            raise HTTPException(404, "Page introuvable")
+        return Response(site.html_content, media_type="text/html; charset=utf-8",
+                        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})

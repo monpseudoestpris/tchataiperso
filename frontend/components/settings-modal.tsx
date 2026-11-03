@@ -20,6 +20,7 @@ import {
   Zap,
 } from "lucide-react";
 import { api, errorMessage, type AgentTeamsResponse, type AuthUser, type PromptPreset, type UserSettings } from "@/lib/api";
+import { InterfaceThemePicker } from "@/components/interface-theme";
 
 type SettingsModalProps = {
   currentUser: AuthUser;
@@ -193,6 +194,7 @@ export function SettingsModal({
 
         {/* Content body */}
         <div className="settings-modal-body">
+          <InterfaceThemePicker />
           {loading ? (
             <div className="settings-loading-state">
               <LoaderCircle size={28} className="spin" />

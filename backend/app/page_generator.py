@@ -858,6 +858,7 @@ async def generate_page_html(
     include_svg: bool = True,
     theme_palette: str = "ocean",
     visual_style: str = "auto",
+    raise_on_failure: bool = False,
 ) -> tuple[str, str]:
     """
     Generates a full standalone HTML5 document from a prompt or chat transcript.
@@ -1002,6 +1003,8 @@ async def generate_page_html(
         has_llm_key = False
 
     if not has_llm_key or getattr(settings, "demo_mode", False):
+        if raise_on_failure:
+            raise ProviderError("La création de page nécessite un fournisseur IA actif.")
         resolved_title = title or (clean_prompt[:60].strip() or "Synthèse de conversation")
         return resolved_title, generate_fallback_page(
             resolved_title,
@@ -1026,24 +1029,59 @@ async def generate_page_html(
     ]
 
     try:
+        request_payload = {
+            "model": target_model,
+            "messages": messages,
+            "stream": False,
+            "temperature": temp,
+            "max_tokens": 12000,
+        }
         async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=False) as client:
-            response = await client.post(
-                settings.llm_base_url.rstrip("/") + "/chat/completions",
-                headers={"Authorization": f"Bearer {key}"},
-                json={
-                    "model": target_model,
-                    "messages": messages,
-                    "stream": False,
-                    "temperature": temp,
-                    "max_tokens": 12000,
-                },
-            )
-        _check_response(response, "Fournisseur IA")
-        payload = _json(response, "Fournisseur IA")
-        raw_content = payload["choices"][0]["message"]["content"]
-        html_code = extract_html(raw_content)
+            # Retry incomplete documents once, regenerating from the original input.
+            # Never append closing tags to a response whose content may be truncated.
+            for attempt in range(2 if raise_on_failure else 1):
+                response = await client.post(
+                    settings.llm_base_url.rstrip("/") + "/chat/completions",
+                    headers={"Authorization": f"Bearer {key}"},
+                    json=request_payload,
+                )
+                # Follow the existing presentation fallback for unsupported page models.
+                fallback_model = getattr(settings, "default_model", "")
+                if (response.status_code in (400, 404, 422)
+                        and fallback_model and fallback_model != request_payload["model"]):
+                    request_payload = {**request_payload, "model": fallback_model}
+                    response = await client.post(
+                        settings.llm_base_url.rstrip("/") + "/chat/completions",
+                        headers={"Authorization": f"Bearer {key}"},
+                        json=request_payload,
+                    )
+                _check_response(response, "Fournisseur IA")
+                payload = _json(response, "Fournisseur IA")
+                choice = payload["choices"][0]
+                html_code = extract_html(choice["message"]["content"])
+                incomplete = choice.get("finish_reason") == "length" or "</html>" not in html_code.lower()
+                if not raise_on_failure or not incomplete:
+                    break
+                if attempt == 1:
+                    raise ProviderError("La page générée reste incomplète après une seconde tentative compacte. Réessayez.")
+                compact_instruction = (
+                    "La précédente tentative était incomplète. Régénère depuis les données "
+                    "initiales un document HTML COMPLET, plus compact : 4 sections maximum, "
+                    "600 mots maximum, CSS concis et un seul SVG simple (40 éléments maximum). "
+                    "Conserve les informations essentielles, nuances et sources utiles. "
+                    "Aucune transcription des échanges, aucun script ni animation complexe. "
+                    "Vise moins de 6000 tokens pour tout le fichier et termine impérativement "
+                    "par </body></html>. Renvoie uniquement le document complet."
+                )
+                request_payload = {
+                    **request_payload,
+                    "messages": [*messages, {"role": "user", "content": compact_instruction}],
+                    "temperature": 0.2,
+                }
 
         if not html_code or "<html" not in html_code.lower():
+            if raise_on_failure:
+                raise ProviderError("Le fournisseur a renvoyé une page invalide.")
             resolved_title = title or clean_prompt[:60]
             return resolved_title, generate_fallback_page(
                 resolved_title,
@@ -1063,6 +1101,14 @@ async def generate_page_html(
         return resolved_title, html_code
 
     except Exception as exc:
+        if raise_on_failure:
+            if isinstance(exc, ProviderError):
+                raise
+            if isinstance(exc, httpx.TimeoutException):
+                raise ProviderError("La génération de la page a dépassé le délai autorisé. Réessayez.") from None
+            if isinstance(exc, httpx.HTTPError):
+                raise ProviderError("Impossible de joindre le fournisseur IA pour créer la page.") from None
+            raise ProviderError("Le fournisseur IA a renvoyé une page illisible ou invalide.") from None
         _logger.warning("Erreur lors de la génération de page HTML par IA: %s; utilisation du fallback.", exc)
         resolved_title = title or (clean_prompt[:60].strip() or "Page Web")
         return resolved_title, generate_fallback_page(

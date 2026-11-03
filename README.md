@@ -4,6 +4,55 @@ Une application de tchat en français avec **Next.js / React / Tailwind**, **Fas
 
 La première exécution utilise un **mode démo explicitement signalé**. Il produit des réponses locales déterministes pour vérifier l'interface et la persistance ; il ne contacte aucune IA. Les fournisseurs réels se configurent uniquement dans le backend.
 
+Dans **Paramètres → Apparence de l’application**, 12 thèmes sont disponibles : Clair,
+Sombre, Océan, Forêt, Lavande, Sable, Rose, Nuit bleue, Graphite, Aubergine,
+Émeraude et Cacao. Le choix s’applique immédiatement, indépendamment du bouton
+d’enregistrement des autres paramètres. Il est conservé dans ce navigateur et
+synchronisé entre ses onglets ; il ne suit pas le compte sur les autres appareils.
+Les documents générés, aperçus intégrés et styles éditoriaux des blogs gardent
+leur présentation propre. Si le stockage local est bloqué, le thème reste actif
+pendant la page courante et un message indique qu’il ne sera pas mémorisé.
+
+## Sortie du tchat en site HTML
+
+Dans **Sortie → Site HTML**, le tour sélectionné ou la discussion complète est
+transformé en page éditoriale par le générateur **clAIr Pages** : synthèse rédigée,
+sections thématiques, sommaire, cartes et illustrations SVG adaptées au sujet.
+La page contient uniquement la synthèse des informations et les sources utiles :
+aucune transcription, aucun volet d’échanges et aucune copie cachée de l’historique
+dans le fichier téléchargé.
+Les longues discussions sont condensées par étapes, sans supprimer silencieusement
+les derniers messages. La page est isolée de la session de l’application ; le
+JavaScript généré est désactivé et les appels aux API sont bloqués. Les textes,
+SVG et styles restent lisibles sans script.
+
+Chaque page réussie est enregistrée automatiquement et apparaît sous **Pages HTML
+attachées** dans la discussion, avec sa date et son périmètre (tour ou discussion).
+Le lien ouvre l’instantané enregistré sans appel IA. La liste se recharge à la
+réouverture du tchat et au retour de l’onglet de génération. Une discussion modifiée
+peut produire un nouvel instantané ; les précédents restent consultables. Les pages
+restent privées et sont supprimées avec leur discussion. Les générations en erreur
+ne sont jamais enregistrées.
+
+Cette sortie utilise le modèle Pages déjà configuré (`PAGE_MODEL`). Les boutons
+**Site HTML** réutilisent le résultat enregistré pour un même contenu et périmètre ;
+une génération sur un nouveau contenu et les synthèses longues peuvent nécessiter
+plusieurs appels IA. Le bouton **Télécharger .html** dans la page conserve le résultat
+affiché sans nouvel appel IA. Les instantanés sont rattachés au tchat ; ils ne sont
+pas publiés ni ajoutés à la bibliothèque indépendante Pages. La table `chat_sites`
+est créée au démarrage du backend ; la migration additive `0018_add_chat_sites`
+permet aussi de l’intégrer au schéma versionné. Si la réponse HTML est tronquée ou non terminée, une seule nouvelle
+tentative régénère une synthèse plus compacte (quatre sections, texte et SVG
+simplifiés) depuis les mêmes informations. Un document partiel n’est jamais
+complété artificiellement par des balises de fermeture.
+En mode démo ou si la génération échoue encore, un message
+d’indisponibilité précise la cause (délai dépassé, réponse incomplète, refus
+d’accès ou crédits insuffisants), sans réintroduire les échanges ni afficher de
+détails privés du fournisseur. Si le modèle Pages est refusé comme non pris en
+charge, une seconde tentative utilise le modèle par défaut du tchat. **Beau PDF** conserve
+l’export documentaire existant. Le rendu exact et la fidélité de la synthèse restent
+à relire, comme pour toute sortie générative.
+
 ## Démarrer avec Docker
 
 Prérequis : Docker Engine avec Compose v2 et Python 3 pour le petit script d'installation.

@@ -8,6 +8,7 @@
     "start": "next start --hostname 0.0.0.0 --port 3001",
     "typecheck": "tsc --noEmit",
     "test:research": "node --test tests/research-activity.test.cjs",
+    "test:themes": "node --test tests/interface-themes.test.mjs",
     "lint": "eslint . --max-warnings 0"
   },
   "dependencies": {

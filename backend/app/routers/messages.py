@@ -6,7 +6,7 @@ from typing import Any
 import unicodedata
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
@@ -21,6 +21,7 @@ from ..source_registry import SourceRegistry
 from ..report_publication import finalize_report
 from ..fact_verifier import verify_report_figures
 from ..chat_export_html import generate_chat_export_html
+from ..chat_site_store import get_or_create_chat_site
 from ..deep_search_html import generate_report_html
 from ..learn_mode import execute_learn_mode
 from ..learn_html import generate_learn_course_html
@@ -2012,10 +2013,13 @@ def create_or_get_learn_report_from_message(
 
 
 @router.get("/api/messages/{message_id}/html")
-def get_message_html(
+async def get_message_html(
     message_id: str,
     scope: str = "turn",
     download: bool = False,
+    pdf: bool = False,
+    print_mode: bool = Query(False, alias="print"),
+    settings: Settings = Depends(get_settings),
     user: User = Depends(current_user),
     sessions: sessionmaker = Depends(get_sessions),
 ):
@@ -2032,6 +2036,14 @@ def get_message_html(
             raise HTTPException(404, "Message introuvable")
 
         conv = message.conversation
+        preceding_user = next((
+            m for m in reversed(conv.messages)
+            if m.role == "user" and m.created_at <= message.created_at
+        ), None)
+        turn_messages_for_site = [
+            {"role": m.role, "content": m.content, "sources": m.sources or []}
+            for m in (preceding_user, message) if m is not None
+        ]
 
         # Si l'utilisateur demande la synthèse complète de la conversation
         if scope in ("conversation", "all"):
@@ -2126,6 +2138,16 @@ def get_message_html(
                         created_at_str=message.created_at.strftime("%d/%m/%Y %H:%M") if message.created_at else None,
                     )
 
+        if not (pdf or print_mode):
+            site_messages = [
+                {"role": m.role, "content": m.content, "sources": m.sources or []}
+                for m in conv.messages
+            ] if scope in ("conversation", "all") else turn_messages_for_site
+            html_doc = await get_or_create_chat_site(
+                db, settings, conv.id, title, site_messages,
+                "conversation" if scope in ("conversation", "all") else "turn",
+                "" if scope in ("conversation", "all") else message.id,
+            )
         headers = {}
         if download:
             clean_ascii = unicodedata.normalize("NFKD", title).encode("ascii", "ignore").decode("ascii")

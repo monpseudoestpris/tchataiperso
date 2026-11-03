@@ -79,6 +79,7 @@ class Conversation(Base):
     topic_space_id: Mapped[str | None] = mapped_column(ForeignKey("topic_spaces.id", ondelete="SET NULL"), nullable=True, index=True)
     topic_space: Mapped["TopicSpace | None"] = relationship(back_populates="conversations")
     messages: Mapped[list["Message"]] = relationship(back_populates="conversation", cascade="all, delete-orphan", order_by="Message.created_at")
+    chat_sites: Mapped[list["ChatSite"]] = relationship(cascade="all, delete-orphan")
     skill_links: Mapped[list["ConversationSkill"]] = relationship(
         back_populates="conversation", cascade="all, delete-orphan", order_by="ConversationSkill.position",
     )
@@ -86,6 +87,19 @@ class Conversation(Base):
     @property
     def skills(self) -> list["Skill"]:
         return [link.skill for link in self.skill_links]
+
+
+class ChatSite(Base):
+    """Private, immutable HTML snapshot attached to its source conversation."""
+    __tablename__ = "chat_sites"
+    __table_args__ = (UniqueConstraint("conversation_id", "input_hash", name="uq_chat_sites_input"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    conversation_id: Mapped[str] = mapped_column(ForeignKey("conversations.id", ondelete="CASCADE"), index=True)
+    input_hash: Mapped[str] = mapped_column(String(64))
+    scope: Mapped[str] = mapped_column(String(20))
+    title: Mapped[str] = mapped_column(String(200))
+    html_content: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
 class Message(Base):
