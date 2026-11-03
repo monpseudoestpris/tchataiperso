@@ -255,7 +255,7 @@ def serve_public_page(
         content=html_content,
         media_type="text/html; charset=utf-8",
         headers={
-            "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data: blob:;",
+            "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com data:; script-src 'unsafe-inline'; img-src data: blob:;",
             "X-Content-Type-Options": "nosniff",
         },
     )

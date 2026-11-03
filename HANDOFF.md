@@ -158,3 +158,22 @@ Résolution des retours de recherche web aberrants (YouTube, YouTube Music, calc
   - `npm run typecheck --prefix frontend` : code 0.
   - `npm run build --prefix frontend` : code 0 (Next.js Turbopack).
   - Conteneurs `clair-searxng`, `clair-db`, `clair-api` et `clair-web` reconstruits et opérationnels (`healthy`).
+
+## Ajout — Sortie HTML enrichie (Beaux styles CSS, polices Google Fonts fun & SVG vectoriels)
+- **Objectif** : Garantir que toute demande de site ou page web HTML en sortie (dans le chat, dans le mode Code Canvas ou via le générateur cLAIr Pages) produise un résultat visuellement remarquable ("beau HTML") avec des styles CSS riches, modernes et responsives, des typographies Google Fonts expressives/fun adaptées au sujet, et des graphismes/icônes en SVG inline sans dépendances cassées.
+- **Backend** :
+  - `backend/app/context.py` :
+    - Ajout dans `SYSTEM_PROMPT` d'une consigne directive pour la sortie HTML / Web : interdiction du HTML brut ou austère, obligation de styles CSS soignés avec variables, cartes, ombres douces et responsive design, importation systématique de polices web Google Fonts fun/expressives (Poppins, Outfit, Fredoka, Space Grotesk, Quicksand) avec fallbacks propres, et intégration de graphismes et icônes vectorielles en SVG inline (zéro image externe cassée).
+    - Mise à jour de `CODE_MODE_PROMPT` (mode Code Canvas) insistant sur les styles modernes, typographies expressives, cartes et SVG inline.
+    - Optimisation de la concision des directives système pour maintenir un budget de contexte optimal sous `max_context_chars`.
+  - `backend/app/base_prompt.py` : enrichissement de la section `STYLE` de `BASE_USER_PROMPT` pour toute demande d'interface ou page HTML.
+  - `backend/app/page_generator.py` :
+    - Levée de l'interdiction de Google Fonts dans `PAGE_SYSTEM_PROMPT` et `REFINE_SYSTEM_PROMPT` : autorisation et incitation aux typographies expressives web via Google Fonts (`<link rel="preconnect" ...><link href="https://fonts.googleapis.com/css2?..." rel="stylesheet">`).
+    - Intégration de clés `google_font` et typographies associées dans tous les styles de `VISUAL_STYLES` (ex: `Outfit` pour Moderne Épuré, `Space Grotesk` & `Plus Jakarta Sans` pour Néobrutalisme, `Fredoka` & `Baloo 2` pour BD & Cartoon, `Patrick Hand` & `Caveat` pour Cahier d'écolier, `Righteous` pour Synthwave, `Playfair Display` pour Journal, etc.).
+    - Injection du lien Google Fonts dans le template `<head>` de `generate_fallback_page`.
+  - `backend/app/routers/pages.py` : mise à jour de la Content-Security-Policy sur `/p/{token}` pour autoriser `https://fonts.googleapis.com` dans `style-src` et `https://fonts.gstatic.com` dans `font-src`, permettant un affichage parfait des polices web sur les pages publiées.
+- **Vérifications** :
+  - `PYTHONPATH=backend pytest backend/tests/` : 420 tests passés (100 %).
+  - `npm run typecheck --prefix frontend` : code 0.
+- **Prochaine action** :
+  - Tester la génération directe d'une page HTML dans le chat ou via cLAIr Pages et admirer le rendu avec polices Google Fonts et SVG.

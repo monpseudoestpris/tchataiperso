@@ -77,15 +77,19 @@ def extract_title_from_html(html_code: str, fallback: str = "Page Web") -> str:
 PAGE_SYSTEM_PROMPT = """Tu es un concepteur et développeur web expert en création de pages web didactiques, modernes et entièrement autonomes.
 Ton objectif est de générer un document web unique (HTML5 + CSS3 + SVG inline + JavaScript vanilla) sur le sujet demandé par l'utilisateur.
 
-RÈGLES D'OR ABSOLUES D'AUTONOMIE (TRÈS STRICT) :
+RÈGLES D'OR ABSOLUES D'AUTONOMIE ET D'ESTHÉTIQUE (TRÈS STRICT) :
 1. FICHIER UNIQUE : Tout doit être dans un seul document HTML5 : <!DOCTYPE html><html lang="fr"><head>...<style>...</style></head><body>...<script>...</script></body></html>.
-2. ZÉRO DÉPENDANCE EXTERNE :
-   - Strictement AUCUN <link href="http..."> (pas de Google Fonts, pas de Tailwind CDN, pas de Bootstrap).
-   - Strictement AUCUN <script src="http..."> (pas de React, pas de jQuery, pas de bibliothèques tierces).
-   - Strictement AUCUNE image externe <img src="http...">.
-   - Utilise EXCLUSIVEMENT les polices système via un system-ui stack moderne :
-     font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-     (ou Serif / Monospace selon le style demandé).
+2. POLICES WEB, RESSOURCES ET DÉPENDANCES :
+   - Strictement AUCUN <script src="http..."> externe (pas de React, pas de jQuery, pas de bibliothèques tierces js : utilise exclusivement du JavaScript vanilla moderne, propre et autonome dans <script>).
+   - Strictement AUCUNE image externe <img src="http..."> (les URLs externes cassent facilement et ne chargent pas hors-ligne : utilise exclusivement des illustrations et icônes en SVG inline ou balises locales <clair-svg name="..." />).
+   - POLICES WEB FUN, EXPRESSIVES ET MODERNES (Google Fonts) :
+     Utilise impérativement de superbes polices web via Google Fonts (<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=...&display=swap" rel="stylesheet"> ou @import dans <style>) avec une police pleine de fraîcheur ou de personnalité pour les titres et une typographie fluide pour le corps :
+     * Moderne / Pop / SaaS : 'Outfit', 'Poppins', 'Plus Jakarta Sans', 'Space Grotesk'
+     * Fun / BD / Ludique / Enfants : 'Fredoka', 'Quicksand', 'Baloo 2', 'Patrick Hand', 'Comic Neue'
+     * Rétro / 80s / Synthwave : 'Righteous', 'Orbitron', 'Syne', 'Bungee'
+     * Presse / Journal / Littéraire : 'Playfair Display', 'Lora', 'Merriweather'
+     * Cahier / Fiches révision : 'Caveat', 'Patrick Hand', 'Indie Flower'
+     Associe toujours une pile de repli propre dans le CSS : font-family: 'NomDePolice', system-ui, -apple-system, sans-serif;
 3. DÉTECTION INTELLIGENTE DES COMPOSANTS (N'ajoute que ce qui apporte une réelle valeur didactique) :
    Analyse le sujet et insère prioritairement les éléments pertinents :
    - Événements historiques ou chronologiques -> Frise chronologique SVG soignée.
@@ -149,9 +153,9 @@ Tu reçois le code HTML complet actuel d'une page et une consigne d'amélioratio
 
 RÈGLES IMPÉRATIVES :
 1. Applique fidèlement les demandes (modification de contenu, ajout/modification de graphiques SVG, changement de palette CSS, ajout de quiz ou d'interactions JS, etc.).
-2. Conserve impérativement le caractère AUTONOME du document :
-   - Strictement aucune ressource externe (pas de polices CDN, pas de scripts externes, pas d'images distantes).
-   - Tout le CSS dans <style>, tout le JS dans <script>, illustrations en SVG inline.
+2. Conserve impérativement le caractère autonome et la qualité graphique du document :
+   - Strictement aucun script JS externe ni images externes risquant d'être brisées : tout le JS vanilla dans <script>, illustrations et icônes en SVG inline ou <clair-svg>.
+   - Polices web expressives et fun encouragées via Google Fonts (<link> ou @import).
 3. Conserve la cohérence globale de la page et les interactions existantes non concernées par la demande.
 4. Retourne UNIQUEMENT le document HTML5 complet mis à jour.
 """
@@ -170,122 +174,133 @@ VISUAL_STYLES: dict[str, dict[str, str]] = {
         "name": "Moderne Épuré",
         "icon": "✨",
         "description": "Style SaaS contemporain, cartes blanches, ombres douces et bordures fines.",
-        "font": "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
-        "radius": "12px",
+        "font": "'Outfit', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+        "google_font": "Outfit:wght@400;600;700;800",
+        "radius": "14px",
         "border_light": "1px solid #e2e8f0",
         "border_dark": "1px solid #334155",
-        "shadow": "0 4px 20px -2px rgba(0, 0, 0, 0.08)",
-        "prompt_directive": "STYLE MODERNE & ÉPURÉ : Interface claire et professionnelle, cartes blanches aux ombres douces et diffuses, bordures fines 1px, typographie sans-serif contemporaine (system-ui), badges discrets.",
+        "shadow": "0 8px 24px -4px rgba(0, 0, 0, 0.08)",
+        "prompt_directive": "STYLE MODERNE & ÉPURÉ : Interface claire et professionnelle, cartes blanches aux ombres douces et diffuses, bordures fines 1px, typographie moderne et soignée via Google Font 'Outfit' (<link href=\"https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800&display=swap\" rel=\"stylesheet\">), badges soignés et icônes SVG fines.",
     },
     "neobrutalism": {
         "name": "Néobrutalisme Pop",
         "icon": "⚡",
         "description": "Bordures noires épaisses (2.5px), ombres franches décalées sans flou, couleurs vives.",
-        "font": "system-ui, -apple-system, sans-serif",
-        "radius": "6px",
+        "font": "'Space Grotesk', 'Plus Jakarta Sans', system-ui, sans-serif",
+        "google_font": "Space+Grotesk:wght@500;700;800&family=Plus+Jakarta+Sans:wght@700;800",
+        "radius": "8px",
         "border_light": "2.5px solid #111827",
         "border_dark": "2.5px solid #f8fafc",
         "shadow": "4px 4px 0px #111827",
-        "prompt_directive": "STYLE NÉOBRUTALISME POP : Bordures noires épaisses (2.5px solid #111), ombres franches décalées sans flou (ex: box-shadow: 4px 4px 0 #111), couleurs pop et contrastées, pastilles aux coins nets, boutons très lisibles.",
+        "prompt_directive": "STYLE NÉOBRUTALISME POP : Bordures noires épaisses (2.5px solid #111), ombres franches décalées sans flou (ex: box-shadow: 4px 4px 0 #111), typographie percutante et audacieuse via Google Fonts 'Space Grotesk' & 'Plus Jakarta Sans' (<link href=\"https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@700;800&family=Space+Grotesk:wght@500;700;800&display=swap\" rel=\"stylesheet\">), couleurs pop contrastées et boutons très lisibles.",
     },
     "glassmorphism": {
         "name": "Glassmorphism & Glow",
         "icon": "💎",
         "description": "Cartes translucides avec verre dépoli, reflets lumineux et dégradés d'arrière-plan.",
-        "font": "system-ui, -apple-system, sans-serif",
-        "radius": "16px",
+        "font": "'Plus Jakarta Sans', system-ui, -apple-system, sans-serif",
+        "google_font": "Plus+Jakarta+Sans:wght@400;600;700;800",
+        "radius": "18px",
         "border_light": "1px solid rgba(255, 255, 255, 0.35)",
         "border_dark": "1px solid rgba(255, 255, 255, 0.12)",
         "shadow": "0 8px 32px 0 rgba(0, 0, 0, 0.25)",
-        "prompt_directive": "STYLE GLASSMORPHISM : Cartes translucides avec effet verre dépoli (backdrop-filter: blur(14px); background: rgba(255,255,255,0.12);), bordures lumineuses semi-transparentes, dégradés d'arrière-plan riches et diffus.",
+        "prompt_directive": "STYLE GLASSMORPHISM : Cartes translucides avec effet verre dépoli (backdrop-filter: blur(14px); background: rgba(255,255,255,0.12);), bordures lumineuses semi-transparentes, typographie ciselée via Google Font 'Plus Jakarta Sans' (<link href=\"https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap\" rel=\"stylesheet\">), dégradés d'arrière-plan riches et diffus, icônes SVG luminescentes.",
     },
     "notebook": {
         "name": "Cahier d'écolier & Fiches",
         "icon": "📓",
         "description": "Fond papier quadrillé/ligné, surlignages stabilo, post-it de synthèse et fiches de révision.",
-        "font": "'Segoe UI', -apple-system, system-ui, cursive, sans-serif",
-        "radius": "8px",
+        "font": "'Patrick Hand', 'Caveat', 'Segoe UI', cursive, sans-serif",
+        "google_font": "Patrick+Hand&family=Caveat:wght@600;700",
+        "radius": "10px",
         "border_light": "1px dashed #cbd5e1",
         "border_dark": "1px dashed #475569",
-        "shadow": "0 2px 8px rgba(0, 0, 0, 0.06)",
-        "prompt_directive": "STYLE CAHIER D'ÉCOLIER : Ambiance prise de notes et fiches bristol : fond papier réglé/quadrillé discret, titres surlignés au feutre fluo (effet stabilo), cartes type post-it avec punaise ou trombone SVG.",
+        "shadow": "0 4px 12px rgba(0, 0, 0, 0.06)",
+        "prompt_directive": "STYLE CAHIER D'ÉCOLIER : Ambiance prise de notes et fiches bristol : fond papier réglé/quadrillé discret, typographie manuscrite fun et chaleureuse via Google Fonts 'Patrick Hand' et 'Caveat' (<link href=\"https://fonts.googleapis.com/css2?family=Caveat:wght@600;700&family=Patrick+Hand&display=swap\" rel=\"stylesheet\">), titres surlignés au feutre fluo (effet stabilo), cartes type post-it avec punaise ou trombone SVG.",
     },
     "cyberpunk": {
         "name": "Cyberpunk & Terminal",
         "icon": "🔮",
         "description": "Fond sombre OLED, néons cyan/magenta éclatants, typographie monospace futuriste.",
-        "font": "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-        "radius": "4px",
+        "font": "'JetBrains Mono', 'Space Grotesk', monospace",
+        "google_font": "JetBrains+Mono:wght@400;700&family=Space+Grotesk:wght@600;800",
+        "radius": "6px",
         "border_light": "1px solid #0284c7",
         "border_dark": "1px solid #38bdf8",
         "shadow": "0 0 16px rgba(56, 189, 248, 0.35)",
-        "prompt_directive": "STYLE CYBERPUNK & TERMINAL : Fond noir spatial/OLED (#0a0b14), accents néon cyan éclatant (#00f0ff) et magenta (#ff007f), typographie monospace pour les badges et chiffres, bordures luminescentes avec halos glow.",
+        "prompt_directive": "STYLE CYBERPUNK & TERMINAL : Fond noir spatial/OLED (#0a0b14), accents néon cyan éclatant (#00f0ff) et magenta (#ff007f), typographie cybernétique via Google Fonts 'Space Grotesk' & 'JetBrains Mono' (<link href=\"https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Space+Grotesk:wght@600;800&display=swap\" rel=\"stylesheet\">), bordures luminescentes avec halos glow.",
     },
     "editorial_newspaper": {
         "name": "Journal & Presse Éditoriale",
         "icon": "📰",
         "description": "Typographie Serif prestigieuse (Georgia/Garamond), mise en colonnes, lettrines et filets.",
-        "font": "Georgia, Cambria, 'Times New Roman', serif",
-        "radius": "2px",
+        "font": "'Playfair Display', 'Lora', Georgia, serif",
+        "google_font": "Playfair+Display:ital,wght@0,600;0,700;0,900;1,400&family=Lora:ital,wght@0,400;0,500;1,400",
+        "radius": "4px",
         "border_light": "1px solid #d4c5b9",
         "border_dark": "1px solid #44403c",
-        "shadow": "0 1px 4px rgba(0, 0, 0, 0.05)",
-        "prompt_directive": "STYLE JOURNAL & ÉDITORIAL ANCIEN : Typographie à empattement digne des grands journaux (Georgia, Garamond, serif), lettrines majuscules en début de partie, filets horizontaux doubles, ton papier ivoire/sépia raffiné.",
+        "shadow": "0 2px 6px rgba(0, 0, 0, 0.05)",
+        "prompt_directive": "STYLE JOURNAL & ÉDITORIAL ANCIEN : Typographie à empattement prestigieuse via Google Fonts 'Playfair Display' (titres) & 'Lora' (corps) (<link href=\"https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;1,400&family=Playfair+Display:ital,wght@0,600;0,700;0,900;1,400&display=swap\" rel=\"stylesheet\">), lettrines majuscules en début de partie, filets horizontaux doubles, ton papier ivoire/sépia raffiné.",
     },
     "pastel_infographic": {
         "name": "Infographie Pastel Didactique",
         "icon": "🎨",
         "description": "Teintes douces (pêche, menthe, lavande), grands angles arrondis et chiffres géants.",
-        "font": "system-ui, -apple-system, sans-serif",
-        "radius": "20px",
+        "font": "'Quicksand', 'Outfit', system-ui, sans-serif",
+        "google_font": "Quicksand:wght@500;600;700&family=Outfit:wght@600;700",
+        "radius": "22px",
         "border_light": "1px solid #e0e7ff",
         "border_dark": "1px solid #312e81",
-        "shadow": "0 6px 16px rgba(99, 102, 241, 0.08)",
-        "prompt_directive": "STYLE INFOGRAPHIE PASTEL : Couleurs douces (menthe, pêche, lilas, vanille), grands blocs arrondis (border-radius: 20px), chiffres clés géants en médaillons, format magazine de vulgarisation scientifique.",
+        "shadow": "0 8px 20px rgba(99, 102, 241, 0.1)",
+        "prompt_directive": "STYLE INFOGRAPHIE PASTEL : Couleurs douces (menthe, pêche, lilas, vanille), typographie ronde et chaleureuse via Google Fonts 'Quicksand' & 'Outfit' (<link href=\"https://fonts.googleapis.com/css2?family=Outfit:wght@600;700&family=Quicksand:wght@500;600;700&display=swap\" rel=\"stylesheet\">), grands blocs arrondis (border-radius: 22px), chiffres clés géants en médaillons, format magazine de vulgarisation scientifique.",
     },
     "minimal_mono": {
         "name": "Minimaliste Suisse & Mono",
         "icon": "📐",
         "description": "Noir, blanc et gris neutre, grille suisse stricte, géométrie pure et zéro distraction.",
-        "font": "'Helvetica Neue', Helvetica, Arial, sans-serif",
+        "font": "'Space Grotesk', 'Helvetica Neue', Helvetica, Arial, sans-serif",
+        "google_font": "Space+Grotesk:wght@400;600;700",
         "radius": "0px",
         "border_light": "1px solid #0f172a",
         "border_dark": "1px solid #f8fafc",
         "shadow": "none",
-        "prompt_directive": "STYLE MINIMALISTE SUISSE : Noir et blanc pur avec nuances de gris neutre, aucune ombre inutile, grille géométrique impeccable, typographie Helvetica puissante et espacements très généreux.",
+        "prompt_directive": "STYLE MINIMALISTE SUISSE : Noir et blanc pur avec nuances de gris neutre, aucune ombre inutile, grille géométrique impeccable, typographie percutante via Google Font 'Space Grotesk' (<link href=\"https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&display=swap\" rel=\"stylesheet\">) et espacements très généreux.",
     },
     "synthwave_retro": {
         "name": "Rétro 80s Synthwave",
         "icon": "🌆",
         "description": "Coucher de soleil violet/fuchsia, perspective filaire en arrière-plan, néons chauds.",
-        "font": "system-ui, -apple-system, sans-serif",
-        "radius": "8px",
+        "font": "'Righteous', 'Space Grotesk', system-ui, sans-serif",
+        "google_font": "Righteous&family=Space+Grotesk:wght@500;700",
+        "radius": "10px",
         "border_light": "1px solid #ec4899",
         "border_dark": "1px solid #f43f5e",
-        "shadow": "0 0 20px rgba(236, 72, 153, 0.35)",
-        "prompt_directive": "STYLE RÉTRO 80s & SYNTHWAVE : Teintes néon coucher de soleil (violet, rose fuchsia, orange ambré), arrière-plan sombre avec grille filaire, titres stylisés rétro-futuristes et touches d'ambre.",
+        "shadow": "0 0 24px rgba(236, 72, 153, 0.35)",
+        "prompt_directive": "STYLE RÉTRO 80s & SYNTHWAVE : Teintes néon coucher de soleil (violet, rose fuchsia, orange ambré), arrière-plan sombre avec grille filaire, typographie rétro-futuriste via Google Fonts 'Righteous' (titres) & 'Space Grotesk' (texte) (<link href=\"https://fonts.googleapis.com/css2?family=Righteous&family=Space+Grotesk:wght@500;700&display=swap\" rel=\"stylesheet\">), touches lumineuses d'ambre et néon.",
     },
     "nature_botanic": {
         "name": "Nature & Botanique",
         "icon": "🌿",
         "description": "Vert sauge, lin naturel, teintes terreuses, ambiance herbier et carnet naturaliste.",
-        "font": "system-ui, -apple-system, sans-serif",
-        "radius": "14px",
+        "font": "'Plus Jakarta Sans', 'Lora', system-ui, serif",
+        "google_font": "Plus+Jakarta+Sans:wght@400;600;700&family=Lora:ital,wght@0,500;1,400",
+        "radius": "16px",
         "border_light": "1px solid #cbd5be",
         "border_dark": "1px solid #3f4e38",
-        "shadow": "0 4px 12px rgba(46, 78, 40, 0.08)",
-        "prompt_directive": "STYLE NATURE & BOTANIQUE : Palette terreuse et végétale (vert sauge, mousse, beige lin, argile), cartes façon herbier avec coins arrondis et textures douces, schémas végétaux ou naturalistes.",
+        "shadow": "0 6px 16px rgba(46, 78, 40, 0.08)",
+        "prompt_directive": "STYLE NATURE & BOTANIQUE : Palette terreuse et végétale (vert sauge, mousse, beige lin, argile), typographie élégante via Google Fonts 'Plus Jakarta Sans' et 'Lora' (<link href=\"https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,500;1,400&family=Plus+Jakarta+Sans:wght@400;600;700&display=swap\" rel=\"stylesheet\">), cartes façon herbier avec coins arrondis et textures douces, schémas végétaux ou naturalistes.",
     },
     "playful_cartoon": {
         "name": "BD & Cartoon Illustré",
         "icon": "🎈",
         "description": "Bulles de texte façon BD, contrastes joyeux, badges expressifs et dynamisme visuel.",
-        "font": "system-ui, -apple-system, sans-serif",
-        "radius": "18px",
-        "border_light": "2px solid #0284c7",
-        "border_dark": "2px solid #38bdf8",
-        "shadow": "3px 3px 0px rgba(2, 132, 199, 0.3)",
-        "prompt_directive": "STYLE BD & CARTOON : Éléments façon bande dessinée, bulles de dialogue expressives, bordures rondes bien définies (radius 18px), contrastes joyeux et touches ludiques.",
+        "font": "'Fredoka', 'Baloo 2', system-ui, cursive, sans-serif",
+        "google_font": "Fredoka:wght@500;600;700&family=Baloo+2:wght@600;800",
+        "radius": "20px",
+        "border_light": "2.5px solid #0284c7",
+        "border_dark": "2.5px solid #38bdf8",
+        "shadow": "4px 4px 0px rgba(2, 132, 199, 0.35)",
+        "prompt_directive": "STYLE BD & CARTOON : Éléments façon bande dessinée, typographie fun, ronde et joyeuse via Google Fonts 'Fredoka' et 'Baloo 2' (<link href=\"https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;800&family=Fredoka:wght@500;600;700&display=swap\" rel=\"stylesheet\">), bulles de dialogue expressives, bordures rondes bien définies (radius 20px), contrastes colorés éclatants et touches ludiques avec icônes SVG animées.",
     },
 }
 
@@ -317,6 +332,14 @@ def generate_fallback_page(
     box_shadow = vstyle["shadow"]
     border_light = vstyle["border_light"]
     border_dark = vstyle["border_dark"]
+    google_font = vstyle.get("google_font", "")
+    font_link = ""
+    if google_font:
+        font_link = (
+            f'  <link rel="preconnect" href="https://fonts.googleapis.com">\n'
+            f'  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>\n'
+            f'  <link href="https://fonts.googleapis.com/css2?family={google_font}&display=swap" rel="stylesheet">\n'
+        )
 
     is_print = layout_style == "print_sheet"
     container_max_w = "1280px" if orientation == "landscape" else "960px"
@@ -391,7 +414,7 @@ def generate_fallback_page(
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{safe_title}</title>
-  <style>
+{font_link}  <style>
     :root {{
       --bg: #0f172a;
       --surface: #1e293b;
@@ -959,7 +982,11 @@ async def generate_page_html(
         vstyle = VISUAL_STYLES[visual_style]
         design_options.append(f"- STYLE GRAPHIQUE ET IDENTITÉ VISUELLE : {vstyle['prompt_directive']}")
     else:
-        design_options.append("- STYLE GRAPHIQUE : Direction artistique élégante et cohérente, adaptée à la tonalité du sujet.")
+        design_options.append(
+            "- STYLE GRAPHIQUE & TYPOGRAPHIE : Direction artistique soignée et captivante, "
+            "avec importation obligatoire d'une belle police Google Font expressive ou fun (ex: 'Outfit', 'Poppins', 'Fredoka', 'Space Grotesk', 'Quicksand') "
+            "dans <head> via <link href=\"https://fonts.googleapis.com/css2?family=...&display=swap\" rel=\"stylesheet\"> et styles CSS travaillés."
+        )
 
     design_options.append(f"- AMBIANCE & COULEURS : Palette dominante '{theme_palette}' avec variables CSS claires et sombres.")
     user_query_parts.append("\n".join(design_options))
