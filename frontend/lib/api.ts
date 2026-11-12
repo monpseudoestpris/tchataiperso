@@ -32,6 +32,7 @@ export type Config = {
   models: Model[];
   default_model: string;
   image_prompt_model?: string;
+  skill_prompt_model?: string;
   image_models?: ImageModel[];
   default_image_model?: string;
   themes?: string[];

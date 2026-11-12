@@ -90,12 +90,15 @@ export function SkillsPanel({ conversation, model, config, onClose, onConversati
     finally { setBusy(""); }
   }
 
+  const skillImproveModel = config?.skill_prompt_model || "google/gemini-4-argon";
+  const skillImproveModelName = config?.models?.find(m => m.id === skillImproveModel)?.name || "Gemini Argon";
+
   async function improvePrompt() {
     if (busy || !prompt.trim() || !config?.features.chat || config.demo_mode) return;
     setBusy("improve"); setError("");
     try {
       const result = await api<{ prompt: string }>("/skills/improve", {
-        method: "POST", body: JSON.stringify({ prompt: prompt.trim() }),
+        method: "POST", body: JSON.stringify({ prompt: prompt.trim(), model: skillImproveModel }),
       });
       setPrompt(result.prompt);
     } catch (err) { setError(errorMessage(err)); }
@@ -196,7 +199,19 @@ export function SkillsPanel({ conversation, model, config, onClose, onConversati
         <label htmlFor="skill-prompt">Prompt</label>
         <textarea id="skill-prompt" value={prompt} onChange={event => setPrompt(event.target.value)} maxLength={5000} rows={5} placeholder="Décrivez la manière de travailler que l’assistant doit suivre…" disabled={!!busy} />
         <div className="skill-editor-actions">
-          <button type="button" className="skill-improve" disabled={!!busy || !prompt.trim() || !config?.features.chat || !!config.demo_mode} onClick={() => void improvePrompt()}>{busy === "improve" ? <LoaderCircle className="spin" size={14} /> : <Sparkles size={14} />}Améliorer avec l’IA</button>
+          <button
+            type="button"
+            className="skill-improve"
+            disabled={!!busy || !prompt.trim() || !config?.features.chat || !!config.demo_mode}
+            onClick={() => void improvePrompt()}
+            title={
+              config?.features.chat && !config.demo_mode
+                ? `Enrichir et structurer le prompt avec ${skillImproveModelName}`
+                : "Nécessite LLM_API_KEY et le mode IA réel"
+            }
+          >
+            {busy === "improve" ? <LoaderCircle className="spin" size={14} /> : <Sparkles size={14} />}Améliorer avec l’IA
+          </button>
           <span>{prompt.length}/5000</span>
         </div>
         <div className="skill-save-actions">

@@ -34,6 +34,7 @@ def config(settings: Settings = Depends(get_settings)):
         "themes": list(CONVERSATION_THEMES),
         "search_providers": search_providers,
         "image_prompt_model": settings.image_prompt_model,
+        "skill_prompt_model": settings.skill_prompt_model,
         "image_models": settings.available_image_models,
         "default_image_model": settings.effective_default_image_model,
         "features": {

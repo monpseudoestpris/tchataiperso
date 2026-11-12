@@ -257,7 +257,8 @@ class Settings(BaseSettings):
     blog_model: str = "google/gemini-3.5-flash-lite"
     page_model: str = "google/gemini-2.5-flash"
     presentation_model: str = "google/gemini-2.5-flash-lite"
-    image_prompt_model: str = "openai/gpt-6-luna"
+    image_prompt_model: str = "google/gemini-4-argon"
+    skill_prompt_model: str = "google/gemini-4-argon"
     image_models: str = ""
     default_image_model: str = "ideogram"
     auto_web_search: bool = True
@@ -558,7 +559,7 @@ class Settings(BaseSettings):
                 cleaned = _clean_api_key(raw_val)
                 if cleaned or force is False:
                     setattr(self, field_name, SecretStr(cleaned))
-        str_fields = ("llm_base_url", "ocr_model", "vision_model", "default_model", "llm_models", "summary_model", "search_query_model", "web_search_decision_model", "deep_search_plan_model", "deep_search_synthesis_model", "deep_search_engine", "deep_search_model", "blog_model", "page_model", "presentation_model", "image_prompt_model", "image_models", "default_image_model")
+        str_fields = ("llm_base_url", "ocr_model", "vision_model", "default_model", "llm_models", "summary_model", "search_query_model", "web_search_decision_model", "deep_search_plan_model", "deep_search_synthesis_model", "deep_search_engine", "deep_search_model", "blog_model", "page_model", "presentation_model", "image_prompt_model", "skill_prompt_model", "image_models", "default_image_model")
         for field_name in str_fields:
             if field_name in self._explicit_fields:
                 continue

@@ -55,6 +55,7 @@ async def improve_image(
     model = (
         (body.model.strip() if body.model and body.model.strip() else None)
         or settings.image_prompt_model
+        or "google/gemini-4-argon"
         or settings.default_model
     )
     try:

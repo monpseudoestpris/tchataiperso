@@ -49,8 +49,14 @@ async def improve_skill(
 ):
     if settings.demo_mode or not settings.enabled(settings.llm_api_key):
         raise HTTPException(503, "L'amélioration des compétences nécessite une clé LLM_API_KEY et le mode IA réel")
+    model = (
+        (body.model.strip() if body.model and body.model.strip() else None)
+        or settings.skill_prompt_model
+        or "google/gemini-4-argon"
+        or settings.default_model
+    )
     try:
-        prompt = await providers.improve_skill_prompt(settings, settings.default_model, body.prompt)
+        prompt = await providers.improve_skill_prompt(settings, model, body.prompt)
     except providers.ProviderError as exc:
         raise HTTPException(502, str(exc)) from exc
     return {"prompt": prompt}

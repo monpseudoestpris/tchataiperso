@@ -364,8 +364,10 @@ def test_skill_improvement_is_unsaved_and_requires_real_provider(client, setting
     settings.demo_mode = False
     settings.llm_api_key = SecretStr("secret")
 
+    called_models = []
+
     async def improve(_settings, model, prompt):
-        assert model == settings.default_model
+        called_models.append(model)
         assert prompt == "Rends-le clair"
         return "Proposition améliorée"
 
@@ -373,6 +375,11 @@ def test_skill_improvement_is_unsaved_and_requires_real_provider(client, setting
     response = client.post("/api/skills/improve", json={"prompt": "Rends-le clair"})
     assert response.status_code == 200
     assert response.json() == {"prompt": "Proposition améliorée"}
+    assert called_models[-1] == "google/gemini-4-argon"
+
+    response_custom = client.post("/api/skills/improve", json={"prompt": "Rends-le clair", "model": "custom/expert"})
+    assert response_custom.status_code == 200
+    assert called_models[-1] == "custom/expert"
     assert client.get("/api/skills").json() == []
 
 

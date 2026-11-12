@@ -360,6 +360,7 @@ class SetConversationSkills(BaseModel):
 
 class ImproveSkillPrompt(BaseModel):
     prompt: str = Field(min_length=1, max_length=5000)
+    model: str | None = Field(default=None, max_length=150)
 
     @field_validator("prompt")
     @classmethod
@@ -368,6 +369,14 @@ class ImproveSkillPrompt(BaseModel):
         if not value:
             raise ValueError("Le prompt ne peut pas être vide")
         return value
+
+    @field_validator("model")
+    @classmethod
+    def sanitize_model(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
 
 
 class CreateImage(BaseModel):

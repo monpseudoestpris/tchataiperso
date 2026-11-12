@@ -3624,6 +3624,15 @@ async def improve_skill_prompt(settings: Any, model: str, prompt: str) -> str:
                 json={"model": model, "messages": messages, "stream": False,
                       "temperature": settings.summary_temperature, "max_tokens": settings.summary_max_tokens},
             )
+            if response.status_code in (400, 404, 422) and model != getattr(settings, "default_model", ""):
+                alt_model = getattr(settings, "default_model", "")
+                if alt_model:
+                    response = await client.post(
+                        settings.llm_base_url.rstrip("/") + "/chat/completions",
+                        headers={"Authorization": f"Bearer {key}"},
+                        json={"model": alt_model, "messages": messages, "stream": False,
+                              "temperature": settings.summary_temperature, "max_tokens": settings.summary_max_tokens},
+                    )
         _check_response(response, "Fournisseur IA")
         payload = _json(response, "Fournisseur IA")
         try:

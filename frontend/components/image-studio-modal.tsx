@@ -311,7 +311,7 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
 
   const preferredModel =
     config?.image_prompt_model ||
-    (config?.models?.some(m => m.id === "openai/gpt-6-luna") ? "openai/gpt-6-luna" : config?.default_model || "openai/gpt-6-luna");
+    (config?.models?.some(m => m.id === "google/gemini-4-argon") ? "google/gemini-4-argon" : config?.default_model || "google/gemini-4-argon");
   const [improveModel, setImproveModel] = useState<string>(preferredModel);
 
   const [dynamicImageModels, setDynamicImageModels] = useState<ImageModel[]>([]);
@@ -362,8 +362,8 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
   useEffect(() => {
     if (config?.image_prompt_model) {
       setImproveModel(config.image_prompt_model);
-    } else if (config?.models?.some(m => m.id === "openai/gpt-6-luna")) {
-      setImproveModel("openai/gpt-6-luna");
+    } else if (config?.models?.some(m => m.id === "google/gemini-4-argon")) {
+      setImproveModel("google/gemini-4-argon");
     } else if (config?.default_model) {
       setImproveModel(config.default_model);
     }
@@ -697,7 +697,7 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
                   onClick={() => void improvePrompt()}
                   title={
                     config?.features.chat && !config.demo_mode
-                      ? `Enrichir les détails visuels, la lumière et la composition avec ${config?.models?.find(m => m.id === improveModel)?.name || "l'IA"}`
+                      ? `Enrichir les détails visuels, la lumière et la composition avec ${config?.models?.find(m => m.id === improveModel)?.name || "Gemini Argon"}`
                       : "Nécessite LLM_API_KEY et le mode IA réel"
                   }
                 >
