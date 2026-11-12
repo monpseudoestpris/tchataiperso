@@ -2378,7 +2378,7 @@ def generate_learn_course_html(
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
         <span>Thème</span>
       </button>
-      <a href="?download=1" class="reader-btn" download title="Télécharger le fichier .html complet">
+      <a href="?download=1" class="reader-btn" download title="Télécharger le fichier .html complet" onclick="if(window.location.protocol==='file:'||window.location.href.includes('/sites/')){{event.preventDefault();const blob=new Blob(['<!doctype html>'+document.documentElement.outerHTML],{{type:'text/html;charset=utf-8'}});const u=URL.createObjectURL(blob),a=document.createElement('a');a.href=u;a.download='cours.html';a.click();setTimeout(()=>URL.revokeObjectURL(u),1500);}}">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
         <span>Télécharger .html</span>
       </a>

@@ -460,6 +460,7 @@ def list_conversation_sites(
 def get_conversation_site(
     conversation_id: str,
     site_id: str,
+    download: bool = False,
     user: User = Depends(current_user),
     sessions: sessionmaker = Depends(get_sessions),
 ):
@@ -470,5 +471,9 @@ def get_conversation_site(
         ))
         if site is None:
             raise HTTPException(404, "Page introuvable")
-        return Response(site.html_content, media_type="text/html; charset=utf-8",
-                        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
+        headers = {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}
+        if download:
+            clean_ascii = unicodedata.normalize("NFKD", site.title or "clair-synthese").encode("ascii", "ignore").decode("ascii")
+            clean_filename = re.sub(r"[^a-zA-Z0-9_\-]", "_", clean_ascii).strip("_")[:40] or "clair-synthese"
+            headers["Content-Disposition"] = f'attachment; filename="{clean_filename}.html"'
+        return Response(site.html_content, media_type="text/html; charset=utf-8", headers=headers)

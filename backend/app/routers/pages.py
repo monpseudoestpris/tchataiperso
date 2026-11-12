@@ -5,8 +5,8 @@ from sqlalchemy.orm import sessionmaker
 from ..config import Settings
 from ..deps import current_user, get_sessions, get_settings
 from ..models import Conversation, User, WebPage, WebPageVersion, now
-from ..page_generator import generate_page_html, refine_page_html, slugify
-from ..schemas import CreateWebPage, RefineWebPage, UpdateWebPage
+from ..page_generator import generate_page_html, propose_page_topics, refine_page_html, slugify
+from ..schemas import CreateWebPage, PageTopicItem, ProposePageTopicsRequest, ProposePageTopicsResponse, RefineWebPage, UpdateWebPage
 from ..serializers import web_page_json, web_page_version_json
 
 router = APIRouter(tags=["pages"])
@@ -26,6 +26,54 @@ def list_pages(
             )
         )
         return [web_page_json(item, include_versions=False, include_latest_html=True) for item in items]
+
+
+@router.post("/api/pages/propose-topics", response_model=ProposePageTopicsResponse)
+async def propose_topics_endpoint(
+    body: ProposePageTopicsRequest,
+    user: User = Depends(current_user),
+    settings: Settings = Depends(get_settings),
+    sessions: sessionmaker = Depends(get_sessions),
+):
+    chat_transcript = None
+    fallback_title = body.title
+    selected_model = body.model
+
+    if body.conversation_id:
+        with sessions() as db:
+            conv = db.scalar(
+                select(Conversation).where(
+                    Conversation.id == body.conversation_id,
+                    Conversation.user_id == user.id,
+                )
+            )
+            if conv:
+                if not fallback_title:
+                    fallback_title = conv.title
+                if not selected_model and conv.model:
+                    selected_model = conv.model
+                lines = []
+                for msg in conv.messages:
+                    role_label = "Utilisateur" if msg.role == "user" else "Assistant"
+                    lines.append(f"{role_label} : {msg.content}")
+                chat_transcript = "\n\n".join(lines)
+
+    s_title, summary, topics_data = await propose_page_topics(
+        settings=settings,
+        prompt=body.prompt,
+        chat_transcript=chat_transcript,
+        title=fallback_title,
+        page_type=body.page_type,
+        target_audience=body.target_audience,
+        model=selected_model,
+    )
+
+    return ProposePageTopicsResponse(
+        suggested_title=s_title,
+        summary=summary,
+        topics=[PageTopicItem(**t) for t in topics_data],
+    )
+
 
 
 @router.post("/api/pages", status_code=201)
@@ -79,6 +127,10 @@ async def create_page(
         include_svg=body.include_svg,
         theme_palette=body.theme_palette,
         visual_style=body.visual_style,
+        animation_engine=body.animation_engine,
+        font_family=body.font_family,
+        text_effects=body.text_effects,
+        selected_topics=[t.model_dump() for t in body.selected_topics] if body.selected_topics else None,
     )
 
     clean_slug = slugify(resolved_title)

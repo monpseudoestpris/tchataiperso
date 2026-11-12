@@ -37,10 +37,12 @@ import {
   errorMessage,
   fetchWebPage,
   fetchWebPages,
+  proposeWebPageTopics,
   refineWebPage,
   restoreWebPageVersion,
   updateWebPage,
   type Model,
+  type PageTopicItem,
   type WebPage,
   type WebPageVersion,
 } from "@/lib/api";
@@ -59,15 +61,16 @@ export type WebPageModalProps = {
 };
 
 const SUGGESTIONS = [
-  "Guide interactif sur le système solaire avec diagramme SVG et mini-quiz",
+  "Guide interactif sur le système solaire avec diagramme SVG et fiches didactiques",
   "Synthèse visuelle sur la photosynthèse avec schéma des étapes et accordéons",
   "Fiche récapitulative cybersécurité : mots de passe, phishing et bonnes pratiques",
   "Tableau de bord interactif d'analyse avec graphiques SVG et sélecteur d'onglets",
 ];
 
 const REFINE_CHIPS = [
+  "Anime la page au scroll (AOS) et ajoute des transitions GSAP",
   "Change les couleurs en bleu nuit et cyan",
-  "Ajoute un quiz interactif de 3 questions",
+  "Détaille davantage chaque section avec des exemples concrets",
   "Ajoute un schéma conceptuel en SVG",
   "Raccourcis l'introduction et résume en puces",
   "Ajoute une section Foire aux questions",
@@ -86,6 +89,34 @@ export const VISUAL_STYLES_LIST = [
   { id: "nature_botanic", icon: "🌿", name: "Nature & Botanique", desc: "Vert sauge, lin naturel, teintes terreuses et esprit herbier" },
   { id: "playful_cartoon", icon: "🎈", name: "BD & Cartoon", desc: "Bulles de dialogue, contrastes joyeux et badges ludiques" },
 ];
+export const ANIMATION_ENGINES = [
+  { id: "auto", icon: "✨", name: "Auto IA", desc: "L'IA choisit le dosage optimal" },
+  { id: "both", icon: "🚀", name: "AOS + GSAP", desc: "Révélations au scroll + chorégraphies et compteurs" },
+  { id: "aos", icon: "📜", name: "AOS Seul", desc: "Apparitions fluides et cascades au défilement" },
+  { id: "gsap", icon: "⏱️", name: "GSAP Seul", desc: "Timelines, compteurs de chiffres et tracés SVG" },
+  { id: "none", icon: "🛑", name: "Statique", desc: "Zéro animation (lecture sobre / impression)" },
+];
+
+export const FONT_FAMILIES_LIST = [
+  { id: "auto", name: "Assortie au style", desc: "Police signature du style visuel" },
+  { id: "outfit", name: "Outfit & Plus Jakarta", desc: "Géométrique, épuré & contemporain (SaaS)" },
+  { id: "playfair", name: "Playfair & Lora (Serif)", desc: "Éditorial littéraire, lettrines prestigieuses" },
+  { id: "space_grotesk", name: "Space Grotesk & Syne", desc: "Brutaliste, design affirmé & avant-garde" },
+  { id: "fredoka", name: "Fredoka & Baloo 2", desc: "Ronde, douce, conviviale & ludique" },
+  { id: "caveat", name: "Caveat & Patrick Hand", desc: "Manuscrite, carnet d'écolier & croquis" },
+  { id: "jetbrains", name: "JetBrains Mono", desc: "Terminal informatique, console & code" },
+  { id: "righteous", name: "Righteous & Orbitron", desc: "Rétro-futuriste, Synthwave & affichage" },
+];
+
+export const TEXT_EFFECTS_LIST = [
+  { id: "charming_wave", icon: "🌊", name: "Ondulation cinétique", desc: "Vague animée lettre par lettre sur le titre" },
+  { id: "charming_gradient", icon: "🌈", name: "Flux chromatique", desc: "Dégradé de couleur animé sur les mots-clés" },
+  { id: "charming_bounce", icon: "🎈", name: "Rebond au survol", desc: "Lettres dynamiques et interactives à la souris" },
+  { id: "pretext_fit", icon: "📐", name: "Titre monumental", desc: "Auto-ajustement plein cadre sans débordement" },
+  { id: "curved_text", icon: "〰️", name: "Bandeau courbé SVG", desc: "Accroche sur courbe sinusoïdale organique" },
+  { id: "gsap_counters", icon: "🔢", name: "Compteurs chiffrés", desc: "Défilement numérique animé des statistiques" },
+];
+
 
 export function WebPageModal({
   isOpen,
@@ -110,7 +141,15 @@ export function WebPageModal({
     }
   }, [currentModel, models]);
 
+  // Synchronize useConversation whenever conversationId changes or modal opens
+  useEffect(() => {
+    if (conversationId) {
+      setUseConversation(true);
+    }
+  }, [conversationId, isOpen]);
+
   const [loading, setLoading] = useState(false);
+  const [loadingPage, setLoadingPage] = useState(false);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -125,12 +164,50 @@ export function WebPageModal({
   const [layoutStyle, setLayoutStyle] = useState<"tabs" | "single_page" | "print_sheet" | "auto">("auto");
   const [textDensity, setTextDensity] = useState<number>(5);
   const [interactivity, setInteractivity] = useState<"auto" | "high" | "none">("auto");
-  const [includeQuiz, setIncludeQuiz] = useState<boolean>(true);
+  const [includeQuiz, setIncludeQuiz] = useState<boolean>(false);
   const [includeSvg, setIncludeSvg] = useState<boolean>(true);
   const [themePalette, setThemePalette] = useState<string>("ocean");
   const [visualStyle, setVisualStyle] = useState<string>("auto");
   const [activePreset, setActivePreset] = useState<string>("auto");
+  const [animationEngine, setAnimationEngine] = useState<"auto" | "both" | "aos" | "gsap" | "none">("auto");
+  const [fontFamily, setFontFamily] = useState<string>("auto");
+  const [textEffects, setTextEffects] = useState<string[]>([]);
+
   const [isModelPickerOpen, setIsModelPickerOpen] = useState(false);
+  // Topics exploration modal state
+  const [showTopicsModal, setShowTopicsModal] = useState(false);
+  const [proposedTopics, setProposedTopics] = useState<PageTopicItem[]>([]);
+  const [selectedTopicIds, setSelectedTopicIds] = useState<Set<string>>(new Set());
+  const [proposedSummary, setProposedSummary] = useState("");
+  const [loadingTopics, setLoadingTopics] = useState(false);
+  const [customTopicInput, setCustomTopicInput] = useState("");
+  const [topicCategoryFilter, setTopicCategoryFilter] = useState<string>("all");
+  const [topicSearchQuery, setTopicSearchQuery] = useState<string>("");
+  const [topicDetailLevels, setTopicDetailLevels] = useState<Record<string, number>>({});
+  const [bulkDetailLevel, setBulkDetailLevel] = useState<number>(5);
+
+  // Categories derived from proposed topics
+  const topicCategories = useMemo(() => {
+    const cats = new Set<string>();
+    proposedTopics.forEach((t) => {
+      if (t.category) cats.add(t.category);
+    });
+    return Array.from(cats);
+  }, [proposedTopics]);
+
+  // Filtered topics according to category chip and search query
+  const displayedTopics = useMemo(() => {
+    return proposedTopics.filter((t) => {
+      const matchCat = topicCategoryFilter === "all" || t.category === topicCategoryFilter;
+      const matchSearch =
+        !topicSearchQuery.trim() ||
+        t.title.toLowerCase().includes(topicSearchQuery.toLowerCase()) ||
+        t.description.toLowerCase().includes(topicSearchQuery.toLowerCase()) ||
+        t.category.toLowerCase().includes(topicSearchQuery.toLowerCase());
+      return matchCat && matchSearch;
+    });
+  }, [proposedTopics, topicCategoryFilter, topicSearchQuery]);
+
 
   function applyPreset(presetId: string) {
     setActivePreset(presetId);
@@ -143,7 +220,7 @@ export function WebPageModal({
       setTextDensity(5);
       setInteractivity("auto");
       setIncludeSvg(true);
-      setIncludeQuiz(true);
+      setIncludeQuiz(false);
       setVisualStyle("auto");
     } else if (presetId === "revision") {
       setPageType("revision");
@@ -154,7 +231,7 @@ export function WebPageModal({
       setTextDensity(4);
       setInteractivity("high");
       setIncludeSvg(true);
-      setIncludeQuiz(true);
+      setIncludeQuiz(false);
       setVisualStyle("notebook");
     } else if (presetId === "article") {
       setPageType("article");
@@ -176,7 +253,7 @@ export function WebPageModal({
       setTextDensity(5);
       setInteractivity("high");
       setIncludeSvg(true);
-      setIncludeQuiz(true);
+      setIncludeQuiz(false);
       setVisualStyle("modern_clean");
     } else if (presetId === "dashboard") {
       setPageType("dashboard");
@@ -243,7 +320,8 @@ export function WebPageModal({
     try {
       const data = await fetchWebPages();
       setPages(data);
-      if (data.length > 0 && !selectedPageId && !initialPrompt) {
+      // Only auto-select existing page if there is NO conversation context and NO initialPrompt
+      if (data.length > 0 && !selectedPageId && !initialPrompt && !conversationId) {
         await selectPage(data[0].id);
       }
     } catch (err) {
@@ -256,7 +334,7 @@ export function WebPageModal({
   async function selectPage(id: string) {
     setSelectedPageId(id);
     setSelectedVersionId(null);
-    setWorking(true);
+    setLoadingPage(true);
     setError(null);
     try {
       const full = await fetchWebPage(id);
@@ -267,7 +345,7 @@ export function WebPageModal({
     } catch (err) {
       setError(errorMessage(err));
     } finally {
-      setWorking(false);
+      setLoadingPage(false);
     }
   }
 
@@ -281,11 +359,58 @@ export function WebPageModal({
     return selectedPage.latest_html ?? "";
   }, [selectedPage, selectedVersionId]);
 
-  // Handle page creation
-  async function handleCreate(e?: FormEvent) {
+  // Trigger topic exploration before generation
+  async function handleExploreTopics(e?: FormEvent) {
     if (e) e.preventDefault();
     if (!prompt.trim() && !useConversation) return;
 
+    setLoadingTopics(true);
+    setError(null);
+    try {
+      const res = await proposeWebPageTopics({
+        prompt: prompt.trim(),
+        title: title.trim() || undefined,
+        conversation_id: useConversation && conversationId ? conversationId : undefined,
+        page_type: pageType,
+        target_audience: targetAudience,
+        model: selectedModel || undefined,
+      });
+
+      if (!title.trim() && res.suggested_title) {
+        setTitle(res.suggested_title);
+      }
+      setProposedSummary(res.summary || "");
+      setProposedTopics(res.topics || []);
+
+      // Initialize default detail level of 5 for each topic
+      const initialLevels: Record<string, number> = {};
+      (res.topics || []).forEach((t) => {
+        initialLevels[t.id] = t.detail_level || 5;
+      });
+      setTopicDetailLevels(initialLevels);
+
+      // Auto-select recommended topics, or all if none recommended
+      const rec = new Set<string>();
+      (res.topics || []).forEach((t) => {
+        if (t.recommended) rec.add(t.id);
+      });
+      if (rec.size === 0) {
+        (res.topics || []).forEach((t) => rec.add(t.id));
+      }
+      setSelectedTopicIds(rec);
+      setShowTopicsModal(true);
+    } catch (err) {
+      setError("Impossible d'explorer les thèmes : " + errorMessage(err));
+    } finally {
+      setLoadingTopics(false);
+    }
+  }
+
+  // Handle page creation with optional selected topics
+  async function handleCreate(topicsToInclude?: PageTopicItem[]) {
+    if (!prompt.trim() && !useConversation) return;
+
+    setShowTopicsModal(false);
     setWorking(true);
     setError(null);
     try {
@@ -305,6 +430,10 @@ export function WebPageModal({
         include_svg: includeSvg,
         theme_palette: themePalette,
         visual_style: visualStyle,
+        animation_engine: animationEngine,
+        font_family: fontFamily,
+        text_effects: textEffects,
+        selected_topics: topicsToInclude && topicsToInclude.length > 0 ? topicsToInclude : undefined,
       });
       setPages((prev) => [created, ...prev]);
       setSelectedPageId(created.id);
@@ -320,6 +449,59 @@ export function WebPageModal({
     } finally {
       setWorking(false);
     }
+  }
+
+  // Helper to toggle a topic selection
+  function toggleTopicSelection(topicId: string) {
+    setSelectedTopicIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(topicId)) {
+        next.delete(topicId);
+      } else {
+        next.add(topicId);
+      }
+      return next;
+    });
+  }
+
+  // Add custom user-defined topic to proposed topics list
+  function handleAddCustomTopic() {
+    const trimmed = customTopicInput.trim();
+    if (!trimmed) return;
+    const newId = `custom-${Date.now()}`;
+    const newTopic: PageTopicItem = {
+      id: newId,
+      title: trimmed,
+      description: "Thème sur-mesure ajouté par vos soins.",
+      category: "Personnalisé",
+      recommended: true,
+      detail_level: bulkDetailLevel || 5,
+    };
+    setProposedTopics((prev) => [newTopic, ...prev]);
+    setSelectedTopicIds((prev) => new Set(prev).add(newId));
+    setTopicDetailLevels((prev) => ({ ...prev, [newId]: bulkDetailLevel || 5 }));
+    setCustomTopicInput("");
+  }
+
+  // Adjust detail level for a specific topic
+  function handleSetTopicDetail(topicId: string, level: number) {
+    setTopicDetailLevels((prev) => ({
+      ...prev,
+      [topicId]: Math.max(1, Math.min(10, level)),
+    }));
+  }
+
+  // Apply a bulk detail level to all proposed topics
+  function handleApplyBulkDetailLevel(level: number) {
+    const clamped = Math.max(1, Math.min(10, level));
+    setBulkDetailLevel(clamped);
+    setTopicDetailLevels((prev) => {
+      const updated: Record<string, number> = {};
+      proposedTopics.forEach((t) => {
+        updated[t.id] = clamped;
+      });
+      return updated;
+    });
   }
 
   // Handle iterative refinement
@@ -350,8 +532,9 @@ export function WebPageModal({
 
   // Download standalone HTML file
   function handleDownloadHtml() {
-    if (!activeHtml || !selectedPage) return;
-    const blob = new Blob([activeHtml], { type: "text/html;charset=utf-8" });
+    const htmlToDownload = activeHtml || selectedPage?.latest_html || "";
+    if (!htmlToDownload || !selectedPage) return;
+    const blob = new Blob([htmlToDownload], { type: "text/html;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -507,6 +690,23 @@ export function WebPageModal({
           </div>
 
           <div className={styles.headerControls}>
+            {/* Create new page action available directly from top bar */}
+            <button
+              type="button"
+              className={`${styles.btn} ${!selectedPage ? styles.btnPrimary : ""}`}
+              onClick={() => {
+                setSelectedPageId(null);
+                setSelectedPage(null);
+                setPrompt("");
+                setTitle("");
+                if (conversationId) setUseConversation(true);
+              }}
+              title="Créer une nouvelle page autonome"
+            >
+              <Plus size={14} />
+              <span>Nouvelle page</span>
+            </button>
+
             {selectedPage && (
               <>
                 {/* Device preview switcher */}
@@ -558,6 +758,7 @@ export function WebPageModal({
                   type="button"
                   className={styles.btn}
                   onClick={handleDownloadHtml}
+                  disabled={!activeHtml && !selectedPage?.latest_html}
                   title="Télécharger le fichier .html autonome"
                 >
                   <Download size={14} />
@@ -814,7 +1015,7 @@ export function WebPageModal({
                     </button>
                   </div>
 
-                  <form onSubmit={handleCreate}>
+                  <form onSubmit={handleExploreTopics}>
                     {conversationId && (
                       <div className={styles.convSourceBanner}>
                         <div>
@@ -1156,21 +1357,7 @@ export function WebPageModal({
                         />
                       </div>
 
-                      {/* Row 7: Toggles Quiz & Palette */}
-                      <div className={styles.togglesRow}>
-                        <label className={styles.checkboxLabel}>
-                          <input
-                            type="checkbox"
-                            checked={includeQuiz}
-                            onChange={(e) => {
-                              setIncludeQuiz(e.target.checked);
-                              setActivePreset("custom");
-                            }}
-                          />
-                          <span>Mini-quiz interactif de validation</span>
-                        </label>
-                      </div>
-
+                      {/* Row 7: Palette */}
                       <div className={styles.paletteRow}>
                         <span>Palette de teintes :</span>
                         <div className={styles.paletteList}>
@@ -1193,15 +1380,104 @@ export function WebPageModal({
                           ))}
                         </div>
                       </div>
+                      {/* Row 8: Moteur d'Animation (AOS & GSAP) */}
+                      <div style={{ marginTop: "0.85rem", marginBottom: "0.85rem" }}>
+                        <label className={styles.label}>Chorégraphie & Moteur d&apos;animation</label>
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: "0.4rem" }}>
+                          {ANIMATION_ENGINES.map((eng) => (
+                            <button
+                              key={eng.id}
+                              type="button"
+                              className={`${styles.creativeCard} ${animationEngine === eng.id ? styles.active : ""}`}
+                              onClick={() => {
+                                setAnimationEngine(eng.id as any);
+                                setActivePreset("custom");
+                              }}
+                              style={{ padding: "0.45rem" }}
+                            >
+                              <div className={styles.creativeCardTitle}>
+                                <span>{eng.icon}</span>
+                                <span>{eng.name}</span>
+                              </div>
+                              <div className={styles.creativeCardDesc} style={{ fontSize: "0.62rem" }}>
+                                {eng.desc}
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Row 9: Police d'écriture (Google Fonts) */}
+                      <div style={{ marginBottom: "0.85rem" }}>
+                        <label className={styles.label}>Police d&apos;écriture (Google Fonts)</label>
+                        <select
+                          className={styles.selectInput}
+                          value={fontFamily}
+                          onChange={(e) => {
+                            setFontFamily(e.target.value);
+                            setActivePreset("custom");
+                          }}
+                        >
+                          {FONT_FAMILIES_LIST.map((f) => (
+                            <option key={f.id} value={f.id}>
+                              {f.name} — {f.desc}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* Row 10: Effets typographiques et visuels (Charming, Pretext, xsvg, compteurs) */}
+                      <div style={{ marginBottom: "0.85rem" }}>
+                        <label className={styles.label}>Effets visuels & typographiques activés</label>
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: "0.35rem" }}>
+                          {TEXT_EFFECTS_LIST.map((eff) => {
+                            const isChecked = textEffects.includes(eff.id);
+                            return (
+                              <button
+                                key={eff.id}
+                                type="button"
+                                className={`${styles.effectChip} ${isChecked ? styles.active : ""}`}
+                                onClick={() => {
+                                  setTextEffects((prev) =>
+                                    isChecked ? prev.filter((id) => id !== eff.id) : [...prev, eff.id]
+                                  );
+                                  setActivePreset("custom");
+                                }}
+                              >
+                                <span style={{ fontSize: "0.95rem" }}>{eff.icon}</span>
+                                <div style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+                                  <span style={{ fontWeight: 600, fontSize: "0.72rem" }}>{eff.name}</span>
+                                  <span style={{ fontSize: "0.6rem", opacity: 0.75, lineHeight: 1.15 }}>{eff.desc}</span>
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
                     </div>
 
-                    <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                    <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.6rem" }}>
+                      <button
+                        type="button"
+                        className={styles.btn}
+                        disabled={working || loadingTopics || (!prompt.trim() && !useConversation)}
+                        onClick={() => void handleCreate()}
+                        title="Générer directement la page sans passer par la sélection de thèmes"
+                      >
+                        <span>Génération directe</span>
+                      </button>
                       <button
                         type="submit"
                         className={`${styles.btn} ${styles.btnPrimary}`}
-                        disabled={working || (!prompt.trim() && !useConversation)}
+                        disabled={working || loadingTopics || (!prompt.trim() && !useConversation)}
                       >
-                        {working ? (
+                        {loadingTopics ? (
+                          <>
+                            <LoaderCircle size={15} className="spin" />
+                            <span>Exploration des thèmes...</span>
+                          </>
+                        ) : working ? (
                           <>
                             <LoaderCircle size={15} className="spin" />
                             <span>Génération en cours...</span>
@@ -1209,7 +1485,7 @@ export function WebPageModal({
                         ) : (
                           <>
                             <Sparkles size={15} />
-                            <span>Générer la Page Web</span>
+                            <span>Explorer les thèmes & Générer</span>
                           </>
                         )}
                       </button>
@@ -1221,7 +1497,7 @@ export function WebPageModal({
               /* Viewer & Workspace */
               <>
                 <div className={styles.stage}>
-                  {working && (
+                  {(working || loadingPage) && (
                     <div
                       style={{
                         position: "absolute",
@@ -1239,7 +1515,7 @@ export function WebPageModal({
                       }}
                     >
                       <LoaderCircle size={14} className="spin" />
-                      <span>Actualisation par l'IA...</span>
+                      <span>{loadingPage ? "Chargement de la page..." : "Actualisation par l'IA..."}</span>
                     </div>
                   )}
 
@@ -1391,6 +1667,324 @@ export function WebPageModal({
           </section>
         </div>
       </div>
+
+            {/* Topics Selection Modal */}
+      {showTopicsModal && (
+        <div
+          className={styles.topicsOverlay}
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !working) {
+              setShowTopicsModal(false);
+            }
+          }}
+        >
+          <div className={styles.topicsModal} role="dialog" aria-modal="true" aria-labelledby="topics-modal-title">
+            <div className={styles.topicsHeader}>
+              <div className={styles.topicsTitleWrap}>
+                <div className={styles.topicsIconBadge}>
+                  <Sparkles size={20} />
+                </div>
+                <div>
+                  <h3 id="topics-modal-title" className={styles.topicsMainTitle}>
+                    Thèmes d&apos;exploration : {title || prompt.slice(0, 45)}
+                  </h3>
+                  <p className={styles.topicsSubtitle}>
+                    {proposedSummary ||
+                      "L'agent a balayé large pour identifier tous les angles possibles. Cochez les sujets à intégrer dans votre page."}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                className={styles.topicsCloseBtn}
+                onClick={() => setShowTopicsModal(false)}
+                disabled={working}
+                aria-label="Fermer la modale"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className={styles.topicsToolbar}>
+              <div className={styles.topicsCounter}>
+                <Check size={14} />
+                <span>
+                  {selectedTopicIds.size} / {proposedTopics.length} thème{selectedTopicIds.size > 1 ? "s" : ""} sélectionné{selectedTopicIds.size > 1 ? "s" : ""}
+                </span>
+              </div>
+              <div className={styles.topicsActionLinks}>
+                <button
+                  type="button"
+                  className={styles.topicsLinkBtn}
+                  onClick={() => {
+                    const allIds = new Set(proposedTopics.map((t) => t.id));
+                    setSelectedTopicIds(allIds);
+                  }}
+                  disabled={working}
+                >
+                  Tout cocher
+                </button>
+                <button
+                  type="button"
+                  className={styles.topicsLinkBtn}
+                  onClick={() => {
+                    const rec = new Set<string>();
+                    proposedTopics.forEach((t) => {
+                      if (t.recommended) rec.add(t.id);
+                    });
+                    setSelectedTopicIds(rec);
+                  }}
+                  disabled={working}
+                >
+                  Sélection recommandée
+                </button>
+                <button
+                  type="button"
+                  className={styles.topicsLinkBtn}
+                  onClick={() => setSelectedTopicIds(new Set())}
+                  disabled={working}
+                >
+                  Tout désélectionner
+                </button>
+                <button
+                  type="button"
+                  className={styles.topicsLinkBtn}
+                  onClick={(e) => void handleExploreTopics(e)}
+                  disabled={working || loadingTopics}
+                  title="Demander à l'IA d'autres suggestions"
+                >
+                  {loadingTopics ? <LoaderCircle size={11} className="spin" /> : <RefreshCw size={11} />}
+                  <span>Relancer</span>
+                </button>
+              </div>
+
+              {/* Bulk Detail Level Slider */}
+              <div className={styles.bulkDetailBar} title="Règle d'un coup le niveau de détail de base pour tous les thèmes">
+                <span>Niveau global :</span>
+                <input
+                  type="range"
+                  min={1}
+                  max={10}
+                  value={bulkDetailLevel}
+                  onChange={(e) => handleApplyBulkDetailLevel(Number(e.target.value))}
+                  style={{ width: "90px", accentColor: "#0284c7" }}
+                />
+                <span style={{ fontWeight: 700, color: "#0284c7", minWidth: "32px" }}>{bulkDetailLevel}/10</span>
+                <span style={{ fontSize: "0.66rem", opacity: 0.8 }}>
+                  {bulkDetailLevel >= 7 ? "(35-50 lignes/thème)" : bulkDetailLevel >= 4 ? "(≥20 lignes/thème)" : "(15 lignes/thème)"}
+                </span>
+              </div>
+            </div>
+
+            <div className={styles.topicsBody}>
+              {/* Source conversation rappel dans la modale */}
+              {conversationId && (
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    padding: "0.5rem 0.85rem",
+                    borderRadius: "8px",
+                    background: "rgba(2, 132, 199, 0.08)",
+                    border: "1px solid rgba(2, 132, 199, 0.25)",
+                    fontSize: "0.78rem",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", minWidth: 0 }}>
+                    <span style={{ color: "#0284c7", fontWeight: 700 }}>Conversation liée :</span>
+                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {conversationTitle || "Échange actif"}
+                    </span>
+                  </div>
+                  <label style={{ display: "flex", alignItems: "center", gap: "0.35rem", cursor: "pointer", fontWeight: 600, color: "#0284c7" }}>
+                    <input
+                      type="checkbox"
+                      checked={useConversation}
+                      onChange={(e) => setUseConversation(e.target.checked)}
+                    />
+                    <span>Inclure les échanges du tchat</span>
+                  </label>
+                </div>
+              )}
+              {/* Category Filter Chips & Search Bar */}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.6rem", flexWrap: "wrap" }}>
+                <div className={styles.categoryFilterRow}>
+                  <button
+                    type="button"
+                    className={`${styles.categoryFilterChip} ${topicCategoryFilter === "all" ? styles.active : ""}`}
+                    onClick={() => setTopicCategoryFilter("all")}
+                  >
+                    Toutes ({proposedTopics.length})
+                  </button>
+                  {topicCategories.map((cat) => {
+                    const countInCat = proposedTopics.filter((t) => t.category === cat).length;
+                    return (
+                      <button
+                        key={cat}
+                        type="button"
+                        className={`${styles.categoryFilterChip} ${topicCategoryFilter === cat ? styles.active : ""}`}
+                        onClick={() => setTopicCategoryFilter(cat)}
+                      >
+                        {cat} ({countInCat})
+                      </button>
+                    );
+                  })}
+                </div>
+                <input
+                  type="text"
+                  className={styles.topicSearchInput}
+                  placeholder="Filtrer les thèmes..."
+                  value={topicSearchQuery}
+                  onChange={(e) => setTopicSearchQuery(e.target.value)}
+                />
+              </div>
+
+              {/* Add custom topic on the fly */}
+              <div className={styles.customTopicBar}>
+                <Plus size={16} color="#0284c7" />
+                <input
+                  type="text"
+                  className={styles.customTopicInput}
+                  placeholder="Ajouter un thème personnalisé..."
+                  value={customTopicInput}
+                  onChange={(e) => setCustomTopicInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      handleAddCustomTopic();
+                    }
+                  }}
+                  disabled={working}
+                />
+                <button
+                  type="button"
+                  className={styles.topicsLinkBtn}
+                  onClick={handleAddCustomTopic}
+                  disabled={!customTopicInput.trim() || working}
+                  style={{ fontWeight: 600, color: "#0284c7" }}
+                >
+                  Ajouter
+                </button>
+              </div>
+
+              {/* Topics Grid */}
+              <div className={styles.topicsGrid}>
+                {displayedTopics.map((top) => {
+                  const isChecked = selectedTopicIds.has(top.id);
+                  const detailLvl = topicDetailLevels[top.id] ?? 5;
+                  return (
+                    <div
+                      key={top.id}
+                      className={`${styles.topicCard} ${isChecked ? styles.selected : ""}`}
+                      onClick={() => toggleTopicSelection(top.id)}
+                      role="checkbox"
+                      aria-checked={isChecked}
+                      tabIndex={0}
+                      onKeyDown={(e) => {
+                        if (e.key === " " || e.key === "Enter") {
+                          e.preventDefault();
+                          toggleTopicSelection(top.id);
+                        }
+                      }}
+                    >
+                      <div className={styles.topicCardTop}>
+                        <span className={styles.topicCatBadge}>{top.category}</span>
+                        <div className={styles.topicCheckCircle}>
+                          {isChecked && <Check size={12} strokeWidth={3} />}
+                        </div>
+                      </div>
+                      <div className={styles.topicCardTitle}>{top.title}</div>
+                      {top.description && <div className={styles.topicCardDesc}>{top.description}</div>}
+
+                      {/* Detail Level Slider on each selected topic card */}
+                      {isChecked && (
+                        <div
+                          className={styles.topicDetailSliderBox}
+                          onClick={(e) => e.stopPropagation()}
+                          onKeyDown={(e) => e.stopPropagation()}
+                        >
+                          <div className={styles.topicDetailSliderHeader}>
+                            <span>Détail : {detailLvl}/10</span>
+                            <span className={styles.topicDetailSliderBadge}>
+                              {detailLvl >= 7
+                                ? "≥ 35 lignes"
+                                : detailLvl >= 4
+                                ? "≥ 20 lignes (standard)"
+                                : "~15 lignes"}
+                            </span>
+                          </div>
+                          <input
+                            type="range"
+                            min={1}
+                            max={10}
+                            value={detailLvl}
+                            className={styles.topicDetailSliderInput}
+                            onChange={(e) => {
+                              handleSetTopicDetail(top.id, Number(e.target.value));
+                            }}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className={styles.topicsFooter}>
+              <button
+                type="button"
+                className={styles.btn}
+                onClick={() => setShowTopicsModal(false)}
+                disabled={working}
+              >
+                Annuler
+              </button>
+              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <button
+                  type="button"
+                  className={styles.btn}
+                  onClick={() => void handleCreate()}
+                  disabled={working}
+                  title="Générer sans imposer la sélection de thèmes"
+                >
+                  Générer sans filtrer
+                </button>
+                <button
+                  type="button"
+                  className={`${styles.btn} ${styles.btnPrimary}`}
+                  disabled={working || selectedTopicIds.size === 0}
+                  onClick={() => {
+                    const chosen = proposedTopics
+                      .filter((t) => selectedTopicIds.has(t.id))
+                      .map((t) => ({
+                        ...t,
+                        detail_level: topicDetailLevels[t.id] ?? 5,
+                      }));
+                    void handleCreate(chosen);
+                  }}
+                >
+                  {working ? (
+                    <>
+                      <LoaderCircle size={15} className="spin" />
+                      <span>Génération de la page...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles size={15} />
+                      <span>
+                        Générer la page ({selectedTopicIds.size} thème{selectedTopicIds.size > 1 ? "s" : ""})
+                      </span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
 
       {/* Dedicated Model Picker Modal */}
       {isModelPickerOpen && models && (

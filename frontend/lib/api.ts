@@ -274,6 +274,22 @@ export type Blog = {
   } | null;
   posts?: BlogPost[];
 };
+
+export type PageTopicItem = {
+  id: string;
+  title: string;
+  description: string;
+  category: string;
+  recommended: boolean;
+  detail_level?: number;
+};
+
+export type ProposePageTopicsResponse = {
+  suggested_title: string;
+  summary: string;
+  topics: PageTopicItem[];
+};
+
 export type WebPageVersion = {
   id: string;
   page_id: string;
@@ -656,6 +672,20 @@ export async function fetchWebPage(pageId: string): Promise<WebPage> {
   return api<WebPage>(`/pages/${pageId}`);
 }
 
+export async function proposeWebPageTopics(payload: {
+  prompt: string;
+  title?: string;
+  conversation_id?: string;
+  page_type?: string;
+  target_audience?: string;
+  model?: string;
+}): Promise<ProposePageTopicsResponse> {
+  return api<ProposePageTopicsResponse>("/pages/propose-topics", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function createWebPage(payload: {
   prompt: string;
   title?: string;
@@ -672,6 +702,10 @@ export async function createWebPage(payload: {
   include_svg?: boolean;
   theme_palette?: string;
   visual_style?: string;
+  animation_engine?: "auto" | "both" | "aos" | "gsap" | "none";
+  font_family?: string;
+  text_effects?: string[];
+  selected_topics?: PageTopicItem[];
 }): Promise<WebPage> {
   return api<WebPage>("/pages", {
     method: "POST",

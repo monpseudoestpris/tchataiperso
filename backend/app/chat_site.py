@@ -94,11 +94,36 @@ async def generate_chat_site(
 
 
 def _site_document(title: str, page: str) -> str:
-    """Sandbox scripts, cookies, navigation and network access, including offline exports."""
+    """Sandbox scripts, cookies, navigation and network access, including offline exports.
+    Allows popups so external source links can be opened in new tabs without leaving the page."""
     policy = ("default-src 'none'; script-src 'none'; "
               "style-src 'unsafe-inline' https://fonts.googleapis.com; "
               "font-src https://fonts.gstatic.com data:; img-src data: blob:; "
               "connect-src 'none'; form-action 'none'; base-uri 'none'")
+
+    # Ensure all external links have target="_blank" rel="noopener noreferrer"
+    def _fix_links(doc: str) -> str:
+        import re
+        def _repl(m: re.Match) -> str:
+            tag = m.group(0)
+            href_m = re.search(r'href=["\']([^"\']+)["\']', tag, re.I)
+            if not href_m:
+                return tag
+            href = href_m.group(1).strip()
+            if href.startswith(("http://", "https://", "//")):
+                if "target=" not in tag.lower():
+                    tag = tag[:-1] + ' target="_blank">'
+                elif 'target="_blank"' not in tag and "target='_blank'" not in tag:
+                    tag = re.sub(r'target=["\'][^"\']*["\']', 'target="_blank"', tag, flags=re.I)
+                if "rel=" not in tag.lower():
+                    tag = tag[:-1] + ' rel="noopener noreferrer">'
+                elif 'noopener' not in tag.lower():
+                    tag = re.sub(r'rel=["\']([^"\']*)["\']', r'rel="\1 noopener noreferrer"', tag, flags=re.I)
+            return tag
+        return re.sub(r'<a\b[^>]*>', _repl, doc, flags=re.I)
+
+    clean_page = _fix_links(page)
+
     def isolated(document: str) -> str:
         # A leading CSP also covers generated documents without a <head> tag.
         return html.escape('<meta http-equiv="Content-Security-Policy" content="'
@@ -118,7 +143,7 @@ iframe{{display:block;width:100%;height:calc(100vh - 85px);min-height:600px;bord
 </style></head><body>
 <header><strong>clAIr Pages · Synthèse du tchat</strong><nav>
 <button type="button" id="download">Télécharger .html</button></nav></header>
-<iframe title="Synthèse illustrée de la conversation" sandbox="" srcdoc="{isolated(page)}"></iframe>
+<iframe title="Synthèse illustrée de la conversation" sandbox="allow-popups allow-popups-to-escape-sandbox" srcdoc="{isolated(clean_page)}"></iframe>
 <script>
 document.getElementById('download').addEventListener('click',()=>{{
  const blob=new Blob(['<!doctype html>'+document.documentElement.outerHTML],{{type:'text/html;charset=utf-8'}});

@@ -738,6 +738,35 @@ class UpdateTopicResource(BaseModel):
     content: str | None = Field(default=None, max_length=50000)
 
 
+class PageTopicItem(BaseModel):
+    id: str = Field(max_length=60)
+    title: str = Field(min_length=1, max_length=150)
+    description: str = Field(default="", max_length=500)
+    category: str = Field(default="general", max_length=60)
+    recommended: bool = True
+    detail_level: int = Field(default=5, ge=1, le=10)
+
+
+class ProposePageTopicsRequest(BaseModel):
+    prompt: str = Field(default="", max_length=15000)
+    title: str | None = Field(default=None, max_length=200)
+    conversation_id: str | None = Field(default=None, max_length=36)
+    page_type: str = Field(default="auto", max_length=50)
+    target_audience: str = Field(default="general", max_length=50)
+    model: str | None = Field(default=None, max_length=200)
+
+    @field_validator("prompt")
+    @classmethod
+    def trim_prompt(cls, value: str) -> str:
+        return value.strip()
+
+
+class ProposePageTopicsResponse(BaseModel):
+    suggested_title: str = Field(default="Page Web", max_length=200)
+    summary: str = Field(default="", max_length=1000)
+    topics: list[PageTopicItem] = Field(default_factory=list)
+
+
 class CreateWebPage(BaseModel):
     prompt: str = Field(default="", max_length=15000)
     title: str | None = Field(default=None, max_length=200)
@@ -750,10 +779,14 @@ class CreateWebPage(BaseModel):
     layout_style: Literal["tabs", "single_page", "print_sheet", "auto"] = "auto"
     text_density: int = Field(default=5, ge=1, le=10)
     interactivity: Literal["auto", "high", "none"] = "auto"
-    include_quiz: bool = True
+    include_quiz: bool = False
     include_svg: bool = True
     theme_palette: str = Field(default="ocean", max_length=40)
     visual_style: str = Field(default="auto", max_length=50)
+    animation_engine: Literal["auto", "both", "aos", "gsap", "none"] = "auto"
+    font_family: str = Field(default="auto", max_length=50)
+    text_effects: list[str] = Field(default_factory=list, max_length=10)
+    selected_topics: list[PageTopicItem] = Field(default_factory=list, max_length=100)
 
     @field_validator("prompt")
     @classmethod

@@ -1159,7 +1159,7 @@ def generate_chat_export_html(
         <span>📋</span>
         <span>Copier</span>
       </button>
-      <a href="?download=1" class="topbar-btn" download title="Télécharger le fichier .html complet">
+      <a href="?download=1" class="topbar-btn" download title="Télécharger le fichier .html complet" onclick="if(window.location.protocol==='file:'||window.location.href.includes('/sites/')){{event.preventDefault();const blob=new Blob(['<!doctype html>'+document.documentElement.outerHTML],{{type:'text/html;charset=utf-8'}});const u=URL.createObjectURL(blob),a=document.createElement('a');a.href=u;a.download='{slugify(clean_title)[:40] or 'document'}.html';a.click();setTimeout(()=>URL.revokeObjectURL(u),1500);}}">
         <span>📥</span>
         <span>Télécharger .html</span>
       </a>

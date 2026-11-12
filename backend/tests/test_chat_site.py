@@ -49,7 +49,7 @@ def test_site_uses_pages_and_isolates_html(monkeypatch):
     assert '<script>parent.attack()' not in document
     frames = Frames(document).frames
     assert len(frames) == 1
-    assert frames[0]["sandbox"] == ""
+    assert frames[0]["sandbox"] == "allow-popups allow-popups-to-escape-sandbox"
     assert "script-src &#x27;none&#x27;" in frames[0]["srcdoc"]
     assert call["interactivity"] == "none"
     assert 'connect-src &#x27;none&#x27;' in frames[0]["srcdoc"]

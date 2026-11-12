@@ -43,14 +43,46 @@ def test_page_generator_helpers():
     assert "<svg" in fallback
     assert "themeBtn" in fallback
 
+    # 5. extract_html with truncated markdown fence
+    truncated_wrapped = "```html\n<!DOCTYPE html><html><body><h1>Titre</h1>"
+    extracted_trunc = extract_html(truncated_wrapped)
+    assert extracted_trunc.startswith("<!DOCTYPE html>")
+    assert not extracted_trunc.startswith("```")
+
+
+def test_sanitize_and_enhance_html():
+    from app.page_runtime import sanitize_and_enhance_html
+
+    # External links get target="_blank" and rel="noopener noreferrer"
+    html_with_ext_link = '<html><body><a href="https://example.org">Lien externe</a></body></html>'
+    enhanced = sanitize_and_enhance_html(html_with_ext_link)
+    assert 'target="_blank"' in enhanced
+    assert 'rel="noopener noreferrer"' in enhanced
+    assert "__clair_runtime_installed__" in enhanced
+
+    # Unclosed tags are properly closed
+    truncated = '<html><body><section><h2>Partie 1</h2><script>console.log("ok");'
+    closed = sanitize_and_enhance_html(truncated)
+    assert "</script>" in closed
+    assert "</body>" in closed
+    assert "</html>" in closed
+
+    # Hidden tabs container has hidden attribute removed
+    with_hidden_tabs = '<nav class="tabs" hidden><button>Tab 1</button></nav>'
+    unhidden = sanitize_and_enhance_html(with_hidden_tabs)
+    assert 'hidden' not in unhidden or 'class="tabs"' in unhidden
+
 
 def test_web_page_crud_and_lifecycle(client):
-    # 1. Create a Web Page
+    # 1. Create a Web Page with custom font, animation engine and text effects
     res = client.post(
         "/api/pages",
         json={
             "prompt": "Guide interactif sur l'astronomie",
             "title": "Astronomie Interactive",
+            "animation_engine": "both",
+            "font_family": "space_grotesk",
+            "text_effects": ["charming_wave", "gsap_counters"],
         },
     )
     assert res.status_code == 201, res.text
@@ -61,6 +93,7 @@ def test_web_page_crud_and_lifecycle(client):
     assert page["versions_count"] == 1
     assert page["latest_version_number"] == 1
     assert "<!DOCTYPE html>" in page["latest_html"]
+    assert "Space+Grotesk" in page["latest_html"] or "Space Grotesk" in page["latest_html"]
     page_id = page["id"]
     token = page["public_token"]
 
@@ -151,6 +184,97 @@ def test_web_page_creation_from_conversation(client):
     page = res.json()
     assert page["versions_count"] == 1
     assert "<!DOCTYPE html>" in page["latest_html"]
+
+
+def test_propose_topics_and_creation_with_selected_topics(client):
+    # 1. Test propose-topics endpoint
+    res = client.post(
+        "/api/pages/propose-topics",
+        json={
+            "prompt": "L'énergie nucléaire et les réacteurs SMR",
+            "page_type": "didactic_sheet",
+            "target_audience": "general",
+        },
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert "suggested_title" in data
+    assert "topics" in data
+    assert len(data["topics"]) >= 4
+    # Check topic structure
+    first_topic = data["topics"][0]
+    assert "id" in first_topic
+    assert "title" in first_topic
+    assert "category" in first_topic
+    assert "recommended" in first_topic
+
+    # 2. Pick 3 topics
+    chosen_topics = [
+        data["topics"][0],
+        data["topics"][1],
+        {
+            "id": "custom-safety",
+            "title": "Protocoles de sûreté passive",
+            "description": "Systèmes de refroidissement autonome sans alimentation électrique d'urgence.",
+            "category": "Sécurité",
+            "recommended": True,
+        },
+    ]
+
+    # 3. Create Web Page with selected_topics
+    res_page = client.post(
+        "/api/pages",
+        json={
+            "prompt": "Guide complet sur les réacteurs nucléaires SMR",
+            "title": "Nucléaire & SMR",
+            "selected_topics": chosen_topics,
+        },
+    )
+    assert res_page.status_code == 201
+    created = res_page.json()
+    assert created["title"] == "Nucléaire & SMR"
+    page_id = created["id"]
+
+    # Retrieve page HTML content
+    detail = client.get(f"/api/pages/{page_id}").json()
+    html_content = detail["versions"][0]["html_content"]
+
+    # Verify that chosen topic titles and descriptions are integrated into the tabs/sections
+    assert "Protocoles de sûreté passive" in html_content
+    assert "Systèmes de refroidissement autonome" in html_content
+    assert "Fonctionnement interne" in html_content
+    assert created["versions_count"] == 1
+    assert "<!DOCTYPE html>" in created["latest_html"]
+    # Verify that detail_level is present and no quiz is forced by default
+    assert "detail_level" in chosen_topics[0]
+    assert "<div class=\"quiz-box" not in html_content
+
+
+
+def test_propose_topics_literary_and_deep_subtopics(client):
+    # Verify that literary subjects like "commentaire composé" return detailed subtopics:
+    # figures of speech, punctuation, syntax, register, plan, etc.
+    res = client.post(
+        "/api/pages/propose-topics",
+        json={
+            "prompt": "Méthode du commentaire composé pour le bac de français",
+            "page_type": "revision",
+            "target_audience": "school",
+        },
+    )
+    assert res.status_code == 200
+    data = res.json()
+    topics = data["topics"]
+    # Check that we do not artificially limit the topics count
+    assert len(topics) >= 14
+
+    titles_and_desc = " ".join([t["title"] + " " + t["description"] for t in topics]).lower()
+    # Check for inclusion of essential literary subtopics requested by user
+    assert "figure" in titles_and_desc
+    assert "ponctuation" in titles_and_desc or "rythme" in titles_and_desc
+    assert "champs lexicaux" in titles_and_desc or "lexique" in titles_and_desc
+    assert "plan" in titles_and_desc or "axes" in titles_and_desc
+
 
 
 def test_web_page_options(client):
@@ -271,5 +395,29 @@ def test_text_fx_typography():
     assert "xsvg-curved-wrap" in fallback
 
 
+
+def test_motion_fx_aos_and_gsap():
+    from app.motion_fx import MOTION_FX_CSS, MOTION_FX_JS, inject_motion_fx
+
+    # 1. Verification of inject_motion_fx on sample HTML
+    sample_html = """<!DOCTYPE html><html><head><title>Test</title><style>body { margin: 0; }</style></head>
+<body>
+  <div class="card" data-aos="fade-up" data-aos-delay="100">Contenu</div>
+  <script>console.log('init');</script>
+</body></html>"""
+
+    enhanced = inject_motion_fx(sample_html)
+    assert "[data-aos]" in enhanced
+    assert "data-aos=\"fade-up\"" in enhanced
+    assert "window.AOS = AOS;" in enhanced
+    assert "window.gsap = gsap;" in enhanced
+
+    # 2. Verification that fallback page contains AOS and GSAP
+    fallback = generate_fallback_page("Guide IA", "Sujet")
+    assert "data-aos=\"fade-up\"" in fallback
+    assert "[data-aos]" in fallback
+    assert "window.AOS" in fallback
+    assert "window.gsap" in fallback
+    assert "AOS.refresh()" in fallback
 
 

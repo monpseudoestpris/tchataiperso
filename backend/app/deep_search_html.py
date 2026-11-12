@@ -1592,7 +1592,7 @@ def generate_report_html(
       <button type="button" class="nav-btn" onclick="copyReport()" title="Copier tout le contenu du rapport">
         📋 Copier
       </button>
-      <a href="?download=1" class="nav-btn" download title="Télécharger le fichier .html complet">
+      <a href="?download=1" class="nav-btn" download title="Télécharger le fichier .html complet" onclick="if(window.location.protocol==='file:'||window.location.href.includes('/sites/')){{event.preventDefault();const blob=new Blob(['<!doctype html>'+document.documentElement.outerHTML],{{type:'text/html;charset=utf-8'}});const u=URL.createObjectURL(blob),a=document.createElement('a');a.href=u;a.download='{slugify(clean_title)[:40] or 'rapport'}.html';a.click();setTimeout(()=>URL.revokeObjectURL(u),1500);}}">
         📥 Télécharger .html
       </a>
       <button type="button" class="nav-btn primary" onclick="printPdf()" title="Imprimer ou enregistrer en Beau PDF">
