@@ -4,7 +4,7 @@ import {
   ArrowDown, ArrowRightLeft, ArrowUp, Bookmark, BookmarkCheck, BookOpen, Brain, Check, ChevronDown, ChevronLeft, ChevronRight,
   CircleAlert, Code2, Compass, Copy, Download, ExternalLink, Eye, FileCode2, FileText, FolderArchive, FolderKanban,
   Globe, Globe2, GraduationCap, ImagePlus, LayoutGrid, LineChart, Link2, LoaderCircle, LogOut, Menu, MessageCircle, Newspaper, PanelLeftClose, Paperclip,
-  Pencil, Plus, Presentation, Search, RefreshCw, Settings, Share2, Shield, Sparkles, Square, SquarePlay, Target, Trash2, TrendingUp, Unlink, Users, UsersRound, Volume2, WandSparkles, X,
+  Pencil, Plus, Presentation, Search, RefreshCw, Settings, Share2, Shield, Sparkles, Square, SquarePlay, Star, Target, Trash2, TrendingUp, Unlink, Users, UsersRound, Volume2, WandSparkles, X,
 } from "lucide-react";
 import { isValidElement, memo, useEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
@@ -38,6 +38,7 @@ import { WebPageModal } from "@/components/web-page-modal";
 import { ApiError, api, attachUrl, createLearnReportFromMessage, createReportFromMessage, errorMessage, fetchTopics, linkConversationToTopic, unlinkConversationFromTopic, skillToSlug, streamMessage, type Attachment, type AuthUser, type Config, type Conversation, type DocumentExtraction, type FamilyGroupInfo, type FinancialDashboardData, type GeneratedSound, type Memory, type Message, type Model, type MultiAgentConfig, type Skill, type Source, type StageModelsConfig, type TopicSpace } from "@/lib/api";
 import { collectConversationCanvasFiles, createZipBlob, extractCanvasFiles, hasExplicitCanvasFiles, triggerBlobDownload } from "@/lib/code-canvas";
 import { hasInteractiveLearnModules, stripInteractiveModulesForBody } from "@/lib/learn-parser";
+import { useModelFavorites } from "@/lib/model-favorites";
 
 function extractThoughtAndContent(text: string): { thought: string; cleanContent: string } {
   if (!text) return { thought: "", cleanContent: "" };
@@ -1044,6 +1045,7 @@ const MessageView = memo(function MessageView({
 });
 
 export function ChatApp() {
+  const { isFavorite } = useModelFavorites("llm");
   const [user, setUser] = useState<AuthUser | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [authError, setAuthError] = useState("");
@@ -2698,7 +2700,7 @@ export function ChatApp() {
       <header className="topbar">
         <div className="topbar-left">
           <IconButton label="Ouvrir le menu" className="mobile-only" onClick={() => setSidebarOpen(true)}><Menu size={21} /></IconButton>
-          <div className="model-select-wrap"><button type="button" className="model-selector-btn" onClick={() => setModelModalOpen(true)} disabled={!config || working} title="Changer de modèle IA (voir tous les modèles, prix, contexte, vision)" aria-label="Changer de modèle IA"><span className="model-indicator" /><span className="model-current-name">{currentModelInfo?.name || model || "Modèle IA"}</span>{currentModelInfo?.vision && <span className="model-topbar-pill vision" title="Modèle multimodal avec vision (images acceptées)"><Eye size={11} /><span>Vision</span></span>}{currentModelPriceTag && <span className={`model-topbar-pill price ${currentModelPriceTag === "Gratuit" ? "is-free" : ""}`}>{currentModelPriceTag}</span>}<ChevronDown size={14} className="model-chevron" /></button></div>
+          <div className="model-select-wrap"><button type="button" className="model-selector-btn" onClick={() => setModelModalOpen(true)} disabled={!config || working} title="Changer de modèle IA (voir tous les modèles, prix, contexte, vision)" aria-label="Changer de modèle IA"><span className="model-indicator" />{isFavorite(model) && <span className="model-topbar-pill favorite" title="Modèle favori"><Star size={11} fill="#f59e0b" color="#f59e0b" /></span>}<span className="model-current-name">{currentModelInfo?.name || model || "Modèle IA"}</span>{currentModelInfo?.vision && <span className="model-topbar-pill vision" title="Modèle multimodal avec vision (images acceptées)"><Eye size={11} /><span>Vision</span></span>}{currentModelPriceTag && <span className={`model-topbar-pill price ${currentModelPriceTag === "Gratuit" ? "is-free" : ""}`}>{currentModelPriceTag}</span>}<ChevronDown size={14} className="model-chevron" /></button></div>
           <span className="topbar-divider" />
           <span className="personal-label">Votre espace IA</span>
         </div>

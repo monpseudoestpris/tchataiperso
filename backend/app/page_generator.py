@@ -129,17 +129,19 @@ RÈGLES D'OR ABSOLUES D'AUTONOMIE ET D'ESTHÉTIQUE (TRÈS STRICT) :
    - CRÉATION SUR-MESURE : Tu peux également dessiner tes propres diagrammes SVG inline spécifiques au sujet (ex: frise chronologique historique avec repères d'années, schéma anatomique ou circuit logique) en respectant les bonnes pratiques SVG responsive (width="100%", height="auto", viewBox).
    - Rends tous les SVG responsive, modernes, sans dépendance externe et sans pixellisation.
 5. CSS3 MODERNE ET RESPONSIVE :
-   - Définis des variables CSS dans :root pour les couleurs, rayons de courbure, ombres.
-   - Prise en charge du thème clair et du thème sombre (via prefers-color-scheme ou un sélecteur [data-theme="dark"]).
-   - Mise en page aérée : Flexbox, Grid, cartes (cards) élégantes, badges colorés, typographie hiérarchisée.
+   - Définis des variables CSS dans :root pour les couleurs, rayons de courbure, ombres et dégradés (gradients).
+   - Exploite de superbes composants visuels adaptés :
+     * Dégradés modernes (linear-gradient sur les fonds de cartes hero, badges, titres ou bordures fines).
+     * Cartes mémos / fiches / notes type post-it (fond chaleureux jaune/crème/pastel, légère rotation -1deg à 1.5deg, ombre décalée portée, punaise ou trombone SVG, aspect pense-bête pour les définitions et points clés).
+     * Cartes (cards) élégantes, badges colorés, typographie hiérarchisée et mise en page aérée (Flexbox, Grid).
    - Transitions fluides au survol (hover) et animations douces (@keyframes).
 6. INTERACTIVITÉ VANILLA ÉLÉGANTE DANS <script> :
    - Inclus des composants interactifs pertinents pour le sujet lorsque l'interactivité est activée :
-     * Bouton bascule de thème Clair / Sombre.
      * Système d'onglets pour explorer différents aspects du sujet.
      * Accordéons interactifs pour les détails et questions fréquentes.
      * Simulateur/calculateur interactif avec curseurs <input type="range"> selon le sujet.
      * Bouton "Copier le résumé" ou filtres dynamiques.
+   - Note : n'ajoute PAS de bouton de bascule de thème clair/sombre.
    - Le JavaScript doit être propre, robuste, sans erreur console et sans bibliothèque externe.
 7. TYPOGRAPHIE EXPRESSIVE & TEXTE QUI PREND FORME (Inspirations Charming.js, Pretext, xsvg) :
    Ne laisse pas le texte uniquement plat et statique ! C'est TOI qui choisis judicieusement l'effet selon la tonalité du sujet :
@@ -948,9 +950,6 @@ def generate_fallback_page(
       </div>
       <div class="actions-row">
         {f'<button class="action-btn" onclick="window.print()" title="Imprimer la fiche A4">🖨️ Imprimer</button>' if is_print else ''}
-        <button class="action-btn" id="themeBtn" aria-label="Changer de thème">
-          <span id="themeIcon">☀️</span> Thème
-        </button>
       </div>
     </div>
   </header>
@@ -1001,18 +1000,6 @@ def generate_fallback_page(
   </footer>
 
   <script>
-    const themeBtn = document.getElementById('themeBtn');
-    const themeIcon = document.getElementById('themeIcon');
-    let currentTheme = 'dark';
-
-    if (themeBtn) {{
-      themeBtn.addEventListener('click', () => {{
-        currentTheme = currentTheme === 'dark' ? 'light' : 'dark';
-        document.documentElement.setAttribute('data-theme', currentTheme);
-        themeIcon.textContent = currentTheme === 'dark' ? '☀️' : '🌙';
-      }});
-    }}
-
     document.querySelectorAll('.tab-btn').forEach(btn => {{
       btn.addEventListener('click', () => {{
         document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));

@@ -17,6 +17,7 @@ import {
   Plus,
   RefreshCw,
   Sparkles,
+  Star,
   Trash2,
   Users,
   X,
@@ -24,6 +25,7 @@ import {
 } from "lucide-react";
 import type { AgentPersonaConfig, AgentTeam, AgentTeamsResponse, Model, MultiAgentConfig } from "@/lib/api";
 import { api, generateAiPersona } from "@/lib/api";
+import { useModelFavorites } from "@/lib/model-favorites";
 
 type MultiAgentModalProps = {
   isOpen: boolean;
@@ -139,6 +141,7 @@ export function MultiAgentModal({
   activeConfig,
   onApplyConfig,
 }: MultiAgentModalProps) {
+  const { favoritesSet, isFavorite, toggleFavorite } = useModelFavorites("llm");
   const [mode, setMode] = useState<"synthesis" | "debate" | "dialectic" | "contradictory">(
     activeConfig?.mode || "synthesis"
   );
@@ -153,6 +156,11 @@ export function MultiAgentModal({
   // Server teams and templates data
   const [teamsData, setTeamsData] = useState<AgentTeamsResponse | null>(null);
   const [loadingTeams, setLoadingTeams] = useState(false);
+
+  const favoriteModelsList = useMemo(
+    () => models.filter((m) => favoritesSet.has(m.id)),
+    [models, favoritesSet]
+  );
   const [saveTeamName, setSaveTeamName] = useState("");
   const [isSavingTeam, setIsSavingTeam] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
@@ -642,6 +650,11 @@ export function MultiAgentModal({
                       <label className="agent-field-label">
                         <Cpu size={13} />
                         <span>Modèle assigné & Tarifs</span>
+                        {isFavorite(agent.model) && (
+                          <span title="Modèle favori" className="inline-flex items-center">
+                            <Star size={11} fill="#f59e0b" color="#f59e0b" />
+                          </span>
+                        )}
                       </label>
 
                       <div className="agent-model-select-wrap">
@@ -650,20 +663,49 @@ export function MultiAgentModal({
                           value={agent.model}
                           onChange={(e) => handleUpdateAgent(index, { model: e.target.value })}
                         >
-                          {models.map((m) => {
-                            const promptPriceStr =
-                              m.prompt_price_1m === 0 ? "Gratuit" : formatPrice(m.prompt_price_1m);
-                            const completionPriceStr =
-                              m.completion_price_1m === 0 ? "Gratuit" : formatPrice(m.completion_price_1m);
-                            return (
-                              <option key={m.id} value={m.id}>
-                                {m.name} — {promptPriceStr} / {completionPriceStr} per 1M (
-                                {m.provider || "IA"})
-                              </option>
-                            );
-                          })}
+                          {favoriteModelsList.length > 0 && (
+                            <optgroup label="⭐ Modèles favoris">
+                              {favoriteModelsList.map((m) => {
+                                const promptPriceStr =
+                                  m.prompt_price_1m === 0 ? "Gratuit" : formatPrice(m.prompt_price_1m);
+                                const completionPriceStr =
+                                  m.completion_price_1m === 0 ? "Gratuit" : formatPrice(m.completion_price_1m);
+                                return (
+                                  <option key={`fav-${m.id}`} value={m.id}>
+                                    ⭐ {m.name} — {promptPriceStr} / {completionPriceStr} ({m.provider || "IA"})
+                                  </option>
+                                );
+                              })}
+                            </optgroup>
+                          )}
+                          <optgroup label={favoriteModelsList.length > 0 ? "Tous les modèles" : "Modèles disponibles"}>
+                            {models.map((m) => {
+                              const promptPriceStr =
+                                m.prompt_price_1m === 0 ? "Gratuit" : formatPrice(m.prompt_price_1m);
+                              const completionPriceStr =
+                                m.completion_price_1m === 0 ? "Gratuit" : formatPrice(m.completion_price_1m);
+                              return (
+                                <option key={m.id} value={m.id}>
+                                  {favoritesSet.has(m.id) ? "⭐ " : ""}{m.name} — {promptPriceStr} / {completionPriceStr} per 1M (
+                                  {m.provider || "IA"})
+                                </option>
+                              );
+                            })}
+                          </optgroup>
                         </select>
-                        <ChevronDown size={14} className="agent-select-arrow" />
+                        <button
+                          type="button"
+                          className={`agent-model-fav-btn ${isFavorite(agent.model) ? "is-favorite" : ""}`}
+                          onClick={() => toggleFavorite(agent.model)}
+                          title={isFavorite(agent.model) ? "Retirer ce modèle des favoris" : "Ajouter ce modèle aux favoris"}
+                          aria-label={isFavorite(agent.model) ? "Retirer ce modèle des favoris" : "Ajouter ce modèle aux favoris"}
+                        >
+                          <Star
+                            size={14}
+                            fill={isFavorite(agent.model) ? "#f59e0b" : "none"}
+                            color={isFavorite(agent.model) ? "#f59e0b" : "#94a3b8"}
+                          />
+                        </button>
                       </div>
 
                       {/* Detailed Pricing & Capabilities Card for this Agent */}

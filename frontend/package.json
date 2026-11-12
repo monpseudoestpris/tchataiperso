@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit",
     "test:research": "node --test tests/research-activity.test.cjs",
     "test:themes": "node --test tests/interface-themes.test.mjs",
+    "test:favorites": "node --test tests/model-favorites.test.mjs",
     "lint": "eslint . --max-warnings 0"
   },
   "dependencies": {

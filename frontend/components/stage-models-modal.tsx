@@ -11,12 +11,14 @@ import {
   Search,
   ShieldCheck,
   Sparkles,
+  Star,
   Workflow,
   X,
   Zap,
 } from "lucide-react";
 import type { Model, StageModelsConfig } from "@/lib/api";
 import { ModelModal } from "@/components/model-modal";
+import { useModelFavorites } from "@/lib/model-favorites";
 
 export type StageId = "plan_model" | "search_model" | "expert_model" | "synthesis_model" | "audit_model";
 
@@ -159,6 +161,7 @@ export function StageModelsModal({
   onClose,
   onRefreshModels,
 }: StageModelsModalProps) {
+  const { isFavorite } = useModelFavorites("llm");
   const [activeStagePicker, setActiveStagePicker] = useState<StageId | null>(null);
 
   const modelMap = useMemo(() => {
@@ -302,6 +305,11 @@ export function StageModelsModal({
                   <div className="flex items-center gap-3 shrink-0 self-end md:self-center">
                     <div className="text-right">
                       <div className="flex items-center justify-end gap-1.5">
+                        {isFavorite(currentModelId) && (
+                          <span title="Modèle favori" className="inline-flex items-center">
+                            <Star size={12} className="text-amber-500 fill-amber-500 shrink-0" />
+                          </span>
+                        )}
                         <span className="text-xs font-medium text-text-primary max-w-[200px] truncate" title={currentModelId}>
                           {modelData?.name || currentModelId.split("/").pop()}
                         </span>

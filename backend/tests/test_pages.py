@@ -41,7 +41,7 @@ def test_page_generator_helpers():
     assert "<!DOCTYPE html>" in fallback
     assert "Système Solaire" in fallback
     assert "<svg" in fallback
-    assert "themeBtn" in fallback
+    assert "themeBtn" not in fallback
 
     # 5. extract_html with truncated markdown fence
     truncated_wrapped = "```html\n<!DOCTYPE html><html><body><h1>Titre</h1>"
@@ -71,6 +71,12 @@ def test_sanitize_and_enhance_html():
     with_hidden_tabs = '<nav class="tabs" hidden><button>Tab 1</button></nav>'
     unhidden = sanitize_and_enhance_html(with_hidden_tabs)
     assert 'hidden' not in unhidden or 'class="tabs"' in unhidden
+
+    # Theme toggle buttons are stripped out to avoid visual glitches
+    html_with_theme_btn = '<html><body><button id="themeBtn">Thème</button><p>Contenu</p></body></html>'
+    cleaned = sanitize_and_enhance_html(html_with_theme_btn)
+    assert 'id="themeBtn"' not in cleaned
+    assert 'Contenu' in cleaned
 
 
 def test_web_page_crud_and_lifecycle(client):

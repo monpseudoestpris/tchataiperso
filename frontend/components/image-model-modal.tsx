@@ -13,9 +13,11 @@ import {
   RefreshCw,
   Search,
   Sparkles,
+  Star,
   X,
 } from "lucide-react";
 import type { ImageModel } from "@/lib/api";
+import { useModelFavorites } from "@/lib/model-favorites";
 
 type ImageModelModalProps = {
   currentModel: string;
@@ -29,6 +31,7 @@ type SortOption = "recommended" | "name_asc";
 
 const IMAGE_PROVIDERS = [
   { id: "all", label: "Tous" },
+  { id: "favorites", label: "⭐ Favoris" },
   { id: "top", label: "⭐ Top Collection" },
   { id: "ideogram", label: "Ideogram v2" },
   { id: "google", label: "Google" },
@@ -73,6 +76,7 @@ export function ImageModelModal({
   onClose,
   onRefreshModels,
 }: ImageModelModalProps) {
+  const { favoritesSet, isFavorite, toggleFavorite } = useModelFavorites("image");
   const [query, setQuery] = useState("");
   const [activeTab, setActiveTab] = useState<string>("all");
   const [sort, setSort] = useState<SortOption>("recommended");
@@ -105,6 +109,7 @@ export function ImageModelModal({
 
     return models.filter(item => {
       // Tab filter
+      if (activeTab === "favorites" && !favoritesSet.has(item.id)) return false;
       if (activeTab === "top" && !item.is_top) return false;
       if (activeTab === "google" && !item.id.toLowerCase().startsWith("google/")) return false;
       if (activeTab === "openai" && !item.id.toLowerCase().startsWith("openai/")) return false;
@@ -142,24 +147,33 @@ export function ImageModelModal({
 
       return true;
     });
-  }, [models, query, activeTab]);
+  }, [models, query, activeTab, favoritesSet]);
 
+  // Sort models: favorites appear at the top ("en tête")
   const sortedModels = useMemo(() => {
     const list = [...filteredModels];
-    if (sort === "name_asc") {
-      return list.sort((a, b) => a.name.localeCompare(b.name));
-    }
-    // "recommended"
     return list.sort((a, b) => {
+      // 1. Favorites always first
+      const aFav = favoritesSet.has(a.id);
+      const bFav = favoritesSet.has(b.id);
+      if (aFav && !bFav) return -1;
+      if (!aFav && bFav) return 1;
+
+      // 2. Active model first within its tier
       if (a.id === currentModel) return -1;
       if (b.id === currentModel) return 1;
+
+      // 3. User sort selection
+      if (sort === "name_asc") {
+        return a.name.localeCompare(b.name);
+      }
       if (a.id === "ideogram") return -1;
       if (b.id === "ideogram") return 1;
       if (a.is_top && !b.is_top) return -1;
       if (!a.is_top && b.is_top) return 1;
       return a.name.localeCompare(b.name);
     });
-  }, [filteredModels, sort, currentModel]);
+  }, [filteredModels, sort, currentModel, favoritesSet]);
 
   const activeModelObj = models.find(m => m.id === currentModel) || models[0];
 
@@ -218,6 +232,20 @@ export function ImageModelModal({
               <span>Modèle sélectionné :</span>
               <strong>{activeModelObj.name}</strong>
               <code className="model-id-pill">{activeModelObj.id}</code>
+              <button
+                type="button"
+                className={`model-favorite-toggle-banner ${isFavorite(activeModelObj.id) ? "is-favorite" : ""}`}
+                onClick={() => toggleFavorite(activeModelObj.id)}
+                title={isFavorite(activeModelObj.id) ? "Retirer ce modèle des favoris" : "Ajouter ce modèle aux favoris"}
+                aria-label={isFavorite(activeModelObj.id) ? "Retirer ce modèle des favoris" : "Ajouter ce modèle aux favoris"}
+              >
+                <Star
+                  size={14}
+                  fill={isFavorite(activeModelObj.id) ? "#f59e0b" : "none"}
+                  color={isFavorite(activeModelObj.id) ? "#f59e0b" : "#94a3b8"}
+                />
+                <span>{isFavorite(activeModelObj.id) ? "Favori" : "Mettre en favori"}</span>
+              </button>
             </div>
             <div className="model-active-banner-right">
               {activeModelObj.is_top && (
@@ -285,6 +313,10 @@ export function ImageModelModal({
         <div className="model-filter-tabs">
           {IMAGE_PROVIDERS.map(provider => {
             const isSelected = activeTab === provider.id;
+            const tabLabel =
+              provider.id === "favorites"
+                ? `⭐ Favoris (${favoritesSet.size})`
+                : provider.label;
             return (
               <button
                 key={provider.id}
@@ -292,7 +324,7 @@ export function ImageModelModal({
                 className={`model-filter-tab ${isSelected ? "is-active" : ""}`}
                 onClick={() => setActiveTab(provider.id)}
               >
-                {provider.label}
+                {tabLabel}
               </button>
             );
           })}
@@ -320,6 +352,7 @@ export function ImageModelModal({
             <div className="model-grid">
               {sortedModels.map(item => {
                 const isSelected = item.id === currentModel;
+                const isFav = isFavorite(item.id);
                 const pColor = providerColor(item.id);
                 const providerLabel =
                   item.provider === "ideogram"
@@ -329,7 +362,7 @@ export function ImageModelModal({
                 return (
                   <div
                     key={item.id}
-                    className={`model-card ${isSelected ? "is-selected" : ""}`}
+                    className={`model-card ${isSelected ? "is-selected" : ""} ${isFav ? "is-favorite" : ""}`}
                     onClick={() => {
                       onSelectModel(item.id);
                       onClose();
@@ -361,29 +394,57 @@ export function ImageModelModal({
                           {item.name}
                         </h4>
                       </div>
-                      {isSelected ? (
-                        <span className="model-active-badge">
-                          <Check size={13} />
-                          <span>Actif</span>
-                        </span>
-                      ) : (
+                      <div className="model-card-actions">
                         <button
                           type="button"
-                          className="model-select-action-btn"
-                          onClick={e => {
+                          className={`model-favorite-btn ${isFav ? "is-favorite" : ""}`}
+                          onClick={(e) => {
                             e.stopPropagation();
-                            onSelectModel(item.id);
-                            onClose();
+                            toggleFavorite(item.id);
                           }}
+                          title={isFav ? "Retirer des favoris" : "Ajouter aux favoris"}
+                          aria-label={isFav ? "Retirer des favoris" : "Ajouter aux favoris"}
                         >
-                          Choisir
+                          <Star
+                            size={16}
+                            fill={isFav ? "#f59e0b" : "none"}
+                            color={isFav ? "#f59e0b" : "#94a3b8"}
+                          />
                         </button>
-                      )}
+                        {isSelected ? (
+                          <span className="model-active-badge">
+                            <Check size={13} />
+                            <span>Actif</span>
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            className="model-select-action-btn"
+                            onClick={e => {
+                              e.stopPropagation();
+                              onSelectModel(item.id);
+                              onClose();
+                            }}
+                          >
+                            Choisir
+                          </button>
+                        )}
+                      </div>
                     </div>
 
                     {/* ID du modèle & Top badge */}
                     <div className="model-card-id-row">
                       <code className="model-card-id">{item.id}</code>
+                      {isFav && (
+                        <span
+                          className="image-model-top-badge"
+                          style={{ fontSize: "10px", padding: "1px 6px", background: "#fef3c7", color: "#b45309", borderColor: "#fde68a" }}
+                          title="Modèle dans vos favoris"
+                        >
+                          <Star size={10} fill="currentColor" />
+                          <span>Favori</span>
+                        </span>
+                      )}
                       {item.is_top && (
                         <span
                           className="image-model-top-badge"

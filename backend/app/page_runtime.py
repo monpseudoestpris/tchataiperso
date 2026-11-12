@@ -174,16 +174,8 @@ CLAIR_PAGE_RUNTIME_JS = """
     }
   }, true);
 
-  // 4. Câblage de secours pour les boutons de Thème
-  document.addEventListener('click', function(e) {
-    var themeBtn = e.target && e.target.closest ? e.target.closest('#theme-toggle, #themeToggle, #themeButton, #themeBtn, #theme, .theme-btn, .theme-toggle, .theme-switcher') : null;
-    if (!themeBtn) return;
-    var root = document.documentElement;
-    var cur = root.getAttribute('data-theme') || (root.classList.contains('dark') ? 'dark' : 'light');
-    var next = cur === 'dark' ? 'light' : 'dark';
-    root.setAttribute('data-theme', next);
-    if (next === 'dark') root.classList.add('dark'); else root.classList.remove('dark');
-  }, true);
+  // 4. Désactivation du bouton de bascule de thème dans clAIr pages
+  // (Le changement de thème est désactivé pour éviter les incompatibilités de rendu)
 
   // 5. Nettoyer les éléments de navigation cachés à tort (.tabs[hidden])
   function initDoc() {
@@ -248,7 +240,15 @@ def sanitize_and_enhance_html(html_code: str, *, title: str = "") -> str:
     # 3. Retirer hidden sur les barres d'onglets
     code = re.sub(r'(<(?:div|nav)\b[^>]*class=["\'][^"\']*(?:tabs|explore|filter)[^"\']*["\'][^>]*)\bhidden\b', r'\1', code, flags=re.I)
 
-    # 4. Injecter le script runtime universel
+    # 4. Supprimer tout bouton de bascule de thème résiduel pour éviter les dysfonctionnements visuels
+    code = re.sub(
+        r'<button\b[^>]*\b(?:id|class)=["\'][^"\']*(?:theme-toggle|themeToggle|themeButton|themeBtn|theme-switcher)[^"\']*["\'][^>]*>.*?</button>',
+        '',
+        code,
+        flags=re.I | re.DOTALL,
+    )
+
+    # 5. Injecter le script runtime universel
     if "__clair_runtime_installed__" not in code:
         runtime_tag = f"\n<script>\n{CLAIR_PAGE_RUNTIME_JS.strip()}\n</script>\n"
         if "</body>" in code:

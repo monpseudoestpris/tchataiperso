@@ -1,8 +1,9 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Check, Cpu, Search, Sparkles, X, Zap } from "lucide-react";
+import { Check, Cpu, Sparkles, Star, X, Zap } from "lucide-react";
 import type { Model } from "@/lib/api";
+import { useModelFavorites } from "@/lib/model-favorites";
 import styles from "./model-picker-modal.module.css";
 
 export type ModelPickerModalProps = {
@@ -20,6 +21,7 @@ export function ModelPickerModal({
   selectedModelId,
   onSelectModel,
 }: ModelPickerModalProps) {
+  const { favoritesSet, isFavorite, toggleFavorite } = useModelFavorites("llm");
   const [search, setSearch] = useState("");
 
   const filteredModels = useMemo(() => {
@@ -32,6 +34,21 @@ export function ModelPickerModal({
         (m.provider || "").toLowerCase().includes(q)
     );
   }, [models, search]);
+
+  // Sort with favorites at the head ("en tête")
+  const sortedModels = useMemo(() => {
+    return [...filteredModels].sort((a, b) => {
+      const aFav = favoritesSet.has(a.id);
+      const bFav = favoritesSet.has(b.id);
+      if (aFav && !bFav) return -1;
+      if (!aFav && bFav) return 1;
+
+      if (a.id === selectedModelId) return -1;
+      if (b.id === selectedModelId) return 1;
+
+      return 0;
+    });
+  }, [filteredModels, favoritesSet, selectedModelId]);
 
   if (!isOpen) return null;
 
@@ -97,13 +114,14 @@ export function ModelPickerModal({
 
         {/* Models List */}
         <div className={styles.list}>
-          {filteredModels.length === 0 ? (
+          {sortedModels.length === 0 ? (
             <div style={{ padding: "2rem", textAlign: "center", color: "#64748b", fontSize: "0.85rem" }}>
               Aucun modèle ne correspond à votre recherche.
             </div>
           ) : (
-            filteredModels.map((m) => {
+            sortedModels.map((m) => {
               const isSelected = selectedModelId === m.id;
+              const isFav = isFavorite(m.id);
               const { isRecommended, isFast, isDeep, description } = getModelDetails(m);
 
               return (
@@ -124,6 +142,28 @@ export function ModelPickerModal({
                     </div>
 
                     <div className={styles.tagPills}>
+                      <button
+                        type="button"
+                        className={`${styles.favoriteBtn} ${isFav ? styles.isFavorite : ""}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleFavorite(m.id);
+                        }}
+                        title={isFav ? "Retirer des favoris" : "Ajouter aux favoris"}
+                        aria-label={isFav ? "Retirer des favoris" : "Ajouter aux favoris"}
+                      >
+                        <Star
+                          size={15}
+                          fill={isFav ? "#f59e0b" : "none"}
+                          color={isFav ? "#f59e0b" : "#94a3b8"}
+                        />
+                      </button>
+                      {isFav && (
+                        <span className={styles.pillFavorite}>
+                          <Star size={11} fill="currentColor" />
+                          <span>Favori</span>
+                        </span>
+                      )}
                       {isRecommended && (
                         <span className={styles.pillRecommended}>
                           <Sparkles size={11} />

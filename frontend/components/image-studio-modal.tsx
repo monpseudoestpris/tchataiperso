@@ -3,10 +3,11 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   Ban, Check, CircleAlert, Coins, Copy, Download, Expand, ExternalLink, ImagePlus,
-  LoaderCircle, Minimize2, RefreshCw, RotateCcw, SlidersHorizontal, Sparkles, Trash2, WandSparkles, X,
+  LoaderCircle, Minimize2, RefreshCw, RotateCcw, SlidersHorizontal, Sparkles, Star, Trash2, WandSparkles, X,
 } from "lucide-react";
 import { api, errorMessage, type Config, type GeneratedImage, type ImageModel } from "@/lib/api";
 import { ImageModelModal } from "@/components/image-model-modal";
+import { useModelFavorites } from "@/lib/model-favorites";
 
 const ASPECT_RATIOS = [
   { value: "1:1", label: "1:1", hint: "Carré" },
@@ -257,6 +258,7 @@ type ImageStudioModalProps = {
 };
 
 export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageStudioModalProps) {
+  const { isFavorite } = useModelFavorites("image");
   const [images, setImages] = useState<GeneratedImage[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loadingGallery, setLoadingGallery] = useState(true);
@@ -797,6 +799,16 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
                       </div>
                       <div className="image-model-trigger-title-group">
                         <strong className="image-model-trigger-name">{selectedGenModel?.name}</strong>
+                        {selectedGenModel && isFavorite(selectedGenModel.id) && (
+                          <span
+                            className="image-model-top-badge"
+                            style={{ background: "#fef3c7", color: "#b45309", borderColor: "#fde68a" }}
+                            title="Modèle favori"
+                          >
+                            <Star size={10} fill="currentColor" />
+                            <span>Favori</span>
+                          </span>
+                        )}
                         {selectedGenModel?.is_top && (
                           <span className="image-model-top-badge" title="Top Collection OpenRouter">
                             <Sparkles size={10} />

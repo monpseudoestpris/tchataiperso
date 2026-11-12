@@ -14,10 +14,12 @@ import {
   RefreshCw,
   Search,
   Sparkles,
+  Star,
   X,
   Zap,
 } from "lucide-react";
 import type { Model } from "@/lib/api";
+import { useModelFavorites } from "@/lib/model-favorites";
 
 type ModelModalProps = {
   currentModel: string;
@@ -31,6 +33,7 @@ type SortOption = "recommended" | "price_asc" | "price_desc" | "context_desc" | 
 
 const POPULAR_PROVIDERS = [
   { id: "all", label: "Tous" },
+  { id: "favorites", label: "⭐ Favoris" },
   { id: "vision", label: "👁️ Vision" },
   { id: "free", label: "🎁 Gratuits" },
   { id: "reasoning", label: "🧠 Raisonnement" },
@@ -97,6 +100,7 @@ export function ModelModal({
   onClose,
   onRefreshModels,
 }: ModelModalProps) {
+  const { favoritesSet, isFavorite, toggleFavorite } = useModelFavorites("llm");
   const [query, setQuery] = useState("");
   const [activeTab, setActiveTab] = useState<string>("all");
   const [sort, setSort] = useState<SortOption>("recommended");
@@ -133,11 +137,12 @@ export function ModelModal({
 
     return models.filter((item) => {
       // Tab filter
+      if (activeTab === "favorites" && !favoritesSet.has(item.id)) return false;
       if (activeTab === "vision" && !item.vision) return false;
       if (activeTab === "free" && item.prompt_price_1m !== 0 && !item.id.endsWith(":free")) return false;
       if (activeTab === "reasoning" && !item.reasoning) return false;
       if (
-        !["all", "vision", "free", "reasoning"].includes(activeTab) &&
+        !["all", "favorites", "vision", "free", "reasoning"].includes(activeTab) &&
         (item.provider || "").toLowerCase() !== activeTab.toLowerCase()
       ) {
         return false;
@@ -156,28 +161,35 @@ export function ModelModal({
 
       return true;
     });
-  }, [models, query, activeTab]);
+  }, [models, query, activeTab, favoritesSet]);
 
-  // Sort models
+  // Sort models: favorite models appear at the top ("en tête")
   const sortedModels = useMemo(() => {
     const list = [...filteredModels];
 
-    switch (sort) {
-      case "price_asc":
-        return list.sort((a, b) => (a.prompt_price_1m ?? 9999) - (b.prompt_price_1m ?? 9999));
-      case "price_desc":
-        return list.sort((a, b) => (b.prompt_price_1m ?? 0) - (a.prompt_price_1m ?? 0));
-      case "context_desc":
-        return list.sort((a, b) => (b.context_length ?? 0) - (a.context_length ?? 0));
-      case "name_asc":
-        return list.sort((a, b) => a.name.localeCompare(b.name));
-      case "recommended":
-      default: {
-        // Active model first, then flagship providers (OpenAI, Anthropic, Google, DeepSeek)
-        return list.sort((a, b) => {
-          if (a.id === currentModel) return -1;
-          if (b.id === currentModel) return 1;
+    return list.sort((a, b) => {
+      // 1. Favorites always first
+      const aFav = favoritesSet.has(a.id);
+      const bFav = favoritesSet.has(b.id);
+      if (aFav && !bFav) return -1;
+      if (!aFav && bFav) return 1;
 
+      // 2. Active model first within its tier (within favorites or within non-favorites)
+      if (a.id === currentModel) return -1;
+      if (b.id === currentModel) return 1;
+
+      // 3. User chosen sort criteria
+      switch (sort) {
+        case "price_asc":
+          return (a.prompt_price_1m ?? 9999) - (b.prompt_price_1m ?? 9999);
+        case "price_desc":
+          return (b.prompt_price_1m ?? 0) - (a.prompt_price_1m ?? 0);
+        case "context_desc":
+          return (b.context_length ?? 0) - (a.context_length ?? 0);
+        case "name_asc":
+          return a.name.localeCompare(b.name);
+        case "recommended":
+        default: {
           const topProviders = ["openai", "anthropic", "google", "deepseek", "mistralai"];
           const aIndex = topProviders.indexOf(a.provider || "");
           const bIndex = topProviders.indexOf(b.provider || "");
@@ -187,10 +199,10 @@ export function ModelModal({
           if (bIndex !== -1) return 1;
 
           return a.name.localeCompare(b.name);
-        });
+        }
       }
-    }
-  }, [filteredModels, sort, currentModel]);
+    });
+  }, [filteredModels, sort, currentModel, favoritesSet]);
 
   const displayedModels = sortedModels.slice(0, visibleCount);
   const activeModelObj = models.find((m) => m.id === currentModel);
@@ -244,6 +256,20 @@ export function ModelModal({
               <span>Modèle actif actuellement :</span>
               <strong>{activeModelObj.name}</strong>
               <code className="model-id-pill">{activeModelObj.id}</code>
+              <button
+                type="button"
+                className={`model-favorite-toggle-banner ${isFavorite(activeModelObj.id) ? "is-favorite" : ""}`}
+                onClick={() => toggleFavorite(activeModelObj.id)}
+                title={isFavorite(activeModelObj.id) ? "Retirer ce modèle des favoris" : "Ajouter ce modèle aux favoris"}
+                aria-label={isFavorite(activeModelObj.id) ? "Retirer ce modèle des favoris" : "Ajouter ce modèle aux favoris"}
+              >
+                <Star
+                  size={14}
+                  fill={isFavorite(activeModelObj.id) ? "#f59e0b" : "none"}
+                  color={isFavorite(activeModelObj.id) ? "#f59e0b" : "#94a3b8"}
+                />
+                <span>{isFavorite(activeModelObj.id) ? "Favori" : "Mettre en favori"}</span>
+              </button>
             </div>
             <div className="model-active-banner-right">
               {activeModelObj.vision && (
@@ -319,6 +345,10 @@ export function ModelModal({
         <div className="model-filter-tabs">
           {POPULAR_PROVIDERS.map((provider) => {
             const isSelected = activeTab === provider.id;
+            const tabLabel =
+              provider.id === "favorites"
+                ? `⭐ Favoris (${favoritesSet.size})`
+                : provider.label;
             return (
               <button
                 key={provider.id}
@@ -329,7 +359,7 @@ export function ModelModal({
                   setVisibleCount(60);
                 }}
               >
-                {provider.label}
+                {tabLabel}
               </button>
             );
           })}
@@ -357,12 +387,13 @@ export function ModelModal({
             <div className="model-grid">
               {displayedModels.map((item) => {
                 const isSelected = item.id === currentModel;
+                const isFav = isFavorite(item.id);
                 const pColor = providerColor(item.provider);
 
                 return (
                   <div
                     key={item.id}
-                    className={`model-card ${isSelected ? "is-selected" : ""}`}
+                    className={`model-card ${isSelected ? "is-selected" : ""} ${isFav ? "is-favorite" : ""}`}
                     onClick={() => onSelectModel(item.id)}
                     role="button"
                     tabIndex={0}
@@ -390,23 +421,41 @@ export function ModelModal({
                           {item.name}
                         </h4>
                       </div>
-                      {isSelected ? (
-                        <span className="model-active-badge">
-                          <Check size={13} />
-                          <span>Actif</span>
-                        </span>
-                      ) : (
+                      <div className="model-card-actions">
                         <button
                           type="button"
-                          className="model-select-action-btn"
+                          className={`model-favorite-btn ${isFav ? "is-favorite" : ""}`}
                           onClick={(e) => {
                             e.stopPropagation();
-                            onSelectModel(item.id);
+                            toggleFavorite(item.id);
                           }}
+                          title={isFav ? "Retirer des favoris" : "Ajouter aux favoris"}
+                          aria-label={isFav ? "Retirer des favoris" : "Ajouter aux favoris"}
                         >
-                          Choisir
+                          <Star
+                            size={16}
+                            fill={isFav ? "#f59e0b" : "none"}
+                            color={isFav ? "#f59e0b" : "#94a3b8"}
+                          />
                         </button>
-                      )}
+                        {isSelected ? (
+                          <span className="model-active-badge">
+                            <Check size={13} />
+                            <span>Actif</span>
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            className="model-select-action-btn"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onSelectModel(item.id);
+                            }}
+                          >
+                            Choisir
+                          </button>
+                        )}
+                      </div>
                     </div>
 
                     {/* Model ID snippet */}
@@ -416,6 +465,12 @@ export function ModelModal({
 
                     {/* Badges row: Vision, Reasoning, Context window */}
                     <div className="model-card-specs">
+                      {isFav && (
+                        <span className="model-spec-badge favorite" title="Modèle dans vos favoris">
+                          <Star size={12} fill="currentColor" />
+                          <span>Favori</span>
+                        </span>
+                      )}
                       {item.vision ? (
                         <span className="model-spec-badge vision" title="Ce modèle accepte les images en entrée">
                           <Eye size={12} />
