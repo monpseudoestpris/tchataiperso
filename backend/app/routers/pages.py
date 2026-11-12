@@ -65,6 +65,8 @@ async def propose_topics_endpoint(
         title=fallback_title,
         page_type=body.page_type,
         target_audience=body.target_audience,
+        author_persona=body.author_persona,
+        visual_description=body.visual_description,
         model=selected_model,
     )
 
@@ -118,6 +120,8 @@ async def create_page(
         model=selected_model,
         page_type=body.page_type,
         target_audience=body.target_audience,
+        author_persona=body.author_persona,
+        visual_description=body.visual_description,
         creative_freedom=body.creative_freedom,
         orientation=body.orientation,
         layout_style=body.layout_style,

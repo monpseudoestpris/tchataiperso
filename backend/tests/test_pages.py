@@ -265,7 +265,6 @@ def test_propose_topics_literary_and_deep_subtopics(client):
     assert res.status_code == 200
     data = res.json()
     topics = data["topics"]
-    # Check that we do not artificially limit the topics count
     assert len(topics) >= 14
 
     titles_and_desc = " ".join([t["title"] + " " + t["description"] for t in topics]).lower()
@@ -274,6 +273,46 @@ def test_propose_topics_literary_and_deep_subtopics(client):
     assert "ponctuation" in titles_and_desc or "rythme" in titles_and_desc
     assert "champs lexicaux" in titles_and_desc or "lexique" in titles_and_desc
     assert "plan" in titles_and_desc or "axes" in titles_and_desc
+
+
+def test_create_page_with_author_persona_visual_desc_and_formats(client):
+    # Verify creation with author_persona, visual_description, and per-topic output_format
+    res = client.post(
+        "/api/pages",
+        json={
+            "prompt": "Analyse de Germinal de Zola",
+            "title": "Germinal - Étude stylistique",
+            "author_persona": "Émile Zola",
+            "visual_description": "Très coloré rouge mine et noir charbon",
+            "selected_topics": [
+                {
+                    "id": "figures",
+                    "title": "Figures de style de la mine",
+                    "description": "Métaphores animales et anthropomorphiques du Voreux.",
+                    "category": "Stylistique",
+                    "output_format": "table",
+                    "detail_level": 8,
+                },
+                {
+                    "id": "rythme",
+                    "title": "Rythme de la descente",
+                    "description": "Phrases courtes et suffocation.",
+                    "category": "Syntaxe",
+                    "output_format": "list",
+                    "detail_level": 6,
+                },
+            ],
+        },
+    )
+    assert res.status_code == 201
+    created = res.json()
+    assert created["title"] == "Germinal - Étude stylistique"
+    detail = client.get(f"/api/pages/{created['id']}").json()
+    html_content = detail["versions"][0]["html_content"]
+    assert "Figures de style de la mine" in html_content
+    assert "Rythme de la descente" in html_content
+    # Table layout for figures
+    assert "<table" in html_content or "format : table" in html_content.lower()
 
 
 

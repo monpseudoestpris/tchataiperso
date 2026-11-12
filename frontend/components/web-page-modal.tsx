@@ -159,6 +159,9 @@ export function WebPageModal({
   const [useConversation, setUseConversation] = useState(Boolean(conversationId));
   const [pageType, setPageType] = useState<string>("auto");
   const [targetAudience, setTargetAudience] = useState<string>("general");
+  const [authorPersona, setAuthorPersona] = useState<string>("");
+  const [visualDescription, setVisualDescription] = useState<string>("");
+
   const [creativeFreedom, setCreativeFreedom] = useState<"low" | "medium" | "high">("medium");
   const [orientation, setOrientation] = useState<"portrait" | "landscape">("portrait");
   const [layoutStyle, setLayoutStyle] = useState<"tabs" | "single_page" | "print_sheet" | "auto">("auto");
@@ -185,6 +188,9 @@ export function WebPageModal({
   const [topicSearchQuery, setTopicSearchQuery] = useState<string>("");
   const [topicDetailLevels, setTopicDetailLevels] = useState<Record<string, number>>({});
   const [bulkDetailLevel, setBulkDetailLevel] = useState<number>(5);
+  const [topicOutputFormats, setTopicOutputFormats] = useState<Record<string, "auto" | "text" | "list" | "table" | "cards" | "timeline">>({});
+  const [bulkOutputFormat, setBulkOutputFormat] = useState<"auto" | "text" | "list" | "table" | "cards" | "timeline">("auto");
+
 
   // Categories derived from proposed topics
   const topicCategories = useMemo(() => {
@@ -373,6 +379,8 @@ export function WebPageModal({
         conversation_id: useConversation && conversationId ? conversationId : undefined,
         page_type: pageType,
         target_audience: targetAudience,
+        author_persona: authorPersona.trim() || undefined,
+        visual_description: visualDescription.trim() || undefined,
         model: selectedModel || undefined,
       });
 
@@ -382,12 +390,15 @@ export function WebPageModal({
       setProposedSummary(res.summary || "");
       setProposedTopics(res.topics || []);
 
-      // Initialize default detail level of 5 for each topic
+      // Initialize default detail level (5) and output format (auto) for each topic
       const initialLevels: Record<string, number> = {};
+      const initialFormats: Record<string, "auto" | "text" | "list" | "table" | "cards" | "timeline"> = {};
       (res.topics || []).forEach((t) => {
         initialLevels[t.id] = t.detail_level || 5;
+        initialFormats[t.id] = (t.output_format as any) || "auto";
       });
       setTopicDetailLevels(initialLevels);
+      setTopicOutputFormats(initialFormats);
 
       // Auto-select recommended topics, or all if none recommended
       const rec = new Set<string>();
@@ -421,6 +432,8 @@ export function WebPageModal({
         model: selectedModel || undefined,
         page_type: pageType,
         target_audience: targetAudience,
+        author_persona: authorPersona.trim() || undefined,
+        visual_description: visualDescription.trim() || undefined,
         creative_freedom: creativeFreedom,
         orientation: orientation,
         layout_style: layoutStyle,
@@ -499,6 +512,26 @@ export function WebPageModal({
       const updated: Record<string, number> = {};
       proposedTopics.forEach((t) => {
         updated[t.id] = clamped;
+      });
+      return updated;
+    });
+  }
+
+  // Adjust output format for a specific topic
+  function handleSetTopicFormat(topicId: string, format: "auto" | "text" | "list" | "table" | "cards" | "timeline") {
+    setTopicOutputFormats((prev) => ({
+      ...prev,
+      [topicId]: format,
+    }));
+  }
+
+  // Apply a bulk output format to all proposed topics
+  function handleApplyBulkFormat(format: "auto" | "text" | "list" | "table" | "cards" | "timeline") {
+    setBulkOutputFormat(format);
+    setTopicOutputFormats((prev) => {
+      const updated: Record<string, "auto" | "text" | "list" | "table" | "cards" | "timeline"> = {};
+      proposedTopics.forEach((t) => {
+        updated[t.id] = format;
       });
       return updated;
     });
@@ -1074,6 +1107,38 @@ export function WebPageModal({
                     </div>
 
                     {/* Model Selector Trigger */}
+                    {/* Author Persona / Plume & Style */}
+                    <div className={styles.formGroup}>
+                      <label className={styles.label} htmlFor="author-persona-input">
+                        Qui rédige la page ? (Auteur, plume ou persona)
+                      </label>
+                      <input
+                        id="author-persona-input"
+                        type="text"
+                        className={styles.input}
+                        placeholder="Ex : Émile Zola, Un prof de français au lycée, Un vulgarisateur scientifique passionné..."
+                        value={authorPersona}
+                        onChange={(e) => setAuthorPersona(e.target.value)}
+                        disabled={working}
+                      />
+                    </div>
+
+                    {/* Visual Description & Custom Atmosphere */}
+                    <div className={styles.formGroup}>
+                      <label className={styles.label} htmlFor="visual-desc-input">
+                        Décris la page (Ambiance visuelle & Couleurs libres)
+                      </label>
+                      <input
+                        id="visual-desc-input"
+                        type="text"
+                        className={styles.input}
+                        placeholder="Ex : Très coloré en rouge et vert, Noir et blanc minimaliste, Ambiance parchemin ancien..."
+                        value={visualDescription}
+                        onChange={(e) => setVisualDescription(e.target.value)}
+                        disabled={working}
+                      />
+                    </div>
+
                     {models && models.length > 0 && (
                       <div className={styles.formGroup}>
                         <label className={styles.label}>Modèle IA de génération</label>
@@ -1775,6 +1840,23 @@ export function WebPageModal({
                 </span>
               </div>
             </div>
+              {/* Bulk Output Format Selector */}
+              <div className={styles.bulkDetailBar} title="Appliquer un formatage de sortie à tous les thèmes">
+                <span>Format global :</span>
+                <select
+                  className={styles.bulkFormatSelect}
+                  value={bulkOutputFormat}
+                  onChange={(e) => handleApplyBulkFormat(e.target.value as any)}
+                >
+                  <option value="auto">✨ Auto IA</option>
+                  <option value="text">📝 Texte rédigé</option>
+                  <option value="list">📋 Liste / Checklist</option>
+                  <option value="table">📊 Tableau comparatif</option>
+                  <option value="cards">🗂️ Cartes modulaires</option>
+                  <option value="timeline">⏳ Étapes / Timeline</option>
+                </select>
+              </div>
+
 
             <div className={styles.topicsBody}>
               {/* Source conversation rappel dans la modale */}
@@ -1795,6 +1877,36 @@ export function WebPageModal({
                     <span style={{ color: "#0284c7", fontWeight: 700 }}>Conversation liée :</span>
                     <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {conversationTitle || "Échange actif"}
+              {/* Quick Persona & Visual Description inputs in Modal */}
+              <div className={styles.topicsPersonaRow}>
+                <div className={styles.topicsPersonaInputWrap}>
+                  <label className={styles.topicsPersonaLabel} htmlFor="modal-author-persona">
+                    ✍️ Qui rédige la page ? (Auteur / Persona)
+                  </label>
+                  <input
+                    id="modal-author-persona"
+                    type="text"
+                    className={styles.topicsPersonaInput}
+                    placeholder="Ex: Émile Zola, Un prof de français, Un vulgarisateur..."
+                    value={authorPersona}
+                    onChange={(e) => setAuthorPersona(e.target.value)}
+                  />
+                </div>
+                <div className={styles.topicsPersonaInputWrap}>
+                  <label className={styles.topicsPersonaLabel} htmlFor="modal-visual-desc">
+                    🎨 Décris la page (Ambiance & Couleurs libres)
+                  </label>
+                  <input
+                    id="modal-visual-desc"
+                    type="text"
+                    className={styles.topicsPersonaInput}
+                    placeholder="Ex: Très coloré rouge et vert, Noir et blanc minimaliste..."
+                    value={visualDescription}
+                    onChange={(e) => setVisualDescription(e.target.value)}
+                  />
+                </div>
+              </div>
+
                     </span>
                   </div>
                   <label style={{ display: "flex", alignItems: "center", gap: "0.35rem", cursor: "pointer", fontWeight: 600, color: "#0284c7" }}>
@@ -1924,6 +2036,39 @@ export function WebPageModal({
                               handleSetTopicDetail(top.id, Number(e.target.value));
                             }}
                           />
+
+                          {/* Output Format Selector on each topic */}
+                          <div style={{ marginTop: "0.4rem", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.2rem", flexWrap: "wrap" }}>
+                            <span style={{ fontSize: "0.66rem", fontWeight: 600, color: "#64748b" }}>Format :</span>
+                            <div className={styles.topicFormatRow}>
+                              {[
+                                { id: "auto", label: "Auto", icon: "✨" },
+                                { id: "text", label: "Texte", icon: "📝" },
+                                { id: "list", label: "Liste", icon: "📋" },
+                                { id: "table", label: "Tableau", icon: "📊" },
+                                { id: "cards", label: "Cartes", icon: "🗂️" },
+                                { id: "timeline", label: "Étapes", icon: "⏳" },
+                              ].map((fmt) => {
+                                const currentFmt = topicOutputFormats[top.id] || "auto";
+                                const isActive = currentFmt === fmt.id;
+                                return (
+                                  <button
+                                    key={fmt.id}
+                                    type="button"
+                                    className={`${styles.topicFormatBtn} ${isActive ? styles.active : ""}`}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleSetTopicFormat(top.id, fmt.id as any);
+                                    }}
+                                    title={`Formater ce thème en ${fmt.label}`}
+                                  >
+                                    <span>{fmt.icon}</span>
+                                    <span>{fmt.label}</span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
                         </div>
                       )}
                     </div>
@@ -1961,6 +2106,7 @@ export function WebPageModal({
                       .map((t) => ({
                         ...t,
                         detail_level: topicDetailLevels[t.id] ?? 5,
+                        output_format: topicOutputFormats[t.id] || "auto",
                       }));
                     void handleCreate(chosen);
                   }}

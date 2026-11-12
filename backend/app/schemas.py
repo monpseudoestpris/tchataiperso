@@ -745,6 +745,7 @@ class PageTopicItem(BaseModel):
     category: str = Field(default="general", max_length=60)
     recommended: bool = True
     detail_level: int = Field(default=5, ge=1, le=10)
+    output_format: Literal["auto", "text", "list", "table", "cards", "timeline"] = "auto"
 
 
 class ProposePageTopicsRequest(BaseModel):
@@ -753,6 +754,8 @@ class ProposePageTopicsRequest(BaseModel):
     conversation_id: str | None = Field(default=None, max_length=36)
     page_type: str = Field(default="auto", max_length=50)
     target_audience: str = Field(default="general", max_length=50)
+    author_persona: str | None = Field(default=None, max_length=300)
+    visual_description: str | None = Field(default=None, max_length=1000)
     model: str | None = Field(default=None, max_length=200)
 
     @field_validator("prompt")
@@ -774,6 +777,8 @@ class CreateWebPage(BaseModel):
     model: str | None = Field(default=None, max_length=200)
     page_type: str = Field(default="auto", max_length=50)
     target_audience: str = Field(default="general", max_length=50)
+    author_persona: str | None = Field(default=None, max_length=300)
+    visual_description: str | None = Field(default=None, max_length=1000)
     creative_freedom: Literal["low", "medium", "high"] = "medium"
     orientation: Literal["portrait", "landscape"] = "portrait"
     layout_style: Literal["tabs", "single_page", "print_sheet", "auto"] = "auto"

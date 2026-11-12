@@ -1642,6 +1642,14 @@
 }
 
 .topicCardDesc {
+  font-size: 0.72rem;
+  color: #64748b;
+  line-height: 1.35;
+}
+
+:global([data-theme="dark"]) .topicCardDesc {
+  color: #94a3b8;
+}
 
 /* Topic Card Detail Level Slider */
 .topicDetailSliderBox {
@@ -1697,23 +1705,120 @@
   gap: 0.5rem;
   font-size: 0.72rem;
   color: #64748b;
-  background: var(--bg-surface-header, #f8fafc);
-  border: 1px solid var(--border-color, #e2e8f0);
-  border-radius: 6px;
-  padding: 0.25rem 0.6rem;
 }
 
-:global([data-theme="dark"]) .bulkDetailBar {
+/* Topic Format Selector Row */
+.topicFormatRow {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-top: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.topicFormatBtn {
+  background: var(--bg-surface, #ffffff);
+  border: 1px solid var(--border-color, #cbd5e1);
+  border-radius: 5px;
+  padding: 0.15rem 0.4rem;
+  font-size: 0.65rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--text-primary, #0f172a);
+  transition: all 0.15s;
+  font-family: inherit;
+}
+
+:global([data-theme="dark"]) .topicFormatBtn {
   background: #0f172a;
   border-color: #334155;
+  color: #cbd5e1;
+}
+
+.topicFormatBtn:hover {
+  border-color: #0284c7;
+  color: #0284c7;
+}
+
+.topicFormatBtn.active {
+  background: #0284c7;
+  border-color: #0284c7;
+  color: #ffffff;
+  font-weight: 600;
+}
+
+:global([data-theme="dark"]) .topicFormatBtn.active {
+  background: #0284c7;
+  border-color: #38bdf8;
+  color: #ffffff;
+}
+
+.bulkFormatSelect {
+  background: transparent;
+  border: 1px solid var(--border-color, #cbd5e1);
+  border-radius: 5px;
+  padding: 0.15rem 0.35rem;
+  font-size: 0.68rem;
+  color: inherit;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+:global([data-theme="dark"]) .bulkFormatSelect {
+  border-color: #334155;
+  background: #0f172a;
+  color: #f8fafc;
+}
+
+/* Modale persona / ambiance row */
+.topicsPersonaRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.65rem;
+  padding: 0.6rem 0.85rem;
+  border-radius: 8px;
+  background: var(--bg-surface-header, #f8fafc);
+  border: 1px solid var(--border-color, #e2e8f0);
+}
+
+:global([data-theme="dark"]) .topicsPersonaRow {
+  background: #0f172a;
+  border-color: #334155;
+}
+
+.topicsPersonaInputWrap {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.topicsPersonaLabel {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: #475569;
+}
+
+:global([data-theme="dark"]) .topicsPersonaLabel {
   color: #94a3b8;
 }
 
-  font-size: 0.72rem;
-  color: #64748b;
-  line-height: 1.35;
+.topicsPersonaInput {
+  background: var(--bg-surface, #ffffff);
+  border: 1px solid var(--border-color, #cbd5e1);
+  border-radius: 6px;
+  padding: 0.3rem 0.55rem;
+  font-size: 0.75rem;
+  color: inherit;
+  font-family: inherit;
+  outline: none;
 }
 
+:global([data-theme="dark"]) .topicsPersonaInput {
+  background: #1e293b;
+  border-color: #334155;
+}
 
 /* Category Filter Bar */
 .categoryFilterRow {

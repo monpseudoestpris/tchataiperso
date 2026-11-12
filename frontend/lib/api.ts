@@ -282,6 +282,7 @@ export type PageTopicItem = {
   category: string;
   recommended: boolean;
   detail_level?: number;
+  output_format?: "auto" | "text" | "list" | "table" | "cards" | "timeline";
 };
 
 export type ProposePageTopicsResponse = {
@@ -678,6 +679,8 @@ export async function proposeWebPageTopics(payload: {
   conversation_id?: string;
   page_type?: string;
   target_audience?: string;
+  author_persona?: string;
+  visual_description?: string;
   model?: string;
 }): Promise<ProposePageTopicsResponse> {
   return api<ProposePageTopicsResponse>("/pages/propose-topics", {
@@ -693,6 +696,8 @@ export async function createWebPage(payload: {
   model?: string;
   page_type?: string;
   target_audience?: string;
+  author_persona?: string;
+  visual_description?: string;
   creative_freedom?: "low" | "medium" | "high";
   orientation?: "portrait" | "landscape";
   layout_style?: "tabs" | "single_page" | "print_sheet" | "auto";

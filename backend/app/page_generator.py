@@ -341,7 +341,18 @@ VISUAL_STYLES: dict[str, dict[str, str]] = {
         "shadow": "4px 4px 0px rgba(2, 132, 199, 0.35)",
         "prompt_directive": "STYLE BD & CARTOON : Éléments façon bande dessinée, typographie fun, ronde et joyeuse via Google Fonts 'Fredoka' et 'Baloo 2' (<link href=\"https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;800&family=Fredoka:wght@500;600;700&display=swap\" rel=\"stylesheet\">), bulles de dialogue expressives, bordures rondes bien définies (radius 20px), contrastes colorés éclatants et touches ludiques avec icônes SVG animées.",
     },
-
+      "ancient_parchment": {
+        "name": "Parchemin Ancien & Manuscrits",
+        "icon": "📜",
+        "description": "Papier vieilli sépia, encres de lettré, sceaux de cire et typographie manuscrite ou serif ancienne.",
+        "font": "'Cinzel', 'EB Garamond', Georgia, serif",
+        "google_font": "Cinzel:wght@500;700;900&family=EB+Garamond:ital,wght@0,400;0,600;1,400",
+        "radius": "6px",
+        "border_light": "1px solid #d4b595",
+        "border_dark": "1px solid #5c4033",
+        "shadow": "0 4px 16px rgba(92, 64, 51, 0.15)",
+        "prompt_directive": "STYLE PARCHEMIN ANCIEN : Fond de page couleur parchemin/ivoire vieilli (#fdfbf7 ou #f4ebd0), encres sombres et sépia (#2c221e), typographie historique et solennelle via Google Fonts 'Cinzel' (titres) et 'EB Garamond' (corps) (<link href=\"https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700;900&family=EB+Garamond:ital,wght@0,400;0,600;1,400&display=swap\" rel=\"stylesheet\">), bordures fines effet gravure, lettrines décoratives et en-têtes ornés de motifs anciens.",
+    },
 
 }
 
@@ -519,29 +530,77 @@ def generate_fallback_page(
                 f'<button class="tab-btn {is_active}" data-tab="{tab_id}">{top_title}</button>'
             )
 
-            # Generate deep multi-paragraph development matching at least 20 lines
+            out_fmt = str(top.get("output_format", "auto"))
+            if out_fmt == "table":
+                fmt_body = (
+                    f'  <div style="overflow-x:auto; margin-bottom:1.25rem;">\n'
+                    f'    <table style="width:100%; border-collapse:collapse; font-size:0.88rem; text-align:left;">\n'
+                    f'      <thead>\n'
+                    f'        <tr style="background:var(--surface-hover); border-bottom:2px solid var(--primary);">\n'
+                    f'          <th style="padding:0.6rem 0.8rem; font-weight:700;">Axe / Paramètre</th>\n'
+                    f'          <th style="padding:0.6rem 0.8rem; font-weight:700;">Définition & Principe</th>\n'
+                    f'          <th style="padding:0.6rem 0.8rem; font-weight:700;">Exemple concret</th>\n'
+                    f'          <th style="padding:0.6rem 0.8rem; font-weight:700;">Portée & Effet</th>\n'
+                    f'        </tr>\n'
+                    f'      </thead>\n'
+                    f'      <tbody>\n'
+                    f'        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem 0.8rem; font-weight:600; color:var(--primary);">Fondation</td><td style="padding:0.6rem 0.8rem;">Périmètre et terminologie</td><td style="padding:0.6rem 0.8rem;">Application de référence</td><td style="padding:0.6rem 0.8rem;">Précision</td></tr>\n'
+                    f'        <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.6rem 0.8rem; font-weight:600; color:var(--primary);">Procédés</td><td style="padding:0.6rem 0.8rem;">Mécanismes internes</td><td style="padding:0.6rem 0.8rem;">Cas décortiqué pas-à-pas</td><td style="padding:0.6rem 0.8rem;">Efficacité</td></tr>\n'
+                    f'      </tbody>\n'
+                    f'    </table>\n'
+                    f'  </div>\n'
+                )
+            elif out_fmt == "list":
+                fmt_body = (
+                    f'  <div style="background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:1rem; margin-bottom:1.25rem;">\n'
+                    f'    <ul style="padding-left:1.4rem; display:flex; flex-direction:column; gap:0.5rem; line-height:1.65; font-size:0.92rem;">\n'
+                    f'      <li><strong>1. Règle fondamentale :</strong> Maîtriser le socle de définitions indispensables.</li>\n'
+                    f'      <li><strong>2. Démarche pas-à-pas :</strong> Suivre un ordre d\'exécution méthodique.</li>\n'
+                    f'      <li><strong>3. Point de contrôle :</strong> Valider la cohérence d\'ensemble.</li>\n'
+                    f'    </ul>\n'
+                    f'  </div>\n'
+                )
+            elif out_fmt == "cards":
+                fmt_body = (
+                    f'  <div class="grid-2" style="margin-bottom:1.25rem;">\n'
+                    f'    <div class="card" style="padding:1rem;">\n'
+                    f'      <h5 style="color:var(--primary); font-weight:700; margin-bottom:0.4rem;">Principes clés</h5>\n'
+                    f'      <p style="font-size:0.88rem; line-height:1.6; color:var(--text-muted); margin:0;">Définitions précises et repères théoriques.</p>\n'
+                    f'    </div>\n'
+                    f'    <div class="card" style="padding:1rem;">\n'
+                    f'      <h5 style="color:var(--accent); font-weight:700; margin-bottom:0.4rem;">Applications</h5>\n'
+                    f'      <p style="font-size:0.88rem; line-height:1.6; color:var(--text-muted); margin:0;">Cas pratiques et illustrations réelles.</p>\n'
+                    f'    </div>\n'
+                    f'  </div>\n'
+                )
+            else:
+                fmt_body = (
+                    f'  <p style="margin-bottom:1rem; line-height:1.7; font-size:0.95rem;">{top_desc} Cette composante constitue un pilier déterminant du sujet.</p>\n'
+                    f'  <div style="background:var(--surface-hover); border-left:4px solid var(--primary); padding:0.85rem 1.1rem; border-radius:0 10px 10px 0; margin-bottom:1.25rem;">\n'
+                    f'    <strong style="color:var(--primary); display:block; margin-bottom:0.35rem; font-size:0.88rem;">Éléments fondamentaux</strong>\n'
+                    f'    <p style="font-size:0.88rem; line-height:1.65; color:var(--text-muted); margin:0;">L\'étude approfondie de ce volet requiert d\'en maîtriser les notions pivot et distinctions terminologiques.</p>\n'
+                    f'  </div>\n'
+                )
+            fmt_badge = f'<span style="font-size:0.72rem; padding:0.15rem 0.5rem; border-radius:999px; background:var(--surface-hover); color:var(--text-muted); font-weight:600;">Format : {out_fmt}</span>' if out_fmt != 'auto' else ''
+
+
             tab_contents.append(
                 f'<div class="tab-content {is_active}" id="{tab_id}">\n'
                 f'  <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.75rem; flex-wrap:wrap; gap:0.5rem;">\n'
                 f'    <span style="font-size:0.75rem; text-transform:uppercase; letter-spacing:0.05em; color:var(--primary); font-weight:700;">{top_cat}</span>\n'
-                f'    <span style="font-size:0.72rem; padding:0.15rem 0.5rem; border-radius:999px; background:rgba(2,132,199,0.15); color:var(--primary); font-weight:600;">Niveau de détail : {detail_lvl}/10</span>\n'
+                f'    <div style="display:flex; align-items:center; gap:0.4rem;">\n'
+                f'      <span style="font-size:0.72rem; padding:0.15rem 0.5rem; border-radius:999px; background:rgba(2,132,199,0.15); color:var(--primary); font-weight:600;">Détail : {detail_lvl}/10</span>\n'
+                f'      {fmt_badge}\n'
+                f'    </div>\n'
                 f'  </div>\n'
                 f'  <h4 style="margin-bottom: 0.85rem; color: var(--text); font-size:1.2rem; font-weight:700;">{top_title}</h4>\n'
-                f'  <p style="margin-bottom:1rem; line-height:1.7; font-size:0.95rem;">{top_desc} Cette composante constitue un pilier déterminant du sujet, reliant les principes conceptuels à leurs applications opérationnelles directes.</p>\n'
-                f'  <div style="background:var(--surface-hover); border-left:4px solid var(--primary); padding:0.85rem 1.1rem; border-radius:0 10px 10px 0; margin-bottom:1.25rem;">\n'
-                f'    <strong style="color:var(--primary); display:block; margin-bottom:0.35rem; font-size:0.88rem;">Éléments fondamentaux & Définition de référence</strong>\n'
-                f'    <p style="font-size:0.88rem; line-height:1.65; color:var(--text-muted); margin:0;">L\'étude approfondie de ce volet requiert d\'en maîtriser les notions pivot, les distinctions terminologiques indispensables et les mécanismes sous-jacents qui évitent toute ambiguïté d\'interprétation.</p>\n'
-                f'  </div>\n'
-                f'  <h5 style="color:var(--text); font-size:0.98rem; font-weight:600; margin:1rem 0 0.5rem;">Démarche d\'analyse & Mécanismes d\'application :</h5>\n'
+                f'{fmt_body}\n'
+                f'  <h5 style="color:var(--text); font-size:0.98rem; font-weight:600; margin:1rem 0 0.5rem;">Démarche d\'analyse :</h5>\n'
                 f'  <ul style="padding-left:1.4rem; display:flex; flex-direction:column; gap:0.5rem; line-height:1.6; font-size:0.92rem; margin-bottom:1.25rem;">\n'
-                f'    <li><strong>Identification et repérage systématique :</strong> Observer précisément les indices concrets, les manifestations tangibles et les régularités caractéristiques.</li>\n'
-                f'    <li><strong>Interprétation et mise en perspective :</strong> Relier chaque observation à son effet ciblé, à sa portée globale et aux intentions sous-jacentes.</li>\n'
-                f'    <li><strong>Articulation logique avec l\'ensemble du sujet :</strong> Mettre en regard ce point avec les autres axes pour construire une démonstration cohérente et progressive.</li>\n'
-                f'    <li><strong>Vérification critique et points de vigilance :</strong> Éviter les simplifications hâtives, les contresens fréquents et la simple paraphrase passive.</li>\n'
+                f'    <li><strong>Repérage systématique :</strong> Observer précisément les indices concrets et régularités.</li>\n'
+                f'    <li><strong>Interprétation :</strong> Relier chaque observation à son effet ciblé et à sa portée.</li>\n'
+                f'    <li><strong>Points de vigilance :</strong> Éviter la simple paraphrase passive et les contresens.</li>\n'
                 f'  </ul>\n'
-                f'  <div style="background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:0.85rem 1rem; font-size:0.88rem; line-height:1.6; color:var(--text-muted);">\n'
-                f'    <span style="font-weight:600; color:var(--primary);">Synthèse d\'action :</span> L\'intégration rigoureuse de « {top_title} » assure la solidité de votre analyse, en conjuguant rigueur technique et vision d\'ensemble.\n'
-                f'  </div>\n'
                 f'</div>'
             )
         tabs_html = f"""
@@ -1007,6 +1066,8 @@ async def generate_page_html(
     model: str | None = None,
     page_type: str = "auto",
     target_audience: str = "general",
+    author_persona: str | None = None,
+    visual_description: str | None = None,
     creative_freedom: str = "medium",
     orientation: str = "portrait",
     layout_style: str = "auto",
@@ -1065,6 +1126,24 @@ async def generate_page_html(
         design_options.append("- PUBLIC CIBLE : Professionnels et décideurs. Style concis, vision stratégique, chiffres et synthèse exécutive percutante.")
     elif target_audience == "general":
         design_options.append("- PUBLIC CIBLE : Grand public curieux. Didactique, vivant, captivant et accessible sans jargon excessif.")
+
+    # 2bis. Auteur / Persona rédactionnel (Style & Voix de plume)
+    if author_persona and author_persona.strip():
+        design_options.append(
+            f"- AUTEUR / PERSONA DE RÉDACTION (STYLE & TON DE PLUME IMPÉRATIF) : « {author_persona.strip()} ».\n"
+            f"Tu DOIS impérativement adopter la voix, le style d'écriture, le registre de langue, le niveau de vocabulaire, "
+            f"les tournures de phrases, le souffle littéraire ou la rigueur professorale caractéristiques de : « {author_persona.strip()} ». "
+            f"Fais transparaître cette personnalité unique dans les introductions, les explications, les transitions et les conclusions."
+        )
+
+    # 2ter. Description visuelle et ambiance chromatique personnalisée
+    if visual_description and visual_description.strip():
+        design_options.append(
+            f"- AMBIANCE VISUELLE & COULEURS SUR-MESURE (EXIGENCE FORTE) : « {visual_description.strip()} ».\n"
+            f"L'utilisateur a spécifié l'ambiance et la palette suivante : « {visual_description.strip()} ». "
+            f"Adapte impérativement le CSS (:root, variables de couleurs --primary, --bg, --surface, dégradés, bordures, contrastes) "
+            f"pour incarner fidèlement cette description visuelle (ex: tons dominants, contrastes chauds/froids, noir & blanc, néons ou couleurs spécifiques)."
+        )
 
     # 3. Liberté créative
     if creative_freedom == "low":
@@ -1205,7 +1284,21 @@ async def generate_page_html(
             else:
                 lines_req = "MINIMUM 55+ LIGNES EXHAUSTIVES / COURS MAGISTRAL (OBLIGATOIRE)"
 
-            item_str = f"Thème {idx} : « {t_title} » [Niveau de détail : {d_lvl}/10 — Contrat de volume : {lines_req}]"
+            # Desired layout / output format for this specific topic
+            out_fmt = t.get("output_format", "auto")
+            fmt_instruction = ""
+            if out_fmt == "table":
+                fmt_instruction = " — FORMAT OBLIGATOIRE : TABLEAU HTML COMPARATIF / SYNTHÉTIQUE (<table> avec en-têtes clairs, données riches et au moins 6 à 10 lignes d'analyse)"
+            elif out_fmt == "list":
+                fmt_instruction = " — FORMAT OBLIGATOIRE : LISTE STRUCTURÉE À PUCES / CHECKLIST (éléments détaillés avec termes en gras et explications)"
+            elif out_fmt == "cards":
+                fmt_instruction = " — FORMAT OBLIGATOIRE : CARTES / GRILLE MODULAIRE (blocs de contenu encadrés côte à côte)"
+            elif out_fmt == "timeline":
+                fmt_instruction = " — FORMAT OBLIGATOIRE : ÉTAPES / TIMELINE SÉQUENTIELLE (jalons ordonnés pas-à-pas numérotés)"
+            elif out_fmt == "text":
+                fmt_instruction = " — FORMAT OBLIGATOIRE : TEXTE RÉDIGÉ FLUIDE (paragraphes académiques denses sans découpage télégraphique)"
+
+            item_str = f"Thème {idx} : « {t_title} » [Niveau de détail : {d_lvl}/10 — Contrat de volume : {lines_req}{fmt_instruction}]"
             if t_desc:
                 item_str += f"\n   Périmètre attendu : {t_desc}"
             topics_summary.append(item_str)
@@ -1736,6 +1829,8 @@ async def propose_page_topics(
     title: str | None = None,
     page_type: str = "auto",
     target_audience: str = "general",
+    author_persona: str | None = None,
+    visual_description: str | None = None,
     model: str | None = None,
 ) -> tuple[str, str, list[dict[str, Any]]]:
     """
@@ -1772,6 +1867,10 @@ async def propose_page_topics(
         user_query_parts.append(f"Type de page envisagée : {page_type}")
     if target_audience and target_audience != "general":
         user_query_parts.append(f"Public cible : {target_audience}")
+    if author_persona and author_persona.strip():
+        user_query_parts.append(f"Auteur / Persona de rédaction souhaité : {author_persona.strip()}")
+    if visual_description and visual_description.strip():
+        user_query_parts.append(f"Ambiance visuelle & couleurs : {visual_description.strip()}")
 
     user_query_parts.append(
         "Fais un brainstorming extrêmement large, approfondi et granulaire. "
