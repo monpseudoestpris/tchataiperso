@@ -48,6 +48,12 @@ from ..models import (
     now,
 )
 from ..schemas import DeepSearchPlanResponse, LearnModePlanResponse, PlanDeepSearch, PlanLearnMode, SendMessage
+from ..sampling import (
+    build_creativity_instruction,
+    model_supports_direct_temperature,
+    resolve_effective_creativity,
+    resolve_effective_sampling,
+)
 from ..serializers import conversation_json, deep_search_report_json, extract_mentioned_skills, learn_report_json, message_json, sse
 from ..topic_agent import build_topic_prompt_context, process_topic_turn
 from ..web import fetch_and_parse_web_url
@@ -299,6 +305,7 @@ async def send_message(
         target_model: str,
         ping_interval: float = 2.0,
         enable_cache: bool = True,
+        sampling_params: dict[str, Any] | None = None,
     ) -> AsyncIterator[tuple[dict[str, Any] | str | None, bool]]:
         """
         Générateur unifié pour le streaming de chat avec maintien de session SSE (keepalive).
@@ -307,14 +314,24 @@ async def send_message(
         """
         if providers.stream_chat is not _DEFAULT_STREAM_CHAT:
             try:
-                gen = providers.stream_chat(settings, chat_context, target_model, enable_cache=enable_cache)
+                gen = providers.stream_chat(
+                    settings, chat_context, target_model, enable_cache=enable_cache, sampling_params=sampling_params
+                )
             except TypeError:
-                gen = providers.stream_chat(settings, chat_context, target_model)
+                try:
+                    gen = providers.stream_chat(settings, chat_context, target_model, enable_cache=enable_cache)
+                except TypeError:
+                    gen = providers.stream_chat(settings, chat_context, target_model)
         else:
             try:
-                gen = providers.stream_chat_events(settings, chat_context, target_model, enable_cache=enable_cache)
+                gen = providers.stream_chat_events(
+                    settings, chat_context, target_model, enable_cache=enable_cache, sampling_params=sampling_params
+                )
             except TypeError:
-                gen = providers.stream_chat_events(settings, chat_context, target_model)
+                try:
+                    gen = providers.stream_chat_events(settings, chat_context, target_model, enable_cache=enable_cache)
+                except TypeError:
+                    gen = providers.stream_chat_events(settings, chat_context, target_model)
 
         aiterator = gen.__aiter__()
         pending: asyncio.Task | None = None
@@ -773,6 +790,36 @@ async def send_message(
                         seen_skill_ids.add(s.id)
                         merged_skills.append(s)
                 skills = [{"name": s.name, "prompt": s.prompt} for s in merged_skills]
+                supported_params = (
+                    model_info.get("supported_parameters")
+                    if isinstance(model_info, dict) and model_info.get("supported_parameters") is not None
+                    else settings.get_model_supported_parameters(model)
+                )
+                active_skill_sampling_items = [
+                    {
+                        "creativity": getattr(s, "creativity", None),
+                        "sampling_params": getattr(s, "sampling_params", None),
+                    }
+                    for s in merged_skills
+                ]
+                effective_sampling = resolve_effective_sampling(
+                    message_creativity=body.creativity,
+                    message_params=body.sampling_params.to_clean_dict() if body.sampling_params else None,
+                    conversation_creativity=getattr(conversation, "creativity", None),
+                    conversation_params=getattr(conversation, "sampling_params", None),
+                    active_skills=active_skill_sampling_items,
+                    supported_parameters=supported_params,
+                    default_temperature=settings.llm_temperature,
+                )
+                effective_creativity = resolve_effective_creativity(
+                    message_creativity=body.creativity,
+                    conversation_creativity=getattr(conversation, "creativity", None),
+                    active_skills=active_skill_sampling_items,
+                )
+                creativity_instruction = build_creativity_instruction(
+                    effective_creativity,
+                    has_temperature=model_supports_direct_temperature(supported_params),
+                )
                 history = [
                     {
                         "role": item.role,
@@ -918,6 +965,7 @@ async def send_message(
                     prompt_cache_enabled=user_prompt_cache,
                     topic_context=topic_context_text,
                     max_context_tokens=limit_tokens,
+                    creativity_instruction=creativity_instruction,
                 )
                 use_two_step_section_writer = (
                     (body.deep_search or body.learn_mode)
@@ -1142,7 +1190,9 @@ async def send_message(
                     else:
                         status_label = "Rédaction de la réponse…"
                     yield sse("status", {"message": status_label})
-                    async for event_or_str, is_ping in _stream_chat_with_keepalive(context, model, enable_cache=user_prompt_cache):
+                    async for event_or_str, is_ping in _stream_chat_with_keepalive(
+                        context, model, enable_cache=user_prompt_cache, sampling_params=effective_sampling
+                    ):
                         if is_ping:
                             yield event_or_str
                         else:
@@ -1175,7 +1225,9 @@ async def send_message(
                             "explicitement plutôt que de ne rien répondre."
                         ),
                     }]
-                    async for event_or_str, is_ping in _stream_chat_with_keepalive(retry_context, model, enable_cache=user_prompt_cache):
+                    async for event_or_str, is_ping in _stream_chat_with_keepalive(
+                        retry_context, model, enable_cache=user_prompt_cache, sampling_params=effective_sampling
+                    ):
                         if is_ping:
                             yield event_or_str
                         else:

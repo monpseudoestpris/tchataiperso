@@ -206,6 +206,8 @@ def skill_json(item: Skill) -> dict:
         "id": item.id,
         "name": item.name,
         "prompt": item.prompt,
+        "creativity": getattr(item, "creativity", None),
+        "sampling_params": getattr(item, "sampling_params", None),
         "created_at": stamp(item.created_at),
         "updated_at": stamp(item.updated_at),
     }
@@ -260,6 +262,8 @@ def conversation_json(item: Conversation, detail: bool = False) -> dict:
         "theme": (item.theme or "").strip(),
         "keywords": keywords,
         "topic_space_id": getattr(item, "topic_space_id", None),
+        "creativity": getattr(item, "creativity", None),
+        "sampling_params": getattr(item, "sampling_params", None),
         "created_at": stamp(item.created_at),
         "updated_at": stamp(item.updated_at),
         "summary": item.summary,

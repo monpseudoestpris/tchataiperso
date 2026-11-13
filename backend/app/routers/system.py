@@ -4,6 +4,7 @@ from sqlalchemy.orm import sessionmaker
 
 from ..config import Settings
 from ..deps import get_sessions, get_settings
+from ..sampling import PARAMETER_CATALOG
 from ..schemas import CONVERSATION_THEMES
 
 
@@ -53,5 +54,26 @@ def models_directory(refresh: bool = False, settings: Settings = Depends(get_set
     return {
         "models": settings.get_models(force_refresh=refresh),
         "default_model": settings.default_model,
+    }
+
+
+@router.get("/api/models/{model_id:path}/parameters")
+def model_parameters(
+    model_id: str,
+    refresh: bool = False,
+    settings: Settings = Depends(get_settings),
+):
+    supported = settings.get_model_supported_parameters(model_id, force_refresh=refresh)
+    supported_set = set(supported)
+    return {
+        "model": model_id,
+        "supported_parameters": supported,
+        "parameters": [
+            {
+                **param,
+                "available": param["name"] in supported_set,
+            }
+            for param in PARAMETER_CATALOG
+        ],
     }
 

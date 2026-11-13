@@ -4,7 +4,7 @@ import {
   ArrowDown, ArrowRightLeft, ArrowUp, Bookmark, BookmarkCheck, BookOpen, Brain, Check, ChevronDown, ChevronLeft, ChevronRight,
   CircleAlert, Code2, Compass, Copy, Download, ExternalLink, Eye, FileCode2, FileText, FolderArchive, FolderKanban,
   Globe, Globe2, GraduationCap, ImagePlus, LayoutGrid, LineChart, Link2, LoaderCircle, LogOut, Menu, MessageCircle, Newspaper, PanelLeftClose, Paperclip,
-  Pencil, Plus, Presentation, Search, RefreshCw, Settings, Share2, Shield, Sparkles, Square, SquarePlay, Star, Target, Trash2, TrendingUp, Unlink, Users, UsersRound, Volume2, WandSparkles, X,
+  Pencil, Plus, Presentation, Search, RefreshCw, Settings, Share2, Shield, Sliders, Sparkles, Square, SquarePlay, Star, Target, Trash2, TrendingUp, Unlink, Users, UsersRound, Volume2, WandSparkles, X,
 } from "lucide-react";
 import { isValidElement, memo, useEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
@@ -34,8 +34,9 @@ import { StageModelsModal } from "@/components/stage-models-modal";
 import { ThoughtAccordion } from "@/components/thought-accordion";
 import { TopicModal } from "@/components/topic-modal";
 import { ChatAttachedSites } from "@/components/chat-attached-sites";
+import { CreativityControl, formatCreativityBadge } from "@/components/creativity-control";
 import { WebPageModal } from "@/components/web-page-modal";
-import { ApiError, api, attachUrl, createLearnReportFromMessage, createReportFromMessage, errorMessage, fetchTopics, linkConversationToTopic, unlinkConversationFromTopic, skillToSlug, streamMessage, type Attachment, type AuthUser, type Config, type Conversation, type DocumentExtraction, type FamilyGroupInfo, type FinancialDashboardData, type GeneratedSound, type Memory, type Message, type Model, type MultiAgentConfig, type Skill, type Source, type StageModelsConfig, type TopicSpace } from "@/lib/api";
+import { ApiError, api, attachUrl, createLearnReportFromMessage, createReportFromMessage, errorMessage, fetchTopics, linkConversationToTopic, unlinkConversationFromTopic, skillToSlug, streamMessage, type Attachment, type AuthUser, type Config, type Conversation, type DocumentExtraction, type FamilyGroupInfo, type FinancialDashboardData, type GeneratedSound, type Memory, type Message, type Model, type MultiAgentConfig, type SamplingParameters, type Skill, type Source, type StageModelsConfig, type TopicSpace } from "@/lib/api";
 import { collectConversationCanvasFiles, createZipBlob, extractCanvasFiles, hasExplicitCanvasFiles, triggerBlobDownload } from "@/lib/code-canvas";
 import { hasInteractiveLearnModules, stripInteractiveModulesForBody } from "@/lib/learn-parser";
 import { useModelFavorites } from "@/lib/model-favorites";
@@ -1150,6 +1151,9 @@ export function ChatApp() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
   const [skillsOpen, setSkillsOpen] = useState(false);
+  const [creativityOpen, setCreativityOpen] = useState(false);
+  const [pendingCreativity, setPendingCreativity] = useState<number | null>(null);
+  const [pendingSamplingParams, setPendingSamplingParams] = useState<SamplingParameters | null>(null);
   const [contextTab, setContextTab] = useState<"summary" | "memories">("summary");
   const [memoryDraft, setMemoryDraft] = useState("");
   const [dialog, setDialog] = useState<{ type: "rename" | "delete"; conversation: Conversation } | null>(null);
@@ -1663,6 +1667,8 @@ export function ChatApp() {
       }
       const hasCanvas = (loaded.messages ?? []).some(msg => msg.role === "assistant" && hasExplicitCanvasFiles(msg.content));
       setConversation(loaded); setModel(loaded.model); setDraft(""); setAttachments([]); setAtBottom(true);
+      setPendingCreativity(loaded.creativity ?? null);
+      setPendingSamplingParams(loaded.sampling_params ?? null);
       setActiveTopicSpaceId(loaded.topic_space_id ?? null);
       setCanvasMessageId(null); setCanvasSelectedPath(null); setCanvasIncludeUnnamed(false);
       if (hasCanvas) { setContextOpen(false); setCanvasOpen(true); }
@@ -1677,6 +1683,8 @@ export function ChatApp() {
     setBusy("cleanup");
     const warning = await discardUploads(attachments);
     setConversation(null); setDraft(""); setAttachments([]); setModel(config?.default_model ?? ""); setError(""); setSidebarOpen(false); setAtBottom(true);
+    setPendingCreativity(null);
+    setPendingSamplingParams(null);
     setActiveTopicSpaceId(topicId ?? null);
     setCanvasMessageId(null); setCanvasSelectedPath(null); setCanvasIncludeUnnamed(false);
     setStreamingId(null); setStatus("");
@@ -1698,6 +1706,40 @@ export function ChatApp() {
       await refreshConversations();
     } catch (err) { setModel(previous); setError(errorMessage(err)); }
     finally { setBusy(null); }
+  }
+
+  async function updateConversationCreativity(
+    nextCreativity: number | null,
+    nextParams: SamplingParameters | null,
+  ) {
+    setPendingCreativity(nextCreativity);
+    setPendingSamplingParams(nextParams);
+    if (!conversation || working) return;
+    try {
+      const body: Record<string, any> = {
+        creativity: nextCreativity,
+        sampling_params: nextParams,
+      };
+      if (nextCreativity === null && nextParams === null) {
+        body.clear_creativity = true;
+      }
+      const updated = await api<Conversation>(`/conversations/${conversation.id}`, {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      });
+      setConversation(old =>
+        old
+          ? {
+              ...old,
+              creativity: updated.creativity,
+              sampling_params: updated.sampling_params,
+            }
+          : updated,
+      );
+      await refreshConversations();
+    } catch (err) {
+      setError(errorMessage(err));
+    }
   }
 
   async function uploadFiles(files: FileList | null, mode: "ocr" | "vision" = "ocr") {
@@ -1918,6 +1960,8 @@ export function ChatApp() {
       if (!activeId) {
         const postData: Record<string, any> = { model };
         if (activeTopicSpaceId) postData.topic_space_id = activeTopicSpaceId;
+        if (pendingCreativity !== null) postData.creativity = pendingCreativity;
+        if (pendingSamplingParams !== null) postData.sampling_params = pendingSamplingParams;
         const created = await api<Conversation>("/conversations", { method: "POST", body: JSON.stringify(postData), signal: controller.signal });
         activeId = created.id;
         conversationIdRef.current = activeId;
@@ -1959,6 +2003,8 @@ export function ChatApp() {
           interaction_id: interactionId,
           plan_feedback: planFeedback,
           auto_memory_enabled: autoMemoryActive,
+          creativity: conversation ? conversation.creativity : pendingCreativity,
+          sampling_params: conversation ? conversation.sampling_params : pendingSamplingParams,
         },
         controller.signal,
         event => {
@@ -2995,7 +3041,93 @@ export function ChatApp() {
 
       <div className="workspace">
         <section className="chat-panel" aria-label="Conversation">
-          <div className="chat-skills-toolbar"><span>{conversation?.skills?.length ? conversation.skills.map(skill => skill.name).join(" · ") : "Aucune compétence active"}</span><button type="button" onClick={() => { setContextOpen(false); setSkillsOpen(true); }}><Sparkles size={15} />Compétences<small>{conversation?.skills?.length ?? 0}</small></button></div>
+          {(() => {
+            const effectiveCreativity = conversation ? (conversation.creativity ?? null) : pendingCreativity;
+            const effectiveSampling = conversation ? (conversation.sampling_params ?? null) : pendingSamplingParams;
+            const chatBadge = formatCreativityBadge(effectiveCreativity, effectiveSampling);
+            const skillWithCreativity = (conversation?.skills ?? []).find(
+              s => s.creativity !== null && s.creativity !== undefined || (s.sampling_params && Object.values(s.sampling_params).some(v => v !== null && v !== undefined))
+            );
+            const inheritedSkillBadge = !chatBadge && skillWithCreativity
+              ? `${skillWithCreativity.name} (${formatCreativityBadge(skillWithCreativity.creativity, skillWithCreativity.sampling_params)})`
+              : null;
+            return (
+              <>
+                <div className="chat-skills-toolbar">
+                  <span>{conversation?.skills?.length ? conversation.skills.map(skill => skill.name).join(" · ") : "Aucune compétence active"}</span>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setContextOpen(false);
+                        setSkillsOpen(false);
+                        setCreativityOpen(old => !old);
+                      }}
+                      title="Régler la créativité et les paramètres du modèle (temperature, top_p, top_k, pénalités, seed) pour ce tchat"
+                      style={{
+                        borderColor: (chatBadge || creativityOpen) ? "#6366f1" : undefined,
+                        color: (chatBadge || creativityOpen) ? "#4f46e5" : undefined,
+                      }}
+                    >
+                      <Sliders size={14} />
+                      <span>{chatBadge || (inheritedSkillBadge ? `Créativité · ${inheritedSkillBadge}` : "Créativité")}</span>
+                    </button>
+                    <button type="button" onClick={() => { setContextOpen(false); setCreativityOpen(false); setSkillsOpen(true); }}>
+                      <Sparkles size={15} />Compétences<small>{conversation?.skills?.length ?? 0}</small>
+                    </button>
+                  </div>
+                </div>
+                {creativityOpen && (
+                  <div
+                    style={{
+                      padding: "4px 18px 10px",
+                      borderBottom: "1px solid var(--border, #e2e8f0)",
+                      background: "var(--surface, #fff)",
+                      maxHeight: "62vh",
+                      overflowY: "auto",
+                      scrollbarWidth: "thin",
+                      boxShadow: "0 8px 24px rgba(15, 23, 42, 0.06)",
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        marginTop: "4px",
+                        position: "sticky",
+                        top: 0,
+                        background: "var(--surface, #fff)",
+                        zIndex: 2,
+                        paddingBottom: "4px",
+                      }}
+                    >
+                      <span style={{ fontSize: "11px", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--text-secondary, #64748b)" }}>
+                        Réglage de créativité de ce tchat
+                      </span>
+                      <button
+                        type="button"
+                        className="icon-button"
+                        aria-label="Fermer le panneau de créativité"
+                        onClick={() => setCreativityOpen(false)}
+                      >
+                        <X size={15} />
+                      </button>
+                    </div>
+                    <CreativityControl
+                      creativity={effectiveCreativity}
+                      samplingParams={effectiveSampling}
+                      onChange={(nextCreat, nextParams) => void updateConversationCreativity(nextCreat, nextParams)}
+                      model={model}
+                      models={config?.models ?? []}
+                      disabled={working}
+                      inheritedLabel={inheritedSkillBadge ? `Hérité : ${inheritedSkillBadge}` : "Auto (Modèle)"}
+                    />
+                  </div>
+                )}
+              </>
+            );
+          })()}
           {skillsOpen && <SkillsPanel conversation={conversation} model={model} config={config} onClose={() => setSkillsOpen(false)} onConversationChange={setConversation} onRefreshConversations={refreshConversations} onSkillsChange={setSkills} />}
           <div className="chat-scroll" ref={messagesRef} onScroll={() => { const el = messagesRef.current; if (el) { const isBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120; atBottomRef.current = isBottom; setAtBottom(isBottom); } }}>
             {!messages.length && busy !== "switch" ? (

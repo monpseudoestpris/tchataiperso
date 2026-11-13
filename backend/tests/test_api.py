@@ -1516,3 +1516,123 @@ def test_learn_mode_sonar_delegation_flow(settings, monkeypatch):
         saved_msg = done_payload["message"]
         assert "Cours Magistral" in saved_msg["content"]
         assert saved_msg["sources"][0]["url"] == doc_url
+
+
+def test_creativity_and_sampling_params_for_chats_skills_and_models(tmp_path, monkeypatch):
+    llm_models = json.dumps([
+        {
+            "id": "openai/gpt-4o-mini",
+            "name": "GPT-4o mini",
+            "vision": True,
+            "supported_parameters": ["temperature", "top_p", "presence_penalty", "frequency_penalty", "seed"],
+        },
+        {
+            "id": "mistralai/mistral-small-3.2-24b-instruct",
+            "name": "Mistral Small 3.2",
+            "vision": True,
+            "supported_parameters": ["temperature", "top_p", "top_k", "min_p", "top_a", "repetition_penalty"],
+        },
+        {
+            "id": "anthropic/claude-sonnet-5.5",
+            "name": "Claude Sonnet 5.5",
+            "vision": True,
+            "supported_parameters": ["reasoning", "verbosity"],
+        },
+    ])
+    settings = Settings(
+        _env_file=None,
+        app_data_dir=tmp_path,
+        demo_mode=False,
+        llm_api_key="secret",
+        llm_models=llm_models,
+        default_model="openai/gpt-4o-mini",
+    )
+    captured_sampling: list[dict] = []
+
+    async def fake_stream_events(_settings, messages, model, enable_cache=True, sampling_params=None):
+        sys_text = "\n".join(str(m.get("content") or "") for m in messages if m.get("role") == "system")
+        captured_sampling.append({
+            "model": model,
+            "sampling": dict(sampling_params or {}),
+            "system": sys_text,
+        })
+        yield {"type": "delta", "text": "Réponse calibrée"}
+
+    monkeypatch.setattr(providers, "stream_chat_events", fake_stream_events)
+
+    with authenticated_client(settings) as client:
+        # 1. Inspect model parameter availability via /api/models/{model_id}/parameters
+        gpt_params = client.get("/api/models/openai/gpt-4o-mini/parameters").json()
+        assert gpt_params["supported_parameters"] == ["temperature", "top_p", "presence_penalty", "frequency_penalty", "seed"]
+        by_name = {p["name"]: p["available"] for p in gpt_params["parameters"]}
+        assert by_name["temperature"] is True
+        assert by_name["top_k"] is False
+        assert by_name["repetition_penalty"] is False
+
+        sonnet_params = client.get("/api/models/anthropic/claude-sonnet-5.5/parameters").json()
+        assert sonnet_params["supported_parameters"] == ["reasoning", "verbosity"]
+        sonnet_by_name = {p["name"]: p for p in sonnet_params["parameters"]}
+        assert sonnet_by_name["temperature"]["available"] is False
+        assert sonnet_by_name["temperature"]["unavailable_label"] == "Pas de contrôle direct de l'aléatoire"
+        assert sonnet_by_name["reasoning"]["available"] is True
+        assert sonnet_by_name["verbosity"]["available"] is True
+
+        # 2. Skill with creativity & unsupported parameter for GPT-4o-mini -> Hybrid: temperature + instructions
+        creative_skill = client.post(
+            "/api/skills",
+            json={
+                "name": "Brainstorming",
+                "prompt": "Sois inventif.",
+                "creativity": 0.8,
+                "sampling_params": {"top_k": 30, "seed": 42, "reasoning": "high", "verbosity": "high"},
+            },
+        ).json()
+        assert creative_skill["creativity"] == 0.8
+        assert creative_skill["sampling_params"]["top_k"] == 30
+        assert creative_skill["sampling_params"]["seed"] == 42
+        assert creative_skill["sampling_params"]["reasoning"] == "high"
+        assert creative_skill["sampling_params"]["verbosity"] == "high"
+
+        conv_id = conversation(client, model="openai/gpt-4o-mini")
+        client.patch(f"/api/conversations/{conv_id}/skills", json={"skill_ids": [creative_skill["id"]]})
+
+        # Send message -> inherits from skill, filters out top_k/reasoning/verbosity (unsupported by gpt-4o-mini)
+        resp1 = client.post(f"/api/conversations/{conv_id}/messages", json={"content": "Idée 1"})
+        assert events(resp1)[-1][0] == "done"
+        s1 = captured_sampling[-1]["sampling"]
+        sys1 = captured_sampling[-1]["system"]
+        assert s1["temperature"] == 1.2
+        assert s1["seed"] == 42
+        assert "top_k" not in s1
+        assert "reasoning" not in s1
+        assert "Calibrage hybride de créativité (80 %" in sys1
+        assert "JAMAIS inventer de faits" in sys1
+
+        # 3. Conversation-level creativity overrides skill creativity
+        patched_conv = client.patch(
+            f"/api/conversations/{conv_id}",
+            json={"creativity": 0.1, "sampling_params": {"presence_penalty": 0.5, "verbosity": "low"}},
+        ).json()
+        assert patched_conv["creativity"] == 0.1
+        assert patched_conv["sampling_params"]["presence_penalty"] == 0.5
+        assert patched_conv["sampling_params"]["verbosity"] == "low"
+
+        resp2 = client.post(f"/api/conversations/{conv_id}/messages", json={"content": "Idée 2"})
+        assert events(resp2)[-1][0] == "done"
+        s2 = captured_sampling[-1]["sampling"]
+        assert s2["temperature"] == 0.15
+        assert s2["presence_penalty"] == 0.5
+
+        # 4. Switch to Claude Sonnet 5.5 (no temperature) -> temperature omitted, reasoning & verbosity sent + adaptive instructions
+        resp3 = client.post(
+            f"/api/conversations/{conv_id}/messages",
+            json={"content": "Analyse scientifique", "model": "anthropic/claude-sonnet-5.5"},
+        )
+        assert events(resp3)[-1][0] == "done"
+        s3 = captured_sampling[-1]["sampling"]
+        sys3 = captured_sampling[-1]["system"]
+        assert "temperature" not in s3
+        assert "presence_penalty" not in s3
+        assert s3 == {"reasoning": {"effort": "high"}, "verbosity": "low"}
+        assert "sans température directe" in sys3
+        assert "JAMAIS inventer de faits" in sys3

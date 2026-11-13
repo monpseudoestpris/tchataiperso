@@ -289,6 +289,7 @@ async def stream_chat_events(
     messages: list[dict[str, Any]],
     model: str,
     enable_cache: bool = True,
+    sampling_params: dict[str, Any] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """
     Yield OpenAI-compatible SSE events with distinct text deltas and thought/reasoning deltas:
@@ -325,6 +326,19 @@ async def stream_chat_events(
         enable_cache=enable_cache,
     )
 
+    request_json: dict[str, Any] = {
+        "model": model,
+        "messages": payload_messages,
+        "stream": True,
+        "max_tokens": max_tokens,
+    }
+    if sampling_params is not None:
+        for param_key, param_val in sampling_params.items():
+            if param_val is not None:
+                request_json[param_key] = param_val
+    else:
+        request_json["temperature"] = settings.llm_temperature
+
     tag_splitter = ThinkTagSplitter()
 
     try:
@@ -333,8 +347,7 @@ async def stream_chat_events(
                 "POST",
                 settings.llm_base_url.rstrip("/") + "/chat/completions",
                 headers={"Authorization": f"Bearer {key}", "Accept": "text/event-stream"},
-                json={"model": model, "messages": payload_messages, "stream": True,
-                        "temperature": settings.llm_temperature, "max_tokens": max_tokens},
+                json=request_json,
             ) as response:
                 _check_response(response, "Fournisseur IA")
                 event: list[str] = []
@@ -392,9 +405,12 @@ async def stream_chat(
     messages: list[dict[str, Any]],
     model: str,
     enable_cache: bool = True,
+    sampling_params: dict[str, Any] | None = None,
 ) -> AsyncIterator[str]:
     """Yield OpenAI-compatible SSE text deltas without buffering the full response."""
-    async for event in stream_chat_events(settings, messages, model, enable_cache=enable_cache):
+    async for event in stream_chat_events(
+        settings, messages, model, enable_cache=enable_cache, sampling_params=sampling_params
+    ):
         if event["type"] == "delta":
             yield event["text"]
 

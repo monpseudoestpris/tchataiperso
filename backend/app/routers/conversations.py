@@ -73,6 +73,7 @@ def new_conversation(
     model = body.model or settings.default_model
     check_model(settings, model)
     topic_id = body.topic_space_id.strip() if body.topic_space_id else None
+    clean_params = body.sampling_params.to_clean_dict() if body.sampling_params else None
     with sessions() as db:
         item = Conversation(
             user_id=user.id,
@@ -81,6 +82,8 @@ def new_conversation(
             theme=(body.theme or "").strip(),
             keywords=[k.strip().lstrip("#") for k in (body.keywords or []) if k.strip()][:5],
             topic_space_id=topic_id,
+            creativity=body.creativity,
+            sampling_params=clean_params,
         )
         db.add(item)
         db.commit()
@@ -224,6 +227,14 @@ def edit_conversation(
             item.keywords = body.keywords[:5]
         if body.topic_space_id is not None:
             item.topic_space_id = body.topic_space_id.strip() or None
+        if body.clear_creativity:
+            item.creativity = None
+            item.sampling_params = None
+        else:
+            if "creativity" in body.model_fields_set:
+                item.creativity = body.creativity
+            if "sampling_params" in body.model_fields_set:
+                item.sampling_params = body.sampling_params.to_clean_dict() if body.sampling_params else None
         item.updated_at = now()
         db.commit()
         return conversation_json(item, True)

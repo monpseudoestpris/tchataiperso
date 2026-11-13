@@ -76,6 +76,8 @@ class Conversation(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     summary: Mapped[str] = mapped_column(Text, default="")
     summary_through: Mapped[int] = mapped_column(Integer, default=0)
+    creativity: Mapped[float | None] = mapped_column(Float, nullable=True, default=None)
+    sampling_params: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=None)
     topic_space_id: Mapped[str | None] = mapped_column(ForeignKey("topic_spaces.id", ondelete="SET NULL"), nullable=True, index=True)
     topic_space: Mapped["TopicSpace | None"] = relationship(back_populates="conversations")
     messages: Mapped[list["Message"]] = relationship(back_populates="conversation", cascade="all, delete-orphan", order_by="Message.created_at")
@@ -145,6 +147,8 @@ class Skill(Base):
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     name: Mapped[str] = mapped_column(String(100))
     prompt: Mapped[str] = mapped_column(Text)
+    creativity: Mapped[float | None] = mapped_column(Float, nullable=True, default=None)
+    sampling_params: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     conversation_links: Mapped[list["ConversationSkill"]] = relationship(

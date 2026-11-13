@@ -9,12 +9,18 @@ from typing import Any
 
 import httpx
 
+from .sampling import (
+    DEFAULT_SUPPORTED_PARAMETERS,
+    extract_supported_creativity_parameters,
+)
+
 _logger = logging.getLogger("uvicorn.error")
 
 _CACHE: dict[str, Any] = {
     "timestamp": 0.0,
     "models": [],
 }
+_MODEL_PARAMS_CACHE: dict[str, tuple[float, list[str]]] = {}
 _IMAGE_CACHE: dict[str, Any] = {
     "timestamp": 0.0,
     "models": [],
@@ -115,6 +121,13 @@ def format_openrouter_model(m: dict[str, Any]) -> dict[str, Any]:
     provider = mid.split("/")[0] if "/" in mid else "openrouter"
     reasoning_info = m.get("reasoning")
     has_reasoning = bool(reasoning_info and (reasoning_info.get("supported_efforts") or reasoning_info.get("mandatory")))
+    raw_supported = m.get("supported_parameters")
+    if raw_supported is not None:
+        supported_params = extract_supported_creativity_parameters(raw_supported)
+    else:
+        supported_params = list(DEFAULT_SUPPORTED_PARAMETERS)
+    if has_reasoning and "reasoning" not in supported_params:
+        supported_params.append("reasoning")
 
     return {
         "id": mid,
@@ -132,6 +145,7 @@ def format_openrouter_model(m: dict[str, Any]) -> dict[str, Any]:
         "input_cache_read_price_1m": cache_price,
         "provider": provider,
         "reasoning": has_reasoning,
+        "supported_parameters": supported_params,
     }
 
 
@@ -168,6 +182,92 @@ def fetch_openrouter_models(
         _logger.warning("Impossible de joindre OpenRouter pour la liste dynamique : %s", exc)
 
     return list(_CACHE["models"])
+
+
+def fetch_openrouter_model_parameters(
+    model_id: str,
+    api_key: str = "",
+    base_url: str = "https://openrouter.ai/api/v1",
+    force_refresh: bool = False,
+    timeout: float = 5.0,
+) -> list[str]:
+    """
+    Determine which of the 7 creativity/sampling parameters are supported by a specific model.
+    Checks cached model list first, then queries OpenRouter model/endpoint metadata if needed.
+    """
+    mid = (model_id or "").strip()
+    if not mid:
+        return list(DEFAULT_SUPPORTED_PARAMETERS)
+
+    now = time.time()
+    if not force_refresh and mid in _MODEL_PARAMS_CACHE:
+        ts, cached_params = _MODEL_PARAMS_CACHE[mid]
+        if now - ts < _CACHE_TTL:
+            return list(cached_params)
+
+    if not force_refresh and _CACHE["models"]:
+        for m in _CACHE["models"]:
+            if m.get("id") == mid and "supported_parameters" in m:
+                params = list(m["supported_parameters"])
+                _MODEL_PARAMS_CACHE[mid] = (now, params)
+                return params
+
+    clean_base = base_url.rstrip("/") if base_url else "https://openrouter.ai/api/v1"
+    headers: dict[str, str] = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    candidate_urls = [
+        f"{clean_base}/models/{mid}/endpoints",
+        f"{clean_base}/model/{mid}",
+        f"{clean_base}/models",
+    ]
+    try:
+        with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+            for url in candidate_urls:
+                resp = client.get(url, headers=headers if headers else None)
+                if resp.status_code != 200:
+                    continue
+                payload = resp.json()
+                if not isinstance(payload, dict):
+                    continue
+                data = payload.get("data", payload)
+                if isinstance(data, dict):
+                    if "supported_parameters" in data:
+                        params = extract_supported_creativity_parameters(data["supported_parameters"])
+                        _MODEL_PARAMS_CACHE[mid] = (now, params)
+                        return params
+                    endpoints = data.get("endpoints")
+                    if isinstance(endpoints, list) and endpoints:
+                        union_supported: set[str] = set()
+                        found_any = False
+                        for ep in endpoints:
+                            if isinstance(ep, dict) and ep.get("supported_parameters") is not None:
+                                found_any = True
+                                union_supported.update(
+                                    extract_supported_creativity_parameters(ep["supported_parameters"])
+                                )
+                        if found_any:
+                            ordered = [
+                                p for p in extract_supported_creativity_parameters(list(union_supported))
+                            ]
+                            _MODEL_PARAMS_CACHE[mid] = (now, ordered)
+                            return ordered
+                elif isinstance(data, list):
+                    for item in data:
+                        if isinstance(item, dict) and item.get("id") == mid:
+                            raw_sup = item.get("supported_parameters")
+                            params = (
+                                extract_supported_creativity_parameters(raw_sup)
+                                if raw_sup is not None
+                                else list(DEFAULT_SUPPORTED_PARAMETERS)
+                            )
+                            _MODEL_PARAMS_CACHE[mid] = (now, params)
+                            return params
+    except Exception as exc:
+        _logger.warning("Impossible d'inspecter les paramètres du modèle %s : %s", mid, exc)
+
+    return list(DEFAULT_SUPPORTED_PARAMETERS)
 
 
 def format_image_pricing(

@@ -191,13 +191,16 @@ def build_context(settings: Settings, summary: str, memories: list[str], message
                   learn_mode: bool = False, user_system_prompt: str = "",
                   prompt_cache_enabled: bool = True,
                   topic_context: str | None = None,
-                  max_context_tokens: int | None = None) -> list[dict]:
+                  max_context_tokens: int | None = None,
+                  creativity_instruction: str | None = None) -> list[dict]:
     # Structure fixe du prompt : [System Prompt] + [Résumé cumulatif des vieux blocs] + [Derniers messages bruts intacts]
     # Les données de référence (souvenirs, sources) s'intègrent entre le système et l'historique brut.
     prompt_parts = [SYSTEM_PROMPT]
     clean_user_prompt = (user_system_prompt or "").strip()
     if clean_user_prompt:
         prompt_parts.append(f"Consignes générales personnalisées de l'utilisateur :\n{clean_user_prompt}")
+    if creativity_instruction and creativity_instruction.strip():
+        prompt_parts.append(creativity_instruction.strip())
     if deep_search:
         prompt_parts.append(DEEP_SEARCH_PROMPT)
     if learn_mode:

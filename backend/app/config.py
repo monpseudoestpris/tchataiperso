@@ -394,6 +394,7 @@ class Settings(BaseSettings):
 
     @property
     def configured_models(self) -> list[dict]:
+        from .sampling import DEFAULT_SUPPORTED_PARAMETERS, extract_supported_creativity_parameters
         try:
             values = json.loads(self.llm_models)
             if not isinstance(values, list) or not values:
@@ -402,17 +403,47 @@ class Settings(BaseSettings):
             for item in values:
                 if not isinstance(item, dict) or not isinstance(item.get("id"), str) or not item["id"].strip():
                     raise ValueError()
+                raw_sup = item.get("supported_parameters")
+                sup_params = (
+                    extract_supported_creativity_parameters(raw_sup)
+                    if raw_sup is not None
+                    else list(DEFAULT_SUPPORTED_PARAMETERS)
+                )
                 result.append({
                     "id": item["id"],
                     "name": str(item.get("name", item["id"])),
                     "vision": bool(item.get("vision", False)),
                     "provider": item["id"].split("/")[0] if "/" in item["id"] else "custom",
+                    "supported_parameters": sup_params,
                 })
             if self.default_model not in {item["id"] for item in result}:
                 raise ValueError()
             return result
         except (ValueError, TypeError, KeyError) as exc:
             raise ValueError("LLM_MODELS doit être un tableau JSON de modèles; DEFAULT_MODEL doit être présent") from exc
+
+    def get_model_supported_parameters(self, model_id: str, force_refresh: bool = False) -> list[str]:
+        from .sampling import DEFAULT_SUPPORTED_PARAMETERS
+        mid = (model_id or "").strip()
+        if not mid:
+            return list(DEFAULT_SUPPORTED_PARAMETERS)
+        if not force_refresh:
+            for item in self.models:
+                if item.get("id") == mid and item.get("supported_parameters") is not None:
+                    return list(item["supported_parameters"])
+        if self.demo_mode or not self.enabled(self.llm_api_key):
+            for item in self.configured_models:
+                if item.get("id") == mid and item.get("supported_parameters") is not None:
+                    return list(item["supported_parameters"])
+            return list(DEFAULT_SUPPORTED_PARAMETERS)
+        from .openrouter import fetch_openrouter_model_parameters
+        key = _clean_api_key(self.llm_api_key)
+        return fetch_openrouter_model_parameters(
+            model_id=mid,
+            api_key=key,
+            base_url=self.llm_base_url,
+            force_refresh=force_refresh,
+        )
 
     def get_models(self, force_refresh: bool = False) -> list[dict[str, Any]]:
         self.refresh_from_env_file()

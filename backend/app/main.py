@@ -82,6 +82,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 conn.execute(text("ALTER TABLE conversations ADD COLUMN keywords JSON NOT NULL DEFAULT '[]'"))
             if "topic_space_id" not in conv_columns:
                 conn.execute(text("ALTER TABLE conversations ADD COLUMN topic_space_id VARCHAR(36)"))
+            if "creativity" not in conv_columns:
+                conn.execute(text("ALTER TABLE conversations ADD COLUMN creativity FLOAT"))
+            if "sampling_params" not in conv_columns:
+                conn.execute(text("ALTER TABLE conversations ADD COLUMN sampling_params JSON"))
+        if "skills" in inspector.get_table_names():
+            skill_columns = {column["name"] for column in inspector.get_columns("skills")}
+            with engine.begin() as conn:
+                if "creativity" not in skill_columns:
+                    conn.execute(text("ALTER TABLE skills ADD COLUMN creativity FLOAT"))
+                if "sampling_params" not in skill_columns:
+                    conn.execute(text("ALTER TABLE skills ADD COLUMN sampling_params JSON"))
         user_columns = {column["name"] for column in inspector.get_columns("users")}
         with engine.begin() as conn:
             if "family_group_id" not in user_columns:

@@ -1,5 +1,43 @@
 import type { ResearchActivity } from "./research-activity";
 
+export type SamplingParameters = {
+  temperature?: number | null;
+  top_p?: number | null;
+  top_k?: number | null;
+  min_p?: number | null;
+  top_a?: number | null;
+  presence_penalty?: number | null;
+  frequency_penalty?: number | null;
+  repetition_penalty?: number | null;
+  logit_bias?: Record<string, number> | string | null;
+  seed?: number | null;
+  reasoning?: "none" | "minimal" | "low" | "medium" | "high" | null;
+  reasoning_effort?: "none" | "minimal" | "low" | "medium" | "high" | null;
+  verbosity?: "low" | "medium" | "high" | null;
+};
+
+export type ModelParameterSpec = {
+  name: keyof SamplingParameters;
+  label: string;
+  role?: string;
+  description: string;
+  hint: string;
+  unavailable_label?: string;
+  min?: number;
+  max?: number;
+  step?: number;
+  default: number | string | null;
+  type: "float" | "int" | "select" | "json";
+  options?: { value: string; label: string }[];
+  available: boolean;
+};
+
+export type ModelParametersResponse = {
+  model: string;
+  supported_parameters: string[];
+  parameters: ModelParameterSpec[];
+};
+
 export type Model = {
   id: string;
   name: string;
@@ -17,6 +55,7 @@ export type Model = {
   input_cache_read_price_1m?: number | null;
   provider?: string;
   reasoning?: boolean;
+  supported_parameters?: string[];
 };
 export type ImageModel = {
   id: string;
@@ -234,7 +273,15 @@ export type LearnReport = {
   flashcards?: Flashcard[];
   quiz?: QuizQuestion[];
 };
-export type Skill = { id: string; name: string; prompt: string; created_at: string; updated_at: string };
+export type Skill = {
+  id: string;
+  name: string;
+  prompt: string;
+  creativity?: number | null;
+  sampling_params?: SamplingParameters | null;
+  created_at: string;
+  updated_at: string;
+};
 export type BlogCard = {
   title: string;
   text: string;
@@ -324,6 +371,8 @@ export type Conversation = {
   theme?: string;
   keywords?: string[];
   topic_space_id?: string | null;
+  creativity?: number | null;
+  sampling_params?: SamplingParameters | null;
   created_at: string;
   updated_at: string;
   summary?: string | null;
@@ -525,6 +574,8 @@ export async function streamMessage(
     interaction_id?: string;
     plan_feedback?: string;
     auto_memory_enabled?: boolean;
+    creativity?: number | null;
+    sampling_params?: SamplingParameters | null;
   },
   signal: AbortSignal,
   onEvent: (event: StreamEvent) => void,

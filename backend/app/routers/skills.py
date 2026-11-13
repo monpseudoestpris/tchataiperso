@@ -35,7 +35,14 @@ def create_skill(
         count = db.scalar(select(func.count()).select_from(Skill).where(Skill.user_id == user.id))
         if count >= MAX_SKILL_COUNT:
             raise HTTPException(422, f"Limite de {MAX_SKILL_COUNT} compétences atteinte")
-        item = Skill(user_id=user.id, name=body.name, prompt=body.prompt)
+        clean_params = body.sampling_params.to_clean_dict() if body.sampling_params else None
+        item = Skill(
+            user_id=user.id,
+            name=body.name,
+            prompt=body.prompt,
+            creativity=body.creativity,
+            sampling_params=clean_params,
+        )
         db.add(item)
         db.commit()
         return skill_json(item)
@@ -88,6 +95,14 @@ def update_skill(
             item.name = body.name
         if body.prompt is not None:
             item.prompt = body.prompt
+        if body.clear_creativity:
+            item.creativity = None
+            item.sampling_params = None
+        else:
+            if "creativity" in body.model_fields_set:
+                item.creativity = body.creativity
+            if "sampling_params" in body.model_fields_set:
+                item.sampling_params = body.sampling_params.to_clean_dict() if body.sampling_params else None
         item.updated_at = now()
         db.commit()
         return skill_json(item)

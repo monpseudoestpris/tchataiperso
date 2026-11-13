@@ -133,12 +133,40 @@ CONVERSATION_THEMES = (
 )
 
 
+class SamplingParameters(BaseModel):
+    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+    top_p: float | None = Field(default=None, gt=0.0, le=1.0)
+    top_k: int | None = Field(default=None, ge=1, le=1000)
+    min_p: float | None = Field(default=None, ge=0.0, le=1.0)
+    top_a: float | None = Field(default=None, ge=0.0, le=1.0)
+    presence_penalty: float | None = Field(default=None, ge=-2.0, le=2.0)
+    frequency_penalty: float | None = Field(default=None, ge=-2.0, le=2.0)
+    repetition_penalty: float | None = Field(default=None, gt=0.0, le=2.0)
+    logit_bias: dict[str, float] | str | None = Field(default=None)
+    seed: int | None = Field(default=None, ge=0, le=2147483647)
+    reasoning: Literal["none", "minimal", "low", "medium", "high"] | None = None
+    reasoning_effort: Literal["none", "minimal", "low", "medium", "high"] | None = None
+    verbosity: Literal["low", "medium", "high"] | None = None
+
+    @field_validator("logit_bias", mode="before")
+    @classmethod
+    def validate_logit_bias(cls, value):
+        from .sampling import sanitize_logit_bias
+        return sanitize_logit_bias(value)
+
+    def to_clean_dict(self) -> dict | None:
+        d = {k: v for k, v in self.model_dump().items() if v is not None}
+        return d if d else None
+
+
 class CreateConversation(BaseModel):
     title: str = Field(default="Nouvelle conversation", min_length=1, max_length=200)
     model: str | None = None
     theme: str | None = Field(default=None, max_length=80)
     keywords: list[str] | None = Field(default=None, max_length=5)
     topic_space_id: str | None = None
+    creativity: float | None = Field(default=None, ge=0.0, le=1.0)
+    sampling_params: SamplingParameters | None = None
 
 
 class UpdateConversation(BaseModel):
@@ -147,6 +175,9 @@ class UpdateConversation(BaseModel):
     theme: str | None = Field(default=None, max_length=80)
     keywords: list[str] | None = Field(default=None, max_length=5)
     topic_space_id: str | None = None
+    creativity: float | None = Field(default=None, ge=0.0, le=1.0)
+    sampling_params: SamplingParameters | None = None
+    clear_creativity: bool = False
 
     @field_validator("theme")
     @classmethod
@@ -265,6 +296,8 @@ class SendMessage(BaseModel):
     interaction_id: str | None = Field(default=None, max_length=500)
     plan_feedback: str | None = Field(default=None, max_length=20000)
     auto_memory_enabled: bool | None = None
+    creativity: float | None = Field(default=None, ge=0.0, le=1.0)
+    sampling_params: SamplingParameters | None = None
 
     @field_validator("attachment_ids")
     @classmethod
@@ -322,6 +355,8 @@ class CreateMemory(BaseModel):
 class CreateSkill(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     prompt: str = Field(min_length=1, max_length=5000)
+    creativity: float | None = Field(default=None, ge=0.0, le=1.0)
+    sampling_params: SamplingParameters | None = None
 
     @field_validator("name", "prompt")
     @classmethod
@@ -335,6 +370,9 @@ class CreateSkill(BaseModel):
 class UpdateSkill(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=100)
     prompt: str | None = Field(default=None, min_length=1, max_length=5000)
+    creativity: float | None = Field(default=None, ge=0.0, le=1.0)
+    sampling_params: SamplingParameters | None = None
+    clear_creativity: bool = False
 
     @field_validator("name", "prompt")
     @classmethod

@@ -54,6 +54,7 @@ def prepare_schema(settings: Settings) -> None:
         "0016_add_agent_teams",
         "0017_add_blog_categories",
         "0018_add_chat_sites",
+        "0019_add_creativity_params",
     }:
         raise SystemExit(f"Révision de base non reconnue : {current}")
 

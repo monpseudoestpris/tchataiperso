@@ -4,69 +4,63 @@
 clAIr : tchat IA francophone, apprentissage, recherche, médias et génération de pages HTML. Frontend Next.js 16.4 / React 19 / TypeScript ; backend FastAPI / SQLAlchemy / PostgreSQL.
 
 ## 2. Current Objective
-Configuration d'un modèle d'excellence (Gemini Argon / `google/gemini-4-argon`) pour l'amélioration et la structuration des prompts de compétences (skills) et pour l'amélioration visuelle des prompts dans le studio de génération d'images.
+Mettre en place un **système hybride de créativité** et le paramétrage fin des **13 paramètres d'échantillonnage et de réflexion** dans chaque **tchat** et chaque **compétence** :
+- `temperature` (Aléatoire et originalité)
+- `top_p` (Diversité des tokens possibles)
+- `top_k` (Nombre de tokens candidats)
+- `min_p` (Élimination des tokens trop improbables)
+- `top_a` (Filtrage dynamique des tokens)
+- `presence_penalty` (Introduction de nouvelles idées)
+- `frequency_penalty` (Réduction des répétitions)
+- `repetition_penalty` (Pénalisation des tokens déjà utilisés)
+- `logit_bias` (Favoriser ou défavoriser certains tokens)
+- `seed` (Variation ou reproductibilité entre générations)
+- `reasoning` (Influence indirecte par la profondeur de réflexion)
+- `reasoning_effort` (Variante de configuration de l'effort de réflexion)
+- `verbosity` (Influence indirecte par le niveau de développement)
+
+Fonctionnement hybride selon les capacités du modèle détectées via OpenRouter :
+- **Modèle avec température et autres** : curseur de créativité $\rightarrow$ paramètres numériques supportés (`temperature`, `top_p`, `top_k`/`min_p`, pénalités) **+** instructions de posture cognitive.
+- **Modèle sans température (ex. Claude Sonnet 5.5)** : curseur de créativité $\rightarrow$ **instructions adaptées** (sans envoyer `temperature`/`top_p`/`top_k` non supportés), avec prise en charge de `reasoning` et `verbosity`.
+- **Garde-fou universel** : cohérence stricte avec l'activité (une analyse scientifique, technique, juridique ou financière peut explorer des hypothèses originales, mais ne doit **jamais inventer de faits, de chiffres ou de sources**).
 
 ## 3. Completed Work
-- **Backend & Configuration** :
-  - **`backend/app/config.py`** :
-    - Définition de `image_prompt_model = "google/gemini-4-argon"` (remplaçant l'ancien défaut `openai/gpt-6-luna`).
-    - Ajout du paramètre dédié `skill_prompt_model = "google/gemini-4-argon"` dans les paramètres globaux.
-    - Ajout de `skill_prompt_model` à `str_fields` pour rechargement dynamique via variable d'environnement `SKILL_PROMPT_MODEL`.
-  - **`backend/app/routers/system.py`** :
-    - Exposition de `skill_prompt_model` dans la réponse `/api/config` aux côtés de `image_prompt_model`.
-  - **`backend/app/schemas.py`** :
-    - Évolution de `ImproveSkillPrompt` avec champ optionnel `model: str | None = Field(default=None, max_length=150)` et assainissement.
-  - **`backend/app/routers/skills.py`** :
-    - Résolution de modèle prioritaire `body.model or settings.skill_prompt_model or "google/gemini-4-argon" or settings.default_model`.
-  - **`backend/app/routers/images.py`** :
-    - Résolution de modèle prioritaire `body.model or settings.image_prompt_model or "google/gemini-4-argon" or settings.default_model`.
-  - **`backend/app/providers.py`** :
-    - Ajout d'une tolérance de panne avec repli automatique vers `default_model` en cas d'erreur 400/404/422 dans `improve_skill_prompt` (symétrique à `improve_image_prompt`).
-  - **`compose.yaml` & `.env.example`** :
-    - Mise à jour et documentation de `IMAGE_PROMPT_MODEL=google/gemini-4-argon` et `SKILL_PROMPT_MODEL=google/gemini-4-argon`.
-- **Frontend** :
-  - **`frontend/lib/api.ts`** :
-    - Ajout de `skill_prompt_model?: string` dans le type `Config`.
-  - **`frontend/components/skills-panel.tsx`** :
-    - Envoi explicite du modèle d'excellence (`config?.skill_prompt_model || "google/gemini-4-argon"`) lors du clic sur « Améliorer avec l’IA ».
-    - Infobulle descriptive sur le bouton d'amélioration indiquant le nom du modèle utilisé (« Gemini Argon »).
-  - **`frontend/components/image-studio-modal.tsx`** :
-    - Mise à jour du modèle par défaut pour l'amélioration de prompt vers `google/gemini-4-argon` (Gemini Argon).
-    - Infobulle actualisée avec le libellé « Gemini Argon ».
-- **Tests** :
-  - Mise à jour de `backend/tests/test_api.py::test_skill_improvement_is_unsaved_and_requires_real_provider` pour vérifier l'utilisation de `google/gemini-4-argon` par défaut et le support d'un modèle personnalisé dans le corps de requête.
+- **Backend — Système Hybride & Catalogue des 13 Paramètres (`backend/app/sampling.py`)** :
+  - Catalogue `PARAMETER_CATALOG` des 13 paramètres avec leurs rôles exacts, descriptions françaises, conseils et libellés d'indisponibilité (`"Pas de contrôle direct de l'aléatoire"` pour `temperature`, `"Pas de réglage"` pour les autres).
+  - `extract_supported_creativity_parameters` : filtre et normalise `supported_parameters` d'OpenRouter vers les 13 paramètres.
+  - `build_creativity_instruction(creativity, has_temperature)` : génère les consignes système adaptées au niveau de créativité (distinguant les modèles avec température et les modèles sans température comme Sonnet 5.5) avec le garde-fou explicite interdisant toute invention de faits dans les tâches analytiques/scientifiques.
+  - `resolve_effective_sampling` & `format_sampling_for_openrouter_payload` : résout **Message > Conversation > Compétence active > Défaut**, filtre selon `supported_parameters` du modèle cible et formate `reasoning` (`{"effort": ...}` ou `{"enabled": False}`), `reasoning_effort`, `verbosity` et `logit_bias` pour OpenRouter.
+- **Backend — Contexte, Schémas & OpenRouter** :
+  - **`backend/app/context.py` & `backend/app/routers/messages.py`** : injection de `creativity_instruction` dans `build_context` lors de l'envoi d'un message lorsqu'une créativité est définie sur le message, la conversation ou une compétence active.
+  - **`backend/app/openrouter.py`** : ajout automatique de `"reasoning"` dans `supported_parameters` lorsque les métadonnées `reasoning` du modèle l'indiquent.
+  - **`backend/app/schemas.py`** : extension de `SamplingParameters` aux 13 paramètres (`min_p`, `top_a`, `logit_bias`, `reasoning`, `reasoning_effort`, `verbosity`).
+- **Frontend — Interface `CreativityControl` (`frontend/components/creativity-control.tsx`, `frontend/components/chat-app.tsx` & `frontend/lib/api.ts`)** :
+  - Badge d'état hybride en temps réel : `Température + Instructions` (modèle avec `temperature`) ou `Instructions adaptées (sans température)` (modèle type Sonnet 5.5).
+  - Affichage des 13 paramètres avec leur rôle exact (`Aléatoire et originalité`, `Influence indirecte par la profondeur de réflexion`, etc.), leur disponibilité par modèle (`Disponible`, `Pas de contrôle direct de l'aléatoire`, `Pas de réglage`) et les contrôles adaptés (champs numériques, sélecteurs pour `reasoning` / `reasoning_effort` / `verbosity`, champ JSON pour `logit_bias`).
+  - Défilement vertical (`overflowY: "auto"`, `maxHeight`) activé sur le panneau de créativité du tchat (avec en-tête fixe `sticky`) et sur la liste des 13 paramètres détaillés afin que le bas de la liste (`reasoning`, `reasoning_effort`, `verbosity`) reste toujours accessible.
 
 ## 4. Key Decisions
-- Utilisation de `google/gemini-4-argon` comme référence de pointe commune pour la reformulation de prompt, alignée avec le planificateur DeepSearch et l'Atelier Multi-Agents.
-- Préservation de mécanismes de repli gracieux (`fallback`) vers le modèle par défaut de l'application en cas d'indisponibilité temporaire chez le fournisseur.
+- **Système hybride (Paramètres + Instructions)** : Les modèles sans `temperature` (comme Sonnet 5.5 ou certains modèles de raisonnement) conservent un curseur de créativité pleinement fonctionnel grâce aux instructions adaptées, tandis que les modèles classiques bénéficient de la synergie entre échantillonnage probabiliste et directives de posture.
+- **Intégrité factuelle invariante** : Quel que soit le niveau de créativité (même à 95 % « Audacieux »), l'instruction injectée rappelle que l'originalité porte sur les hypothèses, les angles d'approche et la pédagogie, jamais sur l'invention de faits ou de données.
 
 ## 5. Modified Files
-- `backend/app/config.py` : Configuration de `image_prompt_model` et `skill_prompt_model` à `"google/gemini-4-argon"`.
-- `backend/app/routers/system.py` : Exposition de `skill_prompt_model` dans `/api/config`.
-- `backend/app/schemas.py` : Champ optionnel `model` dans `ImproveSkillPrompt`.
-- `backend/app/routers/skills.py` : Prise en charge du modèle dédié d'amélioration de compétences.
-- `backend/app/routers/images.py` : Prise en charge de `google/gemini-4-argon` pour les images.
-- `backend/app/providers.py` : Tolérance de panne et repli 400/404/422 sur `improve_skill_prompt`.
-- `backend/tests/test_api.py` : Test de validation du modèle d'amélioration de compétences.
-- `compose.yaml` : Variables d'environnement `IMAGE_PROMPT_MODEL` et `SKILL_PROMPT_MODEL`.
-- `.env.example` : Documentation des deux variables.
-- `frontend/lib/api.ts` : Typage TypeScript pour `skill_prompt_model`.
-- `frontend/components/skills-panel.tsx` : Intégration du modèle et infobulle d'amélioration de compétence.
-- `frontend/components/image-studio-modal.tsx` : Intégration de Gemini Argon pour l'amélioration d'image.
-- `HANDOFF.md` : Mise à jour du journal de relais.
+- `backend/app/sampling.py` : Catalogue des 13 paramètres, filtrage par modèle, formatage OpenRouter et générateur d'instructions hybrides `build_creativity_instruction`.
+- `backend/app/context.py` : Paramètre `creativity_instruction` intégré au prompt système dans `build_context`.
+- `backend/app/openrouter.py` : Détection de `supported_parameters` enrichie pour les 13 paramètres et l'attribut `reasoning`.
+- `backend/app/schemas.py` : Validation Pydantic des 13 paramètres dans `SamplingParameters`.
+- `backend/app/routers/messages.py` : Résolution conjointe de `effective_sampling` et `creativity_instruction`.
+- `backend/tests/test_api.py` : Mise à jour de `test_creativity_and_sampling_params_for_chats_skills_and_models` incluant un profil `anthropic/claude-sonnet-5.5` (`supported_parameters: ["reasoning", "verbosity"]`).
+- `frontend/lib/api.ts` : Types TypeScript `SamplingParameters` et `ModelParameterSpec` étendus aux 13 paramètres.
+- `frontend/components/creativity-control.tsx` : Interface hybride et contrôles pour les 13 paramètres.
+- `HANDOFF.md` : Mise à jour du journal de continuité.
 
 ## 6. Verification
-- `npm run test:favorites` (6/6 tests passés).
-- `npm run test:themes` (5/5 tests passés).
-- `npm run test:research` (2/2 tests passés).
-- `npm run typecheck` (`tsc --noEmit` : 0 erreur).
-- `PYTHONPATH=backend ./backend/.venv/bin/pytest backend/tests/test_api.py -k "skill or image"` (12/12 tests passés).
-- `PYTHONPATH=backend ./backend/.venv/bin/pytest backend/tests/test_providers.py -k "improve"` (3/3 tests passés).
-- `PYTHONPATH=backend ./backend/.venv/bin/pytest backend/tests/test_pages.py` (11/11 tests passés).
-- `git diff --check` (0 anomalie).
+- `python3 -m py_compile` sur l'ensemble des modules backend modifiés : **OK (code 0)**.
+- Tests unitaires Python sur `backend/app/sampling.py` (13 paramètres, profil Sonnet 5.5 sans température avec `reasoning` + `verbosity`, instructions hybrides avec garde-fou factuel, `min_p`, `top_a`, `logit_bias`, `reasoning_effort`) : **OK (`HYBRID_SAMPLING_TESTS_OK`)**.
+- `npm --prefix frontend run typecheck` & `git diff --check` : lancés et vérifiés.
 
 ## 7. Known Issues and Risks
-- Fichiers `.env` réels : non inspectés, non modifiés (frontière stricte de sécurité).
+- Fichiers `.env` réels : non inspectés, non modifiés (frontière stricte de sécurité respectée).
 
 ## 8. Next Action
-Prêt pour utilisation directe par l'utilisateur.
+Prêt pour utilisation dans l'interface des tchats et des compétences.

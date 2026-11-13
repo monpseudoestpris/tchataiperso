@@ -2,7 +2,8 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 import { Brain, Check, LoaderCircle, Pencil, Plus, Sparkles, Trash2, X } from "lucide-react";
-import { api, errorMessage, skillToSlug, type Config, type Conversation, type Skill } from "@/lib/api";
+import { api, errorMessage, skillToSlug, type Config, type Conversation, type SamplingParameters, type Skill } from "@/lib/api";
+import { CreativityControl, formatCreativityBadge } from "@/components/creativity-control";
 
 type SkillsPanelProps = {
   conversation: Conversation | null;
@@ -40,6 +41,8 @@ export function SkillsPanel({ conversation, model, config, onClose, onConversati
   const [editingId, setEditingId] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [prompt, setPrompt] = useState("");
+  const [creativity, setCreativity] = useState<number | null>(null);
+  const [samplingParams, setSamplingParams] = useState<SamplingParameters | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -59,12 +62,16 @@ export function SkillsPanel({ conversation, model, config, onClose, onConversati
     setEditingId(null);
     setName("");
     setPrompt("");
+    setCreativity(null);
+    setSamplingParams(null);
   }
 
   function applyTemplate(tpl: { name: string; prompt: string }) {
     setEditingId(null);
     setName(tpl.name);
     setPrompt(tpl.prompt);
+    setCreativity(null);
+    setSamplingParams(null);
     setError("");
   }
 
@@ -73,9 +80,18 @@ export function SkillsPanel({ conversation, model, config, onClose, onConversati
     if (busy || !name.trim() || !prompt.trim()) return;
     setBusy("save"); setError("");
     try {
+      const payload: Record<string, any> = {
+        name: name.trim(),
+        prompt: prompt.trim(),
+        creativity,
+        sampling_params: samplingParams,
+      };
+      if (editingId && creativity === null && samplingParams === null) {
+        payload.clear_creativity = true;
+      }
       const saved = await api<Skill>(editingId ? `/skills/${editingId}` : "/skills", {
         method: editingId ? "PATCH" : "POST",
-        body: JSON.stringify({ name: name.trim(), prompt: prompt.trim() }),
+        body: JSON.stringify(payload),
       });
       const next = editingId
         ? skills.map(item => item.id === saved.id ? saved : item)
@@ -130,6 +146,8 @@ export function SkillsPanel({ conversation, model, config, onClose, onConversati
     setEditingId(skill.id);
     setName(skill.name);
     setPrompt(skill.prompt);
+    setCreativity(skill.creativity ?? null);
+    setSamplingParams(skill.sampling_params ?? null);
     setError("");
   }
 
@@ -166,17 +184,21 @@ export function SkillsPanel({ conversation, model, config, onClose, onConversati
 
       {error && <p className="skills-error" role="alert">{error}</p>}
       {loading ? <div className="skills-loading"><LoaderCircle className="spin" size={16} />Chargement…</div> : skills.length ? <ul className="skill-list">
-        {skills.map(skill => <li key={skill.id}>
+        {skills.map(skill => {
+          const creatBadge = formatCreativityBadge(skill.creativity, skill.sampling_params);
+          return <li key={skill.id}>
           <div className="skill-list-heading">
             <label>
               <input type="checkbox" checked={activeIds.includes(skill.id)} disabled={!!busy} onChange={() => void toggleSkill(skill)} />
               <span>{skill.name}</span>
               <span className="skill-mention-badge" title={`Mentionnez cette compétence avec @${skillToSlug(skill.name)}`}>@{skillToSlug(skill.name)}</span>
+              {creatBadge && <span className="skill-mention-badge" style={{ background: "rgba(99, 102, 241, 0.12)", color: "#4f46e5" }} title="Créativité spécifique associée à cette compétence">{creatBadge}</span>}
             </label>
             <div><button type="button" className="icon-button" aria-label={`Modifier ${skill.name}`} title="Modifier" disabled={!!busy} onClick={() => editSkill(skill)}><Pencil size={14} /></button><button type="button" className="icon-button" aria-label={`Supprimer ${skill.name}`} title="Supprimer" disabled={!!busy} onClick={() => void deleteSkill(skill)}><Trash2 size={14} /></button></div>
           </div>
           <p>{skill.prompt}</p>
-        </li>)}
+        </li>;
+        })}
       </ul> : <div className="skills-empty">
         <Brain size={21} />
         <p>Aucune compétence enregistrée.</p>
@@ -214,6 +236,18 @@ export function SkillsPanel({ conversation, model, config, onClose, onConversati
           </button>
           <span>{prompt.length}/5000</span>
         </div>
+        <CreativityControl
+          creativity={creativity}
+          samplingParams={samplingParams}
+          onChange={(nextCreat, nextParams) => {
+            setCreativity(nextCreat);
+            setSamplingParams(nextParams);
+          }}
+          model={model}
+          models={config?.models ?? []}
+          disabled={!!busy}
+          compact={true}
+        />
         <div className="skill-save-actions">
           {editingId && <button type="button" className="skill-cancel" disabled={!!busy} onClick={clearEditor}>Annuler</button>}
           <button type="submit" disabled={!!busy || !name.trim() || !prompt.trim()}>{busy === "save" ? <LoaderCircle className="spin" size={14} /> : editingId ? <Check size={14} /> : <Plus size={14} />}{editingId ? "Enregistrer" : "Créer"}</button>
