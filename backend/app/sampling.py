@@ -421,24 +421,18 @@ def build_creativity_instruction(
     has_temperature: bool = True,
 ) -> str:
     """
-    Generate adaptive French system instructions from the creativity cursor (Hybrid Creativity System):
-    - Models WITH temperature: complements the numeric sampling parameters with stylistic & cognitive guidance.
-    - Models WITHOUT temperature (e.g. Claude Sonnet 5.5): acts as the primary steering mechanism to emulate
-      the desired degree of originality, perspective exploration, and stylistic boldness.
-    - In BOTH cases: enforces strict activity coherence and factual integrity (e.g., a scientific, technical,
-      financial, or legal analysis may explore original hypotheses or angles, but MUST NEVER invent facts,
-      numbers, citations, or references).
+    Generate adaptive French system instructions from the creativity cursor for ALL models
+    (both models with temperature/sampling parameters and models without temperature like Claude Sonnet 5.5).
+    Enforces strict activity coherence and factual integrity (e.g., a scientific, technical,
+    financial, or legal analysis may explore original hypotheses or angles, but MUST NEVER invent facts,
+    numbers, citations, or references).
     """
     if creativity is None:
         return ""
     c = max(0.0, min(1.0, float(creativity)))
     pct = int(round(c * 100))
 
-    mode_header = (
-        f"Calibrage hybride de créativité ({pct} % — paramètres d'échantillonnage + posture cognitive) :"
-        if has_temperature
-        else f"Calibrage hybride de créativité ({pct} % — pilotage par instructions adaptées pour modèle sans température directe) :"
-    )
+    mode_header = f"Calibrage de créativité ({pct} % — consignes comportementales) :"
 
     if c <= 0.20:
         posture = (

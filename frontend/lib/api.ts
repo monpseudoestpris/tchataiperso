@@ -299,6 +299,7 @@ export type BlogPost = {
   blog_id: string;
   title: string;
   summary: string;
+  trends?: string[];
   content: string;
   cards?: BlogCard[];
   sources: Source[];

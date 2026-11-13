@@ -9,7 +9,16 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.auth import hash_password
-from app.blog import generate_blog_edition, parse_cards_from_content, search_blog_news
+from app.blog import (
+    _enrich_sources_with_content,
+    _extract_complete_article,
+    generate_blog_edition,
+    is_landing_or_index_url,
+    looks_like_article_url,
+    parse_cards_from_content,
+    parse_trends_from_content,
+    search_blog_news,
+)
 from app.config import Settings
 from app.main import create_app
 from app.models import Base, Blog, BlogPost, User
@@ -48,6 +57,7 @@ def test_parse_cards_from_content_json():
     json_content = json.dumps({
         "title": "Titre",
         "summary": "Chapeau",
+        "trends": ["Tendance 1 : Montée des agents", "Tendance 2 : Efficacité énergétique"],
         "cards": [
             {
                 "title": "Avancée majeure sur les puces IA",
@@ -64,6 +74,9 @@ def test_parse_cards_from_content_json():
     assert cards[0]["title"] == "Avancée majeure sur les puces IA"
     assert cards[0]["color"] == "emerald"
     assert cards[0]["source_name"] == "TechCrunch"
+    trends = parse_trends_from_content(json_content)
+    assert len(trends) == 2
+    assert "Montée des agents" in trends[0]
 
 
 def test_parse_cards_from_content_markdown_fallback():
@@ -91,6 +104,9 @@ def test_generate_blog_edition_demo_mode(settings):
     cards = parse_cards_from_content(content)
     assert len(cards) >= 10
     assert cards[0]["color"] in ["blue", "emerald", "purple", "amber", "rose", "cyan"]
+    trends = parse_trends_from_content(content)
+    assert len(trends) >= 1
+    assert any("news IA" in t.lower() or "accélération" in t.lower() for t in trends)
 
 
 def test_generate_blog_edition_real_mode(tmp_path):
@@ -362,6 +378,147 @@ def test_search_blog_images_endpoint(settings):
             assert len(data) == 1
             assert data[0]["title"] == "Nébuleuse d'Orion"
             assert data[0]["img_src"] == "https://example.com/orion.jpg"
+
+
+def test_landing_vs_article_url_detection():
+    landing_urls = [
+        "https://www.lesechos.fr/finance-marches",
+        "https://www.investing.com/news/economy",
+        "https://www.lemonde.fr/economie/",
+        "https://example.com/tag/ia",
+        "https://www.boursier.com/actualites/news-du-jour",
+    ]
+    for url in landing_urls:
+        assert is_landing_or_index_url(url) is True, f"Expected landing URL: {url}"
+        assert looks_like_article_url(url) is False, f"Expected non-article URL: {url}"
+
+    article_urls = [
+        "https://www.lesechos.fr/finance-marches/banques-assurances/la-fed-maintient-ses-taux-directeurs-en-novembre-2026-2134567",
+        "https://www.boursier.com/actualites/economie/la-fed-maintient-ses-taux-directeurs-en-novembre-945678.html",
+        "https://www.lemonde.fr/economie/article/2026/11/13/inflation-ralentit-en-zone-euro_6234567_3234.html",
+    ]
+    for article_url in article_urls:
+        assert is_landing_or_index_url(article_url) is False, f"Expected article URL: {article_url}"
+        assert looks_like_article_url(article_url) is True, f"Expected article markers: {article_url}"
+
+
+def test_extract_complete_article_rejects_landing_page_and_accepts_full_article():
+    landing_html = """
+    <html>
+      <head><title>Économie &amp; Marchés - Actualités</title></head>
+      <body>
+        <main>
+          <p>L'analyse approfondie du marché du travail américain et des décisions de la Réserve fédérale dicte le rythme des marchés mondiaux.</p>
+          <section>
+            <h2><a href="/economie/la-fed-maintient-ses-taux-a-425-en-novembre-2026">La Fed maintient ses taux à 4,25 % en novembre 2026</a></h2>
+            <h2><a href="/economie/inflation-zone-euro-recule-a-19-pourcent-octobre">L'inflation recule à 1,9 % en zone euro</a></h2>
+            <p><a href="/economie/article-1">Lire la suite de l'article complet sur les taux américains et les marchés</a></p>
+          </section>
+        </main>
+      </body>
+    </html>
+    """
+    assert _extract_complete_article(landing_html) is None
+
+    feed_html = """
+    <html>
+      <head><title>News du jour - Boursier.com</title></head>
+      <body>
+        <main>
+          <h2><a href="/actualites/economie/article-un-taux-directeurs-945601.html">La BCE maintient ses taux directeurs en novembre</a></h2>
+          <p>La Banque centrale europeenne a decide de laisser ses principaux taux inchanges lors de sa reunion mensuelle a Francfort.</p>
+          <h2><a href="/actualites/societes/article-deux-resultats-trimestriels-945602.html">TotalEnergies publie ses resultats du troisieme trimestre</a></h2>
+          <p>Le groupe energetique affiche un benefice ajuste en leger repli sur fond de baisse des marges de raffinage en Europe.</p>
+          <h2><a href="/actualites/marches/article-trois-cac40-cloture-945603.html">Le CAC 40 cloture en hausse de 0,6 %</a></h2>
+          <p>La Bourse de Paris a termine la seance dans le vert, soutenue par les valeurs technologiques et le secteur du luxe.</p>
+          <h2><a href="/actualites/economie/article-quatre-inflation-usa-945604.html">L'inflation americaine conforme aux attentes</a></h2>
+          <p>L'indice des prix a la consommation a progresse de 2,6 % sur un an aux Etats-Unis selon le departement du Travail.</p>
+          <h2><a href="/actualites/societes/article-cinq-airbus-commandes-945605.html">Airbus enregistre une commande de 40 appareils</a></h2>
+          <p>L'avionneur europeen renforce son carnet de commandes moyen-courrier avec un contrat signe au salon aeronautique.</p>
+          <h2><a href="/actualites/marches/article-six-or-record-945606.html">L'once d'or se stabilise sous son record</a></h2>
+          <p>Les investisseurs arbitrent entre les rendements obligataires americains et les valeurs refuges avant la fin de semaine.</p>
+        </main>
+      </body>
+    </html>
+    """
+    assert _extract_complete_article(feed_html) is None
+
+    article_html = """
+    <html>
+      <head>
+        <title>La Fed maintient ses taux directeurs à 4,25 %</title>
+        <meta property="og:type" content="article" />
+      </head>
+      <body>
+        <nav><p>Menu principal du journal et liens vers toutes les rubriques économiques.</p></nav>
+        <article>
+          <h1>La Fed maintient ses taux directeurs entre 4,00 % et 4,25 %</h1>
+          <p>Réunie mercredi à Washington, la Réserve fédérale américaine a décidé à 11 voix contre 1 de laisser son taux directeur inchangé dans la fourchette de 4,00 % à 4,25 %, invoquant une inflation sous-jacente encore supérieure à sa cible de 2 %.</p>
+          <p>Selon le Bureau of Labor Statistics, les créations d'emplois non agricoles ont atteint 185 000 postes en octobre, tandis que le taux de chômage s'est stabilisé à 4,1 %, réduisant l'urgence d'un nouvel assouplissement monétaire immédiat.</p>
+          <p>Jerome Powell a précisé lors de sa conférence de presse que le comité examinerait les données d'inflation PCE de décembre avant d'envisager une baisse de 25 points de base au premier trimestre 2027.</p>
+        </article>
+      </body>
+    </html>
+    """
+    extracted = _extract_complete_article(article_html)
+    assert extracted is not None
+    title, body = extracted
+    assert "Fed maintient ses taux" in title
+    assert "185 000 postes" in body
+    assert "Menu principal" not in body
+
+
+def test_enrich_sources_follows_article_links_from_landing_page():
+    landing_url = "https://news.example.com/finance-marches"
+    article_url = "https://news.example.com/2026/11/la-fed-maintient-ses-taux-directeurs-en-novembre-2026-2134567"
+
+    landing_html = f"""
+    <html>
+      <head><title>Finance &amp; Marchés</title></head>
+      <body>
+        <main>
+          <p>Retrouvez toute l'actualité des marchés financiers et des banques centrales en temps réel.</p>
+          <h2><a href="{article_url}">La Fed maintient ses taux directeurs en novembre 2026</a></h2>
+        </main>
+      </body>
+    </html>
+    """
+
+    article_html = """
+    <html>
+      <head>
+        <title>La Fed maintient ses taux directeurs à 4,25 %</title>
+        <meta property="og:type" content="article" />
+      </head>
+      <body>
+        <article>
+          <p>La Réserve fédérale a maintenu son principal taux directeur entre 4,00 % et 4,25 % le 12 novembre 2026, confirmant une pause prudente face à la vigueur de la consommation des ménages américains.</p>
+          <p>Les rendements des bons du Trésor à 10 ans ont progressé de 6 points de base à 4,38 % après la publication du communiqué, tandis que l'indice S&amp;P 500 clôturait en hausse de 0,45 % à New York.</p>
+          <p>Les contrats à terme FedWatch n'accordent désormais plus que 38 % de probabilité à une baisse de taux dès janvier, contre 62 % une semaine plus tôt.</p>
+        </article>
+      </body>
+    </html>
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == landing_url:
+            return httpx.Response(200, text=landing_html, headers={"content-type": "text/html; charset=utf-8"})
+        if str(request.url) == article_url:
+            return httpx.Response(200, text=article_html, headers={"content-type": "text/html; charset=utf-8"})
+        return httpx.Response(404)
+
+    real_async_client = httpx.AsyncClient
+    initial_sources = [
+        {"title": "Finance & Marchés", "url": landing_url, "snippet": "L'analyse approfondie des marchés mondiaux."}
+    ]
+
+    with patch("httpx.AsyncClient", lambda *args, **kwargs: real_async_client(transport=httpx.MockTransport(handler))):
+        enriched = asyncio.run(_enrich_sources_with_content(initial_sources))
+
+    assert len(enriched) == 1
+    assert enriched[0]["url"] == article_url
+    assert enriched[0].get("is_complete_article") == "true"
+    assert "4,38 %" in enriched[0]["content"]
 
 
 

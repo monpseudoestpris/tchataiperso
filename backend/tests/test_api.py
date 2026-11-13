@@ -1605,7 +1605,7 @@ def test_creativity_and_sampling_params_for_chats_skills_and_models(tmp_path, mo
         assert s1["seed"] == 42
         assert "top_k" not in s1
         assert "reasoning" not in s1
-        assert "Calibrage hybride de créativité (80 %" in sys1
+        assert "Calibrage de créativité (80 %" in sys1
         assert "JAMAIS inventer de faits" in sys1
 
         # 3. Conversation-level creativity overrides skill creativity
@@ -1634,5 +1634,5 @@ def test_creativity_and_sampling_params_for_chats_skills_and_models(tmp_path, mo
         assert "temperature" not in s3
         assert "presence_penalty" not in s3
         assert s3 == {"reasoning": {"effort": "high"}, "verbosity": "low"}
-        assert "sans température directe" in sys3
+        assert "Calibrage de créativité (10 %" in sys3
         assert "JAMAIS inventer de faits" in sys3

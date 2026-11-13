@@ -3,7 +3,7 @@ import re
 import unicodedata
 from datetime import timezone
 
-from .blog import parse_cards_from_content
+from .blog import parse_cards_from_content, parse_trends_from_content
 from .models import (
     AgentTeam,
     Attachment,
@@ -215,11 +215,13 @@ def skill_json(item: Skill) -> dict:
 
 def blog_post_json(item: BlogPost) -> dict:
     cards = parse_cards_from_content(item.content)
+    trends = parse_trends_from_content(item.content)
     return {
         "id": item.id,
         "blog_id": item.blog_id,
         "title": item.title,
         "summary": item.summary,
+        "trends": trends,
         "content": item.content,
         "cards": cards,
         "sources": item.sources or [],

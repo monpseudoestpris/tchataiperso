@@ -30,6 +30,7 @@ import {
   Search,
   Sparkles,
   Trash2,
+  TrendingUp,
   Video,
   X,
 } from "lucide-react";
@@ -1543,6 +1544,23 @@ export function BlogModal({ onClose, initialPrompt = "" }: BlogModalProps) {
                           </div>
                           <h1 className="blog-lead-title">{activePost.title}</h1>
                           {activePost.summary && <p className="blog-lead-summary">{activePost.summary}</p>}
+
+                          {activePost.trends && activePost.trends.length > 0 && (
+                            <div className="blog-lead-trends" aria-label="Grandes tendances clés">
+                              <div className="blog-lead-trends-header">
+                                <TrendingUp size={14} className="text-amber-500" />
+                                <span>Grandes tendances & signaux clés</span>
+                              </div>
+                              <ul className="blog-lead-trends-list">
+                                {activePost.trends.map((trend, tIdx) => (
+                                  <li key={tIdx} className="blog-lead-trend-item">
+                                    <span className="blog-lead-trend-bullet">#{tIdx + 1}</span>
+                                    <span className="blog-lead-trend-text">{trend}</span>
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
                         </header>
 
                         {/* Category Filter Tabs Bar if multiple categories present */}

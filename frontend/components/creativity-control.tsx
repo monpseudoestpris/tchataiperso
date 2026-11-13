@@ -460,8 +460,8 @@ export function CreativityControl({
             }}
           >
             {hasTemperatureSupport
-              ? "Température + Instructions"
-              : "Instructions adaptées (sans température)"}
+              ? "Température + Consignes prompt"
+              : "Consignes prompt (sans température)"}
           </span>
         </div>
         {hasCustom && (
@@ -549,11 +549,11 @@ export function CreativityControl({
       >
         {hasTemperatureSupport ? (
           <span>
-            Le curseur ajuste à la fois les paramètres supportés du modèle et les consignes de posture, tout en interdisant d&apos;inventer des faits.
+            Quel que soit le modèle, la consigne écrite est injectée dans le prompt (en plus des paramètres supportés comme <code>temperature</code>), sans jamais inventer de faits.
           </span>
         ) : (
           <span>
-            Ce modèle n&apos;expose pas de contrôle direct de l&apos;aléatoire (<code>temperature</code>) : le curseur pilote automatiquement des <strong>instructions adaptées</strong> (exploration d&apos;hypothèses originales sans jamais inventer de faits).
+            Ce modèle n&apos;expose pas de contrôle direct de l&apos;aléatoire (<code>temperature</code>) : le curseur injecte la consigne écrite dans le prompt (exploration d&apos;hypothèses originales sans jamais inventer de faits).
           </span>
         )}
       </div>

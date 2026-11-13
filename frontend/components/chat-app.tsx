@@ -35,6 +35,7 @@ import { ThoughtAccordion } from "@/components/thought-accordion";
 import { TopicModal } from "@/components/topic-modal";
 import { ChatAttachedSites } from "@/components/chat-attached-sites";
 import { CreativityControl, formatCreativityBadge } from "@/components/creativity-control";
+import { SidebarCreativityPotentiometer } from "@/components/sidebar-creativity-potentiometer";
 import { WebPageModal } from "@/components/web-page-modal";
 import { ApiError, api, attachUrl, createLearnReportFromMessage, createReportFromMessage, errorMessage, fetchTopics, linkConversationToTopic, unlinkConversationFromTopic, skillToSlug, streamMessage, type Attachment, type AuthUser, type Config, type Conversation, type DocumentExtraction, type FamilyGroupInfo, type FinancialDashboardData, type GeneratedSound, type Memory, type Message, type Model, type MultiAgentConfig, type SamplingParameters, type Skill, type Source, type StageModelsConfig, type TopicSpace } from "@/lib/api";
 import { collectConversationCanvasFiles, createZipBlob, extractCanvasFiles, hasExplicitCanvasFiles, triggerBlobDownload } from "@/lib/code-canvas";
@@ -2625,70 +2626,38 @@ export function ChatApp() {
         }) : <div className="history-empty"><MessageCircle size={20} /><p>{hasActiveFilter ? "Aucune discussion ne correspond à ce filtre." : "Une idée, une question…\nVotre historique commence ici."}</p></div>}
       </nav>
       <div className="sidebar-bottom">
-        <div className="sidebar-quick-tools" aria-label="Accès rapides aux espaces et outils">
-          <button
-            type="button"
-            className={`sidebar-quick-btn pages-quick ${webPagesModalOpen ? "is-active" : ""}`}
-            onClick={() => { openWebPagesModal(); setSidebarOpen(false); }}
-            title="cLAIr Pages (Générateur HTML5/SVG autonome)"
-            aria-label="cLAIr Pages"
-          >
-            <Globe size={16} />
-            <span className="sidebar-quick-label">Pages</span>
-          </button>
-          <button
-            type="button"
-            className={`sidebar-quick-btn blog-quick ${blogModalOpen ? "is-active" : ""}`}
-            onClick={() => { openBlogModal(""); setSidebarOpen(false); }}
-            title="Mes Blogs d’actualités (Veille SearXNG & résumés auto)"
-            aria-label="Mes Blogs d’actualités"
-          >
-            <Newspaper size={16} />
-            <span className="sidebar-quick-label">Blogs</span>
-          </button>
-          <button
-            type="button"
-            className={`sidebar-quick-btn deepsearch-quick ${deepSearchModalOpen ? "is-active" : ""}`}
-            onClick={() => {
-              setDeepSearchModalQuestion(draft.trim());
-              setDeepSearchModalTab("reports");
-              setDeepSearchModalReportId(null);
-              setDeepSearchModalOpen(true);
-              setSidebarOpen(false);
-            }}
-            title="Rapports DeepSearch (Analyses HTML & recherche approfondie)"
-            aria-label="Rapports DeepSearch"
-          >
-            <Compass size={16} />
-            <span className="sidebar-quick-label">DeepSearch</span>
-          </button>
-          <button
-            type="button"
-            className={`sidebar-quick-btn learn-quick ${learnModalOpen ? "is-active" : ""}`}
-            onClick={() => {
-              setLearnModalQuestion(draft.trim());
-              setLearnModalTab("reports");
-              setLearnModalReportId(null);
-              setLearnModalOpen(true);
-              setSidebarOpen(false);
-            }}
-            title="Mes Cours & Formations (Cours magistraux, cas pratiques & HTML)"
-            aria-label="Mes Cours & Formations"
-          >
-            <GraduationCap size={16} />
-            <span className="sidebar-quick-label">Cours</span>
-          </button>
-          <button
-            type="button"
-            className={`sidebar-quick-btn memory-quick ${contextOpen && contextTab === "memories" ? "is-active" : ""}`}
-            onClick={() => { setContextTab("memories"); setContextOpen(true); setSidebarOpen(false); }}
-            title={`Votre mémoire (${memories.length ? `${memories.length} information${memories.length > 1 ? "s" : ""}` : "Les choses qui comptent"})`}
-            aria-label="Votre mémoire"
-          >
-            <Brain size={16} />
-            <span className="sidebar-quick-label">Mémoire</span>
-          </button>
-        </div>
+        {(() => {
+          const sidebarCreativity = conversation ? (conversation.creativity ?? null) : pendingCreativity;
+          const sidebarSampling = conversation ? (conversation.sampling_params ?? null) : pendingSamplingParams;
+          const hasOverrides = Boolean(
+            sidebarSampling && Object.values(sidebarSampling).some(v => v !== null && v !== undefined && v !== ""),
+          );
+          const skillCreat = (conversation?.skills ?? []).find(
+            s => s.creativity !== null && s.creativity !== undefined,
+          );
+          return (
+            <SidebarCreativityPotentiometer
+              creativity={sidebarCreativity}
+              inheritedCreativity={skillCreat?.creativity ?? null}
+              inheritedSkillName={skillCreat?.name ?? null}
+              hasSamplingOverrides={hasOverrides}
+              disabled={working}
+              onCommitCreativity={nextVal => {
+                if (nextVal === null) {
+                  void updateConversationCreativity(null, null);
+                } else {
+                  void updateConversationCreativity(nextVal, sidebarSampling);
+                }
+              }}
+              onOpenDetails={() => {
+                setContextOpen(false);
+                setSkillsOpen(false);
+                setCreativityOpen(true);
+                setSidebarOpen(false);
+              }}
+            />
+          );
+        })()}
         <div className="profile">
           <div className="profile-main" onClick={() => setFamilyModalOpen(true)} title="Gérer le groupe familial ou basculer" role="button" tabIndex={0}>
             <span className="avatar">{user.username[0].toLocaleUpperCase("fr")}</span>
@@ -2703,31 +2672,6 @@ export function ChatApp() {
               </small>
             </span>
           </div>
-          {familyInfo?.members && familyInfo.members.filter(m => m.id !== user.id).length > 0 && (
-            <div className="sidebar-family-avatars" title="Basculer vers un autre membre de la famille">
-              {familyInfo.members.filter(m => m.id !== user.id).slice(0, 3).map(m => (
-                <button
-                  key={m.id}
-                  type="button"
-                  className="sidebar-avatar-pill"
-                  onClick={() => void switchAccount(m.id)}
-                  title={`Basculer immédiatement sur ${m.username}`}
-                >
-                  {m.username[0].toLocaleUpperCase("fr")}
-                </button>
-              ))}
-              {familyInfo.members.filter(m => m.id !== user.id).length > 3 && (
-                <button
-                  type="button"
-                  className="sidebar-avatar-more"
-                  onClick={() => setFamilyModalOpen(true)}
-                  title="Voir tous les membres"
-                >
-                  +{familyInfo.members.filter(m => m.id !== user.id).length - 3}
-                </button>
-              )}
-            </div>
-          )}
           <div className="profile-actions">
             <IconButton label="Paramètres & Prompt général" onClick={() => setSettingsModalOpen(true)}>
               <Settings size={16} />
