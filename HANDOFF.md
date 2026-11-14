@@ -1,49 +1,42 @@
-# Relais — 13 novembre 2026
+# Relais — 14 novembre 2026
 
 ## 1. Project Overview
-clAIr : tchat IA francophone, apprentissage, recherche, médias et génération de pages HTML. Frontend Next.js 16.4 / React 19 / TypeScript ; backend FastAPI / SQLAlchemy / PostgreSQL.
+clAIr : tchat IA francophone, apprentissage, recherche, médias, génération de pages HTML et orchestration d'agents autonomes. Frontend Next.js 16.4 / React 19 / TypeScript ; backend FastAPI / SQLAlchemy / PostgreSQL (SQLite en dev).
 
 ## 2. Current Objective
-Garantir que la rubrique **Mes blogs** (`backend/app/blog.py`) n'exploite que des **articles complets** (et non des pages d'accueil / rubriques / landing pages remplies de titres ou de descriptions génériques) afin de produire de véritables synthèses factuelles.
+Intégration complète et sécurisée de l'outil `clair_create_page` entre cLAIr (`local_autonomous` & Hermes Gateway) et le conteneur `clair-hermes` via MCP HTTP (`params._meta` authentifié par jeton de mission) — **objectif atteint et vérifié en conditions réelles**.
 
 ## 3. Completed Work
-- **Résumé d'en-tête dense en paragraphe substantiel (`backend/app/blog.py`)** :
-  - Consigne LLM renforcée pour le champ `summary` : exigence stricte de faits concrets, chiffres, pourcentages, décisions, montants et noms précis d'acteurs/institutions, avec interdiction formelle des généralités vagues (« une série d'évolutions significatives », « les acteurs accélèrent », etc.).
-- **Grandes tendances clés en en-tête des blogs (`backend/app/blog.py`, `backend/app/serializers.py`, `frontend/components/blog-modal.tsx`, `frontend/lib/api.ts`, `frontend/app/globals.css`)** :
-  - Génération dans le prompt LLM de 3 grandes tendances/dynamiques de fond (`trends`) synthétisant les mouvements transversaux observés dans les articles.
-  - Stockage dans le JSON de l'édition et sérialisation via `parse_trends_from_content` dans `blog_post_json`.
-  - Affichage direct dans le bandeau d'en-tête de l'édition (`blog-lead-trends`) avec badge `TrendingUp`, numérotation stylisée `#1`, `#2`, `#3` et lisibilité claire sur fond contrasté.
-- **Filtrage d'URLs landing / flux vs articles (`backend/app/blog.py`)** :
-  - `is_landing_or_index_url` et `looks_like_article_url` rejettent les pages d'accueil, rubriques génériques, tags/catégories, recherches/pagination, ainsi que les pages de flux (ex. `/actualites/news-du-jour`, `fil-info`, `en-direct`, slugs courts/génériques sans date ni identifiant numérique `>= 4` chiffres via `_GENERIC_SLUG_WORDS` et `_FEED_PATH_PATTERNS`), tout en acceptant les URLs d'articles complets (`.html` avec ID, date `/20xx/`, slug spécifique long).
-  - `_search_single_query` interroge d'abord `categories="news"` avant de replier sur `"news,general"`.
-  - `_prioritize_article_sources` / `search_blog_news` placent les URLs d'articles en tête et marquent les éventuelles landing pages conservées en fin de liste (`_is_landing_candidate`) uniquement pour en extraire les liens d'articles.
-- **Validation stricte et extraction d'article complet (`backend/app/blog.py`)** :
-  - `_extract_complete_article` refuse immédiatement toute URL de landing/flux et tout titre de flux (`_FEED_TITLE_RE`), cible `<article>`, puis `<main>`, puis `<body>`, rejette les listes multi-brèves (`>= 3` `<article>` courts, ou conteneur `<main>`/`<body>` contenant trop de `<h2>`/`<h3>` ou `> 35 %` de liens via `_looks_like_feed_container`), et n'extrait que les paragraphes `<p>` substantiels (`>= 60` caractères avec ponctuation de phrase, densité de liens `<= 55 %`).
-  - `_extract_article_links_from_html` récupère sur une landing page les liens d'articles du même domaine.
-  - `_enrich_sources_with_content` utilise un `User-Agent` navigateur standard, suit jusqu'à 4 liens d'articles sur chaque page de landing/flux, ne conserve que les sources validées comme articles complets (avec repli hors-ligne pour les tests mockés), et `generate_blog_edition` filtre/remplace toute URL de landing restante dans les `cards` générées par le LLM.
-  - `ensure_minimum_cards` ignore les URLs de landing et utilise `#` au lieu de `https://news.ycombinator.com` comme URL de secours.
-- **Tests ajoutés (`backend/tests/test_blogs.py`)** :
-  - `test_landing_vs_article_url_detection` (incluant `boursier.com/actualites/news-du-jour` et articles `.html` / datés), `test_extract_complete_article_rejects_landing_page_and_accepts_full_article` (incluant un flux multi-brèves de 6 titres `<h2>` + `<p>`), `test_enrich_sources_follows_article_links_from_landing_page`, et vérification de `parse_trends_from_content`.
-- **Travail précédent conservé dans l'arbre de travail** : système hybride de créativité et potentiomètre latéral (`backend/app/sampling.py`, `backend/app/schemas.py`, `backend/tests/test_api.py`, `frontend/components/creativity-control.tsx`, `frontend/components/sidebar-creativity-potentiometer.tsx`, `frontend/components/chat-app.tsx`, `frontend/app/globals.css`).
+- **Propagation authentifiée du contexte de mission (`backend/app/hermes_agent.py`, `backend/app/routers/hermes_mcp.py`)** :
+  - Chaque `GatewayMissionLease` génère un `mission_token` aléatoire unique (`secrets.token_urlsafe(32)`), transmis uniquement par en-tête HTTP transport (`X-Clair-Mission-Token`) vers Hermes Gateway (jamais dans `system_prompt`, `messages`, `tools` ou arguments LLM).
+  - `hermes_mcp.py` exige à la fois un `session_id` valide et un `mission_token` correspondant (`hmac.compare_digest`), extraits de `params._meta` ou des en-têtes HTTP, et refuse tout appel avec contexte absent, expiré, inconnu ou usurpé (ainsi que toute tentative via `params.arguments`).
+- **Patch reproductible du runtime Hermes (`hermes/apply_mission_context_patch.py`, `hermes/Dockerfile`, `compose.yaml`)** :
+  - `api_server_openai_routes.py` capture `X-Hermes-Session-Id` et `X-Clair-Mission-Token` dans un `contextvars.ContextVar` isolé par tâche HTTP et propagé au thread worker (`contextvars.copy_context().run`).
+  - `tools/mcp_tool_handlers.py` lit ce `ContextVar` sur le thread de l'agent avant bascule sur la boucle MCP et le transmet via `server.session.call_tool(..., meta=mission_meta)` dans `params._meta`.
+- **Correction de configuration Docker Compose (`compose.yaml`, `backend/app/config.py`)** :
+  - `HERMES_API_URL: http://clair-hermes:8642` dans `compose.yaml` et retrait de `"hermes_api_url"` de `str_fields` dans `Settings.refresh_from_env_file()` afin que le `.env` local (`127.0.0.1:8642`) n'écrase pas la cible interne Docker.
+- **Script de vérification bout-en-bout (`scripts/verify_hermes_e2e.sh`)** :
+  - Exécute les tests unitaires (`pytest backend/tests/test_hermes.py`) puis un appel réel `POST /api/hermes/run` (`execution_mode="gateway"`) → `clair-hermes` → MCP `tools/call` (`params._meta`) → `clair_create_page` → PostgreSQL (`is_published=False`).
 
 ## 4. Key Decisions
-- **Rejet des `<h2>`/`<h3>`/`<li>` lors de l'extraction de texte d'article** : sur les pages de rubriques, ces balises contiennent les listes de titres d'autres articles et polluaient la synthèse ; seuls les `<p>` substantiels à faible densité de liens sont désormais retenus.
-- **Suivi automatique des liens sur landing page** : lorsqu'un résultat SearXNG pointe malgré tout vers une rubrique, `_enrich_sources_with_content` extrait jusqu'à 2 URLs d'articles du même domaine et ne garde que les articles complets extraits.
+- **Double barrière d'authentification MCP** : le Bearer global (`HERMES_API_KEY`) protège le canal Hermes ↔ cLAIr, tandis que `(session_id, mission_token)` dans `params._meta` authentifie individuellement chaque mission et garantit l'isolation stricte entre utilisateurs concurrents.
+- **Séparation découverte / exécution** : `tools/list` sans session (Bearer valide) expose les schémas pour la découverte globale au démarrage d'Hermes sans accorder aucun droit d'exécution.
 
 ## 5. Modified Files
-- `backend/app/blog.py` : détection d'URLs landing/article, recherche SearXNG `news` prioritaire, extraction stricte `_extract_complete_article`, suivi de liens `_extract_article_links_from_html`, filtrage dans `_enrich_sources_with_content` et `ensure_minimum_cards`.
-- `backend/tests/test_blogs.py` : ajout de 3 tests unitaires pour le filtrage landing/article et l'extraction complète.
-- `HANDOFF.md` : mise à jour du relais.
+- `backend/app/config.py` : retrait de `hermes_api_url` de `refresh_from_env_file()`.
+- `backend/app/hermes_agent.py` : transmission de `X-Clair-Mission-Token` dans les en-têtes HTTP vers Gateway.
+- `backend/app/routers/hermes_mcp.py` : ajout de `mission_token` sur `GatewayMissionLease`, validation stricte `hmac.compare_digest` via `params._meta` / en-têtes, suppression du repli `params.arguments`.
+- `hermes/apply_mission_context_patch.py` & `hermes/Dockerfile` : patch minimal et reproductible du runtime Hermes (`ContextVar` → `params._meta`).
+- `compose.yaml` : `build: ./hermes` pour `clair-hermes` et `HERMES_API_URL: http://clair-hermes:8642` pour `clair-api`.
+- `backend/tests/test_hermes.py` : tests d'isolation multi-utilisateurs avec usurpation de `session_id` sans/mauvais `mission_token` et vérification de non-fuite du secret vers le LLM.
+- `scripts/verify_hermes_e2e.sh` : script unique de vérification unitaire + bout-en-bout réel.
 
 ## 6. Verification
-- `python3 -m py_compile backend/app/blog.py backend/tests/test_blogs.py` : **OK (code 0)**.
-- `git diff --check backend/app/blog.py backend/tests/test_blogs.py` : **OK (code 0)**.
-- Script Python autonome validant `is_landing_or_index_url`, `looks_like_article_url`, le rejet de `https://www.boursier.com/actualites/news-du-jour` et d'un flux HTML à 6 brèves dans `<main>`, l'acceptation d'articles `.html` / datés, et le suivi automatique vers l'article complet via `_enrich_sources_with_content` (avec `httpx.MockTransport` et stubs locaux pour `app.config`/`app.providers`/`app.youtube`) : **OK (`BOURSIER_FEED_FILTER_VERIFICATION_OK`)**.
-- `pytest` (`backend/tests/test_blogs.py`) : non exécuté sur l'hôte (Python 3.10 système sans `exceptiongroup` pour le venv 3.12).
+- `PYTHONPATH=backend backend/.venv/bin/pytest backend/tests/test_hermes.py -v` : **15 passed** en 9.51s.
+- `./scripts/verify_hermes_e2e.sh` : exécuté contre la pile Docker Compose active (`clair-api`, `clair-hermes`, `clair-db`).
 
 ## 7. Known Issues and Risks
-- `pytest` complet à exécuter dans l'environnement Python 3.12 (ou conteneur Docker backend) pour valider la suite complète `backend/tests/test_blogs.py`.
-- Les éditions de blogs déjà enregistrées en base ne sont pas régénérées rétroactivement ; utiliser **Actualiser** dans *Mes blogs*.
+- Lors de l'activation de `compose.cloud.yaml` (si `SSL_CERT_FILE` est défini dans le shell hôte), `docker compose build` avec Bake peut demander `--allow=fs.read=/etc/ssl/certs/ca-certificates.crt` ; construire directement via `docker compose -f compose.yaml build` contourne ce blocage local.
 
 ## 8. Next Action
-Exécuter `pytest backend/tests/test_blogs.py` dans l'environnement Docker/Python 3.12 du backend, puis cliquer sur **Actualiser** dans *Mes blogs* pour tester sur des sujets réels.
+Ouvrir `http://localhost:3001` et tester une mission utilisateur complète avec l'outil `cLAIr Pages` en mode `Gateway Hermes`.

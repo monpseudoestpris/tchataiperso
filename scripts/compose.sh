@@ -3,7 +3,8 @@ set -euo pipefail
 repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_dir"
 export BUILDX_CONFIG="${BUILDX_CONFIG:-$repo_dir/../.cache/buildx}"
-if [[ -f .env && -z "${SEARXNG_SECRET:-}" ]]; then
+export CLAIR_MCP_URL="${CLAIR_MCP_URL:-http://clair-api:8001/api/hermes/mcp}"
+if [[ -f .env && ( -z "${SEARXNG_SECRET:-}" || -z "${HERMES_API_KEY:-}" ) ]]; then
   python3 - <<'PY'
 from pathlib import Path
 import secrets
@@ -12,19 +13,29 @@ target = Path('.env')
 contents = target.read_bytes()
 newline = b'\r\n' if b'\r\n' in contents else b'\n'
 lines = contents.splitlines(keepends=True)
-for index, line in enumerate(lines):
-  key, separator, value = line.partition(b'=')
-  if separator and key.strip() == b'SEARXNG_SECRET':
-    if value.strip().strip(b"'\""):
-      break
-    ending = b'\r\n' if line.endswith(b'\r\n') else b'\n'
-    lines[index] = b'SEARXNG_SECRET=' + secrets.token_hex(32).encode() + ending
-    target.write_bytes(b''.join(lines))
-    break
-else:
-  if contents and not contents.endswith((b'\n', b'\r')):
-    contents += newline
-  target.write_bytes(contents + b'SEARXNG_SECRET=' + secrets.token_hex(32).encode() + newline)
+changed = False
+
+def ensure_secret(key_name: bytes, token_bytes: int, placeholders: tuple[bytes, ...] = ()) -> None:
+  global contents, lines, changed
+  for index, line in enumerate(lines):
+    key, separator, value = line.partition(b'=')
+    if separator and key.strip() == key_name:
+      clean = value.strip().strip(b"'\"")
+      if clean and clean not in placeholders:
+        return
+      ending = b'\r\n' if line.endswith(b'\r\n') else b'\n'
+      lines[index] = key_name + b'=' + secrets.token_hex(token_bytes).encode() + ending
+      changed = True
+      return
+  if lines and not lines[-1].endswith((b'\n', b'\r')):
+    lines[-1] += newline
+  lines.append(key_name + b'=' + secrets.token_hex(token_bytes).encode() + newline)
+  changed = True
+
+ensure_secret(b'SEARXNG_SECRET', 32)
+ensure_secret(b'HERMES_API_KEY', 24, placeholders=(b'replace-with-hermes-gateway-key',))
+if changed:
+  target.write_bytes(b''.join(lines))
 PY
 fi
 lan_mode=false

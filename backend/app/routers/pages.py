@@ -5,7 +5,8 @@ from sqlalchemy.orm import sessionmaker
 from ..config import Settings
 from ..deps import current_user, get_sessions, get_settings
 from ..models import Conversation, User, WebPage, WebPageVersion, now
-from ..page_generator import generate_page_html, propose_page_topics, refine_page_html, slugify
+from ..page_generator import propose_page_topics, refine_page_html, slugify
+from ..page_service import create_draft_web_page
 from ..schemas import CreateWebPage, PageTopicItem, ProposePageTopicsRequest, ProposePageTopicsResponse, RefineWebPage, UpdateWebPage
 from ..serializers import web_page_json, web_page_version_json
 
@@ -85,39 +86,14 @@ async def create_page(
     settings: Settings = Depends(get_settings),
     sessions: sessionmaker = Depends(get_sessions),
 ):
-    with sessions() as db:
-        count = db.scalar(select(func.count(WebPage.id)).where(WebPage.user_id == user.id))
-        if count and count >= 100:
-            raise HTTPException(422, "Nombre maximal de pages web atteint (100)")
-
-    chat_transcript = None
-    fallback_title = body.title
-    selected_model = body.model
-    if body.conversation_id:
-        with sessions() as db:
-            conv = db.scalar(
-                select(Conversation).where(
-                    Conversation.id == body.conversation_id,
-                    Conversation.user_id == user.id,
-                )
-            )
-            if conv:
-                if not fallback_title:
-                    fallback_title = conv.title
-                if not selected_model and conv.model:
-                    selected_model = conv.model
-                lines = []
-                for msg in conv.messages:
-                    role_label = "Utilisateur" if msg.role == "user" else "Assistant"
-                    lines.append(f"{role_label} : {msg.content}")
-                chat_transcript = "\n\n".join(lines)
-
-    resolved_title, html_content = await generate_page_html(
+    return await create_draft_web_page(
         settings=settings,
+        sessions=sessions,
+        user_id=user.id,
         prompt=body.prompt,
-        chat_transcript=chat_transcript,
-        title=fallback_title,
-        model=selected_model,
+        title=body.title,
+        model=body.model,
+        conversation_id=body.conversation_id,
         page_type=body.page_type,
         target_audience=body.target_audience,
         author_persona=body.author_persona,
@@ -136,30 +112,6 @@ async def create_page(
         text_effects=body.text_effects,
         selected_topics=[t.model_dump() for t in body.selected_topics] if body.selected_topics else None,
     )
-
-    clean_slug = slugify(resolved_title)
-
-    with sessions() as db:
-        page = WebPage(
-            user_id=user.id,
-            title=resolved_title,
-            slug=clean_slug,
-            is_published=False,
-        )
-        db.add(page)
-        db.flush()
-
-        version = WebPageVersion(
-            page_id=page.id,
-            version_number=1,
-            prompt_used=body.prompt or "Création initiale",
-            html_content=html_content,
-        )
-        db.add(version)
-        page.updated_at = now()
-        db.commit()
-        db.refresh(page)
-        return web_page_json(page, include_versions=True, include_latest_html=True)
 
 
 @router.get("/api/pages/{page_id}")

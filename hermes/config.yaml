@@ -1,0 +1,6 @@
+# Configuration Hermes Agent pour cLAIr
+mcp_servers:
+  clair:
+    url: "${CLAIR_MCP_URL}"
+    headers:
+      Authorization: "Bearer ${API_SERVER_KEY}"

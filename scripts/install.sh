@@ -16,6 +16,9 @@ contents = Path('.env.example').read_text().replace(
 ).replace(
   'SEARXNG_SECRET=replace-with-random-searxng-secret',
   'SEARXNG_SECRET=' + secrets.token_hex(32),
+).replace(
+  'HERMES_API_KEY=replace-with-hermes-gateway-key',
+  'HERMES_API_KEY=' + secrets.token_hex(24),
 )
 fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
 with os.fdopen(fd, 'w') as handle:

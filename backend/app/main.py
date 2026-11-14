@@ -20,6 +20,8 @@ from .routers import (
     conversations,
     family,
     finance as finance_router,
+    hermes,
+    hermes_mcp,
     images,
     memories,
     messages,
@@ -153,6 +155,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.middleware("http")
     async def check_request_origin(request: Request, call_next):
         settings.refresh_from_env_file()
+        if request.url.path == "/api/hermes/mcp" or request.url.path.startswith("/api/hermes/mcp/"):
+            return await call_next(request)
         origin = request.headers.get("origin")
         if request.method in {"POST", "PATCH", "DELETE"} and origin not in settings.origins:
             return JSONResponse({"detail": "Origine de requête refusée"}, status_code=403)
@@ -175,6 +179,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(agent_teams.router)
     app.include_router(topics.router)
     app.include_router(pages.router)
+    app.include_router(hermes.router)
+    app.include_router(hermes_mcp.router)
     app.include_router(finance_router.router, prefix="/api/finance", tags=["finance"])
 
     return app

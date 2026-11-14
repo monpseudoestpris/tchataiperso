@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Bot,
   Brain,
   Code2,
   Compass,
@@ -34,6 +35,7 @@ export interface ToolsModalProps {
   onOpenStudy: () => void;
   onOpenFinance: () => void;
   onOpenWebPages?: () => void;
+  onOpenHermes?: () => void;
   // Tool state badges
   canvasFilesCount: number;
   isMultiAgentActive: boolean;
@@ -55,6 +57,7 @@ export function ToolsModal({
   onOpenStudy,
   onOpenFinance,
   onOpenWebPages,
+  onOpenHermes,
   canvasFilesCount,
   isMultiAgentActive,
   autoMemoryEnabled,
@@ -151,6 +154,31 @@ export function ToolsModal({
           <div>
             <h3 className={styles.sectionTitle}>Studios & Espaces Dédiés</h3>
             <div className={styles.grid}>
+              {/* Hermes Agent */}
+              {onOpenHermes && (
+                <button
+                  type="button"
+                  className={styles.toolCard}
+                  onClick={() => handleSelect(onOpenHermes)}
+                  title="Ouvrir Hermes Agent (Nous Research)"
+                >
+                  <div className={styles.toolCardHeader}>
+                    <div className={styles.toolIconWrap} style={{ background: "#eef2ff", color: "#4338ca" }}>
+                      <Bot size={19} />
+                    </div>
+                    <span className={styles.toolTag}>Nous Research · Agent</span>
+                  </div>
+                  <h4 className={styles.toolTitle}>Hermes Agent</h4>
+                  <p className={styles.toolDesc}>
+                    Agent autonome à boucle d&apos;outils, mémoire persistante USER.md et création de compétences.
+                  </p>
+                  <div className={styles.toolActionRow}>
+                    <span>Lancer une mission</span>
+                    <ArrowRight size={14} />
+                  </div>
+                </button>
+              )}
+
               {/* cLAIr Pages */}
               {onOpenWebPages && (
                 <button

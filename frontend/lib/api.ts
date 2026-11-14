@@ -1237,9 +1237,156 @@ export async function deleteTopicResource(topicId: string, resourceId: string): 
   return api<void>(`/topics/${topicId}/resources/${resourceId}`, { method: "DELETE" });
 }
 
+export type HermesToolName = "web_search" | "memory" | "skills" | "code_execution" | "create_page";
 
+export type HermesToolSpec = {
+  id: HermesToolName;
+  name: string;
+  description: string;
+  hermes_ref: string;
+};
 
+export type HermesPreset = {
+  id: string;
+  title: string;
+  description: string;
+  prompt: string;
+  tools: HermesToolName[];
+};
 
+export type HermesExecutionMode = "gateway" | "local_autonomous" | "demo" | "offline" | "disabled";
+export type HermesEnginePreference = "auto" | "local_autonomous" | "gateway";
 
+export type HermesStatusResponse = {
+  enabled: boolean;
+  mode: HermesExecutionMode;
+  provider?: string;
+  gateway_reachable: boolean;
+  gateway_url: string;
+  gateway_models: string[];
+  default_model: string;
+  tools: HermesToolSpec[];
+  presets: HermesPreset[];
+  default_soul: string;
+  user_memories_count: number;
+  user_skills_count: number;
+};
 
+export type HermesStepEvent = {
+  type: "step";
+  id: string;
+  tool: string;
+  title: string;
+  status: "running" | "done" | "error";
+  detail?: string;
+};
 
+export type HermesSuggestedSkill = {
+  name: string;
+  prompt: string;
+};
+
+export type HermesRunMetrics = {
+  llm_calls: number;
+  tool_calls: number;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+  cost_usd?: number | null;
+  duration_ms?: number;
+  stop_reason?: string;
+};
+
+export type HermesCreatedPage = {
+  id: string;
+  title: string;
+  slug: string;
+  page_type: string;
+  is_published: boolean;
+};
+
+export type HermesArtifactsEvent = {
+  type: "artifacts";
+  sources: Source[];
+  created_pages?: HermesCreatedPage[];
+  suggested_skill: HermesSuggestedSkill | null;
+  suggested_memory: string | null;
+  metrics?: HermesRunMetrics;
+};
+
+export type HermesStreamEvent =
+  | { type: "meta"; data: { mode: HermesExecutionMode; session_id: string; model: string; gateway_url?: string } }
+  | { type: "step"; data: HermesStepEvent }
+  | { type: "thought"; data: { text: string } }
+  | { type: "delta"; data: { text: string } }
+  | { type: "artifacts"; data: HermesArtifactsEvent }
+  | { type: "done"; data: { content: string; metrics?: HermesRunMetrics } };
+
+export async function fetchHermesStatus(): Promise<HermesStatusResponse> {
+  return api<HermesStatusResponse>("/hermes/status");
+}
+
+export async function streamHermesRun(
+  body: {
+    prompt: string;
+    model?: string;
+    execution_mode?: HermesEnginePreference;
+    session_id?: string;
+    conversation_id?: string;
+    soul_prompt?: string;
+    enabled_tools?: HermesToolName[];
+    auto_learn_skill?: boolean;
+  },
+  signal: AbortSignal,
+  onEvent: (event: HermesStreamEvent) => void,
+): Promise<void> {
+  const response = await fetch("/api/hermes/run", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (!response.ok) throw await responseError(response);
+  if (!response.body) throw new Error("Le serveur ne fournit aucun flux Hermes.");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let completed = false;
+
+  function consume(frame: string) {
+    let event = "message";
+    const lines: string[] = [];
+    for (const line of frame.split(/\r?\n/)) {
+      if (line.startsWith("event:")) event = line.slice(6).trim();
+      if (line.startsWith("data:")) lines.push(line.slice(5).replace(/^ /, ""));
+    }
+    if (!lines.length) return;
+    const data = JSON.parse(lines.join("\n"));
+    if (["meta", "step", "thought", "delta", "artifacts", "done", "error"].includes(event)) {
+      if (event === "done") completed = true;
+      if (event === "error") throw new Error(data.message ?? "La mission Hermes Agent a échoué.");
+      onEvent({ type: event, data } as HermesStreamEvent);
+    }
+  }
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done });
+      let match: RegExpMatchArray | null;
+      while ((match = buffer.match(/\r?\n\r?\n/))) {
+        const index = match.index!;
+        consume(buffer.slice(0, index));
+        buffer = buffer.slice(index + match[0].length);
+      }
+      if (done) break;
+    }
+    if (buffer.trim()) consume(buffer);
+    if (!completed) {
+      throw new Error("Le flux Hermes Agent a été interrompu avant la fin de la mission.");
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+}

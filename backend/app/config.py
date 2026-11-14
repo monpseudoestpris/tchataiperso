@@ -262,8 +262,13 @@ class Settings(BaseSettings):
     image_models: str = ""
     default_image_model: str = "ideogram"
     auto_web_search: bool = True
+    hermes_enabled: bool = True
+    hermes_api_url: str = "http://127.0.0.1:8642"
+    hermes_api_key: SecretStr = SecretStr("")
+    hermes_default_model: str = "nousresearch/hermes-3-llama-3.1-405b"
+    hermes_max_cost_usd: float = 0.25
 
-    @field_validator("llm_api_key", "brave_api_key", "mistral_api_key", "ideogram_api_key", "eod_historical_data_key", "eleven_labs_key", "google_api_key", mode="before")
+    @field_validator("llm_api_key", "brave_api_key", "mistral_api_key", "ideogram_api_key", "eod_historical_data_key", "eleven_labs_key", "google_api_key", "hermes_api_key", mode="before")
     @classmethod
     def sanitize_secret_keys(cls, value):
         if isinstance(value, SecretStr):
@@ -305,6 +310,21 @@ class Settings(BaseSettings):
                     or not all(re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", part) for part in host.split("."))):
                 raise ValueError("IDEOGRAM_IMAGE_HOSTS accepte uniquement des noms DNS publics exacts sans wildcard, schéma, chemin ou port")
         return ",".join(hosts)
+
+    @field_validator("hermes_api_url")
+    @classmethod
+    def valid_hermes_api_url(cls, value: str) -> str:
+        cleaned = value.strip().rstrip("/")
+        if cleaned and not cleaned.startswith(("http://", "https://")):
+            raise ValueError("HERMES_API_URL doit commencer par http:// ou https://")
+        return cleaned
+
+    @field_validator("hermes_max_cost_usd")
+    @classmethod
+    def valid_hermes_max_cost_usd(cls, value: float) -> float:
+        if not 0.0 <= value <= 50.0:
+            raise ValueError("HERMES_MAX_COST_USD doit être compris entre 0 et 50 USD")
+        return float(value)
 
     @field_validator("max_upload_mb")
     @classmethod
@@ -576,7 +596,7 @@ class Settings(BaseSettings):
             return
         self._env_mtime_ns = mtime_ns
         parsed = dotenv_values(env_path)
-        secret_fields = ("llm_api_key", "brave_api_key", "mistral_api_key", "ideogram_api_key", "eod_historical_data_key", "eleven_labs_key", "google_api_key")
+        secret_fields = ("llm_api_key", "brave_api_key", "mistral_api_key", "ideogram_api_key", "eod_historical_data_key", "eleven_labs_key", "google_api_key", "hermes_api_key")
         for field_name in secret_fields:
             if field_name in self._explicit_fields:
                 continue
@@ -590,14 +610,15 @@ class Settings(BaseSettings):
                 cleaned = _clean_api_key(raw_val)
                 if cleaned or force is False:
                     setattr(self, field_name, SecretStr(cleaned))
-        str_fields = ("llm_base_url", "ocr_model", "vision_model", "default_model", "llm_models", "summary_model", "search_query_model", "web_search_decision_model", "deep_search_plan_model", "deep_search_synthesis_model", "deep_search_engine", "deep_search_model", "blog_model", "page_model", "presentation_model", "image_prompt_model", "skill_prompt_model", "image_models", "default_image_model")
+        str_fields = ("llm_base_url", "ocr_model", "vision_model", "default_model", "llm_models", "summary_model", "search_query_model", "web_search_decision_model", "deep_search_plan_model", "deep_search_synthesis_model", "deep_search_engine", "deep_search_model", "blog_model", "page_model", "presentation_model", "image_prompt_model", "skill_prompt_model", "image_models", "default_image_model", "hermes_default_model")
         for field_name in str_fields:
             if field_name in self._explicit_fields:
                 continue
             env_name = field_name.upper()
             raw_val = parsed.get(env_name)
             if isinstance(raw_val, str) and raw_val.strip():
-                setattr(self, field_name, raw_val.strip())
+                val = raw_val.strip()
+                setattr(self, field_name, val)
         if "demo_mode" not in self._explicit_fields and isinstance(parsed.get("DEMO_MODE"), str):
             val = parsed["DEMO_MODE"].strip().lower()
             if val in ("true", "1", "yes", "false", "0", "no"):
@@ -610,6 +631,17 @@ class Settings(BaseSettings):
             val = parsed["AUTO_WEB_SEARCH"].strip().lower()
             if val in ("true", "1", "yes", "false", "0", "no"):
                 self.auto_web_search = val in ("true", "1", "yes")
+        if "hermes_enabled" not in self._explicit_fields and isinstance(parsed.get("HERMES_ENABLED"), str):
+            val = parsed["HERMES_ENABLED"].strip().lower()
+            if val in ("true", "1", "yes", "false", "0", "no"):
+                self.hermes_enabled = val in ("true", "1", "yes")
+        if "hermes_max_cost_usd" not in self._explicit_fields and isinstance(parsed.get("HERMES_MAX_COST_USD"), str):
+            try:
+                budget = float(parsed["HERMES_MAX_COST_USD"].strip())
+                if 0.0 <= budget <= 50.0:
+                    self.hermes_max_cost_usd = budget
+            except ValueError:
+                pass
 
     def enabled(self, key: SecretStr) -> bool:
         self.refresh_from_env_file()

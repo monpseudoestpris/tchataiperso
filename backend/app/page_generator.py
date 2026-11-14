@@ -1171,19 +1171,33 @@ async def generate_page_html(
         )
 
     # 6. Densité du texte
-    if text_density <= 3:
+    resolved_density = 5
+    if isinstance(text_density, int):
+        resolved_density = max(1, min(10, text_density))
+    elif isinstance(text_density, str):
+        cleaned_density = text_density.strip().lower()
+        if cleaned_density.isdigit():
+            resolved_density = max(1, min(10, int(cleaned_density)))
+        elif cleaned_density in {"compact", "synth", "short", "low"}:
+            resolved_density = 3
+        elif cleaned_density in {"dense", "deep", "high"}:
+            resolved_density = 8
+        else:
+            resolved_density = 5
+
+    if resolved_density <= 3:
         design_options.append(
-            f"- DENSITÉ DU TEXTE ({text_density}/10 - Très synthétique & aéré) : "
+            f"- DENSITÉ DU TEXTE ({resolved_density}/10 - Très synthétique & aéré) : "
             "Sois concis et percutant. Privilégie les points clés, chiffres en grand, puces courtes et tableaux. Évite les longs paragraphes."
         )
-    elif text_density <= 7:
+    elif resolved_density <= 7:
         design_options.append(
-            f"- DENSITÉ DU TEXTE ({text_density}/10 - Équilibré & didactique) : "
+            f"- DENSITÉ DU TEXTE ({resolved_density}/10 - Équilibré & didactique) : "
             "Offre un bon équilibre entre clarté explicative, exemples et synthèse visuelle."
         )
     else:
         design_options.append(
-            f"- DENSITÉ DU TEXTE ({text_density}/10 - Dense & approfondi) : "
+            f"- DENSITÉ DU TEXTE ({resolved_density}/10 - Dense & approfondi) : "
             "Contenu riche et exhaustif. Détaille en profondeur chaque notion, définitions rigoureuses, nuances et études de cas."
         )
 

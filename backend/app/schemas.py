@@ -986,7 +986,28 @@ class UpdateWebPage(BaseModel):
     is_published: bool | None = None
 
 
+HermesToolName = Literal["web_search", "memory", "skills", "code_execution", "create_page"]
+HermesEnginePreference = Literal["auto", "local_autonomous", "gateway"]
 
 
+class HermesRunRequest(BaseModel):
+    prompt: str = Field(min_length=1, max_length=16000)
+    model: str | None = Field(default=None, max_length=200)
+    execution_mode: HermesEnginePreference = "auto"
+    session_id: str | None = Field(default=None, max_length=120)
+    conversation_id: str | None = Field(default=None, max_length=64)
+    soul_prompt: str | None = Field(default=None, max_length=4000)
+    enabled_tools: list[HermesToolName] = Field(
+        default_factory=lambda: ["web_search", "memory", "skills", "code_execution"],
+        max_length=8,
+    )
+    auto_learn_skill: bool = True
 
+    @field_validator("prompt")
+    @classmethod
+    def validate_prompt_not_blank(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("L'objectif confié à Hermes Agent ne peut pas être vide")
+        return cleaned
 
