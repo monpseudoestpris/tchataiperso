@@ -6,11 +6,15 @@ import {
   Bot,
   Brain,
   Check,
+  ChevronDown,
   Code2,
   Copy,
+  Cpu,
   ExternalLink,
+  Eye,
   FileText,
   Globe2,
+  History,
   LoaderCircle,
   MessageSquarePlus,
   Play,
@@ -18,6 +22,8 @@ import {
   RefreshCw,
   Sparkles,
   Square,
+  Star,
+  Trash2,
   X,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
@@ -40,7 +46,9 @@ import {
   type Skill,
   type Source,
 } from "@/lib/api";
+import { ModelModal } from "@/components/model-modal";
 import { ThoughtAccordion } from "@/components/thought-accordion";
+import { useModelFavorites } from "@/lib/model-favorites";
 import styles from "./hermes-agent-modal.module.css";
 
 export interface HermesAgentModalProps {
@@ -52,9 +60,99 @@ export interface HermesAgentModalProps {
   onInsertIntoChat: (text: string) => void;
   onSkillCreated?: (skill: Skill) => void;
   onMemoryCreated?: (memory: Memory) => void;
+  onRefreshModels?: () => Promise<void>;
+}
+
+function formatContextTokens(tokens?: number): string {
+  if (!tokens || tokens <= 0) return "";
+  if (tokens >= 1_000_000) {
+    const val = tokens / 1_000_000;
+    return `${val % 1 === 0 ? val.toFixed(0) : val.toFixed(1)}M ctx`;
+  }
+  if (tokens >= 1_000) {
+    return `${Math.round(tokens / 1_000)}k ctx`;
+  }
+  return `${tokens} ctx`;
+}
+
+function formatModelPriceTag(model?: Model): string | null {
+  if (!model) return null;
+  if (model.prompt_price_1m === 0 && (model.completion_price_1m === undefined || model.completion_price_1m === 0)) {
+    return "Gratuit";
+  }
+  if (model.completion_price_1m !== undefined && model.completion_price_1m !== null) {
+    const p = model.completion_price_1m;
+    return p < 0.01 ? "<$0.01/1M" : `$${p.toFixed(2)}/1M`;
+  }
+  if (model.prompt_price_1m !== undefined && model.prompt_price_1m !== null) {
+    const p = model.prompt_price_1m;
+    return p < 0.01 ? "<$0.01/1M" : `$${p.toFixed(2)}/1M`;
+  }
+  return null;
 }
 
 const DEFAULT_TOOLS: HermesToolName[] = ["web_search", "memory", "skills", "code_execution"];
+const HERMES_HISTORY_STORAGE_KEY = "clair_hermes_prompt_history_v1";
+const MAX_HERMES_HISTORY = 10;
+
+type HermesHistoryItem = {
+  id: string;
+  prompt: string;
+  model?: string;
+  executionMode?: HermesEnginePreference;
+  tools?: HermesToolName[];
+  createdAt: number;
+};
+
+function loadHermesHistory(): HermesHistoryItem[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(HERMES_HISTORY_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter(
+        (item): item is HermesHistoryItem =>
+          Boolean(item) &&
+          typeof item.id === "string" &&
+          typeof item.prompt === "string" &&
+          item.prompt.trim().length > 0 &&
+          typeof item.createdAt === "number",
+      )
+      .slice(0, MAX_HERMES_HISTORY);
+  } catch {
+    return [];
+  }
+}
+
+function saveHermesHistory(items: HermesHistoryItem[]): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(
+      HERMES_HISTORY_STORAGE_KEY,
+      JSON.stringify(items.slice(0, MAX_HERMES_HISTORY)),
+    );
+  } catch {
+    // Ignore storage quota or private mode errors
+  }
+}
+
+function formatHistoryTime(timestamp: number): string {
+  const diffMin = Math.floor((Date.now() - timestamp) / 60_000);
+  if (diffMin < 1) return "À l'instant";
+  if (diffMin < 60) return `Il y a ${diffMin} min`;
+  const date = new Date(timestamp);
+  const now = new Date();
+  const isToday =
+    date.getDate() === now.getDate() &&
+    date.getMonth() === now.getMonth() &&
+    date.getFullYear() === now.getFullYear();
+  if (isToday) {
+    return date.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+  }
+  return date.toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit" });
+}
 
 const MODE_LABELS: Record<string, { label: string; className: string }> = {
   gateway: { label: "Gateway Hermes actif (8642)", className: styles.modeGateway },
@@ -82,7 +180,10 @@ export function HermesAgentModal({
   onInsertIntoChat,
   onSkillCreated,
   onMemoryCreated,
+  onRefreshModels,
 }: HermesAgentModalProps) {
+  const { isFavorite } = useModelFavorites("llm");
+  const [modelModalOpen, setModelModalOpen] = useState(false);
   const [statusData, setStatusData] = useState<HermesStatusResponse | null>(null);
   const [loadingStatus, setLoadingStatus] = useState(false);
   const [enginePreference, setEnginePreference] = useState<HermesEnginePreference>("auto");
@@ -92,6 +193,7 @@ export function HermesAgentModal({
   const [enabledTools, setEnabledTools] = useState<HermesToolName[]>(DEFAULT_TOOLS);
   const [autoLearnSkill, setAutoLearnSkill] = useState(true);
   const [sessionId, setSessionId] = useState("");
+  const [history, setHistory] = useState<HermesHistoryItem[]>(() => loadHermesHistory());
 
   const [running, setRunning] = useState(false);
   const [steps, setSteps] = useState<HermesStepEvent[]>([]);
@@ -144,14 +246,29 @@ export function HermesAgentModal({
     };
   }, [isOpen]);
 
-  const orderedModels = useMemo(() => {
-    const gatewayModels = (statusData?.gateway_models ?? []).map((id) => ({
-      id,
-      name: `Hermes Gateway · ${id}`,
-      vision: false,
-    }));
-    const defaultHermesModel = statusData?.default_model?.trim()
-      ? [{ id: statusData.default_model.trim(), name: `OpenRouter · ${statusData.default_model.trim()}`, vision: false }]
+  const orderedModels = useMemo<Model[]>(() => {
+    const modelMap = new Map(models.map((m) => [m.id, m]));
+    const gatewayModels: Model[] = (statusData?.gateway_models ?? []).map((id) => {
+      const existing = modelMap.get(id);
+      if (existing) return existing;
+      return {
+        id,
+        name: `Hermes Gateway · ${id}`,
+        provider: "Hermes Gateway",
+        description: "Modèle exposé directement par le conteneur Hermes Gateway.",
+        vision: false,
+      };
+    });
+    const defaultId = statusData?.default_model?.trim();
+    const defaultHermesModel: Model[] = defaultId
+      ? [
+          modelMap.get(defaultId) ?? {
+            id: defaultId,
+            name: `OpenRouter · ${defaultId}`,
+            provider: "OpenRouter",
+            vision: false,
+          },
+        ]
       : [];
     const hermesPreferred = models.filter((m) => m.id.toLowerCase().includes("hermes"));
     const rest = models.filter((m) => !m.id.toLowerCase().includes("hermes"));
@@ -164,6 +281,11 @@ export function HermesAgentModal({
     });
   }, [models, statusData]);
 
+  const selectedModelInfo = useMemo(
+    () => orderedModels.find((m) => m.id === selectedModel),
+    [orderedModels, selectedModel],
+  );
+
   if (!isOpen) return null;
 
   const detectedMode = statusData?.mode || "local_autonomous";
@@ -173,6 +295,8 @@ export function HermesAgentModal({
       : detectedMode;
   const modeInfo = MODE_LABELS[effectiveMode] || MODE_LABELS.local_autonomous;
   const providerLabel = statusData?.provider === "openai_compatible" ? "LLM Compatible" : "OpenRouter";
+  const selectedPriceTag = formatModelPriceTag(selectedModelInfo);
+  const selectedContextTag = formatContextTokens(selectedModelInfo?.context_length);
 
   function toggleTool(toolId: HermesToolName) {
     setEnabledTools((prev) =>
@@ -187,10 +311,55 @@ export function HermesAgentModal({
     }
   }
 
+  function recordHistory(trimmedPrompt: string) {
+    const entry: HermesHistoryItem = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      prompt: trimmedPrompt,
+      model: selectedModel || undefined,
+      executionMode: enginePreference,
+      tools: [...enabledTools],
+      createdAt: Date.now(),
+    };
+    setHistory((prev) => {
+      const deduplicated = prev.filter((item) => item.prompt.trim() !== trimmedPrompt);
+      const next = [entry, ...deduplicated].slice(0, MAX_HERMES_HISTORY);
+      saveHermesHistory(next);
+      return next;
+    });
+  }
+
+  function applyHistoryItem(item: HermesHistoryItem) {
+    setPrompt(item.prompt);
+    if (item.tools?.length) {
+      setEnabledTools(item.tools);
+    }
+    if (item.executionMode) {
+      setEnginePreference(item.executionMode);
+    }
+    if (item.model && orderedModels.some((m) => m.id === item.model)) {
+      setSelectedModel(item.model);
+    }
+  }
+
+  function removeHistoryItem(id: string) {
+    setHistory((prev) => {
+      const next = prev.filter((item) => item.id !== id);
+      saveHermesHistory(next);
+      return next;
+    });
+  }
+
+  function clearHistory() {
+    setHistory([]);
+    saveHermesHistory([]);
+  }
+
   async function handleRun(event?: FormEvent) {
     event?.preventDefault();
     const trimmed = prompt.trim();
     if (!trimmed || running) return;
+
+    recordHistory(trimmed);
 
     abortRef.current?.abort();
     const controller = new AbortController();
@@ -312,18 +481,19 @@ export function HermesAgentModal({
   }
 
   return (
-    <div
-      className={styles.backdrop}
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="hermes-modal-title"
-      onClick={(e) => {
-        if (e.target === e.currentTarget && !running) onClose();
-      }}
-      onKeyDown={(e) => {
-        if (e.key === "Escape" && !running) onClose();
-      }}
-    >
+    <>
+      <div
+        className={styles.backdrop}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="hermes-modal-title"
+        onClick={(e) => {
+          if (e.target === e.currentTarget && !running) onClose();
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Escape" && !running && !modelModalOpen) onClose();
+        }}
+      >
       <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
         <header className={styles.header}>
           <div className={styles.headerLeft}>
@@ -408,19 +578,64 @@ export function HermesAgentModal({
               <div className={styles.sectionLabel}>
                 <span>Modèle ({providerLabel})</span>
               </div>
-              <select
-                className={styles.select}
-                value={selectedModel}
-                onChange={(e) => setSelectedModel(e.target.value)}
+              <button
+                type="button"
+                className={styles.modelTrigger}
+                onClick={() => setModelModalOpen(true)}
                 disabled={running}
-                aria-label="Modèle Hermes"
+                aria-label="Choisir le modèle Hermes (voir tous les modèles, prix, contexte, vision)"
+                title="Changer de modèle IA (voir tous les modèles, prix, contexte, vision)"
               >
-                {orderedModels.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.name}
-                  </option>
-                ))}
-              </select>
+                <span className={styles.modelTriggerTop}>
+                  <span className={styles.modelTriggerTitle}>
+                    {selectedModel && isFavorite(selectedModel) && (
+                      <Star size={12} fill="#f59e0b" color="#f59e0b" className={styles.modelStar} />
+                    )}
+                    <span className={styles.modelTriggerName}>
+                      {selectedModelInfo?.name || selectedModel || "Choisir un modèle"}
+                    </span>
+                  </span>
+                  <ChevronDown size={15} className={styles.modelTriggerChevron} />
+                </span>
+                {selectedModel && (
+                  <code className={styles.modelTriggerId}>{selectedModel}</code>
+                )}
+                <span className={styles.modelTriggerMeta}>
+                  {selectedModelInfo?.provider && (
+                    <span className={`${styles.modelPill} ${styles.modelPillProvider}`}>
+                      {selectedModelInfo.provider}
+                    </span>
+                  )}
+                  {selectedModelInfo?.vision && (
+                    <span className={`${styles.modelPill} ${styles.modelPillVision}`} title="Modèle multimodal avec vision">
+                      <Eye size={11} />
+                      <span>Vision</span>
+                    </span>
+                  )}
+                  {selectedModelInfo?.reasoning && (
+                    <span className={`${styles.modelPill} ${styles.modelPillReasoning}`} title="Modèle de raisonnement">
+                      <Brain size={11} />
+                      <span>Raisonnement</span>
+                    </span>
+                  )}
+                  {selectedContextTag && (
+                    <span className={`${styles.modelPill} ${styles.modelPillContext}`} title="Fenêtre de contexte">
+                      <Cpu size={11} />
+                      <span>{selectedContextTag}</span>
+                    </span>
+                  )}
+                  {selectedPriceTag && (
+                    <span
+                      className={`${styles.modelPill} ${
+                        selectedPriceTag === "Gratuit" ? styles.modelPillFree : styles.modelPillPrice
+                      }`}
+                      title="Tarif indicatif"
+                    >
+                      {selectedPriceTag}
+                    </span>
+                  )}
+                </span>
+              </button>
             </div>
 
             {statusData?.presets?.length ? (
@@ -444,6 +659,60 @@ export function HermesAgentModal({
                 </div>
               </div>
             ) : null}
+
+            {history.length > 0 && (
+              <div>
+                <div className={styles.sectionLabel}>
+                  <span className={styles.historyHeaderTitle}>
+                    <History size={12} />
+                    <span>Historique ({history.length}/{MAX_HERMES_HISTORY})</span>
+                  </span>
+                  <button
+                    type="button"
+                    className={styles.historyClearBtn}
+                    onClick={clearHistory}
+                    disabled={running}
+                    title="Vider l'historique"
+                  >
+                    <Trash2 size={11} />
+                    <span>Effacer</span>
+                  </button>
+                </div>
+                <div className={styles.historyList}>
+                  {history.map((item) => (
+                    <div key={item.id} className={styles.historyItemWrap}>
+                      <button
+                        type="button"
+                        className={styles.historyBtn}
+                        disabled={running}
+                        onClick={() => applyHistoryItem(item)}
+                        title={item.prompt}
+                      >
+                        <span className={styles.historyPrompt}>{item.prompt}</span>
+                        <span className={styles.historyMeta}>
+                          <span>{formatHistoryTime(item.createdAt)}</span>
+                          {item.model && (
+                            <span className={styles.historyModel}>
+                              {item.model.split("/").pop()}
+                            </span>
+                          )}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        className={styles.historyDeleteBtn}
+                        disabled={running}
+                        onClick={() => removeHistoryItem(item.id)}
+                        title="Supprimer de l'historique"
+                        aria-label="Supprimer cette demande de l'historique"
+                      >
+                        <X size={12} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             <div>
               <div className={styles.sectionLabel}>
@@ -740,6 +1009,19 @@ export function HermesAgentModal({
           </section>
         </div>
       </div>
-    </div>
+      </div>
+      {modelModalOpen && (
+        <ModelModal
+          currentModel={selectedModel}
+          models={orderedModels}
+          onSelectModel={(modelId) => {
+            setSelectedModel(modelId);
+            setModelModalOpen(false);
+          }}
+          onClose={() => setModelModalOpen(false)}
+          onRefreshModels={onRefreshModels}
+        />
+      )}
+    </>
   );
 }

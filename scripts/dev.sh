@@ -7,9 +7,10 @@ if [[ ! -x backend/.venv/bin/uvicorn || ! -d frontend/node_modules ]]; then
   exit 1
 fi
 if command -v docker >/dev/null 2>&1; then
-  # Libère les ports 8001/3001 si la stack Docker complète tournait, puis démarre DB + SearXNG + Hermes.
+  # Libère les ports 8001/3001 si la stack Docker complète tournait, puis démarre DB + SearXNG.
+  # clair-hermes est démarré après uvicorn + le pont MCP afin qu'il découvre les outils MCP cLAIr dès le boot.
   ./scripts/compose.sh stop clair-api clair-web >/dev/null 2>&1 || true
-  ./scripts/compose.sh up --detach --wait --wait-timeout 120 clair-db clair-searxng clair-hermes
+  ./scripts/compose.sh up --detach --wait --wait-timeout 120 clair-db clair-searxng
 fi
 web_host=127.0.0.1
 if [[ "${1:-}" == --lan ]]; then
@@ -31,12 +32,23 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 if command -v docker >/dev/null 2>&1; then
-  docker_gw="$(docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null || docker network inspect tchataiperso_default -f '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null || true)"
-  if [[ -n "$docker_gw" && "$docker_gw" != "127.0.0.1" ]]; then
+  bridge_gw="$(docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null || true)"
+  compose_gw="$(docker network inspect tchataiperso_default -f '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null || true)"
+  gateways=()
+  for gw in "$bridge_gw" "$compose_gw"; do
+    if [[ -n "$gw" && "$gw" != "127.0.0.1" ]]; then
+      seen=false
+      for existing in "${gateways[@]+"${gateways[@]}"}"; do
+        [[ "$existing" == "$gw" ]] && seen=true
+      done
+      [[ "$seen" == false ]] && gateways+=("$gw")
+    fi
+  done
+  if [[ ${#gateways[@]} -gt 0 ]]; then
     (
       exec "$repo_dir/backend/.venv/bin/python" -c "
 import asyncio, sys
-gw = sys.argv[1]
+gateways = sys.argv[1:]
 async def pipe(r, w):
     try:
         while chunk := await r.read(65536):
@@ -54,11 +66,10 @@ async def handle(cr, cw):
         return
     await asyncio.gather(pipe(cr, sw), pipe(sr, cw))
 async def main():
-    srv = await asyncio.start_server(handle, gw, 8001)
-    async with srv:
-        await srv.serve_forever()
+    servers = [await asyncio.start_server(handle, gw, 8001) for gw in gateways]
+    await asyncio.gather(*(srv.serve_forever() for srv in servers))
 asyncio.run(main())
-" "$docker_gw"
+" "${gateways[@]}"
     ) &
     mcp_bridge_pid=$!
   fi
@@ -68,6 +79,20 @@ fi
   exec .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8001 --reload --env-file "$repo_dir/.env"
 ) &
 backend_pid=$!
+if command -v docker >/dev/null 2>&1; then
+  "$repo_dir/backend/.venv/bin/python" -c "
+import time, urllib.request
+for _ in range(60):
+    try:
+        with urllib.request.urlopen('http://127.0.0.1:8001/api/health', timeout=1) as r:
+            if r.status == 200:
+                break
+    except Exception:
+        time.sleep(0.5)
+"
+  CLAIR_MCP_URL="http://host.docker.internal:8001/api/hermes/mcp" \
+    ./scripts/compose.sh up --detach --force-recreate --wait --wait-timeout 120 clair-hermes
+fi
 (
   cd frontend
   export BACKEND_URL=http://127.0.0.1:8001

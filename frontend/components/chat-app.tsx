@@ -3682,6 +3682,7 @@ export function ChatApp() {
         models={config?.models ?? []}
         currentModel={model}
         initialPrompt={draft.trim()}
+        onRefreshModels={refreshModels}
         onInsertIntoChat={(text) => {
           setDraft((prev) => (prev ? `${prev}\n\n${text}` : text));
           textareaRef.current?.focus();
