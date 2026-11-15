@@ -177,29 +177,299 @@ CLAIR_PAGE_RUNTIME_JS = """
   // 4. Désactivation du bouton de bascule de thème dans clAIr pages
   // (Le changement de thème est désactivé pour éviter les incompatibilités de rendu)
 
-  // 5. Nettoyer les éléments de navigation cachés à tort (.tabs[hidden])
+  // 5. Nettoyer les éléments de navigation cachés à tort (.tabs[hidden]) et calibrer les fiches A4
+  function fitA4Sheets() {
+    try {
+      var body = document.body;
+      if (!body) return;
+      var mode = body.getAttribute('data-a4-mode');
+      var sheets = Array.prototype.slice.call(document.querySelectorAll('.a4-sheet'));
+      if (!mode && sheets.length === 0) return;
+      mode = mode || (sheets.length >= 2 ? '2p' : '1p');
+
+      // Copier le fond du body sur la feuille A4 s'il n'est pas déjà défini sur .a4-sheet
+      var bodyStyle = window.getComputedStyle(body);
+      var bodyBg = bodyStyle.backgroundColor;
+      var bodyBgImg = bodyStyle.backgroundImage;
+
+      // Si le LLM n'a pas créé de .a4-sheet, encapsuler le contenu principal automatiquement
+      if (sheets.length === 0) {
+        var wrapper = document.createElement('div');
+        wrapper.className = 'a4-sheet';
+        var children = Array.prototype.slice.call(body.childNodes);
+        children.forEach(function(ch) {
+          if (ch.nodeType === 1) {
+            var tag = ch.tagName ? ch.tagName.toUpperCase() : '';
+            if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'LINK') return;
+            if (ch.classList && ch.classList.contains('no-print') && ch.classList.contains('a4-floating-toolbar')) return;
+          }
+          wrapper.appendChild(ch);
+        });
+        body.insertBefore(wrapper, body.firstChild);
+        sheets = [wrapper];
+      }
+
+      // En mode 1 page stricte, fusionner tout débordement dans une unique .a4-sheet
+      if (mode === '1p' && sheets.length > 1) {
+        var primary = sheets[0];
+        for (var i = 1; i < sheets.length; i++) {
+          while (sheets[i].firstChild) {
+            primary.appendChild(sheets[i].firstChild);
+          }
+          if (sheets[i].parentNode) sheets[i].parentNode.removeChild(sheets[i]);
+        }
+        sheets = [primary];
+      }
+
+      // En mode recto-verso (2p), plafonner strictement à 2 feuilles .a4-sheet
+      if (mode === '2p' && sheets.length > 2) {
+        var second = sheets[1];
+        for (var j = 2; j < sheets.length; j++) {
+          while (sheets[j].firstChild) {
+            second.appendChild(sheets[j].firstChild);
+          }
+          if (sheets[j].parentNode) sheets[j].parentNode.removeChild(sheets[j]);
+        }
+        sheets = [sheets[0], second];
+      }
+
+      sheets.forEach(function(sheet) {
+        // Préserver le thème de fond sur la feuille avant le cadrage bureau de body
+        var sStyle = window.getComputedStyle(sheet);
+        var hasSheetBg = (sStyle.backgroundColor && sStyle.backgroundColor !== 'rgba(0, 0, 0, 0)' && sStyle.backgroundColor !== 'transparent') ||
+                         (sStyle.backgroundImage && sStyle.backgroundImage !== 'none');
+        if (!hasSheetBg) {
+          if (bodyBgImg && bodyBgImg !== 'none') {
+            sheet.style.backgroundImage = bodyBgImg;
+          }
+          if (bodyBg && bodyBg !== 'rgba(0, 0, 0, 0)' && bodyBg !== 'transparent') {
+            sheet.style.backgroundColor = bodyBg;
+          } else {
+            sheet.style.backgroundColor = '#ffffff';
+          }
+        }
+
+        // Assurer la présence d'un conteneur interne mesurable (.a4-sheet-inner)
+        var inner = sheet.querySelector(':scope > .a4-sheet-inner');
+        if (!inner) {
+          inner = document.createElement('div');
+          inner.className = 'a4-sheet-inner';
+          while (sheet.firstChild) {
+            inner.appendChild(sheet.firstChild);
+          }
+          sheet.appendChild(inner);
+        }
+
+        // Réinitialiser avant mesure
+        inner.style.transform = '';
+        inner.style.transformOrigin = '';
+        inner.style.width = '';
+        sheet.style.fontSize = '';
+        sheet.style.padding = '';
+
+        var cs = window.getComputedStyle(sheet);
+        var padTop = parseFloat(cs.paddingTop) || 0;
+        var padBottom = parseFloat(cs.paddingBottom) || 0;
+        var padLeft = parseFloat(cs.paddingLeft) || 0;
+        var padRight = parseFloat(cs.paddingRight) || 0;
+        var availH = sheet.clientHeight - padTop - padBottom;
+        var availW = sheet.clientWidth - padLeft - padRight;
+        if (availH <= 100 || availW <= 100) return;
+
+        // Étape A : compression typographique douce si léger débordement
+        var steps = [
+          { font: '92%', pad: '7mm 9mm' },
+          { font: '85%', pad: '6mm 8mm' },
+          { font: '78%', pad: '5.5mm 7mm' }
+        ];
+        for (var k = 0; k < steps.length; k++) {
+          if (inner.scrollHeight <= availH && inner.scrollWidth <= availW) break;
+          sheet.style.fontSize = steps[k].font;
+          sheet.style.padding = steps[k].pad;
+          cs = window.getComputedStyle(sheet);
+          availH = sheet.clientHeight - (parseFloat(cs.paddingTop) || 0) - (parseFloat(cs.paddingBottom) || 0);
+          availW = sheet.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0);
+        }
+
+        // Étape B : mise à l'échelle géométrique exacte si le contenu dépasse encore
+        var curH = inner.scrollHeight;
+        var curW = inner.scrollWidth;
+        if (curH > availH || curW > availW) {
+          var ratioH = curH > availH ? (availH - 2) / curH : 1;
+          var ratioW = curW > availW ? (availW - 2) / curW : 1;
+          var ratio = Math.max(0.42, Math.min(ratioH, ratioW));
+          inner.style.transformOrigin = 'top left';
+          inner.style.transform = 'scale(' + ratio.toFixed(4) + ')';
+          inner.style.width = (100 / ratio).toFixed(3) + '%';
+        }
+      });
+
+      body.classList.add('clair-a4-desk');
+    } catch (err) {}
+  }
+
+  window.__clairFitA4 = fitA4Sheets;
+
   function initDoc() {
     document.querySelectorAll('.tabs[hidden], nav[hidden]').forEach(function(el) {
       el.removeAttribute('hidden');
     });
+    fitA4Sheets();
   }
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', initDoc);
   } else {
     initDoc();
   }
+  window.addEventListener('load', fitA4Sheets);
+  window.addEventListener('beforeprint', fitA4Sheets);
+  if (document.fonts && document.fonts.ready) {
+    document.fonts.ready.then(fitA4Sheets).catch(function(){});
+  }
 })();
 """
 
+_A4_LAYOUT_STYLES = {"print_sheet", "a4_1p", "a4_2p", "cheat_sheet"}
 
 
-def sanitize_and_enhance_html(html_code: str, *, title: str = "") -> str:
+def _build_a4_enforcer_css(orientation: str) -> str:
+    is_landscape = orientation == "landscape"
+    page_w = "297mm" if is_landscape else "210mm"
+    page_h = "210mm" if is_landscape else "297mm"
+    page_size = "A4 landscape" if is_landscape else "A4 portrait"
+    return f"""<style id="clair-a4-enforcer-css">
+@page {{
+  size: {page_size};
+  margin: 0;
+}}
+:root {{
+  --a4-w: {page_w};
+  --a4-h: {page_h};
+  --a4-pad: 8mm 10mm;
+}}
+body[data-a4-mode],
+body.clair-a4-desk {{
+  margin: 0 !important;
+  padding: 14px 10px !important;
+  max-width: none !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}}
+body.clair-a4-desk {{
+  background-color: #e2e8f0 !important;
+  background-image: none !important;
+}}
+.a4-sheet {{
+  width: var(--a4-w);
+  height: var(--a4-h);
+  min-height: var(--a4-h);
+  max-height: var(--a4-h);
+  padding: var(--a4-pad);
+  box-sizing: border-box;
+  overflow: hidden;
+  position: relative;
+  border-radius: 4px;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.18);
+  page-break-after: always;
+  break-after: page;
+  flex-shrink: 0;
+}}
+.a4-sheet:last-of-type {{
+  page-break-after: auto;
+  break-after: auto;
+}}
+.a4-sheet-inner {{
+  width: 100%;
+  box-sizing: border-box;
+}}
+@media print {{
+  html, body, body[data-a4-mode], body.clair-a4-desk {{
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    background-image: none !important;
+    display: block !important;
+    width: {page_w} !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }}
+  .no-print {{
+    display: none !important;
+  }}
+  .a4-sheet {{
+    margin: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    border: none !important;
+    width: {page_w} !important;
+    height: {page_h} !important;
+    max-height: {page_h} !important;
+    overflow: hidden !important;
+  }}
+}}
+</style>"""
+
+
+def inject_a4_sheet_enforcer(
+    html_code: str,
+    layout_style: str = "auto",
+    orientation: str = "portrait",
+) -> str:
+    """
+    Injecte la géométrie physique A4 stricte (210x297mm ou 297x210mm) et les attributs
+    `data-a4-mode` / `data-a4-orientation` sur <body> lorsque le document est une fiche A4.
+    """
+    is_a4 = layout_style in _A4_LAYOUT_STYLES or "a4-sheet" in html_code or "data-a4-mode" in html_code
+    if not is_a4:
+        return html_code
+
+    resolved_orientation = "landscape" if (layout_style == "cheat_sheet" or orientation == "landscape") else "portrait"
+    if 'data-a4-orientation="landscape"' in html_code and layout_style == "auto":
+        resolved_orientation = "landscape"
+
+    resolved_mode = "2p" if (layout_style == "a4_2p" or 'data-a4-mode="2p"' in html_code) else "1p"
+
+    code = html_code
+    # S'assurer que <body> porte data-a4-mode et data-a4-orientation
+    if "data-a4-mode=" not in code:
+        code = re.sub(
+            r"<body\b([^>]*)>",
+            rf'<body\1 data-a4-mode="{resolved_mode}" data-a4-orientation="{resolved_orientation}">',
+            code,
+            count=1,
+            flags=re.I,
+        )
+
+    if "clair-a4-enforcer-css" not in code:
+        a4_css = _build_a4_enforcer_css(resolved_orientation)
+        if "</head>" in code:
+            code = code.replace("</head>", f"\n{a4_css}\n</head>", 1)
+        elif "<body" in code:
+            code = re.sub(r"(<body\b[^>]*>)", f"{a4_css}\n\\1", code, count=1, flags=re.I)
+        else:
+            code = f"{a4_css}\n{code}"
+
+    return code
+
+
+def sanitize_and_enhance_html(
+    html_code: str,
+    *,
+    title: str = "",
+    layout_style: str = "auto",
+    orientation: str = "portrait",
+) -> str:
     """
     Garantit la complétude structurelle, la sécurité des liens et le runtime d'interactivité.
     - Ferme les balises tronquées (script, body, html).
     - Ajoute target="_blank" et rel="noopener noreferrer" sur tous les liens externes.
     - Rend visibles les barres d'onglets masquées par défaut.
-    - Injecte CLAIR_PAGE_RUNTIME_JS pour assurer la navigation et les onglets.
+    - Injecte le gabarit physique A4 si la page est une fiche A4.
+    - Injecte CLAIR_PAGE_RUNTIME_JS pour assurer la navigation, les onglets et l'auto-fit A4.
     """
     code = html_code.strip()
     if not code:
@@ -248,7 +518,10 @@ def sanitize_and_enhance_html(html_code: str, *, title: str = "") -> str:
         flags=re.I | re.DOTALL,
     )
 
-    # 5. Injecter le script runtime universel
+    # 5. Injecter le gabarit physique A4 si la page est au format A4 strict
+    code = inject_a4_sheet_enforcer(code, layout_style=layout_style, orientation=orientation)
+
+    # 6. Injecter le script runtime universel
     if "__clair_runtime_installed__" not in code:
         runtime_tag = f"\n<script>\n{CLAIR_PAGE_RUNTIME_JS.strip()}\n</script>\n"
         if "</body>" in code:

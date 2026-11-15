@@ -27,10 +27,11 @@ function getCreativityPalette(c: number) {
 }
 
 function getCreativityLevelLabel(c: number): string {
-  if (c <= 0.2) return "Précis & factuel";
-  if (c <= 0.45) return "Équilibré";
-  if (c <= 0.75) return "Créatif";
-  return "Audacieux";
+  if (c <= 0.05) return "Strict (sans souvenirs)";
+  if (c <= 0.25) return "Précis & factuel";
+  if (c <= 0.55) return "Équilibré";
+  if (c <= 0.8) return "Créatif";
+  return "Audacieux (souvenirs max)";
 }
 
 function polarToCartesian(cx: number, cy: number, r: number, angleDeg: number) {

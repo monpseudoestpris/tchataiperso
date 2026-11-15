@@ -197,11 +197,12 @@ export const CREATIVITY_PARAMETER_DEFS: ParameterMeta[] = [
 ];
 
 export const CREATIVITY_PRESETS = [
-  { label: "Auto", value: null, desc: "Par défaut" },
-  { label: "Précis", value: 0.1, desc: "Factuel & rigoureux" },
-  { label: "Équilibré", value: 0.4, desc: "Naturel & nuancé" },
-  { label: "Créatif", value: 0.7, desc: "Riche & expressif" },
-  { label: "Audacieux", value: 0.95, desc: "Brainstorming & hypothèses originales" },
+  { label: "Auto", value: null, desc: "Par défaut (souvenirs modérés)" },
+  { label: "Strict 0%", value: 0.0, desc: "Réponse stricte à la question, sans souvenirs" },
+  { label: "Précis", value: 0.1, desc: "Factuel & rigoureux (souvenirs minimaux)" },
+  { label: "Équilibré", value: 0.4, desc: "Naturel & nuancé (souvenirs pertinents)" },
+  { label: "Créatif", value: 0.7, desc: "Riche & expressif (mobilisation active des souvenirs)" },
+  { label: "Audacieux", value: 0.95, desc: "Brainstorming & mobilisation maximale des souvenirs utiles" },
 ];
 
 export function computeAutoParamsFromCreativity(
@@ -547,15 +548,9 @@ export function CreativityControl({
           marginTop: "4px",
         }}
       >
-        {hasTemperatureSupport ? (
-          <span>
-            Quel que soit le modèle, la consigne écrite est injectée dans le prompt (en plus des paramètres supportés comme <code>temperature</code>), sans jamais inventer de faits.
-          </span>
-        ) : (
-          <span>
-            Ce modèle n&apos;expose pas de contrôle direct de l&apos;aléatoire (<code>temperature</code>) : le curseur injecte la consigne écrite dans le prompt (exploration d&apos;hypothèses originales sans jamais inventer de faits).
-          </span>
-        )}
+        <span>
+          <strong>Impact sur les souvenirs :</strong> à 0 %, réponse stricte à la question posée sans mobiliser les souvenirs ; plus le niveau s&apos;élève, plus les souvenirs sont exploités pour enrichir la réponse et proposer des pistes personnalisées.
+        </span>
       </div>
 
       {/* Summary of active parameters for the model */}

@@ -740,6 +740,11 @@ def test_tool_registry_adapters_validation_and_permissions(tmp_path):
     assert res_invalid.success is False
     assert "Arguments invalides" in (res_invalid.error or "")
 
+    # Vérification du timeout porté à 180s pour laisser le temps à la génération de pages complexes
+    tool_def = CLAIR_TOOL_REGISTRY.get("clair_create_page")
+    assert tool_def is not None
+    assert tool_def.timeout_seconds == 180.0
+
 
 def test_clair_create_page_local_autonomous_and_engine_failure(tmp_path, monkeypatch):
     """Vérifie clair_create_page via local_autonomous (brouillon uniquement) et gestion d'échec Pages."""
@@ -961,6 +966,41 @@ def test_hermes_mcp_adapter_gateway_draft_and_permissions(tmp_path, monkeypatch)
             pages = db.scalars(select(WebPage)).all()
             assert len(pages) == 1
             assert pages[0].is_published is False
+
+        # 5. Création directe avec html_content pré-généré (sans passer par generate_page_html)
+        lease_html = register_gateway_mission_lease("sess-html", user.id, {PERMISSION_CREATE_PAGE_DRAFT})
+        raw_html = "<!doctype html><html><head><title>Fiche A4 Pré-calibrée</title></head><body><div class='a4-sheet'>Contenu A4</div></body></html>"
+        call_direct = client.post(
+            "/api/hermes/mcp",
+            headers={**auth_headers},
+            json={
+                "jsonrpc": "2.0",
+                "id": 6,
+                "method": "tools/call",
+                "params": {
+                    "_meta": {"session_id": "sess-html", "mission_token": lease_html.mission_token},
+                    "name": "clair_create_page",
+                    "arguments": {
+                        "title": "Fiche Figures A4",
+                        "content": "Résumé de la fiche",
+                        "html_content": raw_html,
+                        "layout_style": "a4_1p",
+                    },
+                },
+            },
+        )
+        assert call_direct.status_code == 200
+        res_direct = call_direct.json()["result"]
+        assert res_direct["isError"] is False
+        assert res_direct["structuredContent"]["success"] is True
+
+        with client.app.state.sessions() as db:
+            pages = db.scalars(select(WebPage).order_by(WebPage.id.desc())).all()
+            assert len(pages) == 2
+            assert pages[0].title == "Fiche Figures A4"
+            assert "a4-sheet" in pages[0].versions[0].html_content
+
+        unregister_gateway_mission_lease("sess-html")
 
 
 def test_hermes_mcp_isolation_multi_users_and_origin_boundary(tmp_path, monkeypatch):

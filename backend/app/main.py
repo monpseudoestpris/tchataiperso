@@ -109,6 +109,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 text("UPDATE users SET system_prompt = :prompt WHERE system_prompt = '' OR system_prompt IS NULL"),
                 {"prompt": BASE_USER_PROMPT},
             )
+            # Remplacement de l'ancienne consigne interdisant les questions finales automatiques
+            conn.execute(
+                text(
+                    "UPDATE users SET system_prompt = REPLACE("
+                    "system_prompt, "
+                    "'Évite les répétitions, introductions artificielles et questions finales automatiques.', "
+                    "'Évite les répétitions et les introductions artificielles. À la fin de chaque réponse, propose 2 à 3 questions connexes pertinentes pour continuer la discussion.'"
+                    ") WHERE system_prompt LIKE '%questions finales automatiques%'"
+                )
+            )
         if "generated_sounds" in inspector.get_table_names():
             sound_columns = {column["name"] for column in inspector.get_columns("generated_sounds")}
             with engine.begin() as conn:

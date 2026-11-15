@@ -7,6 +7,8 @@ services:
       SEARXNG_SECRET: ${SEARXNG_SECRET:?Exécutez ./scripts/install.sh ou configurez .env}
     volumes:
       - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    ports:
+      - "127.0.0.1:8080:8080"
     restart: unless-stopped
 
   clair-db:

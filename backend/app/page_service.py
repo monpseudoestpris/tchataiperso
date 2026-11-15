@@ -15,7 +15,8 @@ from sqlalchemy.orm import sessionmaker
 
 from .config import Settings
 from .models import Conversation, WebPage, WebPageVersion, now
-from .page_generator import generate_page_html, slugify
+from .page_generator import extract_title_from_html, generate_page_html, slugify
+from .page_runtime import sanitize_and_enhance_html
 from .serializers import web_page_json
 
 
@@ -45,6 +46,7 @@ async def create_draft_web_page(
     font_family: str = "sans",
     text_effects: list[str] | str | None = None,
     selected_topics: list[dict[str, Any]] | None = None,
+    html_content: str | None = None,
 ) -> dict[str, Any]:
     """Génère et enregistre une nouvelle page Web cLAIr strictement en brouillon."""
     with sessions() as db:
@@ -88,30 +90,41 @@ async def create_draft_web_page(
 
     resolved_effects = [text_effects] if isinstance(text_effects, str) and text_effects != "none" else (text_effects or [])
 
-    resolved_title, html_content = await generate_page_html(
-        settings=settings,
-        prompt=prompt,
-        chat_transcript=chat_transcript,
-        title=fallback_title,
-        model=selected_model,
-        page_type=page_type,
-        target_audience=target_audience,
-        author_persona=author_persona,
-        visual_description=visual_description,
-        creative_freedom=creative_freedom,
-        orientation=orientation,
-        layout_style=layout_style,
-        text_density=resolved_density,
-        interactivity=interactivity,
-        include_quiz=include_quiz,
-        include_svg=include_svg,
-        theme_palette=theme_palette,
-        visual_style=visual_style,
-        animation_engine=animation_engine,
-        font_family=font_family,
-        text_effects=resolved_effects,
-        selected_topics=selected_topics,
-    )
+    if html_content and html_content.strip():
+        resolved_title = (
+            fallback_title or extract_title_from_html(html_content, fallback="Brouillon cLAIr Page")
+        ).strip()
+        final_html = sanitize_and_enhance_html(
+            html_content.strip(),
+            title=resolved_title,
+            layout_style=layout_style,
+            orientation=orientation,
+        )
+    else:
+        resolved_title, final_html = await generate_page_html(
+            settings=settings,
+            prompt=prompt,
+            chat_transcript=chat_transcript,
+            title=fallback_title,
+            model=selected_model,
+            page_type=page_type,
+            target_audience=target_audience,
+            author_persona=author_persona,
+            visual_description=visual_description,
+            creative_freedom=creative_freedom,
+            orientation=orientation,
+            layout_style=layout_style,
+            text_density=resolved_density,
+            interactivity=interactivity,
+            include_quiz=include_quiz,
+            include_svg=include_svg,
+            theme_palette=theme_palette,
+            visual_style=visual_style,
+            animation_engine=animation_engine,
+            font_family=font_family,
+            text_effects=resolved_effects,
+            selected_topics=selected_topics,
+        )
 
     clean_slug = slugify(resolved_title)
 
@@ -129,7 +142,7 @@ async def create_draft_web_page(
             page_id=page.id,
             version_number=1,
             prompt_used=prompt or "Création initiale",
-            html_content=html_content,
+            html_content=final_html,
         )
         db.add(version)
         page.updated_at = now()

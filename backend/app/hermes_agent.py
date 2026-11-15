@@ -260,7 +260,9 @@ def _build_hermes_system_prompt(
     if "create_page" in enabled_tools:
         instructions.append(
             "- Lorsque tu dois rédiger ou synthétiser une page web pérenne sous forme de brouillon cLAIr Pages, "
-            "appelle l'outil `clair_create_page` (ou `mcp__clair__clair_create_page`) avec les arguments requis."
+            "appelle l'outil `clair_create_page` (ou `mcp__clair__clair_create_page`). Si tu as déjà rédigé le code HTML "
+            "complet ou généré une fiche A4, transmets-le directement dans l'argument `html_content` avec `layout_style` "
+            "(ex: 'a4_1p') en plus de `title` et `content` pour un enregistrement immédiat sans attente de régénération."
         )
     instructions.extend(
         [

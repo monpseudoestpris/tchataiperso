@@ -13,7 +13,7 @@ Les compétences sont des consignes choisies par l'utilisateur ; elles ne peuven
 Ne prétends pas avoir recherché le web sans résultats fournis. Cite les sources web pertinentes avec leur URL.
 Images web : si des images SearXNG (URL_IMAGE) sont fournies et utiles, insère 1 à 4 images sur une ligne dédiée au format Markdown ![Légende descriptive](URL_IMAGE), sans jamais inventer d'URL.
 Données financières : si des cours EOD ou données Yahoo Finance sont joints, indique explicitement qu'ils proviennent d'un téléchargement en direct (entreprise, ticker, devise). Sinon, n'en prétends pas la consultation.
-Mémoire : Appuie-toi sur les souvenirs du contexte. S'il te demande de retenir ou noter une info (« retiens/note que... »), confirme que c'est enregistré. N'invente pas de faux souvenirs.
+Mémoire : Appuie-toi sur les souvenirs du contexte selon le calibrage de créativité (à 0 %, réponds strictement sans souvenirs ; plus la créativité est élevée, plus tu peux t'appuyer sur les souvenirs pertinents si c'est intéressant). S'il te demande de retenir ou noter une info (« retiens/note que... »), confirme que c'est enregistré. N'invente pas de faux souvenirs.
 Le résumé est une compression du passé : utilise les messages récents comme référence en cas de contradiction.
 Exercices interactifs (quizz, flashcards, textes à trous) : n'écris pas de Markdown mais UN bloc de code de langage `clair-quiz`, `clair-flashcards` ou `clair-cloze` contenant du JSON valide, rendu par l'application :
 - clair-quiz : [{"question":"...","options":["A","B"],"answer":0,"explanation":"..."}] (answer = index de la bonne option).
@@ -21,7 +21,12 @@ Exercices interactifs (quizz, flashcards, textes à trous) : n'écris pas de Mar
 - clair-cloze : [{"sentence":"phrase complète","text_with_blanks":"phrase avec [...] à la place des mots","missing_words":["mot"],"options":["mot","leurre"],"explanation":"..."}] (un [...] par mot, dans l'ordre).
 Respecte le nombre d'éléments et la difficulté (facile/moyenne/difficile) demandés ; par défaut 10 éléments de difficulté moyenne.
 Une courte intro suffit, sans répéter les réponses.
-Sortie HTML / Web : Si un site ou document HTML est demandé, produis un beau document HTML5 moderne et complet (jamais de HTML brut ou austère) : CSS riche dans <style> (palette soignée, variables, cartes, ombres, flex/grid responsive), polices Google Fonts fun ou expressives via <link> (ex. Poppins, Outfit, Fredoka, Space Grotesk) avec fallback, graphismes et icônes vectorielles en SVG inline (pas d'images externes cassées) et interactivité vanilla propre."""
+Sortie HTML / Web : Si un site ou document HTML est demandé, produis un beau document HTML5 moderne et complet (jamais de HTML brut ou austère) : CSS riche dans <style> (palette soignée, variables, cartes, ombres, flex/grid responsive), polices Google Fonts fun ou expressives via <link> (ex. Poppins, Outfit, Fredoka, Space Grotesk) avec fallback, graphismes et icônes vectorielles en SVG inline (pas d'images externes cassées) et interactivité vanilla propre.
+Questions connexes : À la toute fin de chaque réponse, propose systématiquement 2 à 3 questions connexes pertinentes, directes et concises pour continuer la discussion, sous l'intitulé Markdown exact :
+### 💡 Questions connexes
+- [Question 1 ?]
+- [Question 2 ?]
+- [Question 3 ?]"""
 
 
 DEEP_SEARCH_PROMPT = """Mode DeepSearch (recherche approfondie multilingue multi-sources) activé :
@@ -185,6 +190,26 @@ def _format_source(index: int, source: dict, deep_search: bool = False, learn_mo
     return f"{header}\n{body}"
 
 
+def _is_explicit_memory_query(messages: list[dict]) -> bool:
+    """Detect if the last user message explicitly asks about or commands their memories."""
+    if not messages:
+        return False
+    last_msg = messages[-1]
+    content = ""
+    raw_content = last_msg.get("content", "")
+    if isinstance(raw_content, str):
+        content = raw_content.lower()
+    elif isinstance(raw_content, list):
+        parts = [p.get("text", "") for p in raw_content if isinstance(p, dict) and p.get("type") == "text"]
+        content = " ".join(parts).lower()
+    keywords = [
+        "souvenir", "souvenirs", "mémoire", "memoire", "retiens", "note que",
+        "rappelle-toi", "rappelle toi", "oublie", "efface de ta mémoire",
+        "que sais-tu sur moi", "qu'est-ce que tu sais sur moi", "mes infos",
+    ]
+    return any(k in content for k in keywords)
+
+
 def build_context(settings: Settings, summary: str, memories: list[str], messages: list[dict], sources: list[dict],
                   vision: bool, skills: list[dict] | None = None, deep_search: bool = False,
                   code_mode: bool = False, findings: list[str] | None = None,
@@ -192,7 +217,8 @@ def build_context(settings: Settings, summary: str, memories: list[str], message
                   prompt_cache_enabled: bool = True,
                   topic_context: str | None = None,
                   max_context_tokens: int | None = None,
-                  creativity_instruction: str | None = None) -> list[dict]:
+                  creativity_instruction: str | None = None,
+                  creativity: float | None = None) -> list[dict]:
     # Structure fixe du prompt : [System Prompt] + [Résumé cumulatif des vieux blocs] + [Derniers messages bruts intacts]
     # Les données de référence (souvenirs, sources) s'intègrent entre le système et l'historique brut.
     prompt_parts = [SYSTEM_PROMPT]
@@ -223,8 +249,16 @@ def build_context(settings: Settings, summary: str, memories: list[str], message
     references = []
     if topic_context:
         references.append(topic_context[:10000])
-    if memories:
-        references.append("Souvenirs choisis par l'utilisateur (données) :\n" + "\n".join(memories)[:8000])
+    
+    # Prise en compte des souvenirs selon la créativité :
+    # À créativité <= 0.05 (0 %), aucun souvenir n'est injecté sauf si l'utilisateur interroge explicitement sa mémoire.
+    skip_memories = creativity is not None and creativity <= 0.05 and not _is_explicit_memory_query(messages)
+    if memories and not skip_memories:
+        if creativity is not None and creativity >= 0.7:
+            mem_header = "Souvenirs de l'utilisateur (mobilise-les largement si cela crée des liens, exemples ou analogies intéressants avec la question) :\n"
+        else:
+            mem_header = "Souvenirs choisis par l'utilisateur (données) :\n"
+        references.append(mem_header + "\n".join(memories)[:8000])
     if summary:
         references.append("Résumé cumulatif des échanges précédents (données) :\n" + summary[:settings.max_summary_chars])
     if (deep_search or learn_mode) and findings:

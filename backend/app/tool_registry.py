@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from fastapi import HTTPException
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from sqlalchemy.orm import sessionmaker
 
 from . import providers
@@ -57,9 +57,19 @@ class ClairCreatePageInput(BaseModel):
 
     title: str = Field(min_length=2, max_length=200, description="Titre clair de la page Web brouillon.")
     content: str = Field(
-        min_length=10,
-        max_length=12000,
-        description="Contenu structuré (Markdown ou plan détaillé) à transformer en page cLAIr.",
+        default="",
+        max_length=60000,
+        description="Contenu structuré (Markdown ou plan détaillé) à transformer en page cLAIr, ou descriptif si html_content est fourni.",
+    )
+    html_content: str | None = Field(
+        default=None,
+        max_length=500000,
+        description="Code HTML complet pré-généré de la page. Si fourni, il est directement sauvegardé en brouillon sans régénération LLM.",
+    )
+    layout_style: str = Field(
+        default="auto",
+        max_length=40,
+        description="Gabarit : auto, a4_1p, a4_2p, cheat_sheet, editorial, tabs, single_page.",
     )
     sources: list[ClairPageSourceInput | str] = Field(
         default_factory=list,
@@ -72,13 +82,21 @@ class ClairCreatePageInput(BaseModel):
         description="Style éditorial : educational, landing, documentation, dashboard.",
     )
 
-    @field_validator("title", "content")
+    @field_validator("title")
     @classmethod
     def not_blank(cls, value: str) -> str:
         cleaned = value.strip()
         if not cleaned:
-            raise ValueError("Le champ ne peut pas être vide.")
+            raise ValueError("Le titre ne peut pas être vide.")
         return cleaned
+
+    @model_validator(mode="after")
+    def check_content_or_html(self) -> ClairCreatePageInput:
+        has_content = bool(self.content and len(self.content.strip()) >= 10)
+        has_html = bool(self.html_content and len(self.html_content.strip()) >= 10)
+        if not has_content and not has_html:
+            raise ValueError("Au moins l'un des deux champs `content` (>= 10 car.) ou `html_content` (>= 10 car.) doit être fourni.")
+        return self
 
     @field_validator("page_type")
     @classmethod
@@ -249,7 +267,7 @@ async def _handle_clair_create_page(args: BaseModel, ctx: ToolExecutionContext) 
         f"Crée une page Web cLAIr structurée et soignée intitulée « {args.title} ».",
         "",
         "## Contenu structuré à mettre en page",
-        args.content,
+        args.content or "Contenu HTML fourni directement.",
     ]
     if sources_block:
         prompt_parts.extend(["", sources_block])
@@ -263,6 +281,8 @@ async def _handle_clair_create_page(args: BaseModel, ctx: ToolExecutionContext) 
         title=args.title,
         model=ctx.model,
         page_type=args.page_type,
+        layout_style=args.layout_style,
+        html_content=args.html_content,
     )
 
     draft_summary = {
@@ -298,12 +318,12 @@ CLAIR_TOOL_REGISTRY.register(
         name="clair_create_page",
         description=(
             "Crée un NOUVEAU brouillon de page Web dans cLAIr Pages (jamais publié automatiquement, "
-            "n'écrase aucune page existante). À utiliser uniquement lorsque l'utilisateur demande "
-            "ou autorise la création d'une page Web structurée."
+            "n'écrase aucune page existante). Accepte `content` pour génération assistée par IA, "
+            "ou directement `html_content` si le code HTML a déjà été rédigé/calibré."
         ),
         input_schema=ClairCreatePageInput,
         required_permission=PERMISSION_CREATE_PAGE_DRAFT,
-        timeout_seconds=90.0,
+        timeout_seconds=180.0,
         handler=_handle_clair_create_page,
     )
 )

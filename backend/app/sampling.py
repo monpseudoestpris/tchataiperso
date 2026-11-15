@@ -458,6 +458,34 @@ def build_creativity_instruction(
             "marquantes et des solutions hors des sentiers battus."
         )
 
+    if c <= 0.05:
+        memory_guidance = (
+            "- Prise en compte des souvenirs (0 % — Désactivée) : réponds strictement et uniquement à la question posée. "
+            "N'utilise aucun souvenir de l'utilisateur pour personnaliser, orienter ou illustrer ta réponse (sauf si l'utilisateur "
+            "t'interroge explicitement sur sa mémoire)."
+        )
+    elif c <= 0.25:
+        memory_guidance = (
+            "- Prise en compte des souvenirs (Minimale & Fonctionnelle) : reste centré sur la question. "
+            "N'utilise un souvenir que s'il est directement indispensable pour lever une ambiguïté ou respecter une contrainte explicite."
+        )
+    elif c <= 0.55:
+        memory_guidance = (
+            "- Prise en compte des souvenirs (Modérée & Pertinente) : réponds d'abord à la question et adapte subtilement "
+            "tes exemples ou ton niveau au contexte connu de l'utilisateur lorsque cela éclaire directement le sujet."
+        )
+    elif c <= 0.80:
+        memory_guidance = (
+            "- Prise en compte des souvenirs (Active & Associative) : n'hésite pas à tisser des liens pertinents avec les projets, "
+            "préférences et souvenirs de l'utilisateur pour proposer des exemples personnalisés et des analogies parlantes."
+        )
+    else:
+        memory_guidance = (
+            "- Prise en compte des souvenirs (Maximale & Transversale) : mobilise largement les souvenirs de l'utilisateur "
+            "dès que c'est intéressant. Crée des ponts originaux, des parallèles stimulants et des ouvertures personnalisées "
+            "entre la question posée et ses souvenirs, passions ou projets."
+        )
+
     coherence_guardrail = (
         "- Cohérence avec l'activité & Rigueur factuelle absolue : adapte toujours cette créativité à la nature de la tâche. "
         "Pour la création littéraire ou le brainstorming, libère pleinement l'imagination. "
@@ -467,7 +495,7 @@ def build_creativity_instruction(
         "Distingue toujours explicitement les faits établis des hypothèses exploratoires."
     )
 
-    return f"{mode_header}\n{posture}\n{coherence_guardrail}"
+    return f"{mode_header}\n{posture}\n{memory_guidance}\n{coherence_guardrail}"
 
 
 def format_sampling_for_openrouter_payload(filtered_params: dict[str, Any]) -> dict[str, Any]:

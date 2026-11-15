@@ -466,3 +466,63 @@ def test_motion_fx_aos_and_gsap():
     assert "AOS.refresh()" in fallback
 
 
+def test_a4_strict_presets_and_enforcer(client):
+    from app.page_runtime import inject_a4_sheet_enforcer, sanitize_and_enhance_html
+
+    # 1. inject_a4_sheet_enforcer injects A4 CSS geometry and data attributes
+    raw = "<!DOCTYPE html><html><head><title>Fiche</title></head><body><h1>Synthèse</h1><p>Contenu court</p></body></html>"
+    enforced_1p = inject_a4_sheet_enforcer(raw, layout_style="a4_1p", orientation="portrait")
+    assert 'data-a4-mode="1p"' in enforced_1p
+    assert 'data-a4-orientation="portrait"' in enforced_1p
+    assert ".a4-sheet {" in enforced_1p
+    assert ".a4-sheet-inner {" in enforced_1p
+    assert "size: A4 portrait" in enforced_1p
+    assert "clair-a4-enforcer-css" in enforced_1p
+
+    # 2. Cheat sheet enforces 1p landscape dimensions (297mm x 210mm) via sanitize_and_enhance_html
+    enforced_cs = sanitize_and_enhance_html(raw, title="Antisèche", layout_style="cheat_sheet", orientation="portrait")
+    assert 'data-a4-mode="1p"' in enforced_cs
+    assert 'data-a4-orientation="landscape"' in enforced_cs
+    assert "size: A4 landscape" in enforced_cs
+    assert "fitA4Sheets" in enforced_cs
+
+    # 3. API propose-topics with a4_1p caps recommended topics to <= 5 with detail_level <= 2
+    res_topics = client.post(
+        "/api/pages/propose-topics",
+        json={
+            "prompt": "La thermodynamique : principes, entropie et machines thermiques",
+            "page_type": "a4_revision_1p",
+            "layout_style": "a4_1p",
+            "target_audience": "academic",
+        },
+    )
+    assert res_topics.status_code == 200, res_topics.text
+    topics = res_topics.json()["topics"]
+    recommended = [t for t in topics if t["recommended"]]
+    assert 1 <= len(recommended) <= 5
+    assert all(t["detail_level"] <= 2 for t in recommended)
+
+    # 4. API create page in a4_1p produces strict single-sheet output + auto-fit runtime
+    res_page = client.post(
+        "/api/pages",
+        json={
+            "prompt": "Fiche mémo sur la thermodynamique",
+            "title": "Thermodynamique A4",
+            "page_type": "a4_revision_1p",
+            "layout_style": "a4_1p",
+            "orientation": "portrait",
+            "text_density": 2,
+            "interactivity": "none",
+            "animation_engine": "none",
+            "selected_topics": recommended,
+        },
+    )
+    assert res_page.status_code == 201, res_page.text
+    created = res_page.json()
+    html_out = created["latest_html"]
+    assert 'data-a4-mode="1p"' in html_out
+    assert ".a4-sheet {" in html_out
+    assert "fitA4Sheets" in html_out
+
+
+

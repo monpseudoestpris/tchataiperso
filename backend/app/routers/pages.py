@@ -68,6 +68,7 @@ async def propose_topics_endpoint(
         target_audience=body.target_audience,
         author_persona=body.author_persona,
         visual_description=body.visual_description,
+        layout_style=body.layout_style,
         model=selected_model,
     )
 

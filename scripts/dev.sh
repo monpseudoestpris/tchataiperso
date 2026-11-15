@@ -76,6 +76,9 @@ asyncio.run(main())
 fi
 (
   cd backend
+  if command -v docker >/dev/null 2>&1; then
+    export SEARXNG_URL="http://127.0.0.1:8080"
+  fi
   exec .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8001 --reload --env-file "$repo_dir/.env"
 ) &
 backend_pid=$!

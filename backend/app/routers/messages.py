@@ -932,7 +932,11 @@ async def send_message(
                         "**Mode démonstration — aucune IA externe n'est appelée.**\n\n"
                         f"Votre message a été enregistré : « {body.content.strip() or 'Document joint'} ».\n\n"
                         "L'historique, les pièces jointes et les souvenirs fonctionnent localement. "
-                        "Configurez une clé LLM et désactivez DEMO_MODE pour obtenir de vraies réponses."
+                        "Configurez une clé LLM et désactivez DEMO_MODE pour obtenir de vraies réponses.\n\n"
+                        "### 💡 Questions connexes\n"
+                        "- Comment configurer une clé API pour activer les réponses complètes ?\n"
+                        "- Quelles sont les fonctionnalités disponibles en mode démonstration ?\n"
+                        "- Comment utiliser le mode Canvas Code ou DeepSearch ?"
                     )
                 for offset in range(0, len(response), 32):
                     chunk = response[offset:offset + 32]
@@ -966,6 +970,7 @@ async def send_message(
                     topic_context=topic_context_text,
                     max_context_tokens=limit_tokens,
                     creativity_instruction=creativity_instruction,
+                    creativity=effective_creativity,
                 )
                 use_two_step_section_writer = (
                     (body.deep_search or body.learn_mode)

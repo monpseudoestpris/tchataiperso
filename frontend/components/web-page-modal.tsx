@@ -21,6 +21,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
+  Printer,
   RefreshCw,
   Send,
   Settings2,
@@ -28,6 +29,7 @@ import {
   Sliders,
   Smartphone,
   Sparkles,
+  Star,
   Trash2,
   X,
 } from "lucide-react";
@@ -46,7 +48,8 @@ import {
   type WebPage,
   type WebPageVersion,
 } from "@/lib/api";
-import { ModelPickerModal } from "./model-picker-modal";
+import { ModelModal } from "./model-modal";
+import { useModelFavorites } from "@/lib/model-favorites";
 import { toJpeg, toPng } from "html-to-image";
 import styles from "./web-page-modal.module.css";
 
@@ -58,7 +61,76 @@ export type WebPageModalProps = {
   initialPrompt?: string;
   models?: Model[];
   currentModel?: string;
+  onRefreshModels?: () => Promise<void>;
 };
+
+export type PagePresetDef = {
+  id: string;
+  icon: string;
+  label: string;
+  badge?: string;
+  hint: string;
+};
+
+export const PAGE_PRESETS: PagePresetDef[] = [
+  {
+    id: "auto",
+    icon: "✨",
+    label: "Mode Automatique",
+    hint: "Adaptation libre au sujet",
+  },
+  {
+    id: "a4_sheet_1p",
+    icon: "📄",
+    label: "Fiche A4 · 1 Page",
+    badge: "Strict",
+    hint: "1 seule feuille A4 portrait (210×297 mm) auto-calibrée, zéro débordement",
+  },
+  {
+    id: "a4_sheet_2p",
+    icon: "📑",
+    label: "Fiche A4 · 2 Pages",
+    badge: "Recto-Verso",
+    hint: "Exactement 2 feuilles A4 complémentaires : théorie au recto, méthode & exemples au verso",
+  },
+  {
+    id: "cheat_sheet",
+    icon: "⚡",
+    label: "Cheat Sheet A4",
+    badge: "Paysage 1p",
+    hint: "Antisèche 3 colonnes sur 1 page A4 paysage (297×210 mm) pour formules & commandes",
+  },
+  {
+    id: "revision",
+    icon: "🎯",
+    label: "Révision Interactive",
+    hint: "Exploration détaillée par onglets + style cahier d'écolier",
+  },
+  {
+    id: "comparison",
+    icon: "⚖️",
+    label: "Comparatif & Benchmark",
+    hint: "Tableau comparatif structuré, avantages/limites et matrice de choix",
+  },
+  {
+    id: "timeline",
+    icon: "⏳",
+    label: "Frise & Processus",
+    hint: "Chronologie ou méthodologie étape par étape avec diagramme SVG",
+  },
+  {
+    id: "article",
+    icon: "📰",
+    label: "Article Éditorial",
+    hint: "Mise en page magazine serif, lecture longue immersive",
+  },
+  {
+    id: "dashboard",
+    icon: "📊",
+    label: "Tableau de Bord",
+    hint: "KPI, graphiques SVG et grille large écran",
+  },
+];
 
 const SUGGESTIONS = [
   "Guide interactif sur le système solaire avec diagramme SVG et fiches didactiques",
@@ -126,12 +198,14 @@ export function WebPageModal({
   initialPrompt,
   models,
   currentModel,
+  onRefreshModels,
 }: WebPageModalProps) {
   const [pages, setPages] = useState<WebPage[]>([]);
   const [selectedPageId, setSelectedPageId] = useState<string | null>(null);
   const [selectedPage, setSelectedPage] = useState<WebPage | null>(null);
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
   const [selectedModel, setSelectedModel] = useState<string>(currentModel || "");
+  const { isFavorite } = useModelFavorites("llm");
 
   useEffect(() => {
     if (currentModel) {
@@ -164,7 +238,9 @@ export function WebPageModal({
 
   const [creativeFreedom, setCreativeFreedom] = useState<"low" | "medium" | "high">("medium");
   const [orientation, setOrientation] = useState<"portrait" | "landscape">("portrait");
-  const [layoutStyle, setLayoutStyle] = useState<"tabs" | "single_page" | "print_sheet" | "auto">("auto");
+  const [layoutStyle, setLayoutStyle] = useState<
+    "tabs" | "single_page" | "print_sheet" | "a4_1p" | "a4_2p" | "cheat_sheet" | "auto"
+  >("auto");
   const [textDensity, setTextDensity] = useState<number>(5);
   const [interactivity, setInteractivity] = useState<"auto" | "high" | "none">("auto");
   const [includeQuiz, setIncludeQuiz] = useState<boolean>(false);
@@ -177,6 +253,80 @@ export function WebPageModal({
   const [textEffects, setTextEffects] = useState<string[]>([]);
 
   const [isModelPickerOpen, setIsModelPickerOpen] = useState(false);
+
+  const currentModelInfo = useMemo(
+    () => (models || []).find((item) => item.id === selectedModel),
+    [models, selectedModel]
+  );
+
+  const currentModelPriceTag = useMemo(() => {
+    if (!currentModelInfo) return null;
+    if (currentModelInfo.prompt_price_1m === 0) return "Gratuit";
+    if (currentModelInfo.prompt_price_1m !== undefined) {
+      const val = currentModelInfo.prompt_price_1m;
+      return val < 0.01 ? "<$0.01/M" : val < 1 ? `$${val.toFixed(2)}/M` : `$${val.toFixed(1)}/M`;
+    }
+    return null;
+  }, [currentModelInfo]);
+
+  const isStrictA4Selected =
+    layoutStyle === "a4_1p" ||
+    layoutStyle === "print_sheet" ||
+    layoutStyle === "a4_2p" ||
+    layoutStyle === "cheat_sheet" ||
+    pageType === "a4_revision_1p" ||
+    pageType === "a4_revision_2p" ||
+    pageType === "cheat_sheet";
+
+  function renderUnifiedModelButton(variant: "header" | "full" | "compact" = "header") {
+    const wrapVariantClass =
+      variant === "full"
+        ? styles.unifiedModelWrapFull
+        : variant === "compact"
+        ? styles.unifiedModelWrapCompact
+        : styles.unifiedModelWrap;
+    return (
+      <div className={`model-select-wrap ${wrapVariantClass}`}>
+        <button
+          type="button"
+          className="model-selector-btn"
+          onClick={() => setIsModelPickerOpen(true)}
+          disabled={working}
+          title="Changer de modèle IA (voir tous les modèles, prix, contexte, vision)"
+          aria-label="Changer de modèle IA"
+        >
+          <span className="model-indicator" />
+          {selectedModel && isFavorite(selectedModel) && (
+            <span className="model-topbar-pill favorite" title="Modèle favori">
+              <Star size={11} fill="#f59e0b" color="#f59e0b" />
+            </span>
+          )}
+          <span className="model-current-name">
+            {currentModelInfo?.name || selectedModel || "Modèle IA"}
+          </span>
+          {currentModelInfo?.vision && (
+            <span
+              className="model-topbar-pill vision"
+              title="Modèle multimodal avec vision (images acceptées)"
+            >
+              <Eye size={11} />
+              <span>Vision</span>
+            </span>
+          )}
+          {currentModelPriceTag && (
+            <span
+              className={`model-topbar-pill price ${
+                currentModelPriceTag === "Gratuit" ? "is-free" : ""
+              }`}
+            >
+              {currentModelPriceTag}
+            </span>
+          )}
+          <ChevronDown size={14} className="model-chevron" />
+        </button>
+      </div>
+    );
+  }
   // Topics exploration modal state
   const [showTopicsModal, setShowTopicsModal] = useState(false);
   const [proposedTopics, setProposedTopics] = useState<PageTopicItem[]>([]);
@@ -225,20 +375,89 @@ export function WebPageModal({
       setLayoutStyle("auto");
       setTextDensity(5);
       setInteractivity("auto");
+      setAnimationEngine("auto");
       setIncludeSvg(true);
       setIncludeQuiz(false);
       setVisualStyle("auto");
+      setBulkDetailLevel(5);
+    } else if (presetId === "a4_sheet_1p") {
+      setPageType("a4_revision_1p");
+      setTargetAudience("academic");
+      setCreativeFreedom("low");
+      setOrientation("portrait");
+      setLayoutStyle("a4_1p");
+      setTextDensity(2);
+      setInteractivity("none");
+      setAnimationEngine("none");
+      setIncludeSvg(true);
+      setIncludeQuiz(false);
+      setVisualStyle("notebook");
+      setBulkDetailLevel(2);
+    } else if (presetId === "a4_sheet_2p") {
+      setPageType("a4_revision_2p");
+      setTargetAudience("academic");
+      setCreativeFreedom("low");
+      setOrientation("portrait");
+      setLayoutStyle("a4_2p");
+      setTextDensity(3);
+      setInteractivity("none");
+      setAnimationEngine("none");
+      setIncludeSvg(true);
+      setIncludeQuiz(false);
+      setVisualStyle("modern_clean");
+      setBulkDetailLevel(3);
+    } else if (presetId === "cheat_sheet") {
+      setPageType("cheat_sheet");
+      setTargetAudience("professional");
+      setCreativeFreedom("low");
+      setOrientation("landscape");
+      setLayoutStyle("cheat_sheet");
+      setTextDensity(2);
+      setInteractivity("none");
+      setAnimationEngine("none");
+      setIncludeSvg(false);
+      setIncludeQuiz(false);
+      setVisualStyle("modern_clean");
+      setBulkDetailLevel(2);
     } else if (presetId === "revision") {
       setPageType("revision");
       setTargetAudience("school");
       setCreativeFreedom("medium");
       setOrientation("portrait");
       setLayoutStyle("tabs");
-      setTextDensity(4);
+      setTextDensity(5);
       setInteractivity("high");
+      setAnimationEngine("auto");
       setIncludeSvg(true);
       setIncludeQuiz(false);
       setVisualStyle("notebook");
+      setBulkDetailLevel(5);
+    } else if (presetId === "comparison") {
+      setPageType("comparison");
+      setTargetAudience("general");
+      setCreativeFreedom("medium");
+      setOrientation("landscape");
+      setLayoutStyle("single_page");
+      setTextDensity(5);
+      setInteractivity("auto");
+      setAnimationEngine("auto");
+      setIncludeSvg(true);
+      setIncludeQuiz(false);
+      setVisualStyle("modern_clean");
+      setBulkDetailLevel(5);
+    } else if (presetId === "timeline") {
+      setPageType("timeline");
+      setTargetAudience("general");
+      setCreativeFreedom("medium");
+      setOrientation("portrait");
+      setLayoutStyle("single_page");
+      setTextDensity(4);
+      setInteractivity("auto");
+      setAnimationEngine("aos");
+      setIncludeSvg(true);
+      setIncludeQuiz(false);
+      setVisualStyle("pastel_infographic");
+      setBulkDetailLevel(4);
     } else if (presetId === "article") {
       setPageType("article");
       setTargetAudience("general");
@@ -247,9 +466,11 @@ export function WebPageModal({
       setLayoutStyle("single_page");
       setTextDensity(6);
       setInteractivity("none");
+      setAnimationEngine("none");
       setIncludeSvg(true);
       setIncludeQuiz(false);
       setVisualStyle("editorial_newspaper");
+      setBulkDetailLevel(6);
     } else if (presetId === "interactive") {
       setPageType("didactic_sheet");
       setTargetAudience("general");
@@ -258,9 +479,11 @@ export function WebPageModal({
       setLayoutStyle("tabs");
       setTextDensity(5);
       setInteractivity("high");
+      setAnimationEngine("both");
       setIncludeSvg(true);
       setIncludeQuiz(false);
       setVisualStyle("modern_clean");
+      setBulkDetailLevel(5);
     } else if (presetId === "dashboard") {
       setPageType("dashboard");
       setTargetAudience("professional");
@@ -269,9 +492,11 @@ export function WebPageModal({
       setLayoutStyle("single_page");
       setTextDensity(4);
       setInteractivity("high");
+      setAnimationEngine("auto");
       setIncludeSvg(true);
       setIncludeQuiz(false);
       setVisualStyle("modern_clean");
+      setBulkDetailLevel(4);
     }
   }
 
@@ -381,6 +606,7 @@ export function WebPageModal({
         target_audience: targetAudience,
         author_persona: authorPersona.trim() || undefined,
         visual_description: visualDescription.trim() || undefined,
+        layout_style: layoutStyle,
         model: selectedModel || undefined,
       });
 
@@ -390,11 +616,18 @@ export function WebPageModal({
       setProposedSummary(res.summary || "");
       setProposedTopics(res.topics || []);
 
-      // Initialize default detail level (5) and output format (auto) for each topic
+      // Initialize default detail level and output format for each topic
+      const fallbackLvl =
+        layoutStyle === "a4_1p" || layoutStyle === "print_sheet" || layoutStyle === "cheat_sheet"
+          ? 2
+          : layoutStyle === "a4_2p"
+          ? 3
+          : 5;
+      setBulkDetailLevel(fallbackLvl);
       const initialLevels: Record<string, number> = {};
       const initialFormats: Record<string, "auto" | "text" | "list" | "table" | "cards" | "timeline"> = {};
       (res.topics || []).forEach((t) => {
-        initialLevels[t.id] = t.detail_level || 5;
+        initialLevels[t.id] = t.detail_level || fallbackLvl;
         initialFormats[t.id] = (t.output_format as any) || "auto";
       });
       setTopicDetailLevels(initialLevels);
@@ -578,6 +811,17 @@ export function WebPageModal({
     setTimeout(() => URL.revokeObjectURL(url), 1500);
   }
 
+  // Print rendered page cleanly (preserves @page A4 rules)
+  function handlePrintPage() {
+    const win = iframeRef.current?.contentWindow;
+    if (!win) {
+      setError("L'aperçu de la page n'est pas encore prêt pour l'impression.");
+      return;
+    }
+    win.focus();
+    win.print();
+  }
+
   // Export rendered page as PNG or JPEG image
   async function handleExportImage(format: "png" | "jpeg" = "png") {
     if (!selectedPage || !activeHtml) return;
@@ -592,9 +836,60 @@ export function WebPageModal({
         throw new Error("L'aperçu de la page n'est pas encore prêt pour l'export.");
       }
 
-      const options = {
-        pixelRatio: 2,
-        quality: format === "jpeg" ? 0.92 : undefined,
+      // Extract accessible @font-face rules safely without triggering SecurityError on cross-origin stylesheets
+      let safeFontEmbedCSS = "";
+      try {
+        const styleSheets = Array.from(doc.styleSheets || []);
+        for (const sheet of styleSheets) {
+          try {
+            const rules = sheet.cssRules || sheet.rules;
+            if (!rules) continue;
+            for (let i = 0; i < rules.length; i++) {
+              const rule = rules[i];
+              if (rule && rule.type === CSSRule.FONT_FACE_RULE) {
+                safeFontEmbedCSS += rule.cssText + "\n";
+              }
+            }
+          } catch {
+            // Ignore SecurityError on cross-origin / CDN stylesheets (Google Fonts, FontAwesome, etc.)
+          }
+        }
+      } catch {
+        // Ignore errors accessing doc.styleSheets
+      }
+
+      const a4Sheets = Array.from(doc.querySelectorAll(".a4-sheet")) as HTMLElement[];
+      const captureTarget: HTMLElement = a4Sheets.length === 1 ? a4Sheets[0] : doc.body;
+
+      const contentWidth =
+        a4Sheets.length === 1
+          ? Math.max(captureTarget.scrollWidth, captureTarget.offsetWidth)
+          : Math.max(
+              doc.body.scrollWidth,
+              doc.documentElement.scrollWidth,
+              doc.body.offsetWidth,
+              deviceMode === "mobile" ? 390 : 1024
+            );
+      const contentHeight =
+        a4Sheets.length === 1
+          ? Math.max(captureTarget.scrollHeight, captureTarget.offsetHeight)
+          : Math.max(
+              doc.body.scrollHeight,
+              doc.documentElement.scrollHeight,
+              doc.body.offsetHeight,
+              600
+            );
+
+      const maxDimension = 8192;
+      const pixelRatio = (contentHeight * 2 > maxDimension || contentWidth * 2 > maxDimension) ? 1 : 2;
+
+      const baseOptions = {
+        pixelRatio,
+        width: contentWidth,
+        height: contentHeight,
+        skipFonts: true,
+        fontEmbedCSS: safeFontEmbedCSS.trim() ? safeFontEmbedCSS : undefined,
+        imagePlaceholder: "data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1' height='1'/%3E",
         filter: (node: HTMLElement) => {
           if (node.classList && node.classList.contains("no-print")) {
             return false;
@@ -604,10 +899,24 @@ export function WebPageModal({
       };
 
       let dataUrl: string;
-      if (format === "jpeg") {
-        dataUrl = await toJpeg(doc.body, { ...options, backgroundColor: "#0f172a" });
-      } else {
-        dataUrl = await toPng(doc.body, options);
+      try {
+        if (format === "jpeg") {
+          dataUrl = await toJpeg(captureTarget, { ...baseOptions, quality: 0.92, backgroundColor: "#0f172a" });
+        } else {
+          dataUrl = await toPng(captureTarget, baseOptions);
+        }
+      } catch (firstErr) {
+        console.warn("Primary image export failed, retrying with minimalist fallback options...", firstErr);
+        const fallbackOptions = {
+          ...baseOptions,
+          fontEmbedCSS: undefined,
+          pixelRatio: 1,
+        };
+        if (format === "jpeg") {
+          dataUrl = await toJpeg(captureTarget, { ...fallbackOptions, quality: 0.88, backgroundColor: "#0f172a" });
+        } else {
+          dataUrl = await toPng(captureTarget, fallbackOptions);
+        }
       }
 
       const filename = `${selectedPage.slug || "page"}.${format === "jpeg" ? "jpg" : "png"}`;
@@ -723,6 +1032,8 @@ export function WebPageModal({
           </div>
 
           <div className={styles.headerControls}>
+            {models && models.length > 0 && renderUnifiedModelButton("header")}
+
             {/* Create new page action available directly from top bar */}
             <button
               type="button"
@@ -785,6 +1096,18 @@ export function WebPageModal({
                     <span>Code</span>
                   </button>
                 </div>
+
+                {/* Print / PDF button */}
+                <button
+                  type="button"
+                  className={styles.btn}
+                  onClick={handlePrintPage}
+                  disabled={viewMode !== "preview"}
+                  title="Imprimer ou enregistrer en PDF (respecte la mise en page A4)"
+                >
+                  <Printer size={14} />
+                  <span>Imprimer / PDF</span>
+                </button>
 
                 {/* Download button */}
                 <button
@@ -1011,42 +1334,42 @@ export function WebPageModal({
 
                   {/* UX Presets */}
                   <div className={styles.presetsRow}>
-                    <button
-                      type="button"
-                      className={`${styles.presetBtn} ${activePreset === "auto" ? styles.active : ""}`}
-                      onClick={() => applyPreset("auto")}
-                    >
-                      <span>⚡ Mode Automatique</span>
-                    </button>
-                    <button
-                      type="button"
-                      className={`${styles.presetBtn} ${activePreset === "revision" ? styles.active : ""}`}
-                      onClick={() => applyPreset("revision")}
-                    >
-                      <span>🎯 Fiche de Révision</span>
-                    </button>
-                    <button
-                      type="button"
-                      className={`${styles.presetBtn} ${activePreset === "article" ? styles.active : ""}`}
-                      onClick={() => applyPreset("article")}
-                    >
-                      <span>📰 Article Éditorial</span>
-                    </button>
-                    <button
-                      type="button"
-                      className={`${styles.presetBtn} ${activePreset === "interactive" ? styles.active : ""}`}
-                      onClick={() => applyPreset("interactive")}
-                    >
-                      <span>🔬 Exploration Interactive</span>
-                    </button>
-                    <button
-                      type="button"
-                      className={`${styles.presetBtn} ${activePreset === "dashboard" ? styles.active : ""}`}
-                      onClick={() => applyPreset("dashboard")}
-                    >
-                      <span>📊 Tableau de Bord</span>
-                    </button>
+                    {PAGE_PRESETS.map((preset) => (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        className={`${styles.presetBtn} ${preset.badge ? styles.presetBtnStrict : ""} ${
+                          activePreset === preset.id ? styles.active : ""
+                        }`}
+                        onClick={() => applyPreset(preset.id)}
+                        title={preset.hint}
+                      >
+                        <span>
+                          {preset.icon} {preset.label}
+                        </span>
+                        {preset.badge && (
+                          <span className={styles.presetBadgeStrict}>{preset.badge}</span>
+                        )}
+                      </button>
+                    ))}
                   </div>
+
+                  {isStrictA4Selected && (
+                    <div className={styles.a4ConstraintBanner}>
+                      <span style={{ fontSize: "1rem", lineHeight: 1.2 }}>📐</span>
+                      <div>
+                        <strong>
+                          {layoutStyle === "a4_2p" || pageType === "a4_revision_2p"
+                            ? "Gabarit A4 Recto-Verso strict (exactement 2 pages)"
+                            : layoutStyle === "cheat_sheet" || pageType === "cheat_sheet"
+                            ? "Gabarit Cheat Sheet A4 Paysage strict (1 seule page)"
+                            : "Gabarit Fiche A4 strict (1 seule page garantie)"}
+                        </strong>{" "}
+                        — Budget de texte plafonné, grille multi-colonnes sans onglets cachés et calibrage géométrique
+                        automatique pour empêcher tout débordement sur plusieurs pages.
+                      </div>
+                    </div>
+                  )}
 
                   <form onSubmit={handleExploreTopics}>
                     {conversationId && (
@@ -1142,20 +1465,7 @@ export function WebPageModal({
                     {models && models.length > 0 && (
                       <div className={styles.formGroup}>
                         <label className={styles.label}>Modèle IA de génération</label>
-                        <button
-                          type="button"
-                          className={styles.modelTriggerBtn}
-                          onClick={() => setIsModelPickerOpen(true)}
-                          disabled={working}
-                        >
-                          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                            <Sparkles size={14} color="#0284c7" />
-                            <span style={{ fontWeight: 600 }}>
-                              {models.find((m) => m.id === selectedModel)?.name || selectedModel || "Sélectionner un modèle"}
-                            </span>
-                          </div>
-                          <span className={styles.modelTriggerBadge}>Changer de modèle...</span>
-                        </button>
+                        {renderUnifiedModelButton("full")}
                       </div>
                     )}
 
@@ -1179,8 +1489,13 @@ export function WebPageModal({
                             }}
                           >
                             <option value="auto">✨ Détection automatique selon le sujet</option>
-                            <option value="revision">🎯 Fiche de révision & mémos</option>
-                            <option value="didactic_sheet">📑 Guide didactique structuré</option>
+                            <option value="a4_revision_1p">📄 Fiche de révision A4 · 1 Page stricte</option>
+                            <option value="a4_revision_2p">📑 Fiche de révision A4 · Recto-Verso (2 pages)</option>
+                            <option value="cheat_sheet">⚡ Cheat Sheet / Antisèche A4 Paysage</option>
+                            <option value="revision">🎯 Fiche de révision interactive (multi-onglets)</option>
+                            <option value="comparison">⚖️ Comparatif & Benchmark structuré</option>
+                            <option value="timeline">⏳ Frise chronologique & Processus</option>
+                            <option value="didactic_sheet">📘 Guide didactique structuré</option>
                             <option value="article">📰 Article de fond & format magazine</option>
                             <option value="dashboard">📊 Tableau de bord visuel & métriques</option>
                             <option value="report">📋 Rapport formel d'analyse</option>
@@ -1324,9 +1639,12 @@ export function WebPageModal({
                               }}
                             >
                               <option value="auto">✨ Libre & optimisée pour le sujet</option>
+                              <option value="a4_1p">📄 Fiche A4 stricte (1 seule page)</option>
+                              <option value="a4_2p">📑 Fiche A4 Recto-Verso (2 pages max)</option>
+                              <option value="cheat_sheet">⚡ Cheat Sheet A4 Paysage (1 page)</option>
                               <option value="tabs">📑 Onglets interactifs par section</option>
                               <option value="single_page">📜 Défilement continu</option>
-                              <option value="print_sheet">🖨️ Fiche A4 (optimisée impression)</option>
+                              <option value="print_sheet">🖨️ Fiche imprimable (A4 1 page)</option>
                             </select>
                           </div>
                         </div>
@@ -1666,21 +1984,7 @@ export function WebPageModal({
                         </select>
                       </div>
 
-                      {models && models.length > 0 && !refineBarCollapsed && (
-                        <div className={styles.selectorItem}>
-                          <Sparkles size={13} color="#0284c7" />
-                          <button
-                            type="button"
-                            className={styles.versionSelect}
-                            onClick={() => setIsModelPickerOpen(true)}
-                            disabled={working}
-                            title="Changer de modèle IA"
-                            style={{ textAlign: "left", cursor: "pointer" }}
-                          >
-                            {models.find((m) => m.id === selectedModel)?.name || selectedModel}
-                          </button>
-                        </div>
-                      )}
+                      {models && models.length > 0 && !refineBarCollapsed && renderUnifiedModelButton("compact")}
                     </div>
 
                     {!refineBarCollapsed && (
@@ -1777,6 +2081,7 @@ export function WebPageModal({
                   {selectedTopicIds.size} / {proposedTopics.length} thème{selectedTopicIds.size > 1 ? "s" : ""} sélectionné{selectedTopicIds.size > 1 ? "s" : ""}
                 </span>
               </div>
+              {models && models.length > 0 && renderUnifiedModelButton("compact")}
               <div className={styles.topicsActionLinks}>
                 <button
                   type="button"
@@ -2132,14 +2437,17 @@ export function WebPageModal({
       )}
 
 
-      {/* Dedicated Model Picker Modal */}
-      {isModelPickerOpen && models && (
-        <ModelPickerModal
-          isOpen={isModelPickerOpen}
+      {/* Unified Model Selector Modal */}
+      {isModelPickerOpen && (
+        <ModelModal
+          currentModel={selectedModel}
+          models={models || []}
+          onSelectModel={(id) => {
+            setSelectedModel(id);
+            setIsModelPickerOpen(false);
+          }}
           onClose={() => setIsModelPickerOpen(false)}
-          models={models}
-          selectedModelId={selectedModel}
-          onSelectModel={(id) => setSelectedModel(id)}
+          onRefreshModels={onRefreshModels}
         />
       )}
     </div>

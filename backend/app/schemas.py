@@ -925,6 +925,7 @@ class ProposePageTopicsRequest(BaseModel):
     target_audience: str = Field(default="general", max_length=50)
     author_persona: str | None = Field(default=None, max_length=300)
     visual_description: str | None = Field(default=None, max_length=1000)
+    layout_style: str = Field(default="auto", max_length=40)
     model: str | None = Field(default=None, max_length=200)
 
     @field_validator("prompt")
@@ -950,7 +951,7 @@ class CreateWebPage(BaseModel):
     visual_description: str | None = Field(default=None, max_length=1000)
     creative_freedom: Literal["low", "medium", "high"] = "medium"
     orientation: Literal["portrait", "landscape"] = "portrait"
-    layout_style: Literal["tabs", "single_page", "print_sheet", "auto"] = "auto"
+    layout_style: Literal["tabs", "single_page", "print_sheet", "a4_1p", "a4_2p", "cheat_sheet", "auto"] = "auto"
     text_density: int = Field(default=5, ge=1, le=10)
     interactivity: Literal["auto", "high", "none"] = "auto"
     include_quiz: bool = False

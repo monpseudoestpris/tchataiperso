@@ -308,6 +308,38 @@ function AttachmentView({
   </div>;
 }
 
+function extractFollowUpQuestions(markdown: string): { cleanMarkdown: string; questions: string[] } {
+  if (!markdown) return { cleanMarkdown: markdown, questions: [] };
+  // Matches header like "### 💡 Questions connexes", "### Questions connexes", "**Questions connexes :**"
+  // followed by bullet points "- Question ?"
+  const regex = /(?:^|\n)(?:###?\s*(?:💡\s*)?Questions connexes(?:\s*\(.*?\))?|\*\*(?:💡\s*)?Questions connexes(?:\s*:)?\*\*)\s*\n([\s\S]*?)$/i;
+  const match = markdown.match(regex);
+  if (!match) return { cleanMarkdown: markdown, questions: [] };
+
+  const rawList = match[1];
+  const lines = rawList.split("\n");
+  const questions: string[] = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    // Bullet item: "- [Question]" or "* [Question]" or "1. [Question]"
+    const bulletMatch = trimmed.match(/^(?:[-*]|\d+\.)\s*(?:\[(.*?)\]|(.*?))$/);
+    if (bulletMatch) {
+      const q = (bulletMatch[1] || bulletMatch[2] || "").trim();
+      if (q && q.length > 3) {
+        questions.push(q);
+      }
+    }
+  }
+
+  if (questions.length === 0) {
+    return { cleanMarkdown: markdown, questions: [] };
+  }
+
+  const cleanMarkdown = markdown.slice(0, match.index).trimEnd();
+  return { cleanMarkdown, questions };
+}
+
 type LightboxImageInfo = {
   src: string;
   fallbackSrc?: string;
@@ -507,6 +539,7 @@ const MessageView = memo(function MessageView({
   onOpenLearnReport,
   onOpenFinanceModal,
   onRegenerateExercise,
+  onSelectFollowUp,
   researchActivity,
   onOpenResearchActivity,
 }: {
@@ -517,6 +550,7 @@ const MessageView = memo(function MessageView({
   onOpenLearnReport?: (message: Message) => void;
   onOpenFinanceModal?: (queryOrSymbol?: string) => void;
   onRegenerateExercise?: (prompt: string) => void;
+  onSelectFollowUp?: (question: string) => void;
   researchActivity?: ResearchRun;
   onOpenResearchActivity?: (messageId: string) => void;
 }) {
@@ -559,10 +593,16 @@ const MessageView = memo(function MessageView({
   const isDeepSearchResult = !isLearnResult && (exploredQueries.length > 0 || textSources.length > 5);
   const hasInteractiveModules = !isUser && (isLearnResult || hasInteractiveLearnModules(message.content));
   const rawDisplayContent = hasInteractiveModules ? stripInteractiveModulesForBody(message.content) : message.content;
-  const parsed = useMemo(() => extractThoughtAndContent(rawDisplayContent), [rawDisplayContent]);
+  const followUpData = useMemo(
+    () => (!isUser && !streaming ? extractFollowUpQuestions(rawDisplayContent) : { cleanMarkdown: rawDisplayContent, questions: [] }),
+    [isUser, streaming, rawDisplayContent],
+  );
+  const contentForParsing = followUpData.cleanMarkdown;
+  const parsed = useMemo(() => extractThoughtAndContent(contentForParsing), [contentForParsing]);
   const effectiveThought = message.thought || parsed.thought;
   const mainContent = parsed.cleanContent;
   const displayContent = streaming ? mainContent.replace(/!\[[^\]]*\]\([^)]*$/, "") : mainContent;
+  const followUpQuestions = followUpData.questions;
   const visibleSources = showAllSources ? textSources : textSources.slice(0, 8);
   const explicitCanvasFiles = useMemo(
     () => (isUser ? [] : extractCanvasFiles(displayContent, { isStreaming: streaming, includeUnnamed: false })),
@@ -883,6 +923,28 @@ const MessageView = memo(function MessageView({
               }}
             />
           </div>
+        </div>
+      </div>
+    )}
+    {!isUser && !streaming && followUpQuestions.length > 0 && (
+      <div className="followup-questions-box" role="region" aria-label="Questions connexes suggérées pour continuer">
+        <div className="followup-questions-header">
+          <Sparkles size={13} className="followup-questions-icon" />
+          <span>Continuer la discussion</span>
+        </div>
+        <div className="followup-questions-list">
+          {followUpQuestions.map((q, idx) => (
+            <button
+              key={`${q}-${idx}`}
+              type="button"
+              className="followup-question-chip"
+              onClick={() => onSelectFollowUp?.(q)}
+              title={`Poser cette question : ${q}`}
+            >
+              <span>{q}</span>
+              <ChevronRight size={13} className="followup-chip-arrow" />
+            </button>
+          ))}
         </div>
       </div>
     )}
@@ -3177,7 +3239,7 @@ export function ChatApp() {
               })() : (
                 <div className="welcome"><div className="welcome-eyebrow"><span /> UN PEU DE CLARTÉ, BEAUCOUP DE POSSIBILITÉS</div><BrandMark /><h1>Qu’avez-vous en tête<span> aujourd’hui ?</span></h1><p>Un espace pour vos questions, vos idées et vos projets.<br />Commencez quelque part. On avance ensemble.</p><div className="suggestions">{suggestions.map((item, index) => <button type="button" className="suggestion" key={item.title} disabled={working} onClick={() => { if (index === 3) { openImageStudio(item.prompt); } else if (index === 1) { openBlogModal(item.prompt); } else { setDraft(item.prompt); textareaRef.current?.focus(); } }}><span className={`suggestion-icon suggestion-icon-${index}`}><item.icon size={19} strokeWidth={1.6} /></span><strong>{item.title}</strong><span>{item.description}</span><ChevronRight size={15} className="suggestion-arrow" /></button>)}</div><div className="welcome-note"><Brain size={14} /><span>Les souvenirs que vous choisissez gardent le fil d’une conversation à l’autre.</span></div></div>
               )
-            ) : busy === "switch" ? <div className="loading-conversation"><LoaderCircle size={23} className="spin" />Ouverture de votre conversation…</div> : <div className="messages"><div className="conversation-heading"><div className="conversation-heading-top"><span>CONVERSATION</span>{conversation?.topic_space_id && (() => { const curTopic = topics.find(t => t.id === conversation.topic_space_id); if (!curTopic) return null; return <button type="button" className="conversation-topic-badge" onClick={() => { setTopicModalId(curTopic.id); setTopicModalOpen(true); }} title={`Espace : ${curTopic.title} (cliquer pour voir la synthèse et mémoire)`}><span>{curTopic.icon || "📌"}</span><span>{curTopic.title}</span></button>; })()}{conversation?.theme && <button type="button" className={`conversation-theme-badge tone-${themeTone(conversation.theme)}`} onClick={() => { setGroupMode("theme"); setSelectedTheme(old => (old === conversation.theme ? "" : (conversation.theme ?? ""))); setSidebarOpen(true); }} title={`Voir toutes les discussions du thème « ${conversation.theme} »`}>{conversation.theme}</button>}<div className="conversation-heading-actions">{conversation && <button type="button" className="conversation-meta-btn" disabled={working} onClick={() => setLinkTopicDialogOpen(true)} title="Associer ou détacher cette discussion d'un espace thématique"><FolderKanban size={12} /><span>{conversation.topic_space_id ? "Espace lié" : "Lier à un espace"}</span></button>}{conversation && <button type="button" className="conversation-meta-btn conversation-page-btn" disabled={working} onClick={() => openWebPagesModal()} title="Générer une page web autonome (HTML5 + SVG + JS) à partir de cette conversation"><Globe size={12} /><span>Page Web</span></button>}{conversation && <button type="button" className="conversation-meta-btn conversation-study-btn" disabled={working} onClick={() => openStudyModal("all")} title="Réviser les notions de cette discussion : Flashcards 3D, Quizz QCM et Phrases à trous"><GraduationCap size={12} /><span>Réviser</span></button>}{conversation && <button type="button" className="conversation-meta-btn" disabled={working} onClick={() => openEditDialog(conversation)} title="Modifier le titre, le thème et les mots-clés"><Pencil size={12} /><span>Éditer</span></button>}{conversation && <button type="button" className="conversation-meta-btn" disabled={working} onClick={() => void classifyConversation(conversation.id, true)} title="Régénérer le titre, le thème et les mots-clés automatiquement (Mistral Small)">{busy === "classify" ? <LoaderCircle size={12} className="spin" /> : <WandSparkles size={12} />}<span>Auto-tags IA</span></button>}</div></div><h1>{conversation?.title}</h1>{!!conversation?.keywords?.length && <div className="conversation-keywords-row" aria-label="Mots-clés de la discussion">{conversation.keywords.map(kw => <button key={kw} type="button" className={`conversation-keyword-chip ${selectedKeyword.toLocaleLowerCase("fr") === kw.toLocaleLowerCase("fr") ? "is-active" : ""}`} onClick={() => { toggleKeywordFilter(kw); setSidebarOpen(true); }} title={`Filtrer les discussions avec #${kw}`}>#{kw}</button>)}</div>}</div>{conversation && <ChatAttachedSites key={conversation.id} conversationId={conversation.id} />}{messages.map(message => <MessageView key={message.id} message={message} streaming={streamingId === message.id} onOpenCanvas={openCanvasForMessage} onOpenDeepSearchReport={handleOpenDeepSearchReport} researchActivity={researchRuns[message.id]} onOpenResearchActivity={setResearchActivityMessageId} onOpenLearnReport={handleOpenLearnReport} onOpenFinanceModal={openFinanceModal} onRegenerateExercise={prompt => void send(undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, prompt)} />)}<div ref={bottomRef} /></div>}
+            ) : busy === "switch" ? <div className="loading-conversation"><LoaderCircle size={23} className="spin" />Ouverture de votre conversation…</div> : <div className="messages"><div className="conversation-heading"><div className="conversation-heading-top"><span>CONVERSATION</span>{conversation?.topic_space_id && (() => { const curTopic = topics.find(t => t.id === conversation.topic_space_id); if (!curTopic) return null; return <button type="button" className="conversation-topic-badge" onClick={() => { setTopicModalId(curTopic.id); setTopicModalOpen(true); }} title={`Espace : ${curTopic.title} (cliquer pour voir la synthèse et mémoire)`}><span>{curTopic.icon || "📌"}</span><span>{curTopic.title}</span></button>; })()}{conversation?.theme && <button type="button" className={`conversation-theme-badge tone-${themeTone(conversation.theme)}`} onClick={() => { setGroupMode("theme"); setSelectedTheme(old => (old === conversation.theme ? "" : (conversation.theme ?? ""))); setSidebarOpen(true); }} title={`Voir toutes les discussions du thème « ${conversation.theme} »`}>{conversation.theme}</button>}<div className="conversation-heading-actions">{conversation && <button type="button" className="conversation-meta-btn" disabled={working} onClick={() => setLinkTopicDialogOpen(true)} title="Associer ou détacher cette discussion d'un espace thématique"><FolderKanban size={12} /><span>{conversation.topic_space_id ? "Espace lié" : "Lier à un espace"}</span></button>}{conversation && <button type="button" className="conversation-meta-btn conversation-page-btn" disabled={working} onClick={() => openWebPagesModal()} title="Générer une page web autonome (HTML5 + SVG + JS) à partir de cette conversation"><Globe size={12} /><span>Page Web</span></button>}{conversation && <button type="button" className="conversation-meta-btn conversation-study-btn" disabled={working} onClick={() => openStudyModal("all")} title="Réviser les notions de cette discussion : Flashcards 3D, Quizz QCM et Phrases à trous"><GraduationCap size={12} /><span>Réviser</span></button>}{conversation && <button type="button" className="conversation-meta-btn" disabled={working} onClick={() => openEditDialog(conversation)} title="Modifier le titre, le thème et les mots-clés"><Pencil size={12} /><span>Éditer</span></button>}{conversation && <button type="button" className="conversation-meta-btn" disabled={working} onClick={() => void classifyConversation(conversation.id, true)} title="Régénérer le titre, le thème et les mots-clés automatiquement (Mistral Small)">{busy === "classify" ? <LoaderCircle size={12} className="spin" /> : <WandSparkles size={12} />}<span>Auto-tags IA</span></button>}</div></div><h1>{conversation?.title}</h1>{!!conversation?.keywords?.length && <div className="conversation-keywords-row" aria-label="Mots-clés de la discussion">{conversation.keywords.map(kw => <button key={kw} type="button" className={`conversation-keyword-chip ${selectedKeyword.toLocaleLowerCase("fr") === kw.toLocaleLowerCase("fr") ? "is-active" : ""}`} onClick={() => { toggleKeywordFilter(kw); setSidebarOpen(true); }} title={`Filtrer les discussions avec #${kw}`}>#{kw}</button>)}</div>}</div>{conversation && <ChatAttachedSites key={conversation.id} conversationId={conversation.id} />}{messages.map(message => <MessageView key={message.id} message={message} streaming={streamingId === message.id} onOpenCanvas={openCanvasForMessage} onOpenDeepSearchReport={handleOpenDeepSearchReport} researchActivity={researchRuns[message.id]} onOpenResearchActivity={setResearchActivityMessageId} onOpenLearnReport={handleOpenLearnReport} onOpenFinanceModal={openFinanceModal} onRegenerateExercise={prompt => void send(undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, prompt)} onSelectFollowUp={q => void send(undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, q)} />)}<div ref={bottomRef} /></div>}
           </div>
           {!atBottom && !!messages.length && <IconButton className="scroll-bottom" label="Aller aux derniers messages" onClick={() => { atBottomRef.current = true; setAtBottom(true); messagesRef.current?.scrollTo({ top: messagesRef.current.scrollHeight, behavior: "smooth" }); }}><ArrowDown size={18} /></IconButton>}
 
@@ -3673,6 +3735,7 @@ export function ChatApp() {
       initialPrompt={webPagesModalPrompt}
       models={config?.models ?? []}
       currentModel={model}
+      onRefreshModels={refreshModels}
     />
 
     {hermesModalOpen && (

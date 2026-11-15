@@ -734,6 +734,7 @@ export async function proposeWebPageTopics(payload: {
   target_audience?: string;
   author_persona?: string;
   visual_description?: string;
+  layout_style?: string;
   model?: string;
 }): Promise<ProposePageTopicsResponse> {
   return api<ProposePageTopicsResponse>("/pages/propose-topics", {
@@ -753,7 +754,7 @@ export async function createWebPage(payload: {
   visual_description?: string;
   creative_freedom?: "low" | "medium" | "high";
   orientation?: "portrait" | "landscape";
-  layout_style?: "tabs" | "single_page" | "print_sheet" | "auto";
+  layout_style?: "tabs" | "single_page" | "print_sheet" | "a4_1p" | "a4_2p" | "cheat_sheet" | "auto";
   text_density?: number;
   interactivity?: "auto" | "high" | "none";
   include_quiz?: boolean;

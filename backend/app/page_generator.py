@@ -86,7 +86,19 @@ def extract_title_from_html(html_code: str, fallback: str = "Page Web") -> str:
     return fallback[:100]
 
 
-PAGE_SYSTEM_PROMPT = """Tu es un concepteur et développeur web expert en création de pages web didactiques, modernes et entièrement autonomes.
+_PAGE_RULE_9_EXHAUSTIVE = """9. RÈGLE DE DÉVELOPPEMENT EXHAUSTIF ET ZÉRO BRIDE DE LONGUEUR :
+   - AUCUNE LIMITE DE TAILLE EN SORTIE : Seule compte la richesse, la précision et la profondeur du contenu.
+   - Ne résume JAMAIS à la va-vite en quelques puces ou 2 ou 3 phrases télégraphiques.
+   - sur chaque thème abordé comporte toi en expert du domaine
+   - Chaque thème, sous-partie ou concept doit être développé de manière détaillée (minimum 20 à 30 lignes complètes par thème traité avec explications de fond, contextualisation, exemples décortiqués, méthodes et citations)."""
+
+_PAGE_RULE_9_A4_STRICT = """9. RÈGLE D'OR ABSOLUE DU FORMAT A4 IMPRIMABLE (PRIORITÉ MAXIMALE STRICTE) :
+   - INTERDICTION FORMELLE DE DÉPASSER LE NOMBRE DE PAGES A4 DEMANDÉ (1 seule page A4 pour Fiche A4 / Cheat Sheet, ou exactement 2 pages A4 pour un Recto-Verso).
+   - ZÉRO BAVARDAGE : Rédige en style fiche bristol d'excellence (ultra-synthétique, dense, structuré, mots-clés en gras, formules, listes à puces concises d'une seule ligne, tableaux compacts).
+   - Chaque feuille A4 DOIT être encapsulée dans `<div class="a4-sheet">` avec `box-sizing: border-box; overflow: hidden;`.
+   - N'utilise AUCUN onglet caché ni accordéon fermé : 100 % du contenu doit être visible simultanément sur la feuille A4 pour l'impression et l'export image."""
+
+_PAGE_SYSTEM_PROMPT_BASE = """Tu es un concepteur et développeur web expert en création de pages web didactiques, modernes et entièrement autonomes.
 Ton objectif est de générer un document web unique (HTML5 + CSS3 + SVG inline + JavaScript vanilla) sur le sujet demandé par l'utilisateur.
 
 RÈGLES D'OR ABSOLUES D'AUTONOMIE ET D'ESTHÉTIQUE (TRÈS STRICT) :
@@ -177,14 +189,23 @@ RÈGLES D'OR ABSOLUES D'AUTONOMIE ET D'ESTHÉTIQUE (TRÈS STRICT) :
      - Entrée progressive du Hero ou d'un tracé SVG :
        `gsap.from('.hero-badge', { opacity: 0, y: -15, duration: 0.6 });`
      - Règle de sobriété : les animations doivent sublimer le contenu et la lisibilité, sans surcharger inutilement la page.
-9. RÈGLE DE DÉVELOPPEMENT EXHAUSTIF ET ZÉRO BRIDE DE LONGUEUR :
-   - AUCUNE LIMITE DE TAILLE EN SORTIE : Seule compte la richesse, la précision et la profondeur du contenu.
-   - Ne résume JAMAIS à la va-vite en quelques puces ou 2 ou 3 phrases télégraphiques.
-   - sur chaque thème abordé comporte toi en expert du domaine
-   - Chaque thème, sous-partie ou concept doit être développé de manière détaillée (minimum 20 à 30 lignes complètes par thème traité avec explications de fond, contextualisation, exemples décortiqués, méthodes et citations).
+{rule_9}
 10. FORMAT DE SORTIE :
    - Retourne UNIQUEMENT le document HTML5 complet, sans texte d'introduction ni de conclusion, sans backticks markdown si possible.
 """
+
+PAGE_SYSTEM_PROMPT = _PAGE_SYSTEM_PROMPT_BASE.replace("{rule_9}", _PAGE_RULE_9_EXHAUSTIVE)
+
+
+def _get_page_system_prompt(is_strict_a4: bool) -> str:
+    """Retourne le prompt système adapté au mode libre exhaustif ou au mode A4 strict."""
+    return _PAGE_SYSTEM_PROMPT_BASE.replace(
+        "{rule_9}",
+        _PAGE_RULE_9_A4_STRICT if is_strict_a4 else _PAGE_RULE_9_EXHAUSTIVE,
+    )
+
+
+_A4_LAYOUT_STYLES = {"print_sheet", "a4_1p", "a4_2p", "cheat_sheet"}
 
 REFINE_SYSTEM_PROMPT = """Tu es un expert web perfectionnant une page HTML5 autonome existante.
 Tu reçois le code HTML complet actuel d'une page et une consigne d'amélioration demandée par l'utilisateur.
@@ -451,8 +472,9 @@ def generate_fallback_page(
             f'  <link href="https://fonts.googleapis.com/css2?family={google_font}&display=swap" rel="stylesheet">\n'
         )
 
-    is_print = layout_style == "print_sheet"
-    container_max_w = "1280px" if orientation == "landscape" else "960px"
+    is_print = layout_style in _A4_LAYOUT_STYLES
+    effective_orientation = "landscape" if layout_style == "cheat_sheet" else orientation
+    container_max_w = "1280px" if effective_orientation == "landscape" else "960px"
 
     svg_section = ""
     if include_svg:
@@ -518,7 +540,27 @@ def generate_fallback_page(
 
     # Dynamic tabs and cards based on selected_topics if provided
     tabs_html = ""
-    if selected_topics and len(selected_topics) > 0:
+    if selected_topics and len(selected_topics) > 0 and is_print:
+        # En mode A4 imprimable, afficher tous les thèmes simultanément dans une grille compacte sans onglets cachés
+        cards_list = []
+        cols = 3 if layout_style == "cheat_sheet" else 2
+        for idx, top in enumerate(selected_topics):
+            top_title = html.escape(str(top.get("title", f"Thème {idx+1}")))
+            top_desc = html.escape(str(top.get("description", "")))
+            top_cat = html.escape(str(top.get("category", "Synthèse")))
+            cards_list.append(
+                f'<div class="card" style="padding:0.55rem 0.7rem; margin:0; break-inside:avoid;">\n'
+                f'  <div style="font-size:0.65rem; text-transform:uppercase; color:var(--primary); font-weight:700;">{top_cat}</div>\n'
+                f'  <h4 style="margin:0.15rem 0 0.3rem; font-size:0.9rem; font-weight:700; color:var(--text);">{top_title}</h4>\n'
+                f'  <p style="font-size:0.78rem; line-height:1.3; margin:0; color:var(--text-muted);">{top_desc}</p>\n'
+                f'</div>'
+            )
+        tabs_html = (
+            f'<div style="display:grid; grid-template-columns:repeat({cols}, minmax(0, 1fr)); gap:0.55rem; margin-top:0.5rem;">\n'
+            + "\n".join(cards_list)
+            + "\n</div>"
+        )
+    elif selected_topics and len(selected_topics) > 0:
         tab_buttons = []
         tab_contents = []
         for idx, top in enumerate(selected_topics):
@@ -1042,7 +1084,12 @@ def generate_fallback_page(
     rendered = inject_text_fx_placeholders(inject_svg_placeholders(full_page))
     if animation_engine != "none":
         rendered = inject_motion_fx(rendered)
-    return rendered
+    return sanitize_and_enhance_html(
+        rendered,
+        title=title,
+        layout_style=layout_style,
+        orientation=effective_orientation,
+    )
 
 
 async def generate_page_html(
@@ -1077,6 +1124,20 @@ async def generate_page_html(
     clean_prompt = prompt.strip()
     target_model = model or getattr(settings, "page_model", None) or getattr(settings, "default_model", None) or "google/gemini-2.5-flash"
 
+    is_a4_1p = layout_style in ("print_sheet", "a4_1p") or page_type in ("a4_revision_1p", "revision_a4")
+    is_a4_2p = layout_style == "a4_2p" or page_type == "a4_revision_2p"
+    is_cheat_sheet = layout_style == "cheat_sheet" or page_type == "cheat_sheet"
+    is_strict_a4 = is_a4_1p or is_a4_2p or is_cheat_sheet
+    if is_cheat_sheet:
+        orientation = "landscape"
+    effective_a4_layout = (
+        "cheat_sheet" if is_cheat_sheet else (
+            "a4_2p" if is_a4_2p else (
+                "a4_1p" if is_a4_1p else layout_style
+            )
+        )
+    )
+
     # Context construction
     user_query_parts = []
     if chat_transcript:
@@ -1093,7 +1154,31 @@ async def generate_page_html(
     design_options = ["=== OPTIONS ET DIRECTIVES DE CONCEPTION ==="]
 
     # 1. Type de page
-    if page_type == "revision":
+    if page_type in ("a4_revision_1p", "revision_a4"):
+        design_options.append(
+            "- TYPE DE PAGE (CONTRAINTE STRICTE 1 PAGE A4) : Fiche de révision bristol dense et mémorisable conçue "
+            "pour tenir STRICTEMENT sur UNE SEULE page A4 (210mm x 297mm). Synthèse chirurgicale : définitions, formules clés, "
+            "repères méthodologiques et pièges majeurs."
+        )
+    elif page_type == "a4_revision_2p":
+        design_options.append(
+            "- TYPE DE PAGE (CONTRAINTE STRICTE 2 PAGES A4 RECTO-VERSO) : Dossier de révision structuré en EXACTEMENT 2 pages A4 "
+            "(Page 1 Recto : concepts fondamentaux, définitions, schéma et formules ; Page 2 Verso : méthode, exemples appliqués, tableau récapitulatif et pièges à éviter)."
+        )
+    elif page_type == "cheat_sheet":
+        design_options.append(
+            "- TYPE DE PAGE (CONTRAINTE STRICTE CHEAT SHEET A4 PAYSAGE) : Antisèche technique / Aide-mémoire rapide multi-colonnes "
+            "sur UNE SEULE page A4 Paysage (297mm x 210mm) : tableaux compacts, raccourcis, commandes ou formules clés."
+        )
+    elif page_type == "comparison":
+        design_options.append(
+            "- TYPE DE PAGE : Comparatif & Benchmark approfondi avec tableaux comparatifs structurés, cartes d'avantages/limites, cas d'usage idéaux et matrice de décision."
+        )
+    elif page_type == "timeline":
+        design_options.append(
+            "- TYPE DE PAGE : Frise chronologique & Processus étape par étape avec jalons ordonnés, dates clés, diagramme séquentiel SVG et explications de transition."
+        )
+    elif page_type == "revision":
         design_options.append("- TYPE DE PAGE : Fiche de révision pédagogique axée sur la mémorisation et l'apprentissage actif (synthèses, définitions clés, pièges à éviter, mémo).")
     elif page_type == "didactic_sheet":
         design_options.append("- TYPE DE PAGE : Fiche didactique claire et structurée avec schémas conceptuels et repères méthodologiques.")
@@ -1147,12 +1232,39 @@ async def generate_page_html(
         design_options.append("- ORIENTATION PORTRAIT (LECTURE VERTICALE) : Conçois une mise en page centrée (max-width: 900px), optimisée pour le défilement vertical naturel et la lecture sur smartphone/tablette ou fiche classique.")
 
     # 5. Format et Mise en page
-    if layout_style == "print_sheet":
+    if is_cheat_sheet:
         design_options.append(
-            "- FORMAT IMPRESSION / FICHE UNIQUE : Conçois cette page sous la forme d'une fiche mémo compacte "
-            "optimisée pour tenir sur une feuille d'impression (recto ou recto-verso A4). Intègre des règles CSS "
-            "@media print { @page { margin: 1cm; size: A4; } body { background: #fff !important; color: #000 !important; } .no-print { display: none !important; } }. "
-            "Utilise des grilles denses, des cartes de synthèse et un bouton d'impression <button class=\"no-print\" onclick=\"window.print()\">🖨️ Imprimer</button>."
+            "- FORMAT CHEAT SHEET A4 PAYSAGE STRICT (1 SEULE PAGE = 297mm × 210mm) — OBLIGATOIRE :\n"
+            "  * Ajoute sur <body> les attributs : <body data-a4-mode=\"1p\" data-a4-orientation=\"landscape\">.\n"
+            "  * Encapsule TOUT le document visible dans EXACTEMENT UN SEUL conteneur <div class=\"a4-sheet\">\n"
+            "    avec un bandeau titre ultra-compact en haut (max 42px de haut) et une grille CSS 3 colonnes (`grid-template-columns: repeat(3, 1fr); gap: 8px;`).\n"
+            "  * Contenu total STRICTEMENT borné à 350–450 mots maximum : 6 à 8 blocs denses, listes de 4–5 puces courtes (<= 10 mots par puce), police ~8.5pt (`11px`), tableaux ultra-compacts.\n"
+            "  * INTERDIT : pas d'onglets cachés, pas d'accordéons, pas de longs paragraphes (> 2 lignes), pas de quiz, pas de marges excessives.\n"
+            "  * La page doit tenir sur UNE SEULE FEUILLE A4 PAYSAGE à l'impression et à l'export PNG, sans aucun débordement."
+        )
+    elif is_a4_1p:
+        orient_label = "landscape (297mm × 210mm)" if orientation == "landscape" else "portrait (210mm × 297mm)"
+        grid_cols = "3 colonnes" if orientation == "landscape" else "2 colonnes"
+        design_options.append(
+            f"- FORMAT FICHE A4 STRICT EN 1 SEULE PAGE ({orient_label}) — IMPÉRATIF ABSOLU :\n"
+            f"  * Ajoute sur <body> les attributs : <body data-a4-mode=\"1p\" data-a4-orientation=\"{orientation}\">.\n"
+            "  * Encapsule TOUT le contenu visible dans EXACTEMENT UN SEUL conteneur <div class=\"a4-sheet\">.\n"
+            f"  * Structure la feuille avec : un en-tête compact (titre + objectif en 1 ligne, max 52px de haut), puis une grille {grid_cols} de 4 à 6 encadrés synthétiques (définitions, formules/méthode, tableau mémo compact, pièges à éviter).\n"
+            "  * BUDGET TEXTE STRICT : 300 à 420 mots MAXIMUM au total sur toute la page. Aucun paragraphe ne doit dépasser 3 lignes.\n"
+            "  * STYLE BRISTOL DENSE : phrases courtes, mots-clés en gras, puces concises d'une ligne, police de corps compacte (~9pt / 11.5px, interligne 1.32).\n"
+            "  * SVG : Au maximum 1 petit schéma conceptuel compact (max-height: 85px) si pertinent. Zéro séparateur de vague massif, zéro quiz, zéro onglet caché.\n"
+            "  * OBJECTIF NON NÉGOCIABLE : Toute la fiche DOIT tenir sur UNE UNIQUE PAGE A4 (zéro page 2, zéro débordement)."
+        )
+    elif is_a4_2p:
+        orient_label = "landscape (297mm × 210mm)" if orientation == "landscape" else "portrait (210mm × 297mm)"
+        design_options.append(
+            f"- FORMAT FICHE A4 RECTO-VERSO STRICT EN 2 PAGES ({orient_label}) — IMPÉRATIF ABSOLU :\n"
+            f"  * Ajoute sur <body> les attributs : <body data-a4-mode=\"2p\" data-a4-orientation=\"{orientation}\">.\n"
+            "  * Structure TOUT le contenu visible dans EXACTEMENT DEUX conteneurs <div class=\"a4-sheet\"> distincts (et pas un de plus) :\n"
+            "    1. Premier <div class=\"a4-sheet\"> (Page 1 — Recto) : En-tête compact, concepts fondamentaux, définitions clés, schéma conceptuel et formules/principes.\n"
+            "    2. Deuxième <div class=\"a4-sheet\"> (Page 2 — Verso) : Méthode étape par étape, exemples concrets analysés, tableau récapitulatif et pièges à éviter.\n"
+            "  * BUDGET TEXTE STRICT : 350 à 420 mots MAXIMUM par feuille (~750 mots au total sur les 2 pages). Grille 2 colonnes, police compacte ~9.5pt, zéro onglet caché.\n"
+            "  * OBJECTIF NON NÉGOCIABLE : Exactement 2 pages A4 à l'impression et à l'écran, jamais 3 ou 4."
         )
     elif layout_style == "single_page":
         design_options.append(
@@ -1271,50 +1383,75 @@ async def generate_page_html(
     # 13. Thèmes et sous-sujets sélectionnés par l'utilisateur avec niveau de détail requis
     if selected_topics and len(selected_topics) > 0:
         topics_summary = []
-        for idx, t in enumerate(selected_topics, 1):
-            t_title = t.get("title", f"Thème {idx}")
-            t_desc = t.get("description", "")
-            d_lvl = int(t.get("detail_level", 5) or 5)
-            # Contract of lines based on detail level
-            if d_lvl <= 3:
-                lines_req = "minimum 12 à 18 lignes denses"
-            elif d_lvl <= 6:
-                lines_req = "MINIMUM 20 À 28 LIGNES DÉTAILLÉES (OBLIGATOIRE)"
-            elif d_lvl <= 8:
-                lines_req = "MINIMUM 35 À 45 LIGNES APPROFONDIES (OBLIGATOIRE)"
-            else:
-                lines_req = "MINIMUM 55+ LIGNES EXHAUSTIVES / COURS MAGISTRAL (OBLIGATOIRE)"
+        if is_strict_a4:
+            total_budget = 680 if is_a4_2p else 360
+            per_topic_words = max(25, min(110, int(total_budget / max(1, len(selected_topics)))))
+            for idx, t in enumerate(selected_topics, 1):
+                t_title = t.get("title", f"Thème {idx}")
+                t_desc = t.get("description", "")
+                out_fmt = t.get("output_format", "auto")
+                fmt_instruction = f" [format souhaité : {out_fmt}]" if out_fmt and out_fmt != "auto" else ""
+                item_str = (
+                    f"Bloc {idx} : « {t_title} »{fmt_instruction} "
+                    f"(CONSIGNE A4 STRICTE : carte ultra-synthétique de 3 à 5 puces courtes ou formule/tableau compact, "
+                    f"MAXIMUM {per_topic_words} mots)"
+                )
+                if t_desc:
+                    item_str += f"\n   Points clés : {t_desc}"
+                topics_summary.append(item_str)
+            joined_topics = "\n".join(topics_summary)
+            page_target = "EXACTEMENT 2 pages A4 Recto-Verso" if is_a4_2p else "UNE SEULE page A4"
+            design_options.append(
+                f"- THÈMES À INTÉGRER SUR LA FICHE A4 ({len(selected_topics)} blocs compacts) :\n"
+                f"{joined_topics}\n\n"
+                f"RÈGLE IMPÉRATIVE A4 : Intègre tous ces blocs dans une grille multi-colonnes sans onglet caché, "
+                f"en respectant strictement la limite de {per_topic_words} mots max par bloc pour tenir dans {page_target}."
+            )
+        else:
+            for idx, t in enumerate(selected_topics, 1):
+                t_title = t.get("title", f"Thème {idx}")
+                t_desc = t.get("description", "")
+                d_lvl = int(t.get("detail_level", 5) or 5)
+                # Contract of lines based on detail level
+                if d_lvl <= 3:
+                    lines_req = "minimum 12 à 18 lignes denses"
+                elif d_lvl <= 6:
+                    lines_req = "MINIMUM 20 À 28 LIGNES DÉTAILLÉES (OBLIGATOIRE)"
+                elif d_lvl <= 8:
+                    lines_req = "MINIMUM 35 À 45 LIGNES APPROFONDIES (OBLIGATOIRE)"
+                else:
+                    lines_req = "MINIMUM 55+ LIGNES EXHAUSTIVES / COURS MAGISTRAL (OBLIGATOIRE)"
 
-            # Desired layout / output format for this specific topic
-            out_fmt = t.get("output_format", "auto")
-            fmt_instruction = ""
-            if out_fmt == "table":
-                fmt_instruction = " — FORMAT OBLIGATOIRE : TABLEAU HTML COMPARATIF / SYNTHÉTIQUE (<table> avec en-têtes clairs, données riches et au moins 6 à 10 lignes d'analyse)"
-            elif out_fmt == "list":
-                fmt_instruction = " — FORMAT OBLIGATOIRE : LISTE STRUCTURÉE À PUCES / CHECKLIST (éléments détaillés avec termes en gras et explications)"
-            elif out_fmt == "cards":
-                fmt_instruction = " — FORMAT OBLIGATOIRE : CARTES / GRILLE MODULAIRE (blocs de contenu encadrés côte à côte)"
-            elif out_fmt == "timeline":
-                fmt_instruction = " — FORMAT OBLIGATOIRE : ÉTAPES / TIMELINE SÉQUENTIELLE (jalons ordonnés pas-à-pas numérotés)"
-            elif out_fmt == "text":
-                fmt_instruction = " — FORMAT OBLIGATOIRE : TEXTE RÉDIGÉ FLUIDE (paragraphes académiques denses sans découpage télégraphique)"
+                # Desired layout / output format for this specific topic
+                out_fmt = t.get("output_format", "auto")
+                fmt_instruction = ""
+                if out_fmt == "table":
+                    fmt_instruction = " — FORMAT OBLIGATOIRE : TABLEAU HTML COMPARATIF / SYNTHÉTIQUE (<table> avec en-têtes clairs, données riches et au moins 6 à 10 lignes d'analyse)"
+                elif out_fmt == "list":
+                    fmt_instruction = " — FORMAT OBLIGATOIRE : LISTE STRUCTURÉE À PUCES / CHECKLIST (éléments détaillés avec termes en gras et explications)"
+                elif out_fmt == "cards":
+                    fmt_instruction = " — FORMAT OBLIGATOIRE : CARTES / GRILLE MODULAIRE (blocs de contenu encadrés côte à côte)"
+                elif out_fmt == "timeline":
+                    fmt_instruction = " — FORMAT OBLIGATOIRE : ÉTAPES / TIMELINE SÉQUENTIELLE (jalons ordonnés pas-à-pas numérotés)"
+                elif out_fmt == "text":
+                    fmt_instruction = " — FORMAT OBLIGATOIRE : TEXTE RÉDIGÉ FLUIDE (paragraphes académiques denses sans découpage télégraphique)"
 
-            item_str = f"Thème {idx} : « {t_title} » [Niveau de détail : {d_lvl}/10 — Contrat de volume : {lines_req}{fmt_instruction}]"
-            if t_desc:
-                item_str += f"\n   Périmètre attendu : {t_desc}"
-            topics_summary.append(item_str)
+                item_str = f"Thème {idx} : « {t_title} » [Niveau de détail : {d_lvl}/10 — Contrat de volume : {lines_req}{fmt_instruction}]"
+                if t_desc:
+                    item_str += f"\n   Périmètre attendu : {t_desc}"
+                topics_summary.append(item_str)
 
-        joined_topics = "\n\n".join(topics_summary)
-        design_options.append(
-            "- THÈMES ET SOUS-THÈMES SÉLECTIONNÉS PAR L'UTILISATEUR (IMPÉRATIF ET STRICT) :\n"
-            "L'utilisateur a explicitement validé la liste suivante de thèmes et leur niveau d'approfondissement respectif.\n"
-            "Tu DOIS impérativement consacrer une section, un onglet ou un bloc d'analyse substantiel à CHACUN de ces thèmes sans en omettre aucun :\n\n"
-            f"{joined_topics}\n\n"
-            "RÈGLE D'OR DE DÉTAIL POUR CHAQUE THÈME (TRÈS STRICT) :\n"
-            "* Ne résume JAMAIS un thème en 2 ou 3 lignes ou en quelques puces rapides.\n"
-            "* Respecte scrupuleusement le contrat de volume par thème : dès le niveau 5/10 (défaut), rédige MINIMUM 20 LIGNES SUBSTANTIELLES par thème (définitions rigoureuses, développement en plusieurs paragraphes rédigés, mécanismes étape par étape, exemples réels décortiqués, méthodes d'application concrètes et encadrés d'analyse).\n"
-            "* Ne te bride jamais sur la longueur : seule compte la complétude, la rigueur et l'exhaustivité de la rédaction."
-        )
+            joined_topics = "\n\n".join(topics_summary)
+            design_options.append(
+                "- THÈMES ET SOUS-THÈMES SÉLECTIONNÉS PAR L'UTILISATEUR (IMPÉRATIF ET STRICT) :\n"
+                "L'utilisateur a explicitement validé la liste suivante de thèmes et leur niveau d'approfondissement respectif.\n"
+                "Tu DOIS impérativement consacrer une section, un onglet ou un bloc d'analyse substantiel à CHACUN de ces thèmes sans en omettre aucun :\n\n"
+                f"{joined_topics}\n\n"
+                "RÈGLE D'OR DE DÉTAIL POUR CHAQUE THÈME (TRÈS STRICT) :\n"
+                "* Ne résume JAMAIS un thème en 2 ou 3 lignes ou en quelques puces rapides.\n"
+                "* Respecte scrupuleusement le contrat de volume par thème : dès le niveau 5/10 (défaut), rédige MINIMUM 20 LIGNES SUBSTANTIELLES par thème (définitions rigoureuses, développement en plusieurs paragraphes rédigés, mécanismes étape par étape, exemples réels décortiqués, méthodes d'application concrètes et encadrés d'analyse).\n"
+                "* Ne te bride jamais sur la longueur : seule compte la complétude, la rigueur et l'exhaustivité de la rédaction."
+            )
 
     design_options.append(f"- AMBIANCE & COULEURS : Palette dominante '{theme_palette}' avec variables CSS claires et sombres.")
     user_query_parts.append("\n".join(design_options))
@@ -1336,7 +1473,7 @@ async def generate_page_html(
         return resolved_title, generate_fallback_page(
             resolved_title,
             clean_prompt or "Page didactique interactive",
-            layout_style=layout_style if layout_style != "auto" else "tabs",
+            layout_style=effective_a4_layout if effective_a4_layout != "auto" else "tabs",
             text_density=text_density,
             include_quiz=include_quiz,
             include_svg=include_svg,
@@ -1355,7 +1492,7 @@ async def generate_page_html(
 
     key = _key(settings, "llm_api_key", "du fournisseur IA")
     messages = [
-        {"role": "system", "content": PAGE_SYSTEM_PROMPT},
+        {"role": "system", "content": _get_page_system_prompt(is_strict_a4)},
         {"role": "user", "content": full_user_prompt},
     ]
 
@@ -1397,7 +1534,7 @@ async def generate_page_html(
                     if raise_on_failure:
                         raise ProviderError("La page générée reste incomplète après une seconde tentative compacte. Réessayez.")
                     break
-                if selected_topics:
+                if selected_topics and not is_strict_a4:
                     compact_instruction = (
                         "La précédente réponse a été coupée par la limite de contexte. "
                         "Régénère le document HTML COMPLET en optimisant le code CSS et JavaScript pour laisser "
@@ -1426,7 +1563,7 @@ async def generate_page_html(
             return resolved_title, generate_fallback_page(
                 resolved_title,
                 clean_prompt,
-                layout_style=layout_style if layout_style != "auto" else "tabs",
+                layout_style=effective_a4_layout if effective_a4_layout != "auto" else "tabs",
                 text_density=text_density,
                 include_quiz=include_quiz,
                 include_svg=include_svg,
@@ -1444,7 +1581,12 @@ async def generate_page_html(
         if animation_engine != "none":
             html_code = inject_motion_fx(html_code)
         resolved_title = title or extract_title_from_html(html_code, fallback=clean_prompt[:60])
-        html_code = sanitize_and_enhance_html(html_code, title=resolved_title)
+        html_code = sanitize_and_enhance_html(
+            html_code,
+            title=resolved_title,
+            layout_style=effective_a4_layout,
+            orientation=orientation,
+        )
         return resolved_title, html_code
 
     except Exception as exc:
@@ -1461,7 +1603,7 @@ async def generate_page_html(
         return resolved_title, generate_fallback_page(
             resolved_title,
             clean_prompt,
-            layout_style=layout_style if layout_style != "auto" else "tabs",
+            layout_style=effective_a4_layout if effective_a4_layout != "auto" else "tabs",
             text_density=text_density,
             include_quiz=include_quiz,
             include_svg=include_svg,
@@ -1489,6 +1631,20 @@ async def refine_page_html(
     clean_instruction = instruction.strip()
     target_model = model or getattr(settings, "page_model", None) or getattr(settings, "default_model", None) or "google/gemini-2.5-flash"
 
+    # Preserve strict A4 sheet constraints when refining an A4 sheet/cheat-sheet
+    a4_mode_match = re.search(r'data-a4-mode=["\'](1p|2p)["\']', current_html, re.IGNORECASE)
+    a4_orient_match = re.search(r'data-a4-orientation=["\'](portrait|landscape)["\']', current_html, re.IGNORECASE)
+    has_a4_sheet = bool(a4_mode_match or re.search(r'class=["\'][^"\']*\ba4-sheet\b', current_html, re.IGNORECASE))
+    detected_orientation = a4_orient_match.group(1).lower() if a4_orient_match else "portrait"
+    detected_layout = "auto"
+    if has_a4_sheet:
+        if a4_mode_match and a4_mode_match.group(1) == "2p":
+            detected_layout = "a4_2p"
+        elif detected_orientation == "landscape":
+            detected_layout = "cheat_sheet"
+        else:
+            detected_layout = "a4_1p"
+
     has_llm_key = False
     try:
         if not getattr(settings, "demo_mode", False):
@@ -1505,8 +1661,18 @@ async def refine_page_html(
         return f"{note}\n{current_html}"
 
     key = _key(settings, "llm_api_key", "du fournisseur IA")
+    a4_refine_note = ""
+    if has_a4_sheet:
+        target_pages = "2 pages A4 (<div class=\"a4-sheet\">)" if detected_layout == "a4_2p" else "1 SEULE page A4 (<div class=\"a4-sheet\">)"
+        a4_refine_note = (
+            f"\nCONTRAINTE A4 STRICTE À PRÉSERVER : Cette page est au format A4 strict ({target_pages}, orientation {detected_orientation}). "
+            "Conserve impérativement les attributs data-a4-mode / data-a4-orientation sur <body> ainsi que la structure <div class=\"a4-sheet\"> "
+            "sans augmenter le volume global ni provoquer de débordement sur une page supplémentaire.\n"
+        )
+
     user_prompt = (
-        f"Consigne d'amélioration demandée par l'utilisateur :\n{clean_instruction}\n\n"
+        f"Consigne d'amélioration demandée par l'utilisateur :\n{clean_instruction}\n"
+        f"{a4_refine_note}\n"
         f"Code HTML actuel de la page :\n```html\n{current_html}\n```"
     )
 
@@ -1556,7 +1722,11 @@ async def refine_page_html(
             return current_html
 
         enhanced = inject_motion_fx(inject_text_fx_placeholders(inject_svg_placeholders(updated_html)))
-        return sanitize_and_enhance_html(enhanced)
+        return sanitize_and_enhance_html(
+            enhanced,
+            layout_style=detected_layout,
+            orientation=detected_orientation,
+        )
 
     except Exception as exc:
         _logger.warning("Erreur lors de l'affinage de page HTML par IA: %s", exc)
@@ -1823,6 +1993,41 @@ Format de sortie STRICT : JSON pur valide, SANS AUCUN COMMENTAIRE NI MARKDOWN AU
 """
 
 
+def _apply_a4_topic_constraints(
+    topics: list[dict[str, Any]],
+    is_a4_1p: bool,
+    is_a4_2p: bool,
+    is_cheat_sheet: bool,
+) -> list[dict[str, Any]]:
+    """Borne le nombre de thèmes recommandés et leur niveau de détail pour les formats A4 stricts."""
+    if not (is_a4_1p or is_a4_2p or is_cheat_sheet):
+        return topics
+
+    max_rec = 6 if is_cheat_sheet else (7 if is_a4_2p else 5)
+    rec_detail = 3 if is_a4_2p else 2
+
+    rec_indices = [i for i, t in enumerate(topics) if t.get("recommended")]
+    if len(rec_indices) < min(max_rec, len(topics)):
+        for i in range(len(topics)):
+            if i not in rec_indices:
+                rec_indices.append(i)
+                if len(rec_indices) >= max_rec:
+                    break
+    allowed_rec = set(rec_indices[:max_rec])
+
+    adjusted: list[dict[str, Any]] = []
+    for idx, topic in enumerate(topics):
+        updated = dict(topic)
+        is_rec = idx in allowed_rec
+        updated["recommended"] = is_rec
+        if is_rec or is_a4_1p or is_cheat_sheet:
+            updated["detail_level"] = rec_detail
+        else:
+            updated["detail_level"] = min(4, int(updated.get("detail_level", 3) or 3))
+        adjusted.append(updated)
+    return adjusted
+
+
 async def propose_page_topics(
     settings: Settings,
     prompt: str,
@@ -1832,14 +2037,19 @@ async def propose_page_topics(
     target_audience: str = "general",
     author_persona: str | None = None,
     visual_description: str | None = None,
+    layout_style: str = "auto",
     model: str | None = None,
 ) -> tuple[str, str, list[dict[str, Any]]]:
     """
-    Brainstorms a wide, comprehensive list of 10-14 thematic angles for the given subject.
+    Brainstorms a wide, comprehensive list of thematic angles for the given subject.
     Returns (suggested_title, summary, topics_list).
     """
     clean_prompt = prompt.strip()
     target_model = model or getattr(settings, "page_model", None) or getattr(settings, "default_model", None) or "google/gemini-2.5-flash"
+
+    is_a4_1p = layout_style in ("print_sheet", "a4_1p") or page_type in ("a4_revision_1p", "revision_a4")
+    is_a4_2p = layout_style == "a4_2p" or page_type == "a4_revision_2p"
+    is_cheat_sheet = layout_style == "cheat_sheet" or page_type == "cheat_sheet"
 
     has_llm_key = False
     try:
@@ -1850,7 +2060,8 @@ async def propose_page_topics(
         has_llm_key = False
 
     if not has_llm_key or getattr(settings, "demo_mode", False):
-        return _generate_fallback_topics(clean_prompt, title)
+        f_title, f_summary, f_topics = _generate_fallback_topics(clean_prompt, title)
+        return f_title, f_summary, _apply_a4_topic_constraints(f_topics, is_a4_1p, is_a4_2p, is_cheat_sheet)
 
     key = _key(settings, "llm_api_key", "du fournisseur IA")
 
@@ -1873,10 +2084,29 @@ async def propose_page_topics(
     if visual_description and visual_description.strip():
         user_query_parts.append(f"Ambiance visuelle & couleurs : {visual_description.strip()}")
 
-    user_query_parts.append(
-        "Fais un brainstorming extrêmement large, approfondi et granulaire. "
-        "Génère entre 18 et 26 thèmes, sous-thèmes concrets, outils techniques, figures clés, méthodes et thématiques connexes sous forme de liste JSON complète sans te brider."
-    )
+    if is_cheat_sheet:
+        user_query_parts.append(
+            "CONTRAINTE FORMAT CHEAT SHEET A4 PAYSAGE (1 PAGE) : "
+            "Propose 12 à 16 thèmes utiles au total pour laisser le choix, mais ne marque STRICTEMENT que 5 à 6 thèmes essentiels avec \"recommended\": true "
+            "afin que l'ensemble tienne sur UNE SEULE page A4 Paysage (titres et descriptions courts)."
+        )
+    elif is_a4_1p:
+        user_query_parts.append(
+            "CONTRAINTE FORMAT FICHE A4 STRICTE (1 SEULE PAGE) : "
+            "Propose 12 à 16 thèmes utiles pour laisser le choix à l'utilisateur, mais ne marque STRICTEMENT que 4 ou 5 piliers essentiels avec \"recommended\": true "
+            "afin que la fiche finale tienne confortablement sur UNE SEULE feuille A4 sans débordement."
+        )
+    elif is_a4_2p:
+        user_query_parts.append(
+            "CONTRAINTE FORMAT FICHE A4 RECTO-VERSO (2 PAGES) : "
+            "Propose 14 à 18 thèmes utiles, mais ne marque que 6 ou 7 thèmes essentiels avec \"recommended\": true "
+            "afin de tenir proprement sur EXACTEMENT 2 pages A4."
+        )
+    else:
+        user_query_parts.append(
+            "Fais un brainstorming extrêmement large, approfondi et granulaire. "
+            "Génère entre 18 et 26 thèmes, sous-thèmes concrets, outils techniques, figures clés, méthodes et thématiques connexes sous forme de liste JSON complète sans te brider."
+        )
 
     full_user_prompt = "\n\n".join(user_query_parts)
 
@@ -1936,10 +2166,11 @@ async def propose_page_topics(
                 })
 
             if len(topics) >= 4:
-                return s_title, s_summary, topics
+                return s_title, s_summary, _apply_a4_topic_constraints(topics, is_a4_1p, is_a4_2p, is_cheat_sheet)
 
     except Exception as exc:
         _logger.warning("Erreur lors de la proposition de thèmes par IA: %s; utilisation du fallback.", exc)
 
-    return _generate_fallback_topics(clean_prompt, title)
+    f_title, f_summary, f_topics = _generate_fallback_topics(clean_prompt, title)
+    return f_title, f_summary, _apply_a4_topic_constraints(f_topics, is_a4_1p, is_a4_2p, is_cheat_sheet)
 

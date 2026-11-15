@@ -1108,24 +1108,22 @@
 /* Presets Row */
 .presetsRow {
   display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  overflow-x: auto;
-  scrollbar-width: none;
-  margin-bottom: 1.15rem;
-  padding-bottom: 0.25rem;
+  align-items: stretch;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-bottom: 0.85rem;
 }
 
 .presetBtn {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
-  padding: 0.35rem 0.65rem;
-  border-radius: 8px;
+  padding: 0.4rem 0.7rem;
+  border-radius: 9px;
   border: 1px solid var(--border-color, #cbd5e1);
   background: var(--bg-surface, #ffffff);
   color: var(--text-primary, #0f172a);
-  font-size: 0.74rem;
+  font-size: 0.75rem;
   font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
@@ -1133,11 +1131,44 @@
   transition: all 0.15s;
 }
 
+.presetBtnStrict {
+  border-color: rgba(16, 185, 129, 0.45);
+  background: rgba(16, 185, 129, 0.06);
+}
+
+.presetBadgeStrict {
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 0.08rem 0.35rem;
+  border-radius: 4px;
+  background: rgba(16, 185, 129, 0.16);
+  color: #047857;
+}
+
+:global([data-theme="dark"]) .presetBadgeStrict,
+:global(.dark) .presetBadgeStrict {
+  background: rgba(16, 185, 129, 0.25);
+  color: #34d399;
+}
+
+.presetBtn.active .presetBadgeStrict {
+  background: rgba(255, 255, 255, 0.22);
+  color: #ffffff;
+}
+
 :global([data-theme="dark"]) .presetBtn,
 :global(.dark) .presetBtn {
   background: #0f172a;
   border-color: #334155;
   color: #f8fafc;
+}
+
+:global([data-theme="dark"]) .presetBtnStrict,
+:global(.dark) .presetBtnStrict {
+  border-color: rgba(52, 211, 153, 0.4);
+  background: rgba(16, 185, 129, 0.12);
 }
 
 .presetBtn:hover {
@@ -1155,6 +1186,59 @@
   background: #0284c7;
   border-color: #38bdf8;
   color: #ffffff;
+}
+
+.a4ConstraintBanner {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.6rem 0.85rem;
+  margin-bottom: 1rem;
+  border-radius: 9px;
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  background: rgba(16, 185, 129, 0.08);
+  color: #065f46;
+  font-size: 0.76rem;
+  line-height: 1.4;
+}
+
+:global([data-theme="dark"]) .a4ConstraintBanner,
+:global(.dark) .a4ConstraintBanner {
+  background: rgba(16, 185, 129, 0.14);
+  border-color: rgba(52, 211, 153, 0.35);
+  color: #a7f3d0;
+}
+
+.unifiedModelWrap {
+  max-width: 310px;
+}
+
+.unifiedModelWrapFull {
+  width: 100%;
+  max-width: 100%;
+}
+
+.unifiedModelWrapCompact {
+  max-width: 265px;
+}
+
+:global([data-theme="dark"]) .unifiedModelWrap,
+:global(.dark) .unifiedModelWrap,
+:global([data-theme="dark"]) .unifiedModelWrapFull,
+:global(.dark) .unifiedModelWrapFull,
+:global([data-theme="dark"]) .unifiedModelWrapCompact,
+:global(.dark) .unifiedModelWrapCompact {
+  background: #0f172a;
+  border-color: #334155;
+}
+
+:global([data-theme="dark"]) .unifiedModelWrap :global(.model-current-name),
+:global(.dark) .unifiedModelWrap :global(.model-current-name),
+:global([data-theme="dark"]) .unifiedModelWrapFull :global(.model-current-name),
+:global(.dark) .unifiedModelWrapFull :global(.model-current-name),
+:global([data-theme="dark"]) .unifiedModelWrapCompact :global(.model-current-name),
+:global(.dark) .unifiedModelWrapCompact :global(.model-current-name) {
+  color: #f8fafc;
 }
 
 /* Two-column options grid for key settings */
