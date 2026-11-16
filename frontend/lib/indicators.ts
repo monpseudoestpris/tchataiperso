@@ -135,3 +135,85 @@ export function vwap(high: number[], low: number[], close: number[], volume: num
     return vol === 0 ? null : pv / vol;
   });
 }
+
+/** Supertrend (période ATR 10, multiplicateur 3). */
+export function supertrend(
+  high: number[],
+  low: number[],
+  close: number[],
+  period = 10,
+  multiplier = 3,
+): { value: Num[]; direction: (1 | -1 | null)[] } {
+  const n = close.length;
+  const atrVals = atr(high, low, close, period);
+  const value: Num[] = new Array(n).fill(null);
+  const direction: (1 | -1 | null)[] = new Array(n).fill(null);
+
+  let prevFinalUpper: number | null = null;
+  let prevFinalLower: number | null = null;
+  let prevDir: 1 | -1 | null = null;
+
+  for (let i = 0; i < n; i++) {
+    const a = atrVals[i];
+    if (a == null) continue;
+    const hl2 = (high[i] + low[i]) / 2;
+    const basicUpper = hl2 + multiplier * a;
+    const basicLower = hl2 - multiplier * a;
+
+    const finalUpper: number =
+      prevFinalUpper == null || basicUpper < prevFinalUpper || close[i - 1] > prevFinalUpper
+        ? basicUpper
+        : prevFinalUpper;
+    const finalLower: number =
+      prevFinalLower == null || basicLower > prevFinalLower || close[i - 1] < prevFinalLower
+        ? basicLower
+        : prevFinalLower;
+
+    let dir: 1 | -1;
+    if (prevDir == null) {
+      dir = close[i] >= hl2 ? 1 : -1;
+    } else if (prevDir === -1 && close[i] > finalUpper) {
+      dir = 1;
+    } else if (prevDir === 1 && close[i] < finalLower) {
+      dir = -1;
+    } else {
+      dir = prevDir;
+    }
+
+    direction[i] = dir;
+    value[i] = dir === 1 ? finalLower : finalUpper;
+    prevFinalUpper = finalUpper;
+    prevFinalLower = finalLower;
+    prevDir = dir;
+  }
+
+  return { value, direction };
+}
+
+/**
+ * Rex Oscillator (REX, 14, Signal 14).
+ * TVB = 3*close - (open + high + low) = (close - low) + (close - high) + (close - open)
+ */
+export function rex(
+  open: number[],
+  high: number[],
+  low: number[],
+  close: number[],
+  period = 14,
+  signalPeriod = 14,
+): { rex: Num[]; signal: Num[] } {
+  const n = close.length;
+  const tvb = close.map((c, i) => 3 * c - (open[i] + high[i] + low[i]));
+  const rexLine = sma(tvb, period);
+
+  // SMA of rexLine over non-null prefix
+  const firstValid = rexLine.findIndex(v => v != null);
+  if (firstValid === -1) {
+    return { rex: rexLine, signal: new Array(n).fill(null) };
+  }
+  const validSlice = rexLine.slice(firstValid) as number[];
+  const sigSlice = sma(validSlice, signalPeriod);
+  const signal: Num[] = new Array(firstValid).fill(null).concat(sigSlice);
+
+  return { rex: rexLine, signal };
+}

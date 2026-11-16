@@ -7,11 +7,19 @@ Application de chat IA multi-fournisseurs (`tchataiperso`) composée d'un backen
 - L'espace **Marchés Financiers** (`FinanceModal`) avec cotations EODHD/Yahoo, indicateurs personnalisés, actualités, rapports trimestriels et onglet **MOAT** (travaux antérieurs non committés conservés).
 
 ## 2. Current Objective
-En mode **Conseil IA (Multi-Agents)**, utiliser par défaut le modèle IA sélectionné dans le tchat (tout en conservant la possibilité de personnaliser un modèle par agent si souhaité).
+Dans l'espace **Marchés Financiers** (`FinanceModal`), permettre de basculer la section courbe + indicateurs techniques et la modale de définition d'indicateurs personnalisés en plein écran et de revenir au mode réduit.
 
-**Statut** : Implémentation terminée et vérifiée par `pytest` (`test_multi_agent.py`) et `tsc --noEmit`.
+**Statut** : Implémentation terminée et vérifiée par `tsc --noEmit`.
 
 ## 3. Completed Work
+- **Outils de dessin & nouveaux indicateurs techniques (`frontend/lib/chart-drawings.ts`, `frontend/lib/indicators.ts`, `frontend/components/finance-tv-chart.tsx`, `frontend/components/finance-modal.tsx`, `frontend/app/globals.css`)** :
+  - Ajout d'une barre de dessin (*Curseur*, *Ligne*, *Horizontale*, *Rectangle*, palette de 5 couleurs, *Supprimer* / *Effacer*, déplacement par glisser-déposer, poignées de redimensionnement, pastille **×** et clic droit pour supprimer) avec superposition SVG synchronisée sur les coordonnées `(date, prix)` de `lightweight-charts` v5 et persistance `localStorage` par symbole (`clair_finance_drawings_<SYMBOL>`).
+  - Ajout des indicateurs **Supertrend** (ATR 10, mult. 3, courbe vert/rouge sur le prix) et **REX** (Rex Oscillator 14 + Signal 14 + ligne zéro dans son panneau dédié).
+  - Paramétrage de tous les indicateurs préprogrammés via `frontend/lib/indicator-params.ts` (périodes, multiplicateurs, seuils de surachat/survente, pas SAR, etc.) avec bouton engrenage sur chaque pastille, panneau d'édition en direct, réinitialisation par défaut et persistance `localStorage` (`clair_finance_indicator_params_v1`).
+- **Plein écran courbe + indicateurs techniques & éditeur d'indicateurs (`frontend/components/finance-modal.tsx`, `frontend/components/finance-tv-chart.tsx`, `frontend/components/finance-custom-indicator-modal.tsx`, `frontend/app/globals.css`)** :
+  - Ajout de l'état `chartFullscreen` et du bouton **Plein écran / Mode réduit** (`Maximize2` / `Minimize2`) dans `.finance-chart-header`, ainsi que la sortie via la touche `Échap` sans fermer toute la modale `FinanceModal`.
+  - Passage de `fullscreen={chartFullscreen}` à `FinanceTvChart` pour adapter la hauteur du conteneur `lightweight-charts` (et agrandissement du graphique SVG en mode `Courbe`).
+  - Ajout de l'état `isFullscreen` et du bouton **Plein écran / Mode réduit** dans l'en-tête de `FinanceCustomIndicatorModal`, et passage de `.finance-submodal-backdrop` à `z-index: 10020` pour rester au-dessus du graphique plein écran (`z-index: 10000`).
 - **Conseil IA aligné sur le modèle sélectionné (`backend/app/schemas.py`, `backend/app/multi_agent.py`, `backend/app/routers/messages.py`, `backend/tests/test_multi_agent.py`, `frontend/lib/api.ts`, `frontend/components/multi-agent-modal.tsx`, `frontend/components/chat-app.tsx`)** :
   - Ajout de `use_selected_model` sur `MultiAgentConfig` (`False` par défaut côté schéma API pour compatibilité rétroactive, `true` par défaut côté UI).
   - `resolve_model` accepte désormais `fallback_model` (le modèle sélectionné de la requête/conversation) avant de se replier sur `settings.default_model`, et `_effective_agent_model` applique le modèle sélectionné à tous les agents (modes `synthesis`, `debate`, `dialectic`/`contradictory` et mode démo) lorsque `use_selected_model` est actif.
@@ -85,12 +93,21 @@ En mode **Conseil IA (Multi-Agents)**, utiliser par défaut le modèle IA sélec
   - `frontend/components/web-page-modal.tsx`
   - `frontend/components/web-page-modal.module.css`
   - `frontend/components/chat-app.tsx`
+  - `frontend/components/finance-modal.tsx`
+  - `frontend/components/finance-tv-chart.tsx`
+  - `frontend/components/finance-custom-indicator-modal.tsx`
+  - `frontend/lib/chart-drawings.ts`
+  - `frontend/lib/indicator-params.ts`
+  - `frontend/lib/indicators.ts`
   - `frontend/app/globals.css`
 
 - Modifiés (scripts) :
   - `scripts/start.sh` : point d'entrée unifié (`prod`, `dev`, `local`, `stop`, `logs`, `status`, `--lan`) partageant la même BDD PostgreSQL et les mêmes uploads entre `dev` et `prod`.
 
 ## 6. Verification
+- `npm --prefix frontend run typecheck` : **RÉUSSI** (0 erreur TypeScript après ajout du paramétrage des indicateurs).
+- `npx --prefix frontend eslint --config frontend/eslint.config.mjs --max-warnings 0 frontend/lib/chart-drawings.ts frontend/lib/indicators.ts frontend/lib/indicator-params.ts` : **RÉUSSI** (0 erreur, 0 warning).
+- `npx --prefix frontend eslint --config frontend/eslint.config.mjs --max-warnings 0 frontend/components/finance-modal.tsx frontend/components/finance-tv-chart.tsx frontend/components/finance-custom-indicator-modal.tsx` : **27 problèmes préexistants** (22 erreurs, 5 warnings) sur du code antérieur, 0 problème sur les lignes ajoutées.
 - `PYTHONPATH=backend backend/.venv/bin/pytest backend/tests/test_multi_agent.py -v` : **RÉUSSI — 6 passed, 1 warning**.
 - `python3 -m py_compile backend/app/schemas.py backend/app/multi_agent.py backend/app/routers/messages.py` : **RÉUSSI**.
 - `npm --prefix frontend run typecheck` : **RÉUSSI** (0 erreur TypeScript).

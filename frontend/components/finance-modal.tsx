@@ -20,7 +20,9 @@ import {
   FileText,
   LineChart,
   LoaderCircle,
+  Maximize2,
   MessageSquarePlus,
+  Minimize2,
   Newspaper,
   RefreshCw,
   Search,
@@ -126,6 +128,7 @@ export function FinanceModal({
   const [timeframe, setTimeframe] = useState<FinanceRange>("1m");
   const [rangeLoading, setRangeLoading] = useState(false);
   const [chartView, setChartView] = useState<"line" | "advanced">("line");
+  const [chartFullscreen, setChartFullscreen] = useState(false);
   const [hoveredBarIndex, setHoveredBarIndex] = useState<number | null>(null);
   const [copied, setCopied] = useState(false);
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>([]);
@@ -169,12 +172,16 @@ export function FinanceModal({
           setEditingIndicator(null);
           return;
         }
+        if (chartFullscreen) {
+          setChartFullscreen(false);
+          return;
+        }
         onClose();
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen, indicatorModalOpen, onClose]);
+  }, [isOpen, indicatorModalOpen, chartFullscreen, onClose]);
 
   async function loadWorkspaceData(forceRefreshWatchlist = false) {
     setWatchlistLoading(true);
@@ -632,14 +639,19 @@ export function FinanceModal({
               </div>
 
               {/* Section 1: Courbe interactive du cours via EOD */}
-              <div className="finance-chart-section" ref={chartSectionRef}>
+              <div
+                className={`finance-chart-section${chartFullscreen ? " is-fullscreen" : ""}`}
+                ref={chartSectionRef}
+              >
                 <div className="finance-chart-header">
                   <div className="finance-chart-title">
                     <span className="chart-icon-wrap">
                       <TrendingUp size={16} />
                     </span>
                     <div>
-                      <strong>Courbe du cours (EOD Historical Data)</strong>
+                      <strong>
+                        {data.long_name || data.short_name || data.symbol} ({data.symbol})
+                      </strong>
                       <small>
                         {filteredBars.length} points · {TIMEFRAME_LABELS[timeframe]} ·{" "}
                         {timeframeStats ? (
@@ -656,38 +668,74 @@ export function FinanceModal({
                     </div>
                   </div>
 
-                  <div className="finance-timeframe-selector">
-                    {(Object.keys(TIMEFRAME_LABELS) as FinanceRange[]).map(tf => (
-                      <button
-                        key={tf}
-                        type="button"
-                        disabled={rangeLoading}
-                        className={`finance-tf-btn ${timeframe === tf ? "active" : ""}`}
-                        onClick={() => void changeTimeframe(tf)}
-                      >
-                        {TIMEFRAME_LABELS[tf]}
-                      </button>
-                    ))}
+                  <div className="finance-chart-header-controls">
+                    {chartFullscreen && (
+                      <div className="finance-timeframe-selector finance-chart-view-toggle is-inline">
+                        {(["line", "advanced"] as const).map(v => (
+                          <button
+                            key={v}
+                            type="button"
+                            className={`finance-tf-btn ${chartView === v ? "active" : ""}`}
+                            onClick={() => setChartView(v)}
+                          >
+                            {v === "line" ? "Courbe" : "Analyse technique"}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
+                    <div className="finance-timeframe-selector">
+                      {(Object.keys(TIMEFRAME_LABELS) as FinanceRange[]).map(tf => (
+                        <button
+                          key={tf}
+                          type="button"
+                          disabled={rangeLoading}
+                          className={`finance-tf-btn ${timeframe === tf ? "active" : ""}`}
+                          onClick={() => void changeTimeframe(tf)}
+                        >
+                          {TIMEFRAME_LABELS[tf]}
+                        </button>
+                      ))}
+                    </div>
+
+                    <button
+                      type="button"
+                      className={`finance-chart-fullscreen-btn${chartFullscreen ? " active" : ""}`}
+                      onClick={() => setChartFullscreen(prev => !prev)}
+                      title={
+                        chartFullscreen
+                          ? "Revenir au mode réduit (Échap)"
+                          : "Passer la courbe et les indicateurs en plein écran"
+                      }
+                      aria-label={chartFullscreen ? "Revenir au mode réduit" : "Passer en plein écran"}
+                    >
+                      {chartFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+                      <span>{chartFullscreen ? "Mode réduit" : "Plein écran"}</span>
+                    </button>
                   </div>
                 </div>
 
-                <div className="finance-timeframe-selector finance-chart-view-toggle">
-                  {(["line", "advanced"] as const).map(v => (
-                    <button
-                      key={v}
-                      type="button"
-                      className={`finance-tf-btn ${chartView === v ? "active" : ""}`}
-                      onClick={() => setChartView(v)}
-                    >
-                      {v === "line" ? "Courbe" : "Analyse technique"}
-                    </button>
-                  ))}
-                </div>
+                {!chartFullscreen && (
+                  <div className="finance-timeframe-selector finance-chart-view-toggle">
+                    {(["line", "advanced"] as const).map(v => (
+                      <button
+                        key={v}
+                        type="button"
+                        className={`finance-tf-btn ${chartView === v ? "active" : ""}`}
+                        onClick={() => setChartView(v)}
+                      >
+                        {v === "line" ? "Courbe" : "Analyse technique"}
+                      </button>
+                    ))}
+                  </div>
+                )}
 
                 {chartView === "advanced" && (
                   <FinanceTvChart
                     bars={filteredBars}
+                    symbol={data.symbol}
                     dark={typeof document !== "undefined" && document.documentElement.dataset.theme === "dark"}
+                    fullscreen={chartFullscreen}
                     customIndicators={customIndicators}
                     onOpenIndicatorEditor={ind => {
                       setEditingIndicator(ind ?? null);

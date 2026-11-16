@@ -7,14 +7,35 @@ import {
   HistogramSeries,
   LineSeries,
   type IChartApi,
+  type ISeriesApi,
+  type Logical,
   type Time,
   type UTCTimestamp,
 } from "lightweight-charts";
-import { Pencil, Plus, Trash2 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { ChevronDown, ChevronUp, Eraser, Minus, MousePointer, Pencil, Plus, RotateCcw, Settings2, Square, Trash2, TrendingUp, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { CustomIndicator, EodBar } from "@/lib/api";
+import {
+  dateToLogicalIndex,
+  DRAWING_COLORS,
+  loadChartDrawings,
+  saveChartDrawings,
+  type ChartDrawing,
+  type DrawingTool,
+} from "@/lib/chart-drawings";
 import { evaluateCustomIndicator } from "@/lib/custom-indicators";
+import {
+  DEFAULT_INDICATOR_PARAMS,
+  formatIndicatorLabel,
+  INDICATOR_PARAM_DEFS,
+  isConfigurableIndicator,
+  loadIndicatorParams,
+  saveIndicatorParams,
+  type ConfigurableIndicatorKey,
+  type IndicatorKey,
+  type IndicatorParamsMap,
+} from "@/lib/indicator-params";
 import {
   adx,
   atr,
@@ -24,44 +45,24 @@ import {
   macd,
   obv,
   parabolicSar,
+  rex,
   roc,
   rsi,
   sma,
   stochastic,
+  supertrend,
   vwap,
   williamsR,
   type Num,
 } from "@/lib/indicators";
 
-type IndicatorKey =
-  | "sma20" | "sma50" | "sma200" | "ema20" | "ema50" | "boll" | "vwap" | "sar" | "volume"
-  | "rsi" | "macd" | "stoch" | "willr" | "cci" | "roc" | "atr" | "adx" | "obv";
-
-const OVERLAYS: { key: IndicatorKey; label: string }[] = [
-  { key: "sma20", label: "SMA 20" },
-  { key: "sma50", label: "SMA 50" },
-  { key: "sma200", label: "SMA 200" },
-  { key: "ema20", label: "EMA 20" },
-  { key: "ema50", label: "EMA 50" },
-  { key: "boll", label: "Bollinger" },
-  { key: "vwap", label: "VWAP" },
-  { key: "sar", label: "SAR" },
-  { key: "volume", label: "Volume" },
+const OVERLAY_KEYS: IndicatorKey[] = [
+  "sma20", "sma50", "sma200", "ema20", "ema50", "boll", "supertrend", "vwap", "sar", "volume",
 ];
 
-const OSCILLATORS: { key: IndicatorKey; label: string }[] = [
-  { key: "rsi", label: "RSI 14" },
-  { key: "macd", label: "MACD" },
-  { key: "stoch", label: "Stoch." },
-  { key: "willr", label: "Williams %R" },
-  { key: "cci", label: "CCI 20" },
-  { key: "roc", label: "ROC 12" },
-  { key: "atr", label: "ATR 14" },
-  { key: "adx", label: "ADX 14" },
-  { key: "obv", label: "OBV" },
+const OSCILLATOR_KEYS: IndicatorKey[] = [
+  "rsi", "macd", "rex", "stoch", "willr", "cci", "roc", "atr", "adx", "obv",
 ];
-
-const OSCILLATOR_KEYS = OSCILLATORS.map(o => o.key);
 
 /** "YYYY-MM-DD" reste une date métier ; "YYYY-MM-DD HH:MM" (intraday) devient un timestamp UTC. */
 function toTime(date: string): Time {
@@ -75,25 +76,72 @@ function pick(times: Time[], values: Num[]) {
 
 type FinanceTvChartProps = {
   bars: EodBar[];
+  symbol?: string;
   dark: boolean;
+  fullscreen?: boolean;
   customIndicators?: CustomIndicator[];
   onOpenIndicatorEditor?: (indicator?: CustomIndicator | null) => void;
   onDeleteCustomIndicator?: (id: string) => void;
 };
 
-/** Graphique en chandeliers (TradingView lightweight-charts) avec indicateurs natifs et personnalisés. */
+type ProjectedDrawing = {
+  id: string;
+  type: "line" | "hline" | "rect";
+  color: string;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  priceLabel?: string;
+};
+
+/** Graphique en chandeliers (TradingView lightweight-charts) avec indicateurs natifs, personnalisés et outils de dessin. */
 export function FinanceTvChart({
   bars,
+  symbol,
   dark,
+  fullscreen = false,
   customIndicators = [],
   onOpenIndicatorEditor,
   onDeleteCustomIndicator,
 }: FinanceTvChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
+  const candlesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const rowsRef = useRef<EodBar[]>([]);
   const [active, setActive] = useState<Set<IndicatorKey>>(new Set(["sma20", "volume", "rsi"]));
   const [activeCustom, setActiveCustom] = useState<Set<string>>(new Set());
+  const [params, setParams] = useState<IndicatorParamsMap>(() => loadIndicatorParams());
+  const [editingParamKey, setEditingParamKey] = useState<ConfigurableIndicatorKey | null>(null);
+  const [toolbarsCollapsed, setToolbarsCollapsed] = useState(false);
   const seenCustomIdsRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    saveIndicatorParams(params);
+  }, [params]);
+
+  // Drawing state
+  const [tool, setTool] = useState<DrawingTool>("none");
+  const [drawColor, setDrawColor] = useState<string>(DRAWING_COLORS[0]);
+  const [drawings, setDrawings] = useState<ChartDrawing[]>(() => loadChartDrawings(symbol));
+  const [draft, setDraft] = useState<ChartDrawing | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const dragStartPxRef = useRef<{ x: number; y: number } | null>(null);
+  const [overlaySize, setOverlaySize] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
+  const [projectedDrawings, setProjectedDrawings] = useState<ProjectedDrawing[]>([]);
+  const [projectedDraft, setProjectedDraft] = useState<ProjectedDrawing | null>(null);
+
+  // Sync drawings when symbol changes
+  useEffect(() => {
+    setDrawings(loadChartDrawings(symbol));
+    setDraft(null);
+    setSelectedId(null);
+  }, [symbol]);
+
+  useEffect(() => {
+    saveChartDrawings(symbol, drawings);
+  }, [symbol, drawings]);
 
   // Active automatiquement tout nouvel indicateur personnalisé ayant enabled_by_default
   useEffect(() => {
@@ -138,6 +186,7 @@ export function FinanceTvChart({
       b => b.close != null && b.open != null && b.high != null && b.low != null,
     );
     const times = rows.map(b => toTime(b.date));
+    const opens = rows.map(b => b.open as number);
     const closes = rows.map(b => b.close as number);
     const highs = rows.map(b => b.high as number);
     const lows = rows.map(b => b.low as number);
@@ -157,6 +206,7 @@ export function FinanceTvChart({
       timeScale: { timeVisible: rows.length > 0 && rows[0].date.length > 10 },
     });
     chartRef.current = chart;
+    rowsRef.current = rows;
 
     const candles = chart.addSeries(CandlestickSeries, {
       upColor: "#10b981",
@@ -165,6 +215,7 @@ export function FinanceTvChart({
       wickUpColor: "#10b981",
       wickDownColor: "#f43f5e",
     });
+    candlesRef.current = candles;
     candles.setData(
       rows.map((b, i) => ({
         time: times[i],
@@ -240,11 +291,11 @@ export function FinanceTvChart({
       }
     };
 
-    if (active.has("sma20")) addLine(sma(closes, 20), "#3b82f6");
-    if (active.has("sma50")) addLine(sma(closes, 50), "#f59e0b");
-    if (active.has("sma200")) addLine(sma(closes, 200), "#ef4444");
-    if (active.has("ema20")) addLine(ema(closes, 20), "#a855f7");
-    if (active.has("ema50")) addLine(ema(closes, 50), "#ec4899");
+    if (active.has("sma20")) addLine(sma(closes, params.sma20.period), "#3b82f6");
+    if (active.has("sma50")) addLine(sma(closes, params.sma50.period), "#f59e0b");
+    if (active.has("sma200")) addLine(sma(closes, params.sma200.period), "#ef4444");
+    if (active.has("ema20")) addLine(ema(closes, params.ema20.period), "#a855f7");
+    if (active.has("ema50")) addLine(ema(closes, params.ema50.period), "#ec4899");
     if (active.has("vwap")) {
       addLine(vwap(highs, lows, closes, volumes, rows.map(b => b.date.slice(0, 10))), "#0ea5e9");
     }
@@ -257,13 +308,35 @@ export function FinanceTvChart({
         priceLineVisible: false,
         lastValueVisible: false,
       });
-      sar.setData(pick(times, parabolicSar(highs, lows)));
+      sar.setData(pick(times, parabolicSar(highs, lows, params.sar.step, params.sar.max)));
     }
     if (active.has("boll")) {
-      const b = bollinger(closes);
+      const b = bollinger(closes, params.boll.period, params.boll.mult);
       addLine(b.upper, "#94a3b8");
       addLine(b.mid, "#64748b");
       addLine(b.lower, "#94a3b8");
+    }
+    if (active.has("supertrend")) {
+      const st = supertrend(highs, lows, closes, params.supertrend.period, params.supertrend.multiplier);
+      const stSeries = chart.addSeries(LineSeries, {
+        lineWidth: 2,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        title: "Supertrend",
+      });
+      stSeries.setData(
+        st.value.flatMap((v, i) =>
+          v == null || !Number.isFinite(v)
+            ? []
+            : [
+                {
+                  time: times[i],
+                  value: v,
+                  color: st.direction[i] === 1 ? "#10b981" : "#f43f5e",
+                },
+              ],
+        ),
+      );
     }
     if (active.has("volume")) {
       const vol = chart.addSeries(
@@ -299,9 +372,12 @@ export function FinanceTvChart({
     for (const key of OSCILLATOR_KEYS) {
       if (!active.has(key)) continue;
       if (key === "rsi") {
-        guides(addLine(rsi(closes, 14), "#8b5cf6", pane, "RSI 14"), [[70, "#f43f5e"], [30, "#10b981"]]);
+        guides(addLine(rsi(closes, params.rsi.period), "#8b5cf6", pane, `RSI ${params.rsi.period}`), [
+          [params.rsi.overbought, "#f43f5e"],
+          [params.rsi.oversold, "#10b981"],
+        ]);
       } else if (key === "macd") {
-        const m = macd(closes);
+        const m = macd(closes, params.macd.fast, params.macd.slow, params.macd.signal);
         const hist = chart.addSeries(HistogramSeries, { priceLineVisible: false, lastValueVisible: false }, pane);
         hist.setData(
           m.hist.flatMap((v, i) =>
@@ -310,20 +386,24 @@ export function FinanceTvChart({
         );
         addLine(m.line, "#3b82f6", pane, "MACD");
         addLine(m.signal, "#f59e0b", pane, "Signal");
+      } else if (key === "rex") {
+        const r = rex(opens, highs, lows, closes, params.rex.period, params.rex.signal);
+        guides(addLine(r.rex, "#3b82f6", pane, "REX"), [[0, "#94a3b8"]]);
+        addLine(r.signal, "#f59e0b", pane, "Signal");
       } else if (key === "stoch") {
-        const st = stochastic(highs, lows, closes);
+        const st = stochastic(highs, lows, closes, params.stoch.period, params.stoch.signal);
         guides(addLine(st.k, "#3b82f6", pane, "%K"), [[80, "#f43f5e"], [20, "#10b981"]]);
         addLine(st.d, "#f59e0b", pane, "%D");
       } else if (key === "willr") {
-        guides(addLine(williamsR(highs, lows, closes), "#14b8a6", pane, "%R"), [[-20, "#f43f5e"], [-80, "#10b981"]]);
+        guides(addLine(williamsR(highs, lows, closes, params.willr.period), "#14b8a6", pane, "%R"), [[-20, "#f43f5e"], [-80, "#10b981"]]);
       } else if (key === "cci") {
-        guides(addLine(cci(highs, lows, closes), "#6366f1", pane, "CCI"), [[100, "#f43f5e"], [-100, "#10b981"]]);
+        guides(addLine(cci(highs, lows, closes, params.cci.period), "#6366f1", pane, "CCI"), [[100, "#f43f5e"], [-100, "#10b981"]]);
       } else if (key === "roc") {
-        guides(addLine(roc(closes), "#0ea5e9", pane, "ROC"), [[0, "#94a3b8"]]);
+        guides(addLine(roc(closes, params.roc.period), "#0ea5e9", pane, "ROC"), [[0, "#94a3b8"]]);
       } else if (key === "atr") {
-        addLine(atr(highs, lows, closes), "#f97316", pane, "ATR");
+        addLine(atr(highs, lows, closes, params.atr.period), "#f97316", pane, "ATR");
       } else if (key === "adx") {
-        const a = adx(highs, lows, closes);
+        const a = adx(highs, lows, closes, params.adx.period);
         guides(addLine(a.adx, "#0f172a", pane, "ADX"), [[25, "#94a3b8"]]);
         addLine(a.plusDi, "#10b981", pane, "+DI");
         addLine(a.minusDi, "#f43f5e", pane, "-DI");
@@ -344,11 +424,259 @@ export function FinanceTvChart({
     }
 
     chart.timeScale().fitContent();
+
+    const updateSizeAndProjections = () => {
+      const size = chart.paneSize(0);
+      setOverlaySize({ width: size.width, height: size.height });
+    };
+    updateSizeAndProjections();
+
+    const ro = new ResizeObserver(updateSizeAndProjections);
+    ro.observe(el);
+
     return () => {
+      ro.disconnect();
       chart.remove();
       chartRef.current = null;
+      candlesRef.current = null;
     };
-  }, [bars, active, activeCustom, customIndicators, customResults, dark]);
+  }, [bars, active, activeCustom, customIndicators, customResults, dark, params]);
+
+  const projectDrawing = useCallback((d: ChartDrawing, paneWidth: number): ProjectedDrawing | null => {
+    const chart = chartRef.current;
+    const candles = candlesRef.current;
+    const rows = rowsRef.current;
+    if (!chart || !candles || rows.length === 0) return null;
+
+    const y1 = candles.priceToCoordinate(d.p1);
+    if (y1 == null) return null;
+
+    if (d.type === "hline") {
+      return {
+        id: d.id,
+        type: "hline",
+        color: d.color,
+        x1: 0,
+        y1,
+        x2: paneWidth,
+        y2: y1,
+        priceLabel: d.p1.toFixed(2),
+      };
+    }
+
+    const idx1 = dateToLogicalIndex(rows, d.t1);
+    const idx2 = dateToLogicalIndex(rows, d.t2);
+    if (idx1 == null || idx2 == null) return null;
+    const x1 = chart.timeScale().logicalToCoordinate(idx1 as Logical);
+    const x2 = chart.timeScale().logicalToCoordinate(idx2 as Logical);
+    const y2 = candles.priceToCoordinate(d.p2);
+    if (x1 == null || x2 == null || y2 == null) return null;
+
+    return {
+      id: d.id,
+      type: d.type,
+      color: d.color,
+      x1,
+      y1,
+      x2,
+      y2,
+    };
+  }, []);
+
+  const recomputeOverlay = useCallback(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    const size = chart.paneSize(0);
+    setOverlaySize({ width: size.width, height: size.height });
+    setProjectedDrawings(
+      drawings.flatMap(d => {
+        const p = projectDrawing(d, size.width);
+        return p ? [p] : [];
+      }),
+    );
+    setProjectedDraft(draft ? projectDrawing(draft, size.width) : null);
+  }, [drawings, draft, projectDrawing]);
+
+  useEffect(() => {
+    recomputeOverlay();
+    const chart = chartRef.current;
+    if (!chart) return;
+    const handler = () => recomputeOverlay();
+    chart.timeScale().subscribeVisibleLogicalRangeChange(handler);
+    return () => {
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(handler);
+    };
+  }, [recomputeOverlay, bars, active, activeCustom, fullscreen]);
+
+  // Delete selected drawing with Delete / Backspace
+  useEffect(() => {
+    if (!selectedId) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Delete" || e.key === "Backspace") {
+        const target = e.target as HTMLElement | null;
+        if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
+        e.preventDefault();
+        setDrawings(prev => prev.filter(d => d.id !== selectedId));
+        setSelectedId(null);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [selectedId]);
+
+  function pointFromEvent(e: React.MouseEvent<SVGSVGElement>): { date: string; price: number; px: { x: number; y: number } } | null {
+    const chart = chartRef.current;
+    const candles = candlesRef.current;
+    const rows = rowsRef.current;
+    if (!chart || !candles || rows.length === 0) return null;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const price = candles.coordinateToPrice(y);
+    const logical = chart.timeScale().coordinateToLogical(x);
+    if (price == null || logical == null) return null;
+    const clampedIdx = Math.max(0, Math.min(rows.length - 1, Math.round(logical)));
+    return { date: rows[clampedIdx].date, price: Number(price), px: { x, y } };
+  }
+
+  function commitDraft(nextDraft: ChartDrawing) {
+    setDrawings(prev => [...prev, nextDraft]);
+    setDraft(null);
+    dragStartPxRef.current = null;
+    setSelectedId(nextDraft.id);
+  }
+
+  function deleteDrawing(id: string) {
+    setDrawings(prev => prev.filter(d => d.id !== id));
+    setSelectedId(prev => (prev === id ? null : prev));
+  }
+
+  function startShapeDrag(
+    e: React.MouseEvent,
+    projected: ProjectedDrawing,
+    mode: "move" | "p1" | "p2",
+  ) {
+    if (tool !== "none") return;
+    e.stopPropagation();
+    e.preventDefault();
+    setSelectedId(projected.id);
+
+    const svgEl = svgRef.current;
+    const chart = chartRef.current;
+    const candles = candlesRef.current;
+    const rows = rowsRef.current;
+    const orig = drawings.find(d => d.id === projected.id);
+    if (!svgEl || !chart || !candles || rows.length === 0 || !orig) return;
+
+    const rect = svgEl.getBoundingClientRect();
+    const startX = e.clientX - rect.left;
+    const startY = e.clientY - rect.top;
+
+    chart.applyOptions({ handleScroll: { mouseWheel: true, pressedMouseMove: false } });
+
+    const pxToDate = (x: number): string | null => {
+      const logical = chart.timeScale().coordinateToLogical(x);
+      if (logical == null) return null;
+      const idx = Math.max(0, Math.min(rows.length - 1, Math.round(logical)));
+      return rows[idx].date;
+    };
+
+    const onMouseMove = (ev: MouseEvent) => {
+      const curX = ev.clientX - rect.left;
+      const curY = ev.clientY - rect.top;
+      const dx = curX - startX;
+      const dy = curY - startY;
+
+      setDrawings(prev =>
+        prev.map(d => {
+          if (d.id !== orig.id) return d;
+          if (mode === "move") {
+            const p1 = candles.coordinateToPrice(projected.y1 + dy);
+            if (p1 == null) return d;
+            if (orig.type === "hline") {
+              return { ...d, p1: Number(p1), p2: Number(p1) };
+            }
+            const p2 = candles.coordinateToPrice(projected.y2 + dy);
+            const t1 = pxToDate(projected.x1 + dx);
+            const t2 = pxToDate(projected.x2 + dx);
+            if (p2 == null || !t1 || !t2) return d;
+            return { ...d, t1, p1: Number(p1), t2, p2: Number(p2) };
+          }
+          const price = candles.coordinateToPrice(curY);
+          const date = pxToDate(curX);
+          if (price == null || !date) return d;
+          if (mode === "p1") return { ...d, t1: date, p1: Number(price) };
+          return { ...d, t2: date, p2: Number(price) };
+        }),
+      );
+    };
+
+    const onMouseUp = () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+      chartRef.current?.applyOptions({ handleScroll: { mouseWheel: true, pressedMouseMove: true } });
+    };
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+  }
+
+  function handleOverlayMouseDown(e: React.MouseEvent<SVGSVGElement>) {
+    if (tool === "none") {
+      setSelectedId(null);
+      return;
+    }
+    const pt = pointFromEvent(e);
+    if (!pt) return;
+
+    if (tool === "hline") {
+      const id = `d_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+      commitDraft({
+        id,
+        type: "hline",
+        color: drawColor,
+        t1: pt.date,
+        p1: pt.price,
+        t2: pt.date,
+        p2: pt.price,
+      });
+      return;
+    }
+
+    if (!draft) {
+      const id = `d_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+      dragStartPxRef.current = pt.px;
+      setDraft({
+        id,
+        type: tool,
+        color: drawColor,
+        t1: pt.date,
+        p1: pt.price,
+        t2: pt.date,
+        p2: pt.price,
+      });
+    } else {
+      commitDraft({ ...draft, t2: pt.date, p2: pt.price });
+    }
+  }
+
+  function handleOverlayMouseMove(e: React.MouseEvent<SVGSVGElement>) {
+    if (!draft) return;
+    const pt = pointFromEvent(e);
+    if (!pt) return;
+    setDraft(prev => (prev ? { ...prev, t2: pt.date, p2: pt.price } : null));
+  }
+
+  function handleOverlayMouseUp(e: React.MouseEvent<SVGSVGElement>) {
+    if (!draft || !dragStartPxRef.current) return;
+    const pt = pointFromEvent(e);
+    if (!pt) return;
+    const dx = pt.px.x - dragStartPxRef.current.x;
+    const dy = pt.px.y - dragStartPxRef.current.y;
+    if (Math.hypot(dx, dy) > 8) {
+      commitDraft({ ...draft, t2: pt.date, p2: pt.price });
+    }
+  }
 
   function toggle(key: IndicatorKey) {
     setActive(prev => {
@@ -378,20 +706,73 @@ export function FinanceTvChart({
     .filter(ind => activeCustom.has(ind.id) && customResults[ind.id]?.error)
     .map(ind => `${ind.name} : ${customResults[ind.id]?.error}`);
 
+  const showToolbars = !fullscreen || !toolbarsCollapsed;
+
+  function renderNativePill(key: IndicatorKey) {
+    const isActive = active.has(key);
+    const label = formatIndicatorLabel(key, params);
+    const configurable = isConfigurableIndicator(key);
+    if (!configurable) {
+      return (
+        <button
+          key={key}
+          type="button"
+          className={`finance-tf-btn ${isActive ? "active" : ""}`}
+          onClick={() => toggle(key)}
+        >
+          {label}
+        </button>
+      );
+    }
+    const isEditing = editingParamKey === key;
+    return (
+      <span
+        key={key}
+        className={`finance-native-ind-pill ${isActive ? "active" : ""} ${isEditing ? "is-editing" : ""}`}
+      >
+        <button type="button" className="finance-native-ind-toggle" onClick={() => toggle(key)}>
+          {label}
+        </button>
+        <button
+          type="button"
+          className="finance-native-ind-gear"
+          onClick={() => setEditingParamKey(prev => (prev === key ? null : key))}
+          title={`Paramétrer ${INDICATOR_PARAM_DEFS[key].title}`}
+          aria-label={`Paramétrer ${label}`}
+        >
+          <Settings2 size={10} />
+        </button>
+      </span>
+    );
+  }
+
+  const editingMeta = editingParamKey ? INDICATOR_PARAM_DEFS[editingParamKey] : null;
+  const editingValues = editingParamKey ? (params[editingParamKey] as Record<string, number>) : null;
+
   return (
-    <div className="finance-tv-wrap">
-      <div className="finance-tv-toolbar">
-        <small>Tendance & prix</small>
-        {OVERLAYS.map(i => (
+    <div className={`finance-tv-wrap${fullscreen ? " is-fullscreen" : ""}`}>
+      {fullscreen && (
+        <div className="finance-tv-collapse-row">
           <button
-            key={i.key}
             type="button"
-            className={`finance-tf-btn ${active.has(i.key) ? "active" : ""}`}
-            onClick={() => toggle(i.key)}
+            className="finance-tv-collapse-btn"
+            onClick={() => setToolbarsCollapsed(prev => !prev)}
           >
-            {i.label}
+            {toolbarsCollapsed ? <ChevronDown size={13} /> : <ChevronUp size={13} />}
+            <span>
+              {toolbarsCollapsed
+                ? `Afficher les indicateurs (${active.size + activeCustom.size} actifs)`
+                : "Masquer la barre d'indicateurs"}
+            </span>
           </button>
-        ))}
+        </div>
+      )}
+
+      {showToolbars && (
+        <>
+          <div className="finance-tv-toolbar">
+        <small>Tendance & prix</small>
+        {OVERLAY_KEYS.map(renderNativePill)}
         {customOverlays.map(ind => (
           <span key={ind.id} className={`finance-custom-ind-pill ${activeCustom.has(ind.id) ? "active" : ""}`}>
             <button
@@ -442,16 +823,7 @@ export function FinanceTvChart({
 
       <div className="finance-tv-toolbar">
         <small>Oscillateurs</small>
-        {OSCILLATORS.map(i => (
-          <button
-            key={i.key}
-            type="button"
-            className={`finance-tf-btn ${active.has(i.key) ? "active" : ""}`}
-            onClick={() => toggle(i.key)}
-          >
-            {i.label}
-          </button>
-        ))}
+        {OSCILLATOR_KEYS.map(renderNativePill)}
         {customOscillators.map(ind => (
           <span key={ind.id} className={`finance-custom-ind-pill ${activeCustom.has(ind.id) ? "active" : ""}`}>
             <button
@@ -487,16 +859,349 @@ export function FinanceTvChart({
             )}
           </span>
         ))}
-      </div>
+          </div>
+
+          {editingParamKey && editingMeta && editingValues && (
+            <div className="finance-ind-params-panel">
+              <strong className="finance-ind-params-title">{editingMeta.title}</strong>
+              <div className="finance-ind-params-fields">
+                {editingMeta.fields.map(f => (
+                  <label key={f.field} className="finance-ind-param-field">
+                    <span>{f.label}</span>
+                    <input
+                      type="number"
+                      min={f.min}
+                      max={f.max}
+                      step={f.step}
+                      value={editingValues[f.field] ?? f.min}
+                      onChange={e => {
+                        const raw = Number(e.target.value);
+                        if (!Number.isFinite(raw)) return;
+                        const clamped = Math.max(f.min, Math.min(f.max, raw));
+                        setParams(prev => ({
+                          ...prev,
+                          [editingParamKey]: {
+                            ...prev[editingParamKey],
+                            [f.field]: clamped,
+                          },
+                        }));
+                      }}
+                    />
+                  </label>
+                ))}
+              </div>
+              <div className="finance-ind-params-actions">
+                <button
+                  type="button"
+                  className="finance-tf-btn finance-draw-btn"
+                  onClick={() =>
+                    setParams(prev => ({
+                      ...prev,
+                      [editingParamKey]: DEFAULT_INDICATOR_PARAMS[editingParamKey],
+                    }))
+                  }
+                  title="Rétablir les valeurs par défaut"
+                >
+                  <RotateCcw size={11} />
+                  <span>Défaut</span>
+                </button>
+                <button
+                  type="button"
+                  className="finance-tf-btn finance-draw-btn"
+                  onClick={() => setEditingParamKey(null)}
+                  aria-label="Fermer les paramètres"
+                >
+                  <X size={11} />
+                  <span>Fermer</span>
+                </button>
+              </div>
+            </div>
+          )}
+        </>
+      )}
 
       {customFormulaErrors.length > 0 && (
         <div className="finance-watchlist-error">⚠️ {customFormulaErrors.join(" · ")}</div>
       )}
 
+      <div className="finance-tv-draw-toolbar">
+        <small>Dessin</small>
+        <button
+          type="button"
+          className={`finance-tf-btn finance-draw-btn ${tool === "none" ? "active" : ""}`}
+          onClick={() => {
+            setTool("none");
+            setDraft(null);
+          }}
+          title="Curseur (navigation & sélection)"
+        >
+          <MousePointer size={11} />
+          <span>Curseur</span>
+        </button>
+        <button
+          type="button"
+          className={`finance-tf-btn finance-draw-btn ${tool === "line" ? "active" : ""}`}
+          onClick={() => {
+            setTool("line");
+            setDraft(null);
+            setSelectedId(null);
+          }}
+          title="Tracer une ligne (2 clics ou glisser)"
+        >
+          <TrendingUp size={11} />
+          <span>Ligne</span>
+        </button>
+        <button
+          type="button"
+          className={`finance-tf-btn finance-draw-btn ${tool === "hline" ? "active" : ""}`}
+          onClick={() => {
+            setTool("hline");
+            setDraft(null);
+            setSelectedId(null);
+          }}
+          title="Tracer une ligne horizontale (1 clic)"
+        >
+          <Minus size={11} />
+          <span>Horizontale</span>
+        </button>
+        <button
+          type="button"
+          className={`finance-tf-btn finance-draw-btn ${tool === "rect" ? "active" : ""}`}
+          onClick={() => {
+            setTool("rect");
+            setDraft(null);
+            setSelectedId(null);
+          }}
+          title="Tracer un rectangle (2 clics ou glisser)"
+        >
+          <Square size={11} />
+          <span>Rectangle</span>
+        </button>
+
+        <span className="finance-draw-colors" aria-label="Couleur de dessin">
+          {DRAWING_COLORS.map(c => (
+            <button
+              key={c}
+              type="button"
+              className={`finance-draw-color-dot ${drawColor === c ? "active" : ""}`}
+              style={{ background: c }}
+              onClick={() => setDrawColor(c)}
+              aria-label={`Couleur ${c}`}
+            />
+          ))}
+        </span>
+
+        {selectedId && (
+          <button
+            type="button"
+            className="finance-tf-btn finance-draw-btn is-danger"
+            onClick={() => {
+              setDrawings(prev => prev.filter(d => d.id !== selectedId));
+              setSelectedId(null);
+            }}
+            title="Supprimer le tracé sélectionné (Suppr)"
+          >
+            <Trash2 size={11} />
+            <span>Supprimer</span>
+          </button>
+        )}
+
+        {drawings.length > 0 && (
+          <button
+            type="button"
+            className="finance-tf-btn finance-draw-btn"
+            onClick={() => {
+              setDrawings([]);
+              setDraft(null);
+              setSelectedId(null);
+            }}
+            title="Effacer tous les tracés de cette action"
+          >
+            <Eraser size={11} />
+            <span>Effacer ({drawings.length})</span>
+          </button>
+        )}
+      </div>
+
       {bars.length < 2 ? (
         <div className="finance-chart-empty">Pas assez de données pour cette durée.</div>
       ) : (
-        <div ref={containerRef} className="finance-tv-chart" style={{ height: 300 + (panes - 1) * 140 }} />
+        <div
+          className="finance-tv-canvas-stage"
+          style={
+            fullscreen
+              ? { flex: 1, minHeight: Math.max(420, 320 + (panes - 1) * 150) }
+              : { height: 300 + (panes - 1) * 140 }
+          }
+        >
+          <div ref={containerRef} className="finance-tv-chart" style={{ height: "100%" }} />
+          {overlaySize.width > 0 && overlaySize.height > 0 && (
+            <svg
+              ref={svgRef}
+              className={`finance-tv-draw-overlay${tool !== "none" ? " is-drawing" : ""}`}
+              width={overlaySize.width}
+              height={overlaySize.height}
+              viewBox={`0 0 ${overlaySize.width} ${overlaySize.height}`}
+              onMouseDown={handleOverlayMouseDown}
+              onMouseMove={handleOverlayMouseMove}
+              onMouseUp={handleOverlayMouseUp}
+            >
+              {[...projectedDrawings, ...(projectedDraft ? [projectedDraft] : [])].map(item => {
+                const isSelected = item.id === selectedId && !projectedDraft;
+                const isDraft = projectedDraft?.id === item.id;
+                if (item.type === "rect") {
+                  const rx = Math.min(item.x1, item.x2);
+                  const ry = Math.min(item.y1, item.y2);
+                  const rw = Math.max(1, Math.abs(item.x2 - item.x1));
+                  const rh = Math.max(1, Math.abs(item.y2 - item.y1));
+                  return (
+                    <g key={item.id}>
+                      <rect
+                        x={rx}
+                        y={ry}
+                        width={rw}
+                        height={rh}
+                        fill={item.color}
+                        fillOpacity={isSelected ? 0.22 : 0.14}
+                        stroke={item.color}
+                        strokeWidth={isSelected ? 2.5 : 1.5}
+                        strokeDasharray={isDraft ? "5 4" : undefined}
+                        className="finance-draw-shape"
+                        onMouseDown={e => startShapeDrag(e, item, "move")}
+                        onContextMenu={e => {
+                          if (tool !== "none") return;
+                          e.preventDefault();
+                          e.stopPropagation();
+                          deleteDrawing(item.id);
+                        }}
+                      />
+                      {isSelected && (
+                        <>
+                          <circle
+                            cx={item.x1}
+                            cy={item.y1}
+                            r={5}
+                            fill="#ffffff"
+                            stroke={item.color}
+                            strokeWidth={2}
+                            className="finance-draw-handle"
+                            onMouseDown={e => startShapeDrag(e, item, "p1")}
+                          />
+                          <circle
+                            cx={item.x2}
+                            cy={item.y2}
+                            r={5}
+                            fill="#ffffff"
+                            stroke={item.color}
+                            strokeWidth={2}
+                            className="finance-draw-handle"
+                            onMouseDown={e => startShapeDrag(e, item, "p2")}
+                          />
+                          <g
+                            transform={`translate(${rx + rw - 10}, ${Math.max(10, ry - 10)})`}
+                            className="finance-draw-delete-badge"
+                            onMouseDown={e => e.stopPropagation()}
+                            onClick={e => {
+                              e.stopPropagation();
+                              deleteDrawing(item.id);
+                            }}
+                          >
+                            <circle r={9} fill="#ef4444" stroke="#ffffff" strokeWidth={1.5} />
+                            <text x={0} y={3.5} textAnchor="middle" fill="#ffffff" fontSize={11} fontWeight={700}>
+                              ×
+                            </text>
+                          </g>
+                        </>
+                      )}
+                    </g>
+                  );
+                }
+
+                return (
+                  <g
+                    key={item.id}
+                    className="finance-draw-shape"
+                    onMouseDown={e => startShapeDrag(e, item, "move")}
+                    onContextMenu={e => {
+                      if (tool !== "none") return;
+                      e.preventDefault();
+                      e.stopPropagation();
+                      deleteDrawing(item.id);
+                    }}
+                  >
+                    <line
+                      x1={item.x1}
+                      y1={item.y1}
+                      x2={item.x2}
+                      y2={item.y2}
+                      stroke="transparent"
+                      strokeWidth={12}
+                    />
+                    <line
+                      x1={item.x1}
+                      y1={item.y1}
+                      x2={item.x2}
+                      y2={item.y2}
+                      stroke={item.color}
+                      strokeWidth={isSelected ? 3 : 2}
+                      strokeDasharray={item.type === "hline" ? "6 4" : isDraft ? "5 4" : undefined}
+                    />
+                    {item.priceLabel && (
+                      <g transform={`translate(${Math.max(8, item.x2 - 58)}, ${item.y1 - 18})`}>
+                        <rect width={54} height={16} rx={4} fill={item.color} />
+                        <text x={27} y={11.5} textAnchor="middle" fill="#ffffff" fontSize={10} fontWeight={700}>
+                          {item.priceLabel}
+                        </text>
+                      </g>
+                    )}
+                    {isSelected && item.type !== "hline" && (
+                      <>
+                        <circle
+                          cx={item.x1}
+                          cy={item.y1}
+                          r={5}
+                          fill="#ffffff"
+                          stroke={item.color}
+                          strokeWidth={2}
+                          className="finance-draw-handle"
+                          onMouseDown={e => startShapeDrag(e, item, "p1")}
+                        />
+                        <circle
+                          cx={item.x2}
+                          cy={item.y2}
+                          r={5}
+                          fill="#ffffff"
+                          stroke={item.color}
+                          strokeWidth={2}
+                          className="finance-draw-handle"
+                          onMouseDown={e => startShapeDrag(e, item, "p2")}
+                        />
+                      </>
+                    )}
+                    {isSelected && (
+                      <g
+                        transform={`translate(${
+                          item.type === "hline" ? Math.max(24, item.x2 - 74) : (item.x1 + item.x2) / 2
+                        }, ${Math.max(12, (item.y1 + item.y2) / 2 - 14)})`}
+                        className="finance-draw-delete-badge"
+                        onMouseDown={e => e.stopPropagation()}
+                        onClick={e => {
+                          e.stopPropagation();
+                          deleteDrawing(item.id);
+                        }}
+                      >
+                        <circle r={9} fill="#ef4444" stroke="#ffffff" strokeWidth={1.5} />
+                        <text x={0} y={3.5} textAnchor="middle" fill="#ffffff" fontSize={11} fontWeight={700}>
+                          ×
+                        </text>
+                      </g>
+                    )}
+                  </g>
+                );
+              })}
+            </svg>
+          )}
+        </div>
       )}
     </div>
   );

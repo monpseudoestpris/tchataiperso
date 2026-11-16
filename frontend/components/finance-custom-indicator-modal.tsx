@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Check, Code2, LoaderCircle, Plus, Sliders, Sparkles, X } from "lucide-react";
+import { Check, Code2, LoaderCircle, Maximize2, Minimize2, Plus, Sliders, Sparkles, X } from "lucide-react";
 
 import type { CustomIndicator, CustomIndicatorGuideLine, EodBar } from "@/lib/api";
 import { CUSTOM_INDICATOR_PRESETS, validateCustomFormula } from "@/lib/custom-indicators";
@@ -92,6 +92,7 @@ export function FinanceCustomIndicatorModal({
   const [guidesText, setGuidesText] = useState("");
   const [saving, setSaving] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   // Assistant state
   const [asstType, setAsstType] = useState("ema");
@@ -198,8 +199,16 @@ export function FinanceCustomIndicatorModal({
   }
 
   return (
-    <div className="finance-submodal-backdrop" onClick={onClose} role="dialog" aria-modal="true">
-      <div className="finance-submodal-card" onClick={e => e.stopPropagation()}>
+    <div
+      className={`finance-submodal-backdrop${isFullscreen ? " is-fullscreen" : ""}`}
+      onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+    >
+      <div
+        className={`finance-submodal-card${isFullscreen ? " is-fullscreen" : ""}`}
+        onClick={e => e.stopPropagation()}
+      >
         <div className="finance-submodal-header">
           <div className="finance-submodal-title">
             <Sparkles size={17} className="text-emerald" />
@@ -208,9 +217,21 @@ export function FinanceCustomIndicatorModal({
               <p>Formule Pine Express ou assistant paramétrique — sauvegardé dans votre profil</p>
             </div>
           </div>
-          <button type="button" className="modal-close-btn" onClick={onClose} aria-label="Fermer">
-            <X size={16} />
-          </button>
+          <div className="finance-submodal-header-actions">
+            <button
+              type="button"
+              className={`finance-chart-fullscreen-btn${isFullscreen ? " active" : ""}`}
+              onClick={() => setIsFullscreen(prev => !prev)}
+              title={isFullscreen ? "Revenir au mode réduit" : "Passer en plein écran"}
+              aria-label={isFullscreen ? "Revenir au mode réduit" : "Passer en plein écran"}
+            >
+              {isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+              <span>{isFullscreen ? "Mode réduit" : "Plein écran"}</span>
+            </button>
+            <button type="button" className="modal-close-btn" onClick={onClose} aria-label="Fermer">
+              <X size={16} />
+            </button>
+          </div>
         </div>
 
         <div className="finance-submodal-mode-tabs">
