@@ -311,7 +311,7 @@ async def stream_chat_events(
         for msg in messages
     )
     if is_code_mode:
-        max_tokens = max(settings.llm_max_tokens, 8192)
+        max_tokens = max(settings.llm_max_tokens, getattr(settings, "code_mode_max_tokens", 131072))
     elif is_learn_mode:
         max_tokens = max(settings.llm_max_tokens, getattr(settings, "learn_mode_max_tokens", 16384))
     elif is_deep_search:

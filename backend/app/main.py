@@ -109,14 +109,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 text("UPDATE users SET system_prompt = :prompt WHERE system_prompt = '' OR system_prompt IS NULL"),
                 {"prompt": BASE_USER_PROMPT},
             )
-            # Remplacement de l'ancienne consigne interdisant les questions finales automatiques
+            # Nettoyage des anciennes consignes de questions finales automatiques dans users.system_prompt
+            # (les relances sont désormais pilotées par le toggle du tchat, désactivé par défaut)
             conn.execute(
                 text(
                     "UPDATE users SET system_prompt = REPLACE("
                     "system_prompt, "
                     "'Évite les répétitions, introductions artificielles et questions finales automatiques.', "
-                    "'Évite les répétitions et les introductions artificielles. À la fin de chaque réponse, propose 2 à 3 questions connexes pertinentes pour continuer la discussion.'"
+                    "'Évite les répétitions et les introductions artificielles.'"
                     ") WHERE system_prompt LIKE '%questions finales automatiques%'"
+                )
+            )
+            conn.execute(
+                text(
+                    "UPDATE users SET system_prompt = REPLACE("
+                    "system_prompt, "
+                    "' À la fin de chaque réponse, propose 2 à 3 questions connexes pertinentes pour continuer la discussion.', "
+                    "''"
+                    ") WHERE system_prompt LIKE '%2 à 3 questions connexes pertinentes%'"
+                )
+            )
+            conn.execute(
+                text(
+                    "UPDATE users SET system_prompt = REPLACE("
+                    "system_prompt, "
+                    "' À la fin de chaque réponse, propose au moins 5 pistes de relance pertinentes (questions, affirmations ou réponses courtes en lien avec ton message) pour continuer la discussion.', "
+                    "''"
+                    ") WHERE system_prompt LIKE '%au moins 5 pistes de relance pertinentes%'"
                 )
             )
         if "generated_sounds" in inspector.get_table_names():

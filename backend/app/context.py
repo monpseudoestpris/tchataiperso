@@ -1,4 +1,5 @@
 import base64
+import re
 from pathlib import Path
 
 from .base_prompt import BASE_USER_PROMPT
@@ -21,12 +22,37 @@ Exercices interactifs (quizz, flashcards, textes à trous) : n'écris pas de Mar
 - clair-cloze : [{"sentence":"phrase complète","text_with_blanks":"phrase avec [...] à la place des mots","missing_words":["mot"],"options":["mot","leurre"],"explanation":"..."}] (un [...] par mot, dans l'ordre).
 Respecte le nombre d'éléments et la difficulté (facile/moyenne/difficile) demandés ; par défaut 10 éléments de difficulté moyenne.
 Une courte intro suffit, sans répéter les réponses.
-Sortie HTML / Web : Si un site ou document HTML est demandé, produis un beau document HTML5 moderne et complet (jamais de HTML brut ou austère) : CSS riche dans <style> (palette soignée, variables, cartes, ombres, flex/grid responsive), polices Google Fonts fun ou expressives via <link> (ex. Poppins, Outfit, Fredoka, Space Grotesk) avec fallback, graphismes et icônes vectorielles en SVG inline (pas d'images externes cassées) et interactivité vanilla propre.
-Questions connexes : À la toute fin de chaque réponse, propose systématiquement 2 à 3 questions connexes pertinentes, directes et concises pour continuer la discussion, sous l'intitulé Markdown exact :
+Sortie HTML / Web : Si un site ou document HTML est demandé, produis un beau document HTML5 moderne et complet (jamais de HTML brut ou austère) : CSS riche dans <style> (palette soignée, variables, cartes, ombres, flex/grid responsive), polices Google Fonts fun ou expressives via <link> (ex. Poppins, Outfit, Fredoka, Space Grotesk) avec fallback, graphismes et icônes vectorielles en SVG inline (pas d'images externes cassées) et interactivité vanilla propre."""
+
+
+FOLLOWUP_QUESTIONS_PROMPT = """Questions connexes : À la toute fin de chaque réponse, propose systématiquement au moins 5 pistes de relance pertinentes, directes et concises (5 à 6 puces) en lien direct avec ton message pour continuer la discussion, en panachant des questions ET des affirmations ou réponses courtes.
+IMPORTANT — Perspective utilisateur : chaque puce doit impérativement être rédigée à la 1re personne du point de vue de l'utilisateur qui te répond directement (ex. « Je… », « Peux-tu… », « Explique-moi… », « Oui, je préfère cette piste parce que… », « Pas d'accord sur ce point : … »), jamais du point de vue de l'assistant (interdit : « Voulez-vous que je… », « Souhaitez-vous… »).
+Utilise l'intitulé Markdown exact :
 ### 💡 Questions connexes
-- [Question 1 ?]
-- [Question 2 ?]
-- [Question 3 ?]"""
+- [Question posée par l'utilisateur ?]
+- [Affirmation ou réponse de l'utilisateur à ton message]
+- [Demande d'approfondissement ou de précision de l'utilisateur ?]
+- [Réaction, nuance ou choix exprimé par l'utilisateur]
+- [Autre question ou suite demandée par l'utilisateur]"""
+
+NO_FOLLOWUP_QUESTIONS_PROMPT = (
+    "Relances désactivées : N'ajoute PAS de section « Questions connexes », "
+    "« Pistes de relance », « Pour continuer » ni de liste de questions ou suggestions "
+    "automatiques à la fin de ta réponse. Termine directement ta réponse une fois le sujet traité."
+)
+
+_FOLLOWUP_SECTION_RE = re.compile(
+    r"(?:^|\n)(?:###?\s*(?:💡\s*)?(?:Questions connexes|Pistes de relance|Pour continuer)(?:\s*\(.*?\))?"
+    r"|\*\*(?:💡\s*)?(?:Questions connexes|Pistes de relance|Pour continuer)(?:\s*:)?\*\*)\s*\n[\s\S]*$",
+    re.IGNORECASE,
+)
+
+
+def _strip_followup_section(text: str) -> str:
+    """Remove trailing follow-up suggestions block from an assistant message."""
+    if not text:
+        return text
+    return _FOLLOWUP_SECTION_RE.sub("", text).rstrip()
 
 
 DEEP_SEARCH_PROMPT = """Mode DeepSearch (recherche approfondie multilingue multi-sources) activé :
@@ -166,6 +192,7 @@ CODE_MODE_PROMPT = """Mode Code Canvas (éditeur interactif multi-fichiers et ex
 ... code intégral du fichier ...
 ```
 - N'utilise JAMAIS d'ellipses, de `// ... reste du code` ou de `TODO` incomplets : écris l'intégralité du code de chaque fichier pour que l'archive ZIP téléchargée et l'aperçu fonctionnent immédiatement.
+- Si l'état actuel des fichiers du panneau Code Canvas est fourni dans le contexte, appuie-toi directement dessus comme source de vérité pour toute analyse, correction ou mise à jour, et renvoie l'intégralité de chaque fichier modifié ou créé avec son attribut `path="..."`.
 - Si l'utilisateur demande une application, un outil ou un projet, organise-le proprement en plusieurs fichiers cohérents (ex. `index.html`, `styles.css`, `app.js`, ou `src/...`, `package.json`, `main.py`, `README.md`).
 - Pour une application web ou interface graphique sans contrainte serveur spécifique, privilégie une structure directement prévisualisable dans le navigateur (`index.html`, `styles.css`, `app.js`) avec un design particulièrement soigné, moderne et séduisant : typographie expressive ou fun (Google Fonts comme Poppins, Outfit, Fredoka, Space Grotesk, Quicksand), styles CSS riches et harmonieux (variables CSS, cartes avec ombres ou effets de relief, dégradés, micro-interactions, responsive mobile/desktop), icônes et illustrations décoratives en SVG inline, et interactivité fluide sans dépendance lourde inutile.
 - Si l'utilisateur demande d'intégrer une brique préfaite cLAIr (Agent IA) ou fournit un Diagramme d'Architecture d'Application, utilise OBLIGATOIREMENT l'API native `const res = await window.clair.runBrick("<id_brique>", { ...entrées })` (qui renvoie `{ output, raw_text, model_used }` sans exposer ni demander de clé API) depuis les vrais contrôles de l'interface de l'application (son propre champ de chat, ses boutons, ses jauges et badges de score). N'invente JAMAIS de fausses réponses IA simulées en dur (`setTimeout` ou phrases fixes) lorsqu'une brique IA est configurée : l'IA doit être le vrai moteur interne de l'application !
@@ -211,6 +238,39 @@ def _is_explicit_memory_query(messages: list[dict]) -> bool:
     return any(k in content for k in keywords)
 
 
+def _format_canvas_files(canvas_files: list[dict] | None, max_chars: int) -> str:
+    """Format current Code Canvas files for injection into LLM context within budget."""
+    if not canvas_files or max_chars <= 200:
+        return ""
+    header = (
+        "État actuel des fichiers dans le panneau Code Canvas de l'utilisateur "
+        "(source de vérité pour toute analyse, correction ou mise à jour) :"
+    )
+    parts = [header]
+    used = len(header)
+    for item in canvas_files[:60]:
+        if not isinstance(item, dict):
+            continue
+        path = str(item.get("path") or "").strip()
+        if not path:
+            continue
+        lang = str(item.get("language") or "text").strip() or "text"
+        content = str(item.get("content") or "")
+        block_open = f'\n\n```{lang} path="{path}"\n'
+        block_close = "\n```"
+        remaining = max_chars - used - len(block_open) - len(block_close)
+        if remaining <= 80:
+            parts.append("\n\n[Autres fichiers Canvas omis par la limite de contexte.]")
+            break
+        if len(content) > remaining:
+            notice = "\n/* [Fichier tronqué par la limite de contexte] */"
+            content = content[: max(0, remaining - len(notice))] + notice
+        block = f"{block_open}{content}{block_close}"
+        parts.append(block)
+        used += len(block)
+    return "".join(parts) if len(parts) > 1 else ""
+
+
 def build_context(settings: Settings, summary: str, memories: list[str], messages: list[dict], sources: list[dict],
                   vision: bool, skills: list[dict] | None = None, deep_search: bool = False,
                   code_mode: bool = False, findings: list[str] | None = None,
@@ -219,10 +279,14 @@ def build_context(settings: Settings, summary: str, memories: list[str], message
                   topic_context: str | None = None,
                   max_context_tokens: int | None = None,
                   creativity_instruction: str | None = None,
-                  creativity: float | None = None) -> list[dict]:
+                  creativity: float | None = None,
+                  followup_questions: bool = False,
+                  canvas_files: list[dict] | None = None) -> list[dict]:
     # Structure fixe du prompt : [System Prompt] + [Résumé cumulatif des vieux blocs] + [Derniers messages bruts intacts]
     # Les données de référence (souvenirs, sources) s'intègrent entre le système et l'historique brut.
     prompt_parts = [SYSTEM_PROMPT]
+    if followup_questions:
+        prompt_parts.append(FOLLOWUP_QUESTIONS_PROMPT)
     clean_user_prompt = (user_system_prompt or "").strip()
     if clean_user_prompt:
         prompt_parts.append(f"Consignes générales personnalisées de l'utilisateur :\n{clean_user_prompt}")
@@ -234,6 +298,8 @@ def build_context(settings: Settings, summary: str, memories: list[str], message
         prompt_parts.append(LEARN_MODE_PROMPT)
     if code_mode:
         prompt_parts.append(CODE_MODE_PROMPT)
+    if not followup_questions:
+        prompt_parts.append(NO_FOLLOWUP_QUESTIONS_PROMPT)
     system_prompt = "\n\n".join(prompt_parts)
     effective_max_chars = (
         max_context_tokens * 8
@@ -325,11 +391,15 @@ def build_context(settings: Settings, summary: str, memories: list[str], message
                 "sans inventer de chiffres ni imposer une longueur minimale.]"
             )
         reference_text = ref_header + "\n" + "\n\n".join(trimmed)
-    budget = max(0, effective_max_chars - len(system_prompt) - len(skill_text) - len(reference_text))
+    canvas_budget = min(160000, max(0, (available_after_system - len(reference_text)) // 2))
+    canvas_text = _format_canvas_files(canvas_files, canvas_budget)
+    budget = max(0, effective_max_chars - len(system_prompt) - len(skill_text) - len(reference_text) - len(canvas_text))
     selected: list[dict] = []
     image_count = 0
     for message in reversed(messages):
         text = message["content"]
+        if not followup_questions and message.get("role") == "assistant":
+            text = _strip_followup_section(text)
         image_candidates = []
         attachments = message.get("attachments", [])
         document_headers = [f"\n\n[Document joint : {item['filename']}]\n"
@@ -377,5 +447,6 @@ def build_context(settings: Settings, summary: str, memories: list[str], message
             break
     selected.reverse()
     reference_messages = [{"role": "user", "content": reference_text}] if reference_text else []
+    canvas_messages = [{"role": "user", "content": canvas_text}] if canvas_text else []
     skill_messages = [{"role": "system", "content": skill_text}] if skill_text else []
-    return [{"role": "system", "content": system_prompt}, *skill_messages, *reference_messages, *selected]
+    return [{"role": "system", "content": system_prompt}, *skill_messages, *reference_messages, *canvas_messages, *selected]

@@ -275,6 +275,12 @@ class StageModelsConfig(BaseModel):
     audit_model: str | None = Field(default=None, max_length=200)
 
 
+class CanvasFileSchema(BaseModel):
+    path: str = Field(min_length=1, max_length=255)
+    language: str = Field(default="text", max_length=50)
+    content: str = Field(default="", max_length=500000)
+
+
 class SendMessage(BaseModel):
     content: str = Field(default="", max_length=20000)
     model: str | None = None
@@ -296,8 +302,10 @@ class SendMessage(BaseModel):
     interaction_id: str | None = Field(default=None, max_length=500)
     plan_feedback: str | None = Field(default=None, max_length=20000)
     auto_memory_enabled: bool | None = None
+    followup_questions: bool = False
     creativity: float | None = Field(default=None, ge=0.0, le=1.0)
     sampling_params: SamplingParameters | None = None
+    canvas_files: list[CanvasFileSchema] = Field(default_factory=list, max_length=60)
 
     @field_validator("attachment_ids")
     @classmethod
@@ -955,12 +963,6 @@ class ProposePageTopicsResponse(BaseModel):
     suggested_title: str = Field(default="Page Web", max_length=200)
     summary: str = Field(default="", max_length=1000)
     topics: list[PageTopicItem] = Field(default_factory=list)
-
-
-class CanvasFileSchema(BaseModel):
-    path: str = Field(min_length=1, max_length=255)
-    language: str = Field(default="text", max_length=50)
-    content: str = Field(default="", max_length=500000)
 
 
 class BrickInputFieldSchema(BaseModel):

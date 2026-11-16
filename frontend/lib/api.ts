@@ -609,8 +609,10 @@ export async function streamMessage(
     interaction_id?: string;
     plan_feedback?: string;
     auto_memory_enabled?: boolean;
+    followup_questions?: boolean;
     creativity?: number | null;
     sampling_params?: SamplingParameters | null;
+    canvas_files?: { path: string; language: string; content: string }[];
   },
   signal: AbortSignal,
   onEvent: (event: StreamEvent) => void,

@@ -2072,7 +2072,7 @@ export function WebPageModal({
                         key={`${selectedPage.id}-${selectedVersionId}-${previewNonce}`}
                         className={styles.iframe}
                         title={selectedPage.title}
-                        sandbox="allow-scripts allow-forms allow-modals allow-same-origin"
+                        sandbox="allow-scripts allow-forms allow-modals allow-same-origin allow-downloads"
                         srcDoc={activeHtml}
                       />
                     </div>

@@ -313,6 +313,20 @@ export function collectConversationCanvasFiles(
   return Array.from(merged.values());
 }
 
+function escapeInlineScriptContent(code: string): string {
+  return code.replace(/<\/script/gi, "<\\/script");
+}
+
+function escapeHtmlAttr(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function matchCanvasFileByRef(files: CanvasFile[], rawRef: string): CanvasFile | undefined {
+  const normalized = sanitizeFilePath(rawRef.split(/[?#]/)[0] ?? "");
+  if (!normalized) return undefined;
+  return files.find(file => file.path === normalized || file.path.endsWith(`/${normalized}`));
+}
+
 /**
  * Builds a self-contained HTML preview document if the Canvas files contain HTML (or CSS/JS).
  * Also injects the cLAIr Bricks runtime (`window.clair.runBrick(...)` + optional brick dock).
@@ -329,47 +343,108 @@ export function buildCanvasPreviewHtml(files: CanvasFile[], bricks: PageBrick[] 
   if (!htmlFile) return null;
 
   let doc = htmlFile.content;
+  const inlinedCssPaths = new Set<string>();
+  const inlinedJsPaths = new Set<string>();
 
-  // Replace linked local stylesheets or inject them before </head>
-  const combinedCss = cssFiles.map(file => `/* ${file.path} */\n${file.content}`).join("\n\n");
-  if (combinedCss) {
+  // 1. Replace linked local stylesheets in-place to preserve CSS cascade order
+  if (cssFiles.length > 0) {
     doc = doc.replace(/<link\b[^>]*rel=["']stylesheet["'][^>]*>/gi, match => {
       const hrefMatch = match.match(/href=["']([^"']+)["']/i);
       if (!hrefMatch) return match;
-      const href = sanitizeFilePath(hrefMatch[1]);
-      const found = cssFiles.some(file => file.path === href || file.path.endsWith(`/${href}`));
-      return found ? "" : match;
+      const found = matchCanvasFileByRef(cssFiles, hrefMatch[1]);
+      if (!found) return match;
+      inlinedCssPaths.add(found.path);
+      return `<style data-canvas-styles="${escapeHtmlAttr(found.path)}">\n${found.content}\n</style>`;
     });
-    const styleTag = `<style data-canvas-styles>\n${combinedCss}\n</style>`;
-    if (/<\/head>/i.test(doc)) {
-      doc = doc.replace(/<\/head>/i, `${styleTag}\n</head>`);
-    } else {
-      doc = `${styleTag}\n${doc}`;
+
+    const remainingCss = cssFiles.filter(file => !inlinedCssPaths.has(file.path));
+    if (remainingCss.length > 0) {
+      const extraStyles = remainingCss
+        .map(file => `<style data-canvas-styles="${escapeHtmlAttr(file.path)}">\n${file.content}\n</style>`)
+        .join("\n");
+      if (/<\/head>/i.test(doc)) {
+        doc = doc.replace(/<\/head>/i, () => `${extraStyles}\n</head>`);
+      } else {
+        doc = `${extraStyles}\n${doc}`;
+      }
     }
   }
 
-  // Inject cLAIr Bricks runtime before app scripts so app.js can call window.clair.runBrick directly
-  const bricksScript = buildBricksClientRuntimeScript(bricks);
-  if (/<\/body>/i.test(doc)) {
-    doc = doc.replace(/<\/body>/i, () => `${bricksScript}\n</body>`);
-  } else {
-    doc = `${doc}\n${bricksScript}`;
+  // 2. Inject importmap for ES modules referencing local JS/MJS files if needed
+  if (jsFiles.length > 0 && /<script\b[^>]*type=["']module["']/i.test(doc) && !/type=["']importmap["']/i.test(doc)) {
+    const imports: Record<string, string> = {};
+    for (const file of jsFiles) {
+      const dataUrl = `data:text/javascript;charset=utf-8,${encodeURIComponent(file.content)}`;
+      imports[file.path] = dataUrl;
+      imports[`./${file.path}`] = dataUrl;
+      imports[`/${file.path}`] = dataUrl;
+    }
+    const importMapTag = `<script type="importmap">\n${JSON.stringify({ imports }, null, 2).replace(/<\//g, "<\\/")}\n</script>`;
+    if (/<\/head>/i.test(doc)) {
+      doc = doc.replace(/<\/head>/i, () => `${importMapTag}\n</head>`);
+    } else {
+      doc = `${importMapTag}\n${doc}`;
+    }
   }
 
-  // Replace linked local scripts or inject them before </body>
-  const combinedJs = jsFiles.map(file => `// ${file.path}\n${file.content}`).join("\n\n");
-  if (combinedJs) {
-    doc = doc.replace(/<script\b[^>]*src=["']([^"']+)["'][^>]*>\s*<\/script>/gi, (match, src: string) => {
-      if (/^(?:https?:|\/\/)/i.test(src)) return match;
-      const normalized = sanitizeFilePath(src);
-      const found = jsFiles.some(file => file.path === normalized || file.path.endsWith(`/${normalized}`));
-      return found ? "" : match;
-    });
-    const scriptTag = `<script>\n${combinedJs}\n</script>`;
-    if (/<\/body>/i.test(doc)) {
-      doc = doc.replace(/<\/body>/i, () => `${scriptTag}\n</body>`);
-    } else {
-      doc = `${doc}\n${scriptTag}`;
+  // 3. Inject cLAIr Bricks runtime before any app script runs
+  const bricksScript = buildBricksClientRuntimeScript(bricks);
+  if (/<\/head>/i.test(doc)) {
+    doc = doc.replace(/<\/head>/i, () => `${bricksScript}\n</head>`);
+  } else if (/<\/body>/i.test(doc)) {
+    doc = doc.replace(/<\/body>/i, () => `${bricksScript}\n</body>`);
+  } else {
+    doc = `${bricksScript}\n${doc}`;
+  }
+
+  // 4. Replace linked local scripts in-place to preserve exact execution order
+  if (jsFiles.length > 0) {
+    const deferredHeadScripts: string[] = [];
+    const headCloseMatch = doc.match(/<\/head>/i);
+    const headCloseIndex = headCloseMatch?.index ?? -1;
+
+    doc = doc.replace(
+      /<script\b([^>]*)src=["']([^"']+)["']([^>]*)>\s*<\/script>/gi,
+      (match, beforeSrc: string, src: string, afterSrc: string, offset: number) => {
+        if (/^(?:https?:|\/\/|data:|blob:)/i.test(src.trim())) return match;
+        const found = matchCanvasFileByRef(jsFiles, src);
+        if (!found) return match;
+        inlinedJsPaths.add(found.path);
+
+        const rawAttrs = `${beforeSrc} ${afterSrc}`;
+        const hasDefer = /\bdefer\b/i.test(rawAttrs);
+        const cleanedAttrs = rawAttrs
+          .replace(/\b(?:defer|async)\b/gi, "")
+          .replace(/\b(?:integrity|crossorigin)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, "")
+          .replace(/\s+/g, " ")
+          .trim();
+        const attrPrefix = cleanedAttrs ? ` ${cleanedAttrs}` : "";
+        const inlineTag = `<script data-canvas-script="${escapeHtmlAttr(found.path)}"${attrPrefix}>\n${escapeInlineScriptContent(found.content)}\n</script>`;
+
+        if (hasDefer && headCloseIndex !== -1 && offset < headCloseIndex) {
+          deferredHeadScripts.push(inlineTag);
+          return "";
+        }
+        return inlineTag;
+      },
+    );
+
+    const remainingJs = jsFiles.filter(file => !inlinedJsPaths.has(file.path));
+    const trailingScripts = [
+      ...deferredHeadScripts,
+      ...remainingJs.map(
+        file =>
+          `<script data-canvas-script="${escapeHtmlAttr(file.path)}">\n${escapeInlineScriptContent(file.content)}\n</script>`,
+      ),
+    ];
+
+    if (trailingScripts.length > 0) {
+      const joinedScripts = trailingScripts.join("\n");
+      if (/<\/body>/i.test(doc)) {
+        doc = doc.replace(/<\/body>/i, () => `${joinedScripts}\n</body>`);
+      } else {
+        doc = `${doc}\n${joinedScripts}`;
+      }
     }
   }
 

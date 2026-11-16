@@ -932,12 +932,17 @@ async def send_message(
                         "**Mode démonstration — aucune IA externe n'est appelée.**\n\n"
                         f"Votre message a été enregistré : « {body.content.strip() or 'Document joint'} ».\n\n"
                         "L'historique, les pièces jointes et les souvenirs fonctionnent localement. "
-                        "Configurez une clé LLM et désactivez DEMO_MODE pour obtenir de vraies réponses.\n\n"
-                        "### 💡 Questions connexes\n"
-                        "- Comment configurer une clé API pour activer les réponses complètes ?\n"
-                        "- Quelles sont les fonctionnalités disponibles en mode démonstration ?\n"
-                        "- Comment utiliser le mode Canvas Code ou DeepSearch ?"
+                        "Configurez une clé LLM et désactivez DEMO_MODE pour obtenir de vraies réponses."
                     )
+                    if body.followup_questions:
+                        response += (
+                            "\n\n### 💡 Questions connexes\n"
+                            "- Comment puis-je configurer une clé API pour activer les réponses complètes ?\n"
+                            "- Montre-moi les fonctionnalités disponibles en mode démonstration.\n"
+                            "- Explique-moi comment utiliser le mode Canvas Code ou DeepSearch.\n"
+                            "- Je veux tester la création d'une page web avec cLAIr Pages.\n"
+                            "- Quels fournisseurs LLM peux-tu utiliser dans cette application ?"
+                        )
                 for offset in range(0, len(response), 32):
                     chunk = response[offset:offset + 32]
                     accumulated += chunk
@@ -971,6 +976,8 @@ async def send_message(
                     max_context_tokens=limit_tokens,
                     creativity_instruction=creativity_instruction,
                     creativity=effective_creativity,
+                    followup_questions=body.followup_questions,
+                    canvas_files=[item.model_dump() for item in body.canvas_files] if body.canvas_files else None,
                 )
                 use_two_step_section_writer = (
                     (body.deep_search or body.learn_mode)

@@ -53,6 +53,7 @@ type CodeCanvasProps = {
   initialBricks?: PageBrick[];
   integratedPageId?: string | null;
   onIntegratedToPages?: (page: WebPage) => void;
+  onFilesChange?: (files: CanvasFile[]) => void;
 };
 
 const QUICK_CODE_PROMPTS = [
@@ -111,6 +112,7 @@ export function CodeCanvas({
   initialBricks,
   integratedPageId,
   onIntegratedToPages,
+  onFilesChange,
 }: CodeCanvasProps) {
   // User overrides (edited content or custom added files) and deleted custom paths
   const [overrides, setOverrides] = useState<Record<string, string>>({});
@@ -240,6 +242,10 @@ export function CodeCanvas({
   }, [aiFiles, overrides, customFiles]);
 
   const streamingFile = useMemo(() => files.find(file => file.streaming), [files]);
+
+  useEffect(() => {
+    onFilesChange?.(files);
+  }, [files, onFilesChange]);
 
   // Keep active file in sync: follow streaming file while generating, else respect user selection
   const activeFile = useMemo<CanvasFile | null>(() => {
@@ -717,7 +723,7 @@ export function CodeCanvas({
             key={previewNonce}
             className="code-canvas-iframe"
             title="Aperçu de l'application Canvas"
-            sandbox="allow-scripts allow-forms allow-modals"
+            sandbox="allow-scripts allow-forms allow-modals allow-same-origin allow-downloads"
             srcDoc={previewHtml ?? ""}
           />
         </div>

@@ -311,8 +311,8 @@ function AttachmentView({
 function extractFollowUpQuestions(markdown: string): { cleanMarkdown: string; questions: string[] } {
   if (!markdown) return { cleanMarkdown: markdown, questions: [] };
   // Matches header like "### 💡 Questions connexes", "### Questions connexes", "**Questions connexes :**"
-  // followed by bullet points "- Question ?"
-  const regex = /(?:^|\n)(?:###?\s*(?:💡\s*)?Questions connexes(?:\s*\(.*?\))?|\*\*(?:💡\s*)?Questions connexes(?:\s*:)?\*\*)\s*\n([\s\S]*?)$/i;
+  // followed by bullet points "- Question ?" or "- Affirmation / réponse"
+  const regex = /(?:^|\n)(?:###?\s*(?:💡\s*)?(?:Questions connexes|Pistes de relance|Pour continuer)(?:\s*\(.*?\))?|\*\*(?:💡\s*)?(?:Questions connexes|Pistes de relance|Pour continuer)(?:\s*:)?\*\*)\s*\n([\s\S]*?)$/i;
   const match = markdown.match(regex);
   if (!match) return { cleanMarkdown: markdown, questions: [] };
 
@@ -927,7 +927,7 @@ const MessageView = memo(function MessageView({
       </div>
     )}
     {!isUser && !streaming && followUpQuestions.length > 0 && (
-      <div className="followup-questions-box" role="region" aria-label="Questions connexes suggérées pour continuer">
+      <div className="followup-questions-box" role="region" aria-label="Relances suggérées pour continuer">
         <div className="followup-questions-header">
           <Sparkles size={13} className="followup-questions-icon" />
           <span>Continuer la discussion</span>
@@ -939,7 +939,7 @@ const MessageView = memo(function MessageView({
               type="button"
               className="followup-question-chip"
               onClick={() => onSelectFollowUp?.(q)}
-              title={`Poser cette question : ${q}`}
+              title={`Envoyer cette relance : ${q}`}
             >
               <span>{q}</span>
               <ChevronRight size={13} className="followup-chip-arrow" />
@@ -1167,6 +1167,7 @@ export function ChatApp() {
   const [learnModalReportId, setLearnModalReportId] = useState<string | null>(null);
   const [codeMode, setCodeMode] = useState(false);
   const [financeMode, setFinanceMode] = useState(false);
+  const [followupQuestionsEnabled, setFollowupQuestionsEnabled] = useState(false);
   const [financeModalOpen, setFinanceModalOpen] = useState(false);
   const [financeModalQuery, setFinanceModalQuery] = useState<string | null>(null);
   const [financeModalData, setFinanceModalData] = useState<FinancialDashboardData | null>(null);
@@ -1187,6 +1188,7 @@ export function ChatApp() {
     files: CanvasFile[];
     bricks: PageBrick[];
   } | null>(null);
+  const liveCanvasFilesRef = useRef<CanvasFile[]>([]);
   const [imageStudioOpen, setImageStudioOpen] = useState(false);
   const [imageStudioPrompt, setImageStudioPrompt] = useState("");
   const [soundStudioOpen, setSoundStudioOpen] = useState(false);
@@ -1651,6 +1653,16 @@ export function ChatApp() {
     [messages, canvasMessageId, streamingId, codeMode, canvasIncludeUnnamed],
   );
 
+  const mergedCanvasAiFiles = useMemo(() => {
+    if (!canvasImportedApp) return canvasFiles;
+    if (!canvasFiles.length) return canvasImportedApp.files;
+    const byPath = new Map(canvasImportedApp.files.map(file => [file.path, file]));
+    for (const file of canvasFiles) {
+      byPath.set(file.path, file);
+    }
+    return Array.from(byPath.values());
+  }, [canvasImportedApp, canvasFiles]);
+
   function openCanvasForMessage(messageId: string, filePath?: string, forceUnnamed = false) {
     if (canvasImportedApp) {
       setCanvasImportedApp(null);
@@ -1668,8 +1680,10 @@ export function ChatApp() {
     setCodeMode(old => {
       const next = !old;
       if (next) {
-        setCanvasImportedApp(null);
-        setCanvasMessageId(null);
+        if (!canvasOpen) {
+          setCanvasImportedApp(null);
+          setCanvasMessageId(null);
+        }
         setContextOpen(false);
         setSkillsOpen(false);
         setCanvasOpen(true);
@@ -2059,9 +2073,24 @@ export function ChatApp() {
       const isAutoWeb = !useDeepSearch && !useLearnMode && effectiveWebMode === "auto";
       const isAlwaysWeb = !useDeepSearch && !useLearnMode && effectiveWebMode === "always";
       const useCodeMode = forceCodeMode ?? codeMode;
+      const currentCanvasFiles =
+        (canvasOpen && liveCanvasFilesRef.current.length > 0
+          ? liveCanvasFilesRef.current
+          : null) ??
+        mergedCanvasAiFiles;
+      const canvasFilesPayload =
+        (useCodeMode || canvasOpen) && currentCanvasFiles.length > 0
+          ? currentCanvasFiles.slice(0, 60).map(file => ({
+              path: file.path,
+              language: file.language || "text",
+              content: file.content,
+            }))
+          : undefined;
       if (useCodeMode) {
-        setCanvasImportedApp(null);
-        setCanvasMessageId(null);
+        if (!canvasOpen) {
+          setCanvasImportedApp(null);
+          setCanvasMessageId(null);
+        }
         setContextOpen(false);
         setSkillsOpen(false);
         setCanvasOpen(true);
@@ -2090,8 +2119,10 @@ export function ChatApp() {
           interaction_id: interactionId,
           plan_feedback: planFeedback,
           auto_memory_enabled: autoMemoryActive,
+          followup_questions: followupQuestionsEnabled,
           creativity: conversation ? conversation.creativity : pendingCreativity,
           sampling_params: conversation ? conversation.sampling_params : pendingSamplingParams,
+          canvas_files: canvasFilesPayload,
         },
         controller.signal,
         event => {
@@ -3516,7 +3547,7 @@ export function ChatApp() {
                 disabled={working || !config}
                 aria-describedby="composer-hint"
               />
-              <div className="composer-toolbar"><div className="composer-tools"><div className="composer-attach-wrapper" ref={attachMenuRef}><input className="sr-only" type="file" ref={docInputRef} multiple accept=".txt,.md,.csv,.json,.pdf,.docx,image/png,image/jpeg,image/webp" onChange={event => void uploadFiles(event.target.files, "ocr")} tabIndex={-1} /><input className="sr-only" type="file" ref={visionInputRef} multiple accept="image/png,image/jpeg,image/webp" onChange={event => void uploadFiles(event.target.files, "vision")} tabIndex={-1} /><IconButton label="Joindre un document ou analyser une image" aria-expanded={attachMenuOpen} aria-haspopup="menu" disabled={working || !config} onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); setAttachMenuOpen(prev => !prev); }}><Paperclip size={19} /></IconButton>{attachMenuOpen && <div className="composer-attach-popover" role="menu" onMouseDown={e => e.stopPropagation()}><div className="attach-popover-header"><span className="attach-popover-title">Joindre une pièce</span></div><button type="button" className="attach-popover-item" role="menuitem" onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); docInputRef.current?.click(); setAttachMenuOpen(false); }}><span className="attach-popover-icon is-doc"><FileText size={17} /></span><div className="attach-popover-text"><span className="attach-item-title">Document (Mistral OCR)</span><span className="attach-item-desc">PDF, Word, scans, tableaux — extraction structurée & fidèle</span></div></button><button type="button" className="attach-popover-item" role="menuitem" onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); visionInputRef.current?.click(); setAttachMenuOpen(false); }}><span className="attach-popover-icon is-vision"><Eye size={17} /></span><div className="attach-popover-text"><span className="attach-item-title">Image (Vision IA détaillée)</span><span className="attach-item-desc">Photos, infographies, schémas — analyse visuelle exhaustive</span></div></button></div>}</div><IconButton label="Analyser un lien web ou vidéo YouTube (URL)" disabled={working || !config} onClick={() => { setUrlError(""); setUrlInputValue(""); setShowUrlModal(true); }}><Link2 size={19} /></IconButton><span className="tool-divider" /><button type="button" className={`tool-button web-trigger ${effectiveWebMode !== "off" && !deepSearch && !learnMode ? "active" : ""} ${effectiveWebMode === "auto" && !deepSearch && !learnMode ? "web-auto" : ""} ${effectiveWebMode === "always" && !deepSearch && !learnMode ? "web-always" : ""} ${effectiveWebMode === "off" && !deepSearch && !learnMode ? "web-off" : ""}`} disabled={working || !isWebSearchAvailable} aria-pressed={effectiveWebMode !== "off" && !deepSearch && !learnMode} title={webSearchTooltip} aria-describedby={showDuckDuckGoNotice ? "web-search-hint" : undefined} onClick={() => { if (deepSearch || learnMode) { setDeepSearch(false); setLearnMode(false); setWebSearchMode("auto"); return; } setWebSearchMode(current => { if (current === "auto") return "always"; if (current === "always") return "off"; return "auto"; }); }}><Globe2 size={16} /><span>Web</span>{effectiveWebMode === "auto" && !deepSearch && !learnMode && <span className="auto-badge" title="Décision automatique par agent rapide">Auto</span>}{effectiveWebMode === "always" && !deepSearch && !learnMode && <Check size={12} />}</button><button type="button" className={`tool-button deepsearch-trigger ${deepSearch ? "active" : ""}`} disabled={working || !isWebSearchAvailable} aria-pressed={deepSearch} title={isWebSearchAvailable ? "DeepSearch : recherche large multi-requêtes via SearXNG et grand rapport d’analyse approfondi" : webSearchTooltip} onClick={() => { setDeepSearch(old => { if (!old) setLearnMode(false); return !old; }); }}><Compass size={16} /><span>DeepSearch</span>{deepSearch && <Check size={12} />}</button><button type="button" className={`tool-button learn-trigger ${learnMode ? "active" : ""}`} disabled={working || !isWebSearchAvailable} aria-pressed={learnMode} title={isWebSearchAvailable ? "Mode Apprendre : conception d'un cours complet et adapté au sujet avec plan pédagogique et supports" : webSearchTooltip} onClick={() => { setLearnMode(old => { if (!old) setDeepSearch(false); return !old; }); }}><GraduationCap size={16} /><span>Apprendre</span>{learnMode && <Check size={12} />}</button><button type="button" className={`tool-button codecanvas-trigger ${codeMode ? "active" : ""}`} disabled={working || !config} aria-pressed={codeMode} title="Mode Code Canvas : générer une application ou un projet multi-fichiers dans l’éditeur interactif avec téléchargement .zip" onClick={toggleCodeMode}><Code2 size={16} /><span>Code · Canvas</span>{codeMode && <Check size={12} />}</button><button type="button" className={`tool-button finance-trigger ${financeMode ? "active" : ""}`} disabled={working} aria-pressed={financeMode} title="Mode Finances & Bourse : télécharger automatiquement les cotations en direct (EOD) et les données financières (Yahoo Finance)" onClick={() => setFinanceMode(old => !old)}><TrendingUp size={16} /><span>Finances</span>{financeMode && <Check size={12} />}</button><button type="button" className="tool-button finance-chart-trigger" disabled={working} title="Ouvrir le tableau de bord boursier : courbe du cours EOD et statistiques financières complètes Yahoo" onClick={() => openFinanceModal()}><LineChart size={16} /><span>Courbe & Stats</span></button><button type="button" className={`tool-button multiagent-trigger ${multiAgentActive ? "active" : ""}`} disabled={working || !config} aria-pressed={multiAgentActive} title="Conseil Multi-Agents : orchestrer plusieurs modèles avec des personas dédiés (Synthèse d'experts ou Débat)" onClick={() => setShowMultiAgentModal(true)}><Users size={16} /><span>Conseil IA</span>{multiAgentActive && <Check size={12} />}</button><button type="button" className={`tool-button hermes-trigger ${hermesModalOpen ? "active" : ""}`} disabled={working || !config} aria-pressed={hermesModalOpen} title="Hermes Agent (Nous Research) : agent autonome à boucle d'outils, mémoire persistante et auto-création de compétences" onClick={() => setHermesModalOpen(true)}><Bot size={16} /><span>Hermes</span></button><button type="button" className="tool-button studio-trigger" disabled={working} title="Ouvrir le Studio Image dédié (Ideogram, amélioration de prompt, visualisation et galerie)" onClick={() => openImageStudio(draft.trim())}><ImagePlus size={16} /><span>Studio Image</span></button><button type="button" className="tool-button sound-trigger" disabled={working} title="Ouvrir le Studio Son & Musique dédié (ElevenLabs Sound Effects & Eleven Music)" onClick={() => openSoundStudio(draft.trim())}><Volume2 size={16} /><span>Sons & Musique</span></button><button type="button" className={`tool-button study-trigger ${studyModalOpen ? "active" : ""}`} disabled={working} title="Mode Réviser : révisez avec Flashcards 3D, Quizz interactif et Phrases à trous à partir de vos cours" onClick={() => openStudyModal("all")}><GraduationCap size={16} /><span>Réviser</span></button></div><div className="composer-submit"><span className="enter-hint">↵ pour envoyer</span>{isCurrentStreaming ? <button className="send-button stop-button" type="button" onClick={stopCurrentStream} aria-label="Interrompre la génération" title="Interrompre la génération"><Square size={14} fill="currentColor" /></button> : <button className="send-button" type="submit" disabled={!canSend} aria-label="Envoyer le message">{busy === "upload" ? <LoaderCircle size={19} className="spin" /> : <ArrowUp size={20} />}</button>}</div></div>
+              <div className="composer-toolbar"><div className="composer-tools"><div className="composer-attach-wrapper" ref={attachMenuRef}><input className="sr-only" type="file" ref={docInputRef} multiple accept=".txt,.md,.csv,.json,.pdf,.docx,image/png,image/jpeg,image/webp" onChange={event => void uploadFiles(event.target.files, "ocr")} tabIndex={-1} /><input className="sr-only" type="file" ref={visionInputRef} multiple accept="image/png,image/jpeg,image/webp" onChange={event => void uploadFiles(event.target.files, "vision")} tabIndex={-1} /><IconButton label="Joindre un document ou analyser une image" aria-expanded={attachMenuOpen} aria-haspopup="menu" disabled={working || !config} onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); setAttachMenuOpen(prev => !prev); }}><Paperclip size={19} /></IconButton>{attachMenuOpen && <div className="composer-attach-popover" role="menu" onMouseDown={e => e.stopPropagation()}><div className="attach-popover-header"><span className="attach-popover-title">Joindre une pièce</span></div><button type="button" className="attach-popover-item" role="menuitem" onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); docInputRef.current?.click(); setAttachMenuOpen(false); }}><span className="attach-popover-icon is-doc"><FileText size={17} /></span><div className="attach-popover-text"><span className="attach-item-title">Document (Mistral OCR)</span><span className="attach-item-desc">PDF, Word, scans, tableaux — extraction structurée & fidèle</span></div></button><button type="button" className="attach-popover-item" role="menuitem" onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); visionInputRef.current?.click(); setAttachMenuOpen(false); }}><span className="attach-popover-icon is-vision"><Eye size={17} /></span><div className="attach-popover-text"><span className="attach-item-title">Image (Vision IA détaillée)</span><span className="attach-item-desc">Photos, infographies, schémas — analyse visuelle exhaustive</span></div></button></div>}</div><IconButton label="Analyser un lien web ou vidéo YouTube (URL)" disabled={working || !config} onClick={() => { setUrlError(""); setUrlInputValue(""); setShowUrlModal(true); }}><Link2 size={19} /></IconButton><span className="tool-divider" /><button type="button" className={`tool-button web-trigger ${effectiveWebMode !== "off" && !deepSearch && !learnMode ? "active" : ""} ${effectiveWebMode === "auto" && !deepSearch && !learnMode ? "web-auto" : ""} ${effectiveWebMode === "always" && !deepSearch && !learnMode ? "web-always" : ""} ${effectiveWebMode === "off" && !deepSearch && !learnMode ? "web-off" : ""}`} disabled={working || !isWebSearchAvailable} aria-pressed={effectiveWebMode !== "off" && !deepSearch && !learnMode} title={webSearchTooltip} aria-describedby={showDuckDuckGoNotice ? "web-search-hint" : undefined} onClick={() => { if (deepSearch || learnMode) { setDeepSearch(false); setLearnMode(false); setWebSearchMode("auto"); return; } setWebSearchMode(current => { if (current === "auto") return "always"; if (current === "always") return "off"; return "auto"; }); }}><Globe2 size={16} /><span>Web</span>{effectiveWebMode === "auto" && !deepSearch && !learnMode && <span className="auto-badge" title="Décision automatique par agent rapide">Auto</span>}{effectiveWebMode === "always" && !deepSearch && !learnMode && <Check size={12} />}</button><button type="button" className={`tool-button deepsearch-trigger ${deepSearch ? "active" : ""}`} disabled={working || !isWebSearchAvailable} aria-pressed={deepSearch} title={isWebSearchAvailable ? "DeepSearch : recherche large multi-requêtes via SearXNG et grand rapport d’analyse approfondi" : webSearchTooltip} onClick={() => { setDeepSearch(old => { if (!old) setLearnMode(false); return !old; }); }}><Compass size={16} /><span>DeepSearch</span>{deepSearch && <Check size={12} />}</button><button type="button" className={`tool-button learn-trigger ${learnMode ? "active" : ""}`} disabled={working || !isWebSearchAvailable} aria-pressed={learnMode} title={isWebSearchAvailable ? "Mode Apprendre : conception d'un cours complet et adapté au sujet avec plan pédagogique et supports" : webSearchTooltip} onClick={() => { setLearnMode(old => { if (!old) setDeepSearch(false); return !old; }); }}><GraduationCap size={16} /><span>Apprendre</span>{learnMode && <Check size={12} />}</button><button type="button" className={`tool-button codecanvas-trigger ${codeMode ? "active" : ""}`} disabled={working || !config} aria-pressed={codeMode} title="Mode Code Canvas : générer une application ou un projet multi-fichiers dans l’éditeur interactif avec téléchargement .zip" onClick={toggleCodeMode}><Code2 size={16} /><span>Code · Canvas</span>{codeMode && <Check size={12} />}</button><button type="button" className={`tool-button finance-trigger ${financeMode ? "active" : ""}`} disabled={working} aria-pressed={financeMode} title="Mode Finances & Bourse : télécharger automatiquement les cotations en direct (EOD) et les données financières (Yahoo Finance)" onClick={() => setFinanceMode(old => !old)}><TrendingUp size={16} /><span>Finances</span>{financeMode && <Check size={12} />}</button><button type="button" className="tool-button finance-chart-trigger" disabled={working} title="Ouvrir le tableau de bord boursier : courbe du cours EOD et statistiques financières complètes Yahoo" onClick={() => openFinanceModal()}><LineChart size={16} /><span>Courbe & Stats</span></button><button type="button" className={`tool-button multiagent-trigger ${multiAgentActive ? "active" : ""}`} disabled={working || !config} aria-pressed={multiAgentActive} title="Conseil Multi-Agents : orchestrer plusieurs modèles avec des personas dédiés (Synthèse d'experts ou Débat)" onClick={() => setShowMultiAgentModal(true)}><Users size={16} /><span>Conseil IA</span>{multiAgentActive && <Check size={12} />}</button><button type="button" className={`tool-button hermes-trigger ${hermesModalOpen ? "active" : ""}`} disabled={working || !config} aria-pressed={hermesModalOpen} title="Hermes Agent (Nous Research) : agent autonome à boucle d'outils, mémoire persistante et auto-création de compétences" onClick={() => setHermesModalOpen(true)}><Bot size={16} /><span>Hermes</span></button><button type="button" className="tool-button studio-trigger" disabled={working} title="Ouvrir le Studio Image dédié (Ideogram, amélioration de prompt, visualisation et galerie)" onClick={() => openImageStudio(draft.trim())}><ImagePlus size={16} /><span>Studio Image</span></button><button type="button" className="tool-button sound-trigger" disabled={working} title="Ouvrir le Studio Son & Musique dédié (ElevenLabs Sound Effects & Eleven Music)" onClick={() => openSoundStudio(draft.trim())}><Volume2 size={16} /><span>Sons & Musique</span></button><button type="button" className={`tool-button study-trigger ${studyModalOpen ? "active" : ""}`} disabled={working} title="Mode Réviser : révisez avec Flashcards 3D, Quizz interactif et Phrases à trous à partir de vos cours" onClick={() => openStudyModal("all")}><GraduationCap size={16} /><span>Réviser</span></button><button type="button" className={`tool-button followup-trigger ${followupQuestionsEnabled ? "active" : ""}`} disabled={working || !config} aria-pressed={followupQuestionsEnabled} title="Relances auto : proposer en fin de message au moins 5 questions, affirmations ou réponses pour continuer (désactivé par défaut)" onClick={() => setFollowupQuestionsEnabled(old => !old)}><Sparkles size={16} /><span>Relances</span>{followupQuestionsEnabled && <Check size={12} />}</button></div><div className="composer-submit"><span className="enter-hint">↵ pour envoyer</span>{isCurrentStreaming ? <button className="send-button stop-button" type="button" onClick={stopCurrentStream} aria-label="Interrompre la génération" title="Interrompre la génération"><Square size={14} fill="currentColor" /></button> : <button className="send-button" type="submit" disabled={!canSend} aria-label="Envoyer le message">{busy === "upload" ? <LoaderCircle size={19} className="spin" /> : <ArrowUp size={20} />}</button>}</div></div>
             </form>
             <div className="composer-footnote" id="composer-hint"><span>cLAIr peut se tromper. Gardez un regard critique sur les réponses.</span><span>Maj + Entrée pour un saut de ligne</span></div>
           </div>
@@ -3526,7 +3557,10 @@ export function ChatApp() {
           <CodeCanvas
             key={canvasSessionKey}
             title={canvasImportedApp ? canvasImportedApp.title : (conversation?.title || "Projet Canvas")}
-            aiFiles={canvasImportedApp ? canvasImportedApp.files : canvasFiles}
+            aiFiles={mergedCanvasAiFiles}
+            onFilesChange={files => {
+              liveCanvasFilesRef.current = files;
+            }}
             streaming={Boolean(streamingId)}
             selectedPath={canvasSelectedPath}
             onSelectPath={setCanvasSelectedPath}

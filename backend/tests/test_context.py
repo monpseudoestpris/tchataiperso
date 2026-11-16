@@ -185,3 +185,27 @@ def test_web_image_sources_injected_into_context_with_markdown_instructions():
     assert "[2]" not in ref_text
 
 
+def test_canvas_files_injected_into_context_even_with_summary():
+    settings = Settings(_env_file=None, max_context_chars=80000)
+    canvas_files = [
+        {"path": "index.html", "language": "html", "content": "<!doctype html><html><body><canvas id='c'></canvas></body></html>"},
+        {"path": "effects.js", "language": "javascript", "content": "export function drawMirror() { return true; }"},
+    ]
+    context = build_context(
+        settings,
+        "Résumé des échanges précédents sans blocs de code.",
+        [],
+        [{"role": "user", "content": "Corrige l'effet miroir dans effects.js"}],
+        [],
+        False,
+        code_mode=True,
+        canvas_files=canvas_files,
+    )
+    joined = "\n".join(str(m["content"]) for m in context)
+    assert 'path="index.html"' in joined
+    assert 'path="effects.js"' in joined
+    assert "drawMirror" in joined
+    assert "Résumé des échanges précédents" in joined
+
+
+

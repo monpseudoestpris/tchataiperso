@@ -1473,7 +1473,7 @@ def test_settings_reloads_updated_env_file_live_and_strips_quotes(tmp_path, monk
 def test_chat_stream_raises_max_tokens_in_code_canvas_mode(settings, transport):
     def handler(request):
         payload = json.loads(request.content)
-        assert payload["max_tokens"] == 8192
+        assert payload["max_tokens"] == 131072
         return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=Chunks(
             b'data: {"choices":[{"delta":{"content":"```html path=\\"index.html\\"\\n</html>\\n```"},"finish_reason":"stop"}]}\n\n',
             b'data: [DONE]\n\n',

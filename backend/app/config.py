@@ -310,6 +310,7 @@ class Settings(BaseSettings):
     summary_max_tokens: int = 900
     deep_search_max_tokens: int = 131072
     learn_mode_max_tokens: int = 98304
+    code_mode_max_tokens: int = 131072
     summary_model: str = "openai/gpt-4o-mini"
     search_query_model: str = "google/gemini-3.8-flash"
     web_search_decision_model: str = "google/gemini-3.5-flash-lite"
@@ -411,7 +412,7 @@ class Settings(BaseSettings):
             raise ValueError("Les températures doivent être comprises entre 0 et 2")
         return value
 
-    @field_validator("llm_max_tokens", "summary_max_tokens", "deep_search_max_tokens", "learn_mode_max_tokens")
+    @field_validator("llm_max_tokens", "summary_max_tokens", "deep_search_max_tokens", "learn_mode_max_tokens", "code_mode_max_tokens")
     @classmethod
     def valid_max_tokens(cls, value: int) -> int:
         if not 1 <= value <= 200000:
