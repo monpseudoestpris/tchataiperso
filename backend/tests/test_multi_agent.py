@@ -290,3 +290,226 @@ def test_send_message_with_multi_agent(tmp_path):
             assert "Acte 1 · La Thèse" in events
             assert "Acte 2 · L'Antithèse" in events
             assert "Acte 3 · La Contradiction & 3e Voie" in events
+
+
+def test_multi_agent_uses_selected_model(tmp_path):
+    from app.multi_agent import resolve_model
+
+    database_url = f"sqlite:///{tmp_path / 'multi_selected_model.db'}"
+    settings = Settings(_env_file=None, app_data_dir=tmp_path, database_url=database_url, demo_mode=True)
+    app = create_app(settings)
+    origin = settings.origins[0]
+    selected_model = next(
+        (m["id"] for m in settings.models if m["id"] != settings.default_model),
+        settings.default_model,
+    )
+
+    # resolve_model falls back to fallback_model (selected_model) when target_model is unknown
+    assert resolve_model(settings, "nonexistent/model-xyz", fallback_model=selected_model) == selected_model
+
+    Base.metadata.create_all(app.state.engine)
+    with app.state.sessions() as db:
+        user = User(
+            username="seluser",
+            password_hash=hash_password("correct horse battery"),
+            is_admin=True,
+            active=True,
+        )
+        db.add(user)
+        db.commit()
+        conv = Conversation(title="Test Selected Model", user_id=user.id, model=settings.default_model)
+        db.add(conv)
+        db.commit()
+        conv_id = conv.id
+
+    with TestClient(app, base_url=origin, headers={"Origin": origin}) as client:
+        login_res = client.post("/api/auth/login", json={"username": "seluser", "password": "correct horse battery"})
+        assert login_res.status_code == 200
+
+        payload = {
+            "content": "Faut-il migrer vers PostgreSQL ?",
+            "model": selected_model,
+            "multi_agent": True,
+            "multi_agent_config": {
+                "mode": "synthesis",
+                "use_selected_model": True,
+                "agents": [
+                    {
+                        "name": "Expert A",
+                        "role": "DBA",
+                        "model": "anthropic/claude-3.5-sonnet",
+                        "prompt": "Analyse BDD",
+                        "avatar": "🗄️",
+                        "color": "#0284c7",
+                    },
+                    {
+                        "name": "Expert B",
+                        "role": "Ops",
+                        "model": "openai/gpt-4o",
+                        "prompt": "Analyse Ops",
+                        "avatar": "⚙️",
+                        "color": "#059669",
+                    },
+                ],
+            },
+        }
+
+        with client.stream("POST", f"/api/conversations/{conv_id}/messages", json=payload) as response:
+            assert response.status_code == 200
+            response.read()
+            events = response.text
+            assert selected_model in events
+            assert "anthropic/claude-3.5-sonnet" not in events
+            assert "openai/gpt-4o" not in events
+
+
+def test_multi_agent_receives_mid_chat_history(tmp_path, monkeypatch):
+    from app.multi_agent import _format_conversation_context
+
+    # 1. Unit test for _format_conversation_context with summary + prior turns + attachments
+    ctx = _format_conversation_context(
+        recent_history=[
+            {
+                "role": "user",
+                "content": "Voici le cahier des charges initial.",
+                "attachments": [{"filename": "cdc.pdf", "extracted_text": "Budget max 50k EUR"}],
+            },
+            {"role": "assistant", "content": "Bien noté, budget de 50k EUR."},
+        ],
+        conversation_summary="L'utilisateur souhaite lancer une app mobile B2B.",
+    )
+    assert "Résumé des échanges antérieurs" in ctx
+    assert "app mobile B2B" in ctx
+    assert "cdc.pdf" in ctx
+    assert "Budget max 50k EUR" in ctx
+    assert "Bien noté, budget de 50k EUR." in ctx
+
+    # 2. Integration test: switching from normal mode to Conseil IA mid-conversation passes full prior history & summary
+    database_url = f"sqlite:///{tmp_path / 'multi_history.db'}"
+    settings = Settings(_env_file=None, app_data_dir=tmp_path, database_url=database_url, demo_mode=True)
+    app = create_app(settings)
+    origin = settings.origins[0]
+
+    Base.metadata.create_all(app.state.engine)
+    with app.state.sessions() as db:
+        user = User(
+            username="histuser",
+            password_hash=hash_password("correct horse battery"),
+            is_admin=True,
+            active=True,
+        )
+        db.add(user)
+        db.commit()
+        conv = Conversation(
+            title="Mid-chat Conseil",
+            user_id=user.id,
+            model=settings.default_model,
+            summary="Résumé initial : projet de refonte ERP.",
+        )
+        db.add(conv)
+        db.commit()
+        for idx in range(6):
+            db.add(Message(conversation_id=conv.id, role="user", content=f"Tour utilisateur #{idx + 1}"))
+            db.add(Message(conversation_id=conv.id, role="assistant", content=f"Réponse assistant #{idx + 1}"))
+        db.commit()
+        conv_id = conv.id
+
+    captured: dict[str, object] = {}
+
+    async def fake_synthesis(**kwargs):
+        captured["recent_history"] = kwargs.get("recent_history")
+        captured["conversation_summary"] = kwargs.get("conversation_summary")
+        yield {"type": "delta", "text": "OK"}
+        yield {"type": "done", "content": "OK"}
+
+    monkeypatch.setattr("app.routers.messages.execute_multi_agent_synthesis", fake_synthesis)
+
+    with TestClient(app, base_url=origin, headers={"Origin": origin}) as client:
+        login_res = client.post("/api/auth/login", json={"username": "histuser", "password": "correct horse battery"})
+        assert login_res.status_code == 200
+
+        payload = {
+            "content": "Que recommande le conseil suite à nos échanges ?",
+            "multi_agent": True,
+            "multi_agent_config": {
+                "mode": "synthesis",
+                "use_selected_model": True,
+                "agents": [
+                    {"name": "Expert A", "role": "Tech", "model": settings.default_model, "prompt": "Tech"},
+                    {"name": "Expert B", "role": "Biz", "model": settings.default_model, "prompt": "Biz"},
+                ],
+            },
+        }
+        with client.stream("POST", f"/api/conversations/{conv_id}/messages", json=payload) as response:
+            assert response.status_code == 200
+            response.read()
+
+    assert captured["conversation_summary"] == "Résumé initial : projet de refonte ERP."
+    prior = captured["recent_history"]
+    assert isinstance(prior, list)
+    assert len(prior) == 12
+    assert prior[0]["content"] == "Tour utilisateur #1"
+    assert prior[-1]["content"] == "Réponse assistant #6"
+
+
+def test_agent_personas_panel_and_categories(tmp_path):
+    # 1. Verify built-in categories include scientists, politicians, and creatives
+    categories = {t.get("category") for t in DEFAULT_AGENT_TEMPLATES}
+    assert {"science", "politique", "créatif"}.issubset(categories)
+    names = [t["name"] for t in DEFAULT_AGENT_TEMPLATES]
+    assert any("Marie Curie" in n for n in names)
+    assert any("Richard Feynman" in n for n in names)
+    assert any("Simone Veil" in n for n in names)
+    assert any("Nelson Mandela" in n for n in names)
+    assert any("Salvador Dalí" in n for n in names)
+    assert any("Hayao Miyazaki" in n for n in names)
+
+    # 2. CRUD API for saving/listing/deleting individual personas
+    database_url = f"sqlite:///{tmp_path / 'personas_test.db'}"
+    settings = Settings(_env_file=None, app_data_dir=tmp_path, database_url=database_url, demo_mode=True)
+    app = create_app(settings)
+    origin = settings.origins[0]
+
+    Base.metadata.create_all(app.state.engine)
+    with app.state.sessions() as db:
+        user = User(
+            username="personauser",
+            password_hash=hash_password("correct horse battery"),
+            is_admin=True,
+            active=True,
+        )
+        db.add(user)
+        db.commit()
+
+    with TestClient(app, base_url=origin, headers={"Origin": origin}) as client:
+        login_res = client.post("/api/auth/login", json={"username": "personauser", "password": "correct horse battery"})
+        assert login_res.status_code == 200
+
+        create_res = client.post(
+            "/api/agent-teams/personas",
+            json={
+                "name": "Isaac Newton",
+                "role": "Physicien & Mathématicien",
+                "category": "science",
+                "avatar": "🍎",
+                "color": "#2563eb",
+                "prompt": "Tu analyses par les lois du mouvement et du calcul infinitésimal.",
+                "model": settings.default_model,
+            },
+        )
+        assert create_res.status_code == 201
+        created = create_res.json()
+        assert created["name"] == "Isaac Newton"
+        assert created["category"] == "science"
+
+        list_res = client.get("/api/agent-teams")
+        assert list_res.status_code == 200
+        personas = list_res.json()["personas"]
+        assert len(personas) == 1
+        assert personas[0]["id"] == created["id"]
+
+        del_res = client.delete(f"/api/agent-teams/personas/{created['id']}")
+        assert del_res.status_code == 204
+
+        list_after = client.get("/api/agent-teams").json()["personas"]
+        assert list_after == []

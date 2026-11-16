@@ -58,6 +58,7 @@ def prepare_schema(settings: Settings) -> None:
         "0020_add_finance_workspace",
         "0021_add_finance_moat",
         "0022_add_webpage_apps_and_bricks",
+        "0023_add_agent_personas",
     }:
         raise SystemExit(f"Révision de base non reconnue : {current}")
 

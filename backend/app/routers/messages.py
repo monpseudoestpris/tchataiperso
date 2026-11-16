@@ -845,18 +845,16 @@ async def send_message(
                 agents_list = [a.model_dump() for a in body.multi_agent_config.agents]
                 mode_choice = body.multi_agent_config.mode
                 raw_query = body.content.strip() or "Question soumise au conseil d'experts"
-                with sessions() as db:
-                    conversation = get_conversation(db, conversation_id, user.id)
-                    recent_turns = [
-                        {"role": item.role, "content": item.content}
-                        for item in conversation.messages[:-1][-4:]
-                    ]
+                prior_history = history[:-1] if history else []
                 if mode_choice in ("dialectic", "contradictory"):
                     async for event in execute_multi_agent_contradictory_debate(
                         settings=settings,
                         query=raw_query,
                         agents=agents_list,
-                        recent_history=recent_turns,
+                        recent_history=prior_history,
+                        conversation_summary=summary,
+                        selected_model=model,
+                        use_selected_model=body.multi_agent_config.use_selected_model,
                     ):
                         if event["type"] == "status":
                             yield sse("status", {"message": event["message"]})
@@ -871,7 +869,10 @@ async def send_message(
                         query=raw_query,
                         agents=agents_list,
                         rounds=body.multi_agent_config.rounds,
-                        recent_history=recent_turns,
+                        recent_history=prior_history,
+                        conversation_summary=summary,
+                        selected_model=model,
+                        use_selected_model=body.multi_agent_config.use_selected_model,
                     ):
                         if event["type"] == "status":
                             yield sse("status", {"message": event["message"]})
@@ -886,7 +887,9 @@ async def send_message(
                         query=raw_query,
                         agents=agents_list,
                         synthesizer_model=model,
-                        recent_history=recent_turns,
+                        recent_history=prior_history,
+                        conversation_summary=summary,
+                        use_selected_model=body.multi_agent_config.use_selected_model,
                     ):
                         if event["type"] == "status":
                             yield sse("status", {"message": event["message"]})

@@ -272,6 +272,21 @@ class AgentTeam(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
 
 
+class AgentPersona(Base):
+    __tablename__ = "agent_personas"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(100))
+    role: Mapped[str] = mapped_column(String(100), default="")
+    category: Mapped[str] = mapped_column(String(40), default="personnalisé")
+    avatar: Mapped[str] = mapped_column(String(20), default="🤖")
+    color: Mapped[str] = mapped_column(String(30), default="#6366f1")
+    prompt: Mapped[str] = mapped_column(Text, default="")
+    model: Mapped[str] = mapped_column(String(120), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
 class TopicSpace(Base):
     __tablename__ = "topic_spaces"
 

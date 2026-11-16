@@ -211,6 +211,7 @@ export type MultiAgentConfig = {
   mode: "synthesis" | "debate" | "dialectic" | "contradictory";
   agents: AgentPersonaConfig[];
   rounds: number;
+  use_selected_model?: boolean;
 };
 
 export type AgentTeam = {
@@ -223,12 +224,27 @@ export type AgentTeam = {
   updated_at?: string;
 };
 
+export type SavedAgentPersona = {
+  id: string;
+  name: string;
+  role: string;
+  category: string;
+  avatar: string;
+  color: string;
+  prompt: string;
+  model?: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
 export type AgentTeamsResponse = {
   teams: AgentTeam[];
+  personas?: SavedAgentPersona[];
   templates: Array<{
     id: string;
     name: string;
     role: string;
+    category?: string;
     avatar: string;
     color: string;
     prompt: string;

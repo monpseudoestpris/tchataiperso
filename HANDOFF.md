@@ -7,13 +7,21 @@ Application de chat IA multi-fournisseurs (`tchataiperso`) composée d'un backen
 - L'espace **Marchés Financiers** (`FinanceModal`) avec cotations EODHD/Yahoo, indicateurs personnalisés, actualités, rapports trimestriels et onglet **MOAT** (travaux antérieurs non committés conservés).
 
 ## 2. Current Objective
-Intégration des applications **Code Canvas** dans **cLAIr Pages (« Mes Apps »)**, système de **Briques Préfaites** (12 modèles prêts à l'emploi) et **Éditeur de Diagramme d'Architecture d'Application** (`🗺️ Diagramme`) :
-1. Permettre l'intégration en 1 clic d'une application générée dans **Code Canvas** vers **cLAIr Pages** sous l'onglet dédié **🧩 Mes Apps** (avec conservation des fichiers sources multi-fichiers `canvas_files` et réouverture dans le Canvas).
-2. Permettre de concevoir l'application visuellement dans un **Diagramme d'Architecture** (`ui_input` ↔ `ai_brick` ↔ `ui_output`) avant ou pendant la génération du code, de façon à ce que les agents IA propulsent directement les composants propres de l'interface (bulles, jauges, scores) sans bulle flottante superposée (`show_widget: false` par défaut).
+En mode **Conseil IA (Multi-Agents)**, utiliser par défaut le modèle IA sélectionné dans le tchat (tout en conservant la possibilité de personnaliser un modèle par agent si souhaité).
 
-**Statut** : Implémentation terminée et vérifiée par build TypeScript/Next.js, ESLint ciblé et tests pytest backend.
+**Statut** : Implémentation terminée et vérifiée par `pytest` (`test_multi_agent.py`) et `tsc --noEmit`.
 
 ## 3. Completed Work
+- **Conseil IA aligné sur le modèle sélectionné (`backend/app/schemas.py`, `backend/app/multi_agent.py`, `backend/app/routers/messages.py`, `backend/tests/test_multi_agent.py`, `frontend/lib/api.ts`, `frontend/components/multi-agent-modal.tsx`, `frontend/components/chat-app.tsx`)** :
+  - Ajout de `use_selected_model` sur `MultiAgentConfig` (`False` par défaut côté schéma API pour compatibilité rétroactive, `true` par défaut côté UI).
+  - `resolve_model` accepte désormais `fallback_model` (le modèle sélectionné de la requête/conversation) avant de se replier sur `settings.default_model`, et `_effective_agent_model` applique le modèle sélectionné à tous les agents (modes `synthesis`, `debate`, `dialectic`/`contradictory` et mode démo) lorsque `use_selected_model` est actif.
+  - Dans `MultiAgentModal`, les agents initiaux, les équipes prédéfinies et la génération de persona IA utilisent par défaut `defaultModel` (le modèle sélectionné dans le tchat), avec une case à cocher *« Utiliser le modèle IA sélectionné dans le tchat (…) pour tous les agents »* (qui se décoche automatiquement si l'utilisateur choisit manuellement un modèle différent pour un agent).
+  - Dans `chat-app.tsx`, l'envoi du message synchronise les modèles des agents sur le modèle actif du tchat tant que `use_selected_model !== false`.
+  - **Reprise d'historique en cours de conversation (`backend/app/routers/messages.py`, `backend/app/multi_agent.py`, `backend/tests/test_multi_agent.py`)** : transmission de `history[:-1]` (tous les tours non résumés, y compris `extracted_text` des pièces jointes) et de `conversation.summary` via `_format_conversation_context` (plafonné à 24 000 car.) à tous les agents, au synthétiseur en mode `synthesis`, et à tous les intervenants en modes `debate` et `dialectic`/`contradictory`.
+  - **Sauvegarde des personnalités & Panel de sélection (`backend/app/models.py`, `backend/migrations/versions/0023_add_agent_personas.py`, `backend/app/cli.py`, `backend/app/schemas.py`, `backend/app/serializers.py`, `backend/app/routers/agent_teams.py`, `backend/app/multi_agent.py`, `frontend/lib/api.ts`, `frontend/components/multi-agent-modal.tsx`)** :
+    - Table `agent_personas` + endpoints `POST /api/agent-teams/personas`, `DELETE /api/agent-teams/personas/{id}` et inclusion dans `GET /api/agent-teams`.
+    - Enrichissement de `DEFAULT_AGENT_TEMPLATES` avec des catégories (`science`, `politique`, `créatif`, `métier`, `philosophie`) et ajout de 13 nouvelles personnalités (Marie Curie, Richard Feynman, Alan Turing, Ada Lovelace, Nikola Tesla, Simone Veil, Nelson Mandela, Nicolas Machiavel, Robert Badinter, Salvador Dalí, Hayao Miyazaki, Jules Verne, Frida Kahlo).
+    - Nouvel onglet **« Panel de Personnalités »** dans `MultiAgentModal` avec filtres par catégorie, recherche, ajout/retrait/remplacement en 1 clic dans le conseil actif, sauvegarde automatique lors de la génération IA et bouton *« Sauver »* sur chaque carte d'agent.
 - **Schéma SQLAlchemy & Migration Alembic (`0022_add_webpage_apps_and_bricks`)** :
   - Ajout des colonnes `kind` (`"page"` | `"app"`) et `bricks` (`JSON`) sur `web_pages`, et `canvas_files` (`JSON`) sur `web_page_versions` dans `backend/app/models.py`, `backend/migrations/versions/0022_add_webpage_apps_and_bricks.py`, `backend/app/cli.py` et initialisation idempotente au démarrage dans `backend/app/main.py`.
 - **Service Backend des Briques Préfaites & Diagramme IA (`backend/app/page_bricks.py`)** :
@@ -83,6 +91,9 @@ Intégration des applications **Code Canvas** dans **cLAIr Pages (« Mes Apps »
   - `scripts/start.sh` : point d'entrée unifié (`prod`, `dev`, `local`, `stop`, `logs`, `status`, `--lan`) partageant la même BDD PostgreSQL et les mêmes uploads entre `dev` et `prod`.
 
 ## 6. Verification
+- `PYTHONPATH=backend backend/.venv/bin/pytest backend/tests/test_multi_agent.py -v` : **RÉUSSI — 6 passed, 1 warning**.
+- `python3 -m py_compile backend/app/schemas.py backend/app/multi_agent.py backend/app/routers/messages.py` : **RÉUSSI**.
+- `npm --prefix frontend run typecheck` : **RÉUSSI** (0 erreur TypeScript).
 - `python3 -m py_compile backend/app/config.py backend/app/providers.py` : **RÉUSSI**.
 - `PYTHONPATH=backend backend/.venv/bin/pytest backend/tests/test_providers.py -k "code_canvas_mode or deep_search_mode" -v` : **RÉUSSI — 2 passed, 135 deselected**.
 - `npm --prefix frontend run typecheck` : **RÉUSSI** (0 erreur TypeScript après mise à jour de `chat-app.tsx`).

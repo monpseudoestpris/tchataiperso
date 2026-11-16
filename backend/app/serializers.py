@@ -5,6 +5,7 @@ from datetime import timezone
 
 from .blog import parse_cards_from_content, parse_trends_from_content
 from .models import (
+    AgentPersona,
     AgentTeam,
     Attachment,
     Blog,
@@ -391,6 +392,21 @@ def agent_team_json(team: AgentTeam) -> dict:
         "agents": team.agents or [],
         "created_at": team.created_at.isoformat() if team.created_at else None,
         "updated_at": team.updated_at.isoformat() if team.updated_at else None,
+    }
+
+
+def agent_persona_json(persona: AgentPersona) -> dict:
+    return {
+        "id": persona.id,
+        "name": persona.name,
+        "role": persona.role or "",
+        "category": persona.category or "personnalisé",
+        "avatar": persona.avatar or "🤖",
+        "color": persona.color or "#6366f1",
+        "prompt": persona.prompt or "",
+        "model": persona.model or "",
+        "created_at": persona.created_at.isoformat() if persona.created_at else None,
+        "updated_at": persona.updated_at.isoformat() if persona.updated_at else None,
     }
 
 

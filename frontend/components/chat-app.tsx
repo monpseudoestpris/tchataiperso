@@ -2113,7 +2113,17 @@ export function ChatApp() {
           code_mode: useCodeMode,
           finance_mode: financeMode,
           multi_agent: multiAgentActive,
-          multi_agent_config: multiAgentActive && multiAgentConfig ? multiAgentConfig : undefined,
+          multi_agent_config:
+            multiAgentActive && multiAgentConfig
+              ? {
+                  ...multiAgentConfig,
+                  agents:
+                    multiAgentConfig.use_selected_model !== false && model
+                      ? multiAgentConfig.agents.map((ag) => ({ ...ag, model }))
+                      : multiAgentConfig.agents,
+                  use_selected_model: multiAgentConfig.use_selected_model ?? true,
+                }
+              : undefined,
           attachment_ids: files.map(item => item.id),
           skill_ids: messageSkillIds,
           interaction_id: interactionId,

@@ -32,6 +32,7 @@ DEFAULT_AGENT_TEMPLATES = [
         "id": "lawyer",
         "name": "Maître Legrand · Avocat",
         "role": "Juriste & Risques Réglementaires",
+        "category": "métier",
         "avatar": "⚖️",
         "color": "#d97706",
         "prompt": (
@@ -46,6 +47,7 @@ DEFAULT_AGENT_TEMPLATES = [
         "id": "mathematician",
         "name": "Professeur Gauss · Mathématicien",
         "role": "Mathématiques & Logique Formelle",
+        "category": "science",
         "avatar": "📐",
         "color": "#2563eb",
         "prompt": (
@@ -59,6 +61,7 @@ DEFAULT_AGENT_TEMPLATES = [
         "id": "software_architect",
         "name": "Alexandre · Architecte Logiciel",
         "role": "Tech Lead & Scalabilité",
+        "category": "métier",
         "avatar": "💻",
         "color": "#0284c7",
         "prompt": (
@@ -72,6 +75,7 @@ DEFAULT_AGENT_TEMPLATES = [
         "id": "security_expert",
         "name": "Capitaine Shield · Expert Cybersécurité",
         "role": "Cybersécurité & Pentest",
+        "category": "métier",
         "avatar": "🛡️",
         "color": "#dc2626",
         "prompt": (
@@ -84,6 +88,7 @@ DEFAULT_AGENT_TEMPLATES = [
         "id": "financial_analyst",
         "name": "Marc · Analyste Financier",
         "role": "Finance, ROI & Modèle Économique",
+        "category": "métier",
         "avatar": "📊",
         "color": "#059669",
         "prompt": (
@@ -96,6 +101,7 @@ DEFAULT_AGENT_TEMPLATES = [
         "id": "doctor",
         "name": "Dre Valérie · Consultante Santé",
         "role": "Santé & Physiologie",
+        "category": "science",
         "avatar": "🩺",
         "color": "#0ea5e9",
         "prompt": (
@@ -108,6 +114,7 @@ DEFAULT_AGENT_TEMPLATES = [
         "id": "devils_advocate",
         "name": "Socrate · Avocat du Diable",
         "role": "Esprit Critique & Contradicteur",
+        "category": "philosophie",
         "avatar": "🧠",
         "color": "#7c3aed",
         "prompt": (
@@ -120,6 +127,7 @@ DEFAULT_AGENT_TEMPLATES = [
         "id": "creative_director",
         "name": "Luna · Directrice Créative",
         "role": "Créativité & Innovation de Rupture",
+        "category": "créatif",
         "avatar": "🎨",
         "color": "#ec4899",
         "prompt": (
@@ -132,6 +140,7 @@ DEFAULT_AGENT_TEMPLATES = [
         "id": "pragmatic_referee",
         "name": "Morgane · Décideur Pragmatique",
         "role": "Arbitre & Synthèse d'Action",
+        "category": "métier",
         "avatar": "⚡",
         "color": "#f59e0b",
         "prompt": (
@@ -144,6 +153,7 @@ DEFAULT_AGENT_TEMPLATES = [
         "id": "tony_stark",
         "name": "Tony Stark (Iron Man)",
         "role": "Génie Technologique & Disruptif",
+        "category": "créatif",
         "avatar": "🦾",
         "color": "#e11d48",
         "prompt": (
@@ -157,6 +167,7 @@ DEFAULT_AGENT_TEMPLATES = [
         "id": "general_de_gaulle",
         "name": "Le Général de Gaulle",
         "role": "Vision Historique & Souveraineté",
+        "category": "politique",
         "avatar": "🎖️",
         "color": "#1e3a8a",
         "prompt": (
@@ -170,6 +181,7 @@ DEFAULT_AGENT_TEMPLATES = [
         "id": "jfk",
         "name": "John F. Kennedy (JFK)",
         "role": "Leadership Inspirant & Nouvelle Frontière",
+        "category": "politique",
         "avatar": "🚀",
         "color": "#0284c7",
         "prompt": (
@@ -183,6 +195,7 @@ DEFAULT_AGENT_TEMPLATES = [
         "id": "einstein",
         "name": "Albert Einstein",
         "role": "Physicien Théoricien & Pensée Fondamentale",
+        "category": "science",
         "avatar": "🌌",
         "color": "#8b5cf6",
         "prompt": (
@@ -196,6 +209,7 @@ DEFAULT_AGENT_TEMPLATES = [
         "id": "leonard_de_vinci",
         "name": "Léonard de Vinci",
         "role": "Génie Universel & Polymathie Renaissance",
+        "category": "créatif",
         "avatar": "🎨",
         "color": "#d97706",
         "prompt": (
@@ -209,6 +223,7 @@ DEFAULT_AGENT_TEMPLATES = [
         "id": "steven_spielberg",
         "name": "Steven Spielberg",
         "role": "Maître de la Narration Visuelle & Émotion Cinématographique",
+        "category": "créatif",
         "avatar": "🎬",
         "color": "#f97316",
         "prompt": (
@@ -222,6 +237,7 @@ DEFAULT_AGENT_TEMPLATES = [
         "id": "robert_jordan",
         "name": "Robert Jordan",
         "role": "Créateur de Mondes (Worldbuilding & Roue du Temps)",
+        "category": "créatif",
         "avatar": "🐉",
         "color": "#0d9488",
         "prompt": (
@@ -236,6 +252,7 @@ DEFAULT_AGENT_TEMPLATES = [
         "id": "albert_camus",
         "name": "Albert Camus",
         "role": "Philosophe de l'Absurde & Éthique de la Révolte",
+        "category": "philosophie",
         "avatar": "🌊",
         "color": "#475569",
         "prompt": (
@@ -243,6 +260,178 @@ DEFAULT_AGENT_TEMPLATES = [
             "Tu regardes le monde avec une lucidité solaire, refusant les illusions réconfortantes, le fanatisme et les dogmes absolus. "
             "Face au silence du monde et à l'absurdité de l'existence, tu affirmes la révolte lucide, la mesure méditerranéenne, la justice concrète "
             "et la solidarité fraternelle : « Il faut imaginer Sisyphe heureux ». Tu cherches toujours la vérité sans compromis et la fidélité aux hommes réels."
+        ),
+    },
+    # --- Scientifiques ---
+    {
+        "id": "marie_curie",
+        "name": "Marie Curie",
+        "role": "Physicienne & Chimiste · Double Prix Nobel",
+        "category": "science",
+        "avatar": "🔬",
+        "color": "#0d9488",
+        "prompt": (
+            "Tu es Marie Curie, double prix Nobel de physique et de chimie. Tu abordes chaque problème avec une rigueur expérimentale "
+            "implacable, une patience méthodique et un courage intellectuel hors norme : « Dans la vie, rien n'est à craindre, tout est à comprendre ». "
+            "Tu exiges des faits mesurables, des protocoles reproductibles et tu refuses les spéculations non étayées par l'observation."
+        ),
+    },
+    {
+        "id": "richard_feynman",
+        "name": "Richard Feynman",
+        "role": "Physicien Quantique & Pédagogue Génial",
+        "category": "science",
+        "avatar": "⚛️",
+        "color": "#ea580c",
+        "prompt": (
+            "Tu es Richard Feynman, prix Nobel de physique. Tu penses par les premiers principes avec une curiosité espiègle et un refus "
+            "absolu du jargon creux : « Ce que je ne peux pas créer, je ne le comprends pas ». Tu démontes les problèmes complexes en "
+            "analogies limpides, traques l'auto-illusion (« le premier principe est de ne pas se duper soi-même ») et proposes des tests concrets."
+        ),
+    },
+    {
+        "id": "alan_turing",
+        "name": "Alan Turing",
+        "role": "Père de l'Informatique & Cryptanalyste",
+        "category": "science",
+        "avatar": "🔐",
+        "color": "#1d4ed8",
+        "prompt": (
+            "Tu es Alan Turing, mathématicien, logicien et pionnier de l'informatique. Tu modélises toute situation en termes d'algorithmes, "
+            "de calculabilité, de complexité et de théorie de l'information. Face aux énigmes ou systèmes opaques, tu cherches la faille "
+            "structurelle, le motif caché et la formalisation mécanique qui permet de décrypter et résoudre le problème."
+        ),
+    },
+    {
+        "id": "ada_lovelace",
+        "name": "Ada Lovelace",
+        "role": "Pionnière de la Programmation & Science Poétique",
+        "category": "science",
+        "avatar": "⚙️",
+        "color": "#9333ea",
+        "prompt": (
+            "Tu es Ada Lovelace, mathématicienne visionnaire et première programmeuse de l'histoire. Tu unis l'abstraction algorithmique "
+            "à l'imagination créatrice (« la science poétique »). Tu perçois au-delà du simple calcul numérique le potentiel symbolique "
+            "des systèmes pour composer, modéliser et transformer le réel."
+        ),
+    },
+    {
+        "id": "nikola_tesla",
+        "name": "Nikola Tesla",
+        "role": "Inventeur Visionnaire & Génie Électrique",
+        "category": "science",
+        "avatar": "⚡",
+        "color": "#0284c7",
+        "prompt": (
+            "Tu es Nikola Tesla, inventeur visionnaire de l'électromagnétisme et des systèmes polyphasés. Tu visualises les architectures "
+            "entières mentalement avant même de tracer un plan. Tu penses en termes de résonance, d'énergie, d'efficacité systémique à grande "
+            "échelle et d'inventions qui rendent l'humanité plus libre."
+        ),
+    },
+    # --- Politiques ---
+    {
+        "id": "simone_veil",
+        "name": "Simone Veil",
+        "role": "Femme d'État, Droit & Dignité Humaine",
+        "category": "politique",
+        "avatar": "🕊️",
+        "color": "#4f46e5",
+        "prompt": (
+            "Tu es Simone Veil, magistrate, ministre et première présidente du Parlement européen. Tu abordes les décisions publiques et "
+            "sociétales avec une hauteur morale inébranlable, le sens de l'intérêt général, le respect de la dignité humaine et le courage "
+            "de porter des réformes difficiles mais justes dans un cadre démocratique et européen."
+        ),
+    },
+    {
+        "id": "nelson_mandela",
+        "name": "Nelson Mandela",
+        "role": "Leadership Moral, Stratégie & Réconciliation",
+        "category": "politique",
+        "avatar": "✊",
+        "color": "#15803d",
+        "prompt": (
+            "Tu es Nelson Mandela. Tu allie une fermeté intransigeante sur les principes de justice et de liberté à une intelligence politique "
+            "exceptionnelle du compromis constructif et de la réconciliation. Tu penses sur le temps long, transformes les adversaires en "
+            "partenaires et cherches toujours l'issue qui bâtit une paix durable."
+        ),
+    },
+    {
+        "id": "machiavel",
+        "name": "Nicolas Machiavel",
+        "role": "Stratège Politique & Réalisme du Pouvoir",
+        "category": "politique",
+        "avatar": "♟️",
+        "color": "#991b1b",
+        "prompt": (
+            "Tu es Nicolas Machiavel, penseur politique florentin. Tu analyses les situations sans naïveté ni vœux pieux, en observant les "
+            "rapports de force réels, les intérêts des acteurs, la virtù et la fortuna. Tu distingues ce qui devrait être de ce qui est, "
+            "et formules des stratégies lucides pour conquérir, stabiliser et préserver l'avantage."
+        ),
+    },
+    {
+        "id": "robert_badinter",
+        "name": "Robert Badinter",
+        "role": "Garde des Sceaux & État de Droit",
+        "category": "politique",
+        "avatar": "📜",
+        "color": "#334155",
+        "prompt": (
+            "Tu es Robert Badinter, avocat, garde des Sceaux et président du Conseil constitutionnel. Tu défends avec une éloquence "
+            "lumineuse et rigoureuse les libertés publiques, la primauté de l'État de droit, la proportionnalité et les principes "
+            "fondamentaux contre les réponses émotionnelles ou autoritaires de court terme."
+        ),
+    },
+    # --- Esprits très créatifs ---
+    {
+        "id": "salvador_dali",
+        "name": "Salvador Dalí",
+        "role": "Génie Surréaliste & Méthode Paranoïaque-Critique",
+        "category": "créatif",
+        "avatar": "🦋",
+        "color": "#db2777",
+        "prompt": (
+            "Tu es Salvador Dalí, maître du surréalisme. Tu exploses les cadres rationnels étroits grâce à ta méthode paranoïaque-critique : "
+            "tu crées des collisions d'images impossibles, des métaphores extravagantes et des renversements conceptuels géniaux. "
+            "Tu provoques l'étincelle créative là où tout le monde s'ennuie dans le conventionnel."
+        ),
+    },
+    {
+        "id": "hayao_miyazaki",
+        "name": "Hayao Miyazaki",
+        "role": "Maître de l'Animation, Poésie & Écologie",
+        "category": "créatif",
+        "avatar": "🌿",
+        "color": "#059669",
+        "prompt": (
+            "Tu es Hayao Miyazaki, réalisateur et fondateur du Studio Ghibli. Tu imagines des solutions empreintes d'artisanat sensible, "
+            "de respect du vivant, de merveilleux quotidien et de complexité morale (sans manichéisme). Tu privilégies l'âme, le souffle "
+            "poétique et la relation harmonieuse entre l'humain, la technique et la nature."
+        ),
+    },
+    {
+        "id": "jules_verne",
+        "name": "Jules Verne",
+        "role": "Pionnier de la Science-Fiction & Voyages Extraordinaires",
+        "category": "créatif",
+        "avatar": "🧭",
+        "color": "#b45309",
+        "prompt": (
+            "Tu es Jules Verne, auteur des Voyages Extraordinaires. Tu maries une imagination aventurière débordante à une solide "
+            "documentation scientifique et technique. Tu extrapoles les technologies naissantes vers des horizons grandioses et plausibles : "
+            "« Tout ce qu'un homme est capable d'imaginer, d'autres hommes seront capables de le réaliser »."
+        ),
+    },
+    {
+        "id": "frida_kahlo",
+        "name": "Frida Kahlo",
+        "role": "Artiste Visionnaire & Authenticité Radicale",
+        "category": "créatif",
+        "avatar": "🌺",
+        "color": "#e11d48",
+        "prompt": (
+            "Tu es Frida Kahlo, peintre mexicaine à l'expressivité flamboyante. Tu rejettes les postures artificielles et les vernis "
+            "superficiels. Tu transformes les contraintes, failles et cicatrices en force créatrice brute, en symboles puissants et en "
+            "beauté singulière profondément humaine."
         ),
     },
 ]
@@ -499,17 +688,76 @@ DEFAULT_AGENT_TEAMS = [
 ]
 
 
-def resolve_model(settings: Settings, target_model: str | None) -> str:
-    """Valide et retourne un modèle utilisable, avec repli sécurisé sur settings.default_model."""
-    if not target_model:
-        return settings.default_model
+def resolve_model(settings: Settings, target_model: str | None, fallback_model: str | None = None) -> str:
+    """Valide et retourne un modèle utilisable, avec repli sécurisé sur fallback_model puis settings.default_model."""
     try:
         available = {m["id"] for m in settings.models}
-        if target_model in available:
-            return target_model
     except Exception:
-        pass
+        available = set()
+    if target_model and (not available or target_model in available):
+        return target_model
+    if fallback_model and (not available or fallback_model in available):
+        return fallback_model
     return settings.default_model
+
+
+def _effective_agent_model(
+    settings: Settings,
+    agent_cfg: dict[str, Any],
+    selected_model: str | None,
+    use_selected_model: bool,
+) -> str:
+    """Retourne le modèle effectif d'un agent : modèle sélectionné si forcé, sinon modèle de l'agent avec repli."""
+    if use_selected_model and selected_model:
+        return resolve_model(settings, selected_model)
+    return resolve_model(settings, agent_cfg.get("model"), fallback_model=selected_model)
+
+
+def _format_conversation_context(
+    recent_history: list[dict[str, Any]] | None,
+    conversation_summary: str | None = None,
+    max_chars: int = 24000,
+) -> str:
+    """Formate le résumé et les échanges précédents en bloc de contexte pour le Conseil IA."""
+    sections: list[str] = []
+    if conversation_summary and conversation_summary.strip():
+        sections.append(f"### Résumé des échanges antérieurs\n{conversation_summary.strip()}")
+
+    if recent_history:
+        turn_lines: list[str] = []
+        for item in recent_history:
+            role = item.get("role", "user")
+            label = "Utilisateur" if role == "user" else "Assistant"
+            content = (item.get("content") or "").strip()
+            att_notes: list[str] = []
+            for att in item.get("attachments") or []:
+                fname = att.get("filename") or "fichier"
+                extracted = (att.get("extracted_text") or "").strip()
+                if extracted:
+                    att_notes.append(f"[Pièce jointe : {fname}]\n{extracted[:4000]}")
+                else:
+                    att_notes.append(f"[Pièce jointe : {fname}]")
+            parts = [p for p in (content, "\n".join(att_notes)) if p]
+            if parts:
+                turn_lines.append(f"**{label}** :\n" + "\n".join(parts))
+
+        if turn_lines:
+            kept: list[str] = []
+            used = sum(len(s) for s in sections)
+            for line in reversed(turn_lines):
+                if used + len(line) + 2 > max_chars and kept:
+                    break
+                kept.append(line)
+                used += len(line) + 2
+            kept.reverse()
+            sections.append("### Échanges récents de la conversation\n" + "\n\n".join(kept))
+
+    if not sections:
+        return ""
+    return (
+        "CONTEXTE DE LA CONVERSATION EN COURS (à prendre impérativement en compte) :\n"
+        + "\n\n".join(sections)
+    )
 
 
 async def generate_ai_persona(settings: Settings, name_or_concept: str, model: str | None = None) -> dict[str, str]:
@@ -766,6 +1014,8 @@ async def execute_multi_agent_synthesis(
     agents: list[dict[str, Any]],
     synthesizer_model: str,
     recent_history: list[dict[str, Any]] | None = None,
+    conversation_summary: str | None = None,
+    use_selected_model: bool = False,
 ) -> AsyncIterator[dict[str, Any]]:
     """
     Exécute le mode Synthèse d'Experts :
@@ -782,12 +1032,17 @@ async def execute_multi_agent_synthesis(
         contributions = []
         for a in agents:
             txt = fallback_agent_turn(a, query)
+            demo_model = (
+                synthesizer_model
+                if (use_selected_model and synthesizer_model)
+                else (a.get("model") or synthesizer_model or settings.default_model)
+            )
             contributions.append({
                 "name": a.get("name", "Expert"),
                 "role": a.get("role", "Spécialiste"),
                 "avatar": a.get("avatar", "🤖"),
                 "color": a.get("color", "#6366f1"),
-                "model": a.get("model", settings.default_model),
+                "model": demo_model,
                 "text": txt,
             })
             yield {"type": "status", "message": f"Avis reçu de {a.get('name', 'Expert')}…"}
@@ -804,12 +1059,15 @@ async def execute_multi_agent_synthesis(
         return
 
     # Mode IA Réel : requêtes parallèles vers chaque modèle
+    history_context = _format_conversation_context(recent_history, conversation_summary)
+    history_section = f"\n\n{history_context}\n" if history_context else ""
+
     async def _fetch_agent_opinion(idx: int, agent_cfg: dict[str, Any]) -> dict[str, Any]:
         agent_name = agent_cfg.get("name", f"Expert #{idx + 1}")
         agent_role = agent_cfg.get("role", "Consultant")
         agent_avatar = agent_cfg.get("avatar", "🤖")
         agent_color = agent_cfg.get("color", "#6366f1")
-        agent_model = resolve_model(settings, agent_cfg.get("model"))
+        agent_model = _effective_agent_model(settings, agent_cfg, synthesizer_model, use_selected_model)
         agent_prompt = agent_cfg.get("prompt", "") or DEFAULT_AGENT_TEMPLATES[0]["prompt"]
 
         system_instruction = (
@@ -820,12 +1078,13 @@ async def execute_multi_agent_synthesis(
             "- Sois concis, percutant et argumenté (3 à 5 paragraphes structurés).\n"
             "- Apporte des solutions concrètes et soulève les points de vigilance propres à ta discipline.\n"
             "- Rédige directement ton avis sans salutation superflue."
+            f"{history_section}"
         )
 
-        messages: list[dict[str, Any]] = [{"role": "system", "content": system_instruction}]
-        if recent_history:
-            messages.extend(recent_history[-3:])
-        messages.append({"role": "user", "content": query})
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": system_instruction},
+            {"role": "user", "content": query},
+        ]
 
         try:
             chunks = []
@@ -877,6 +1136,7 @@ async def execute_multi_agent_synthesis(
 
     synthesis_prompt = (
         "Tu es l'arbitre et rapporteur impartial d'un conseil d'experts multi-agents de très haut niveau.\n"
+        f"{history_section}"
         f"L'utilisateur a posé la question suivante :\n« {query} »\n\n"
         f"Voici les contributions individuelles de chaque expert :\n\n{compiled_contributions}\n\n"
         "TA MISSION :\n"
@@ -927,6 +1187,9 @@ async def execute_multi_agent_debate(
     agents: list[dict[str, Any]],
     rounds: int = 1,
     recent_history: list[dict[str, Any]] | None = None,
+    conversation_summary: str | None = None,
+    selected_model: str | None = None,
+    use_selected_model: bool = False,
 ) -> AsyncIterator[dict[str, Any]]:
     """
     Exécute le mode Table Ronde / Débat :
@@ -949,7 +1212,11 @@ async def execute_multi_agent_debate(
                 agent_name = agent.get("name", f"Intervenant #{i + 1}")
                 agent_role = agent.get("role", "Spécialiste")
                 agent_avatar = agent.get("avatar", "🗣️")
-                agent_model = agent.get("model", settings.default_model)
+                agent_model = (
+                    selected_model
+                    if (use_selected_model and selected_model)
+                    else (agent.get("model") or selected_model or settings.default_model)
+                )
 
                 yield {"type": "status", "message": f"Tour de parole : {agent_avatar} {agent_name}…"}
                 await asyncio.sleep(0.4)
@@ -983,13 +1250,16 @@ async def execute_multi_agent_debate(
         return
 
     # Mode IA Réel
+    history_context = _format_conversation_context(recent_history, conversation_summary)
+    history_section = f"\n\n{history_context}\n" if history_context else ""
+
     for round_idx in range(rounds):
         for i, agent_cfg in enumerate(agents):
             agent_name = agent_cfg.get("name", f"Intervenant #{i + 1}")
             agent_role = agent_cfg.get("role", "Spécialiste")
             agent_avatar = agent_cfg.get("avatar", "🗣️")
             agent_color = agent_cfg.get("color", "#6366f1")
-            agent_model = resolve_model(settings, agent_cfg.get("model"))
+            agent_model = _effective_agent_model(settings, agent_cfg, selected_model, use_selected_model)
             agent_prompt = agent_cfg.get("prompt", "") or DEFAULT_AGENT_TEMPLATES[0]["prompt"]
 
             yield {"type": "status", "message": f"Table Ronde · Tour de parole : {agent_avatar} {agent_name}…"}
@@ -1006,7 +1276,8 @@ async def execute_multi_agent_debate(
                 f"CONSIGNE DE PERSONA :\n{agent_prompt}\n\n"
                 "CONTEXTE DE LA TABLE RONDE :\n"
                 "Tu participes à un débat interactif collégial avec d'autres experts.\n"
-                f"L'utilisateur a posé la question : « {query} ».\n\n"
+                f"L'utilisateur a posé la question : « {query} ».\n"
+                f"{history_section}\n"
                 f"INTERVENTIONS PRÉCÉDENTES DES AUTRES EXPERTS :\n{previous_context}\n\n"
                 "DIRECTIVES D'INTERVENTION :\n"
                 "- Réagis directement aux points soulevés par tes confrères (exprime tes accords, réfute avec courtoisie ou nuance selon ta spécialité).\n"
@@ -1053,6 +1324,9 @@ async def execute_multi_agent_contradictory_debate(
     query: str,
     agents: list[dict[str, Any]],
     recent_history: list[dict[str, Any]] | None = None,
+    conversation_summary: str | None = None,
+    selected_model: str | None = None,
+    use_selected_model: bool = False,
 ) -> AsyncIterator[dict[str, Any]]:
     """
     Exécute le mode Débat Contradictoire (Thèse · Antithèse · Réfutation / Troisième voie) :
@@ -1070,6 +1344,11 @@ async def execute_multi_agent_contradictory_debate(
     agent2 = agents[1] if len(agents) > 1 else agents[0]
     agent3 = agents[2] if len(agents) > 2 else (agents[0] if len(agents) == 2 else agents[0])
 
+    def _demo_model(ag: dict[str, Any]) -> str:
+        if use_selected_model and selected_model:
+            return selected_model
+        return ag.get("model") or selected_model or settings.default_model
+
     # Simulation démo ou hors-ligne
     if getattr(settings, "demo_mode", False) or not settings.enabled(getattr(settings, "llm_api_key", None)):
         q_snippet = (query.strip() or "le sujet")[:65]
@@ -1077,7 +1356,7 @@ async def execute_multi_agent_contradictory_debate(
         # Acte 1 : Thèse
         yield {"type": "status", "message": f"Acte 1 · La Thèse : {agent1.get('name', 'Défenseur')}…"}
         await asyncio.sleep(0.3)
-        h1 = f"### 🥊 Acte 1 · La Thèse : {agent1.get('avatar', '🥊')} {agent1.get('name', 'Le Bâtisseur')}\n*{agent1.get('model', settings.default_model)}*\n\n"
+        h1 = f"### 🥊 Acte 1 · La Thèse : {agent1.get('avatar', '🥊')} {agent1.get('name', 'Le Bâtisseur')}\n*{_demo_model(agent1)}*\n\n"
         accumulated_full += h1
         yield {"type": "delta", "text": h1}
         txt1 = (
@@ -1099,7 +1378,7 @@ async def execute_multi_agent_contradictory_debate(
         name2_default = "L'Opposant"
         yield {"type": "status", "message": f"Acte 2 · L'Antithèse : {agent2.get('name', name2_default)}…"}
         await asyncio.sleep(0.3)
-        h2 = f"### ⚔️ Acte 2 · L'Antithèse : {agent2.get('avatar', '⚔️')} {agent2.get('name', name2_default)}\n*{agent2.get('model', settings.default_model)}*\n\n"
+        h2 = f"### ⚔️ Acte 2 · L'Antithèse : {agent2.get('avatar', '⚔️')} {agent2.get('name', name2_default)}\n*{_demo_model(agent2)}*\n\n"
         accumulated_full += h2
         yield {"type": "delta", "text": h2}
         txt2 = (
@@ -1119,7 +1398,7 @@ async def execute_multi_agent_contradictory_debate(
         # Acte 3 : Contradiction & 3e Voie
         yield {"type": "status", "message": f"Acte 3 · La Contradiction : {agent3.get('name', 'Le Contradicteur')}…"}
         await asyncio.sleep(0.3)
-        h3 = f"### ⚖️ Acte 3 · La Contradiction & 3e Voie : {agent3.get('avatar', '🧠')} {agent3.get('name', 'Le Contradicteur')}\n*{agent3.get('model', settings.default_model)}*\n\n"
+        h3 = f"### ⚖️ Acte 3 · La Contradiction & 3e Voie : {agent3.get('avatar', '🧠')} {agent3.get('name', 'Le Contradicteur')}\n*{_demo_model(agent3)}*\n\n"
         accumulated_full += h3
         yield {"type": "delta", "text": h3}
         txt3 = (
@@ -1147,8 +1426,11 @@ async def execute_multi_agent_contradictory_debate(
         return
 
     # Mode IA Réel
+    history_context = _format_conversation_context(recent_history, conversation_summary)
+    history_section = f"\n\n{history_context}\n" if history_context else ""
+
     # 1. ACTE 1 : LA THÈSE
-    m1 = resolve_model(settings, agent1.get("model"))
+    m1 = _effective_agent_model(settings, agent1, selected_model, use_selected_model)
     yield {"type": "status", "message": f"Débat Contradictoire · Acte 1 : La Thèse ({agent1.get('name')})…"}
     h1 = f"### 🥊 Acte 1 · La Thèse : {agent1.get('avatar', '🥊')} {agent1.get('name')} ({agent1.get('role', 'Défenseur')})\n*{m1}*\n\n"
     accumulated_full += h1
@@ -1158,16 +1440,17 @@ async def execute_multi_agent_contradictory_debate(
         f"Tu es {agent1.get('name')}, spécialisé en {agent1.get('role', 'Expert')}.\n"
         f"Consigne de persona : {agent1.get('prompt', '')}\n\n"
         "RÔLE DANS CE DÉBAT CONTRADICTOIRE :\n"
-        f"Tu dois défendre avec force, vigueur et conviction LA THÈSE favorable sur le sujet : « {query} ».\n\n"
+        f"Tu dois défendre avec force, vigueur et conviction LA THÈSE favorable sur le sujet : « {query} ».\n"
+        f"{history_section}\n"
         "DIRECTIVES STRICTES DE STYLE & FORMAT :\n"
         "- Échange COURT, VIF et INCISIF (2 à 3 paragraphes courts maximum).\n"
         "- Pas de salutations ni politesses introductives : entre directement dans le vif du sujet avec une phrase d'accroche percutante.\n"
         "- Valorise les opportunités majeures, les leviers de réussite et défends ta position sans hésitation ni tiédeur."
     )
-    msgs1 = [{"role": "system", "content": sys1}]
-    if recent_history:
-        msgs1.extend(recent_history[-2:])
-    msgs1.append({"role": "user", "content": f"Expose la Thèse forte et affirmative sur : « {query} »."})
+    msgs1 = [
+        {"role": "system", "content": sys1},
+        {"role": "user", "content": f"Expose la Thèse forte et affirmative sur : « {query} »."},
+    ]
 
     thesis_text = ""
     try:
@@ -1186,7 +1469,7 @@ async def execute_multi_agent_contradictory_debate(
     yield {"type": "delta", "text": div}
 
     # 2. ACTE 2 : L'ANTITHÈSE
-    m2 = resolve_model(settings, agent2.get("model"))
+    m2 = _effective_agent_model(settings, agent2, selected_model, use_selected_model)
     yield {"type": "status", "message": f"Débat Contradictoire · Acte 2 : L'Antithèse ({agent2.get('name')})…"}
     h2 = f"### ⚔️ Acte 2 · L'Antithèse : {agent2.get('avatar', '⚔️')} {agent2.get('name')} ({agent2.get('role', 'Opposant')})\n*{m2}*\n\n"
     accumulated_full += h2
@@ -1198,7 +1481,8 @@ async def execute_multi_agent_contradictory_debate(
         "RÔLE DANS CE DÉBAT CONTRADICTOIRE :\n"
         f"Tu dois attaquer frontalement et démolir avec fermeté L'AVIS / LA THÈSE qui vient d'être exposée par {agent1.get('name')}.\n\n"
         f"LA THÈSE DE TON CONFRÈRE :\n« {thesis_text} »\n\n"
-        f"Sujet : « {query} »\n\n"
+        f"Sujet : « {query} »\n"
+        f"{history_section}\n"
         "DIRECTIVES STRICTES DE STYLE & FORMAT :\n"
         "- Échange COURT, MORDANT, VIF et SANS CONCESSION (2 à 3 paragraphes incisifs maximum).\n"
         "- Interpelle directement ton confrère ou son argumentation, pointe les failles évidentes, les risques mortels et les illusions naïves.\n"
@@ -1222,7 +1506,7 @@ async def execute_multi_agent_contradictory_debate(
     yield {"type": "delta", "text": div}
 
     # 3. ACTE 3 : LA CONTRADICTION & LA TROISIÈME VOIE
-    m3 = resolve_model(settings, agent3.get("model"))
+    m3 = _effective_agent_model(settings, agent3, selected_model, use_selected_model)
     yield {"type": "status", "message": f"Débat Contradictoire · Acte 3 : La Contradiction & 3e Voie ({agent3.get('name')})…"}
     h3 = f"### ⚖️ Acte 3 · La Contradiction & 3e Voie : {agent3.get('avatar', '🧠')} {agent3.get('name')} ({agent3.get('role', 'Arbitre')})\n*{m3}*\n\n"
     accumulated_full += h3
@@ -1235,7 +1519,8 @@ async def execute_multi_agent_contradictory_debate(
         "Tu es le CONTRADICTEUR INDÉPENDANT et le DÉCOUVREUR DE LA TROISIÈME VOIE.\n\n"
         f"LA THÈSE DE {agent1.get('name')} :\n« {thesis_text} »\n\n"
         f"L'ANTITHÈSE DE {agent2.get('name')} :\n« {antithesis_text} »\n\n"
-        f"Sujet : « {query} »\n\n"
+        f"Sujet : « {query} »\n"
+        f"{history_section}\n"
         "DIRECTIVES STRICTES DE STYLE & FORMAT :\n"
         "- Échange COURT, VIF, LUCIDE et TRANCHANT (2 à 3 paragraphes denses maximum).\n"
         "- Renvoie les deux postures dos à dos : montre l'aveuglement de la Thèse et l'excès destructeur ou paresseux de l'Antithèse.\n"

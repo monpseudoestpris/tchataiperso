@@ -251,6 +251,7 @@ class MultiAgentConfig(BaseModel):
     mode: Literal["synthesis", "debate", "dialectic", "contradictory"] = "synthesis"
     agents: list[AgentPersonaConfig] = Field(min_length=2, max_length=6)
     rounds: int = Field(default=1, ge=1, le=3)
+    use_selected_model: bool = False
 
 
 class CreateAgentTeam(BaseModel):
@@ -265,6 +266,16 @@ class UpdateAgentTeam(BaseModel):
     description: str | None = Field(default=None, max_length=500)
     mode: Literal["synthesis", "debate", "dialectic", "contradictory"] | None = None
     agents: list[AgentPersonaConfig] | None = None
+
+
+class CreateAgentPersona(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    role: str = Field(default="", max_length=100)
+    category: str = Field(default="personnalisé", max_length=40)
+    avatar: str = Field(default="🤖", max_length=20)
+    color: str = Field(default="#6366f1", max_length=30)
+    prompt: str = Field(default="", max_length=12000)
+    model: str = Field(default="", max_length=120)
 
 
 class StageModelsConfig(BaseModel):

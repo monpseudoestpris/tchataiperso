@@ -23,7 +23,14 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import type { AgentPersonaConfig, AgentTeam, AgentTeamsResponse, Model, MultiAgentConfig } from "@/lib/api";
+import type {
+  AgentPersonaConfig,
+  AgentTeam,
+  AgentTeamsResponse,
+  Model,
+  MultiAgentConfig,
+  SavedAgentPersona,
+} from "@/lib/api";
 import { api, generateAiPersona } from "@/lib/api";
 import { useModelFavorites } from "@/lib/model-favorites";
 
@@ -113,6 +120,16 @@ const AVATAR_OPTIONS = [
   "📜",
   "🥊",
   "⚔️",
+  "⚛️",
+  "🔐",
+  "⚙️",
+  "🕊️",
+  "✊",
+  "♟️",
+  "🦋",
+  "🌿",
+  "🧭",
+  "🌺",
 ];
 const COLOR_OPTIONS = [
   "#d97706",
@@ -142,16 +159,28 @@ export function MultiAgentModal({
   onApplyConfig,
 }: MultiAgentModalProps) {
   const { favoritesSet, isFavorite, toggleFavorite } = useModelFavorites("llm");
+  const resolvedDefaultModel = defaultModel || models[0]?.id || "openai/gpt-4o";
+  const [useSelectedModel, setUseSelectedModel] = useState<boolean>(
+    activeConfig?.use_selected_model ?? true
+  );
   const [mode, setMode] = useState<"synthesis" | "debate" | "dialectic" | "contradictory">(
     activeConfig?.mode || "synthesis"
   );
-  const [agents, setAgents] = useState<AgentPersonaConfig[]>(
+  const [agents, setAgents] = useState<AgentPersonaConfig[]>(() =>
     activeConfig?.agents && activeConfig.agents.length >= 2
       ? activeConfig.agents
-      : DEFAULT_AGENTS_INITIAL
+      : DEFAULT_AGENTS_INITIAL.map((ag) => ({
+          ...ag,
+          model: defaultModel || models[0]?.id || ag.model,
+        }))
   );
   const [rounds, setRounds] = useState<number>(activeConfig?.rounds || 1);
-  const [activeTab, setActiveTab] = useState<"compose" | "presets" | "saved">("compose");
+  const [activeTab, setActiveTab] = useState<"compose" | "panel" | "presets" | "saved">("compose");
+  const [panelCategory, setPanelCategory] = useState<string>("all");
+  const [panelSearch, setPanelSearch] = useState<string>("");
+  const [autoSaveAiPersona, setAutoSaveAiPersona] = useState<boolean>(true);
+  const [savingPersonaIndex, setSavingPersonaIndex] = useState<number | null>(null);
+  const [savedPersonaFeedback, setSavedPersonaFeedback] = useState<string>("");
 
   // Server teams and templates data
   const [teamsData, setTeamsData] = useState<AgentTeamsResponse | null>(null);
@@ -210,8 +239,19 @@ export function MultiAgentModal({
       setMode(activeConfig.mode);
       setAgents(activeConfig.agents);
       setRounds(activeConfig.rounds || 1);
+      setUseSelectedModel(activeConfig.use_selected_model ?? true);
     }
   }, [activeConfig]);
+
+  // Keep agent models synced to the selected chat model when useSelectedModel is enabled
+  useEffect(() => {
+    if (!useSelectedModel || !resolvedDefaultModel) return;
+    setAgents((prev) =>
+      prev.some((ag) => ag.model !== resolvedDefaultModel)
+        ? prev.map((ag) => ({ ...ag, model: resolvedDefaultModel }))
+        : prev
+    );
+  }, [useSelectedModel, resolvedDefaultModel]);
 
   if (!isOpen) return null;
 
@@ -253,6 +293,97 @@ export function MultiAgentModal({
     });
   }
 
+  async function handleSavePersonaToPanel(
+    persona: { name: string; role: string; category?: string; avatar: string; color: string; prompt: string; model?: string },
+    cardIndex?: number
+  ) {
+    if (!persona.name.trim()) return;
+    if (cardIndex !== undefined) setSavingPersonaIndex(cardIndex);
+    try {
+      const saved = await api<SavedAgentPersona>("/agent-teams/personas", {
+        method: "POST",
+        body: JSON.stringify({
+          name: persona.name.trim(),
+          role: persona.role || "",
+          category: persona.category || "personnalisé",
+          avatar: persona.avatar || "🤖",
+          color: persona.color || "#6366f1",
+          prompt: persona.prompt || "",
+          model: persona.model || "",
+        }),
+      });
+      if (saved) {
+        setTeamsData((prev) =>
+          prev
+            ? { ...prev, personas: [saved, ...(prev.personas || [])] }
+            : { teams: [], personas: [saved], templates: [], preset_teams: [] }
+        );
+        setSavedPersonaFeedback(`« ${saved.name} » sauvegardé dans votre panel !`);
+        setTimeout(() => setSavedPersonaFeedback(""), 3000);
+      }
+    } catch (err: any) {
+      setErrorMsg(err.message || "Erreur lors de la sauvegarde de la personnalité.");
+    } finally {
+      setSavingPersonaIndex(null);
+    }
+  }
+
+  async function handleDeleteSavedPersona(personaId: string) {
+    try {
+      await api(`/agent-teams/personas/${personaId}`, { method: "DELETE" });
+      setTeamsData((prev) =>
+        prev
+          ? { ...prev, personas: (prev.personas || []).filter((p) => p.id !== personaId) }
+          : null
+      );
+    } catch (err) {
+      console.warn("Échec suppression personnalité:", err);
+    }
+  }
+
+  function handleAddOrTogglePanelPersona(item: {
+    name: string;
+    role: string;
+    avatar: string;
+    color: string;
+    prompt: string;
+  }) {
+    const existingIdx = agents.findIndex(
+      (a) => a.name.trim().toLowerCase() === item.name.trim().toLowerCase()
+    );
+    if (existingIdx !== -1) {
+      if (agents.length > 2) {
+        setAgents(agents.filter((_, i) => i !== existingIdx));
+      }
+      return;
+    }
+    if (agents.length >= 4) return;
+    const nextAgent: AgentPersonaConfig = {
+      id: `agent_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      name: item.name,
+      role: item.role,
+      model: resolvedDefaultModel,
+      prompt: item.prompt,
+      avatar: item.avatar || "🤖",
+      color: item.color || "#6366f1",
+    };
+    setAgents([...agents, nextAgent]);
+  }
+
+  function handleReplaceAgentFromPanel(
+    targetIndex: number,
+    item: { name: string; role: string; avatar: string; color: string; prompt: string }
+  ) {
+    handleUpdateAgent(targetIndex, {
+      name: item.name,
+      role: item.role,
+      avatar: item.avatar || "🤖",
+      color: item.color || "#6366f1",
+      prompt: item.prompt,
+      ...(useSelectedModel ? { model: resolvedDefaultModel } : {}),
+    });
+  }
+
   async function handleGeneratePersonaWithAi(targetIndex?: number, customInput?: string) {
     const rawInput = (customInput || aiPromptInput).trim();
     if (!rawInput) return;
@@ -278,9 +409,11 @@ export function MultiAgentModal({
             color: generated.color,
             prompt: generated.prompt,
             model:
-              generated.suggested_model && modelMap.has(generated.suggested_model)
+              !useSelectedModel && generated.suggested_model && modelMap.has(generated.suggested_model)
                 ? generated.suggested_model
-                : agents[targetIndex]?.model || defaultModel || models[0]?.id || "openai/gpt-4o",
+                : useSelectedModel
+                ? resolvedDefaultModel
+                : agents[targetIndex]?.model || resolvedDefaultModel,
           });
         } else {
           // Add as new agent (if < 4 agents)
@@ -292,15 +425,26 @@ export function MultiAgentModal({
             color: generated.color,
             prompt: generated.prompt,
             model:
-              generated.suggested_model && modelMap.has(generated.suggested_model)
+              !useSelectedModel && generated.suggested_model && modelMap.has(generated.suggested_model)
                 ? generated.suggested_model
-                : defaultModel || models[0]?.id || "openai/gpt-4o",
+                : resolvedDefaultModel,
           };
           if (agents.length < 4) {
             setAgents([...agents, newAgent]);
           } else {
             // Replace the last agent if full
             setAgents([...agents.slice(0, 3), newAgent]);
+          }
+          if (autoSaveAiPersona) {
+            await handleSavePersonaToPanel({
+              name: generated.name,
+              role: generated.role,
+              category: "personnalisé",
+              avatar: generated.avatar,
+              color: generated.color,
+              prompt: generated.prompt,
+              model: newAgent.model,
+            });
           }
           setAiPromptInput("");
           setShowAiCreator(false);
@@ -316,12 +460,15 @@ export function MultiAgentModal({
 
   function handleLoadPresetTeam(preset: { mode: "synthesis" | "debate" | "dialectic" | "contradictory"; agents: AgentPersonaConfig[] }) {
     setMode(preset.mode === "contradictory" ? "dialectic" : preset.mode);
-    // Replace with matched models or default
+    // Use the selected chat model when useSelectedModel is enabled, otherwise match or fallback
     const resolvedAgents = preset.agents.map((ag) => {
+      if (useSelectedModel) {
+        return { ...ag, model: resolvedDefaultModel };
+      }
       const exists = modelMap.has(ag.model);
       return {
         ...ag,
-        model: exists ? ag.model : defaultModel || models[0]?.id || ag.model,
+        model: exists ? ag.model : resolvedDefaultModel || ag.model,
       };
     });
     setAgents(resolvedAgents);
@@ -375,10 +522,14 @@ export function MultiAgentModal({
       setErrorMsg("Le conseil doit comporter au moins 2 personnalités.");
       return;
     }
+    const effectiveAgents = useSelectedModel
+      ? agents.map((ag) => ({ ...ag, model: resolvedDefaultModel }))
+      : agents;
     onApplyConfig({
       mode,
-      agents,
+      agents: effectiveAgents,
       rounds,
+      use_selected_model: useSelectedModel,
     });
     onClose();
   }
@@ -510,6 +661,16 @@ export function MultiAgentModal({
           </button>
           <button
             type="button"
+            className={`multi-agent-tab ${activeTab === "panel" ? "is-active" : ""}`}
+            onClick={() => setActiveTab("panel")}
+          >
+            <Users size={15} />
+            <span>
+              Panel de Personnalités ({(teamsData?.personas?.length || 0) + (teamsData?.templates?.length || 0)})
+            </span>
+          </button>
+          <button
+            type="button"
             className={`multi-agent-tab ${activeTab === "presets" ? "is-active" : ""}`}
             onClick={() => setActiveTab("presets")}
           >
@@ -529,6 +690,19 @@ export function MultiAgentModal({
         {/* Tab 1: Compose Agents */}
         {activeTab === "compose" && (
           <div className="multi-agent-content-area">
+            <div className="multi-agent-rounds-bar" style={{ padding: "0 0 10px", justifyContent: "space-between", flexWrap: "wrap" }}>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer", fontWeight: 500 }}>
+                <input
+                  type="checkbox"
+                  checked={useSelectedModel}
+                  onChange={(e) => setUseSelectedModel(e.target.checked)}
+                />
+                <span>
+                  Utiliser le modèle IA sélectionné dans le tchat (<code>{modelMap.get(resolvedDefaultModel)?.name || resolvedDefaultModel}</code>) pour tous les agents
+                </span>
+              </label>
+            </div>
+
             {/* AI Persona Quick Generator Banner */}
             <div className="ai-persona-generator-bar">
               <div className="ai-persona-bar-header">
@@ -575,7 +749,22 @@ export function MultiAgentModal({
                   )}
                 </button>
               </div>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 6, marginTop: 8, fontSize: 12, cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={autoSaveAiPersona}
+                  onChange={(e) => setAutoSaveAiPersona(e.target.checked)}
+                />
+                <span>Sauvegarder automatiquement cette personnalité dans mon panel</span>
+              </label>
             </div>
+
+            {savedPersonaFeedback && (
+              <div className="team-success-notice" style={{ marginBottom: 10 }}>
+                <Check size={15} />
+                <span>{savedPersonaFeedback}</span>
+              </div>
+            )}
 
             <div className="multi-agent-cards-grid">
               {agents.map((agent, index) => {
@@ -661,7 +850,10 @@ export function MultiAgentModal({
                         <select
                           className="agent-model-select"
                           value={agent.model}
-                          onChange={(e) => handleUpdateAgent(index, { model: e.target.value })}
+                          onChange={(e) => {
+                            setUseSelectedModel(false);
+                            handleUpdateAgent(index, { model: e.target.value });
+                          }}
                         >
                           {favoriteModelsList.length > 0 && (
                             <optgroup label="⭐ Modèles favoris">
@@ -756,6 +948,35 @@ export function MultiAgentModal({
                         </label>
 
                         <div className="agent-prompt-tools-group">
+                          {/* Save this persona to user's panel */}
+                          <button
+                            type="button"
+                            className="agent-prompt-magic-btn"
+                            title="Sauvegarder cette personnalité dans votre panel réutilisable"
+                            onClick={() =>
+                              void handleSavePersonaToPanel(
+                                {
+                                  name: agent.name,
+                                  role: agent.role,
+                                  category: "personnalisé",
+                                  avatar: agent.avatar,
+                                  color: agent.color,
+                                  prompt: agent.prompt,
+                                  model: agent.model,
+                                },
+                                index
+                              )
+                            }
+                            disabled={savingPersonaIndex === index || !agent.name.trim()}
+                          >
+                            {savingPersonaIndex === index ? (
+                              <LoaderCircle size={12} className="spin" />
+                            ) : (
+                              <Bookmark size={12} />
+                            )}
+                            <span>Sauver</span>
+                          </button>
+
                           {/* AI Generator for this specific agent */}
                           <button
                             type="button"
@@ -852,6 +1073,161 @@ export function MultiAgentModal({
                 <span>{errorMsg}</span>
               </div>
             )}
+          </div>
+        )}
+
+        {/* Tab 1b: Panel de Personnalités */}
+        {activeTab === "panel" && (
+          <div className="multi-agent-content-area">
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {[
+                  { id: "all", label: "Toutes" },
+                  { id: "saved", label: `⭐ Mes sauvegardées (${teamsData?.personas?.length || 0})` },
+                  { id: "science", label: "🔬 Scientifiques" },
+                  { id: "politique", label: "🏛️ Politiques" },
+                  { id: "créatif", label: "🎨 Esprits créatifs" },
+                  { id: "métier", label: "💼 Métiers" },
+                  { id: "philosophie", label: "🧠 Philosophie" },
+                ].map((cat) => (
+                  <button
+                    key={cat.id}
+                    type="button"
+                    className={`rounds-pill ${panelCategory === cat.id ? "is-active" : ""}`}
+                    onClick={() => setPanelCategory(cat.id)}
+                  >
+                    {cat.label}
+                  </button>
+                ))}
+              </div>
+              <input
+                type="text"
+                className="ai-persona-input"
+                style={{ maxWidth: 240, minWidth: 180 }}
+                value={panelSearch}
+                onChange={(e) => setPanelSearch(e.target.value)}
+                placeholder="Rechercher une personnalité..."
+              />
+            </div>
+
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", marginBottom: 14, padding: "8px 12px", borderRadius: 10, background: "var(--bg-subtle, rgba(99,102,241,0.06))", fontSize: 12 }}>
+              <strong>Conseil actif ({agents.length}/4) :</strong>
+              {agents.map((ag, idx) => (
+                <span key={ag.id || idx} className="preset-agent-pill">
+                  <span className="pill-avatar">{ag.avatar}</span>
+                  <span className="pill-name">{ag.name}</span>
+                </span>
+              ))}
+              <button
+                type="button"
+                className="rounds-pill"
+                style={{ marginLeft: "auto" }}
+                onClick={() => setActiveTab("compose")}
+              >
+                Voir / Éditer le conseil →
+              </button>
+            </div>
+
+            <div className="preset-teams-grid">
+              {[
+                ...(teamsData?.personas || []).map((p) => ({ ...p, _isCustom: true })),
+                ...(teamsData?.templates || []).map((t) => ({
+                  ...t,
+                  category: t.category || "métier",
+                  _isCustom: false,
+                })),
+              ]
+                .filter((item) => {
+                  if (panelCategory === "saved") return item._isCustom;
+                  if (panelCategory !== "all" && item.category !== panelCategory) return false;
+                  if (panelSearch.trim()) {
+                    const q = panelSearch.trim().toLowerCase();
+                    return (
+                      item.name.toLowerCase().includes(q) ||
+                      item.role.toLowerCase().includes(q) ||
+                      item.prompt.toLowerCase().includes(q)
+                    );
+                  }
+                  return true;
+                })
+                .map((item) => {
+                  const inCouncil = agents.some(
+                    (a) => a.name.trim().toLowerCase() === item.name.trim().toLowerCase()
+                  );
+                  return (
+                    <div
+                      key={`${item._isCustom ? "custom" : "tpl"}-${item.id}`}
+                      className="preset-team-card"
+                      style={{ borderTop: `3px solid ${item.color || "#6366f1"}` }}
+                    >
+                      <div className="preset-team-header">
+                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                          <span style={{ fontSize: 24 }}>{item.avatar}</span>
+                          <div>
+                            <span className="preset-mode-badge">
+                              {item._isCustom ? "⭐ Sauvegardée" : item.category}
+                            </span>
+                            <h3 style={{ margin: "2px 0 0" }}>{item.name}</h3>
+                            <div style={{ fontSize: 12, opacity: 0.75 }}>{item.role}</div>
+                          </div>
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          {item._isCustom && (
+                            <button
+                              type="button"
+                              className="saved-team-del-btn"
+                              onClick={() => void handleDeleteSavedPersona(item.id)}
+                              title="Supprimer cette personnalité sauvegardée"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          )}
+                          {inCouncil ? (
+                            <button
+                              type="button"
+                              className="rounds-pill is-active"
+                              disabled={agents.length <= 2}
+                              onClick={() => handleAddOrTogglePanelPersona(item)}
+                              title={
+                                agents.length <= 2
+                                  ? "Le conseil doit comporter au moins 2 experts"
+                                  : "Retirer du conseil"
+                              }
+                            >
+                              ✓ Dans le conseil
+                            </button>
+                          ) : agents.length < 4 ? (
+                            <button
+                              type="button"
+                              className="preset-load-btn"
+                              onClick={() => handleAddOrTogglePanelPersona(item)}
+                            >
+                              + Ajouter au conseil
+                            </button>
+                          ) : (
+                            <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                              {agents.map((_, idx) => (
+                                <button
+                                  key={idx}
+                                  type="button"
+                                  className="rounds-pill"
+                                  onClick={() => handleReplaceAgentFromPanel(idx, item)}
+                                  title={`Remplacer l'expert #${idx + 1}`}
+                                >
+                                  Rempl. #{idx + 1}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      <p className="preset-desc" style={{ marginTop: 8 }}>
+                        {item.prompt.length > 180 ? `${item.prompt.slice(0, 180)}…` : item.prompt}
+                      </p>
+                    </div>
+                  );
+                })}
+            </div>
           </div>
         )}
 
