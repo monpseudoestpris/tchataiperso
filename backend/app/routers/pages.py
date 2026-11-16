@@ -5,9 +5,28 @@ from sqlalchemy.orm import sessionmaker
 from ..config import Settings
 from ..deps import current_user, get_sessions, get_settings
 from ..models import Conversation, User, WebPage, WebPageVersion, now
+from ..page_bricks import (
+    build_bricks_prompt_context,
+    execute_page_brick,
+    inject_bricks_runtime_html,
+    interview_app_diagram,
+    normalize_bricks,
+    propose_app_diagram,
+)
 from ..page_generator import propose_page_topics, refine_page_html, slugify
+from ..page_runtime import sanitize_and_enhance_html
 from ..page_service import create_draft_web_page
-from ..schemas import CreateWebPage, PageTopicItem, ProposePageTopicsRequest, ProposePageTopicsResponse, RefineWebPage, UpdateWebPage
+from ..schemas import (
+    CreateWebPage,
+    ExecutePageBrickRequest,
+    InterviewAppDiagramRequest,
+    PageTopicItem,
+    ProposeAppDiagramRequest,
+    ProposePageTopicsRequest,
+    ProposePageTopicsResponse,
+    RefineWebPage,
+    UpdateWebPage,
+)
 from ..serializers import web_page_json, web_page_version_json
 
 router = APIRouter(tags=["pages"])
@@ -95,6 +114,7 @@ async def create_page(
         title=body.title,
         model=body.model,
         conversation_id=body.conversation_id,
+        kind=body.kind,
         page_type=body.page_type,
         target_audience=body.target_audience,
         author_persona=body.author_persona,
@@ -112,6 +132,74 @@ async def create_page(
         font_family=body.font_family,
         text_effects=body.text_effects,
         selected_topics=[t.model_dump() for t in body.selected_topics] if body.selected_topics else None,
+        html_content=body.html_content,
+        canvas_files=[f.model_dump() for f in body.canvas_files] if body.canvas_files else None,
+        bricks=[b.model_dump() for b in body.bricks] if body.bricks else None,
+    )
+
+
+@router.post("/api/pages/bricks/execute")
+async def execute_brick_endpoint(
+    body: ExecutePageBrickRequest,
+    user: User = Depends(current_user),
+    settings: Settings = Depends(get_settings),
+    sessions: sessionmaker = Depends(get_sessions),
+):
+    target_brick: dict | None = body.brick.model_dump() if body.brick else None
+
+    if target_brick is None and body.page_id:
+        with sessions() as db:
+            page = db.scalar(select(WebPage).where(WebPage.id == body.page_id, WebPage.user_id == user.id))
+            if not page:
+                raise HTTPException(404, "Page ou application introuvable")
+            page_bricks = getattr(page, "bricks", None) or []
+            needle = (body.brick_id or "").strip().lower()
+            for candidate in page_bricks:
+                if not isinstance(candidate, dict):
+                    continue
+                cid = str(candidate.get("id") or "").lower()
+                cname = str(candidate.get("name") or "").lower()
+                if not needle or needle == "default" or cid == needle or cname == needle:
+                    target_brick = candidate
+                    break
+
+    if not target_brick:
+        raise HTTPException(404, "Brique IA introuvable pour cette application")
+
+    return await execute_page_brick(
+        settings=settings,
+        brick=target_brick,
+        inputs=body.inputs,
+        fallback_model=body.model,
+    )
+
+
+@router.post("/api/pages/diagram/propose")
+async def propose_diagram_endpoint(
+    body: ProposeAppDiagramRequest,
+    _user: User = Depends(current_user),
+    settings: Settings = Depends(get_settings),
+):
+    return await propose_app_diagram(
+        settings=settings,
+        prompt=body.prompt,
+        title=body.title,
+        model=body.model,
+    )
+
+
+@router.post("/api/pages/diagram/interview")
+async def interview_diagram_endpoint(
+    body: InterviewAppDiagramRequest,
+    _user: User = Depends(current_user),
+    settings: Settings = Depends(get_settings),
+):
+    return await interview_app_diagram(
+        settings=settings,
+        messages=[m.model_dump() for m in body.messages],
+        available_templates=body.available_templates,
+        model=body.model,
+        force_finalize=body.force_finalize,
     )
 
 
@@ -144,6 +232,66 @@ def update_page(
             page.slug = slugify(body.title)
         if body.is_published is not None:
             page.is_published = body.is_published
+        if body.kind is not None:
+            page.kind = body.kind
+        if body.bricks is not None:
+            page.bricks = normalize_bricks([b.model_dump() for b in body.bricks])
+
+        versions = page.versions or []
+        effective_bricks = getattr(page, "bricks", None) or []
+
+        if body.html_content is not None and body.html_content.strip():
+            next_version_num = (max(v.version_number for v in versions) if versions else 0) + 1
+            enhanced_html = sanitize_and_enhance_html(
+                body.html_content.strip(),
+                title=page.title,
+                bricks=effective_bricks if (effective_bricks or page.kind == "app") else None,
+            )
+            norm_files = (
+                [
+                    {
+                        "path": str(f.path).strip(),
+                        "language": str(f.language).strip(),
+                        "content": str(f.content),
+                    }
+                    for f in body.canvas_files
+                    if str(f.path).strip()
+                ]
+                if body.canvas_files is not None
+                else ((versions[0].canvas_files or []) if versions else [])
+            )
+            new_version = WebPageVersion(
+                page_id=page.id,
+                version_number=next_version_num,
+                prompt_used=body.prompt_used or "Mise à jour depuis Code Canvas",
+                html_content=enhanced_html,
+                canvas_files=norm_files,
+            )
+            db.add(new_version)
+        elif body.bricks is not None and versions:
+            latest = versions[0]
+            latest.html_content = inject_bricks_runtime_html(latest.html_content, effective_bricks)
+            if body.canvas_files is not None:
+                latest.canvas_files = [
+                    {
+                        "path": str(f.path).strip(),
+                        "language": str(f.language).strip(),
+                        "content": str(f.content),
+                    }
+                    for f in body.canvas_files
+                    if str(f.path).strip()
+                ]
+        elif body.canvas_files is not None and versions:
+            versions[0].canvas_files = [
+                {
+                    "path": str(f.path).strip(),
+                    "language": str(f.language).strip(),
+                    "content": str(f.content),
+                }
+                for f in body.canvas_files
+                if str(f.path).strip()
+            ]
+
         page.updated_at = now()
         db.commit()
         db.refresh(page)
@@ -182,14 +330,23 @@ async def refine_page(
             raise HTTPException(400, "Aucune version existante à modifier")
         current_version = versions[0]
         current_html = current_version.html_content
+        current_canvas_files = getattr(current_version, "canvas_files", None) or []
+        page_bricks = getattr(page, "bricks", None) or []
         next_version_num = max(v.version_number for v in versions) + 1
+
+    effective_instruction = body.instruction
+    bricks_ctx = build_bricks_prompt_context(page_bricks)
+    if bricks_ctx:
+        effective_instruction = f"{effective_instruction}\n\n{bricks_ctx}"
 
     updated_html = await refine_page_html(
         settings=settings,
         current_html=current_html,
-        instruction=body.instruction,
+        instruction=effective_instruction,
         model=body.model,
     )
+    if page_bricks or getattr(page, "kind", "page") == "app":
+        updated_html = inject_bricks_runtime_html(updated_html, page_bricks)
 
     with sessions() as db:
         page = db.scalar(select(WebPage).where(WebPage.id == page_id, WebPage.user_id == user.id))
@@ -200,6 +357,7 @@ async def refine_page(
             version_number=next_version_num,
             prompt_used=body.instruction,
             html_content=updated_html,
+            canvas_files=current_canvas_files,
         )
         db.add(new_version)
         page.updated_at = now()
@@ -230,12 +388,17 @@ def restore_version(
 
         versions = page.versions or []
         next_version_num = (max(v.version_number for v in versions) if versions else 0) + 1
+        page_bricks = getattr(page, "bricks", None) or []
+        restored_html = target_version.html_content
+        if page_bricks or getattr(page, "kind", "page") == "app":
+            restored_html = inject_bricks_runtime_html(restored_html, page_bricks)
 
         restored_version = WebPageVersion(
             page_id=page.id,
             version_number=next_version_num,
             prompt_used=f"Restauration de la version {target_version.version_number}",
-            html_content=target_version.html_content,
+            html_content=restored_html,
+            canvas_files=getattr(target_version, "canvas_files", None) or [],
         )
         db.add(restored_version)
         page.updated_at = now()

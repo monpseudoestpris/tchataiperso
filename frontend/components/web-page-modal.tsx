@@ -22,6 +22,7 @@ import {
   PanelLeftOpen,
   Plus,
   Printer,
+  Puzzle,
   RefreshCw,
   Send,
   Settings2,
@@ -37,6 +38,7 @@ import {
   createWebPage,
   deleteWebPage,
   errorMessage,
+  executePageBrick,
   fetchWebPage,
   fetchWebPages,
   proposeWebPageTopics,
@@ -44,10 +46,14 @@ import {
   restoreWebPageVersion,
   updateWebPage,
   type Model,
+  type PageBrick,
   type PageTopicItem,
   type WebPage,
   type WebPageVersion,
 } from "@/lib/api";
+import { buildBrickWiringPrompt, injectBrickIntoCanvasHtml } from "@/lib/canvas-bricks";
+import type { CanvasFile } from "@/lib/code-canvas";
+import { CanvasBricksModal } from "./canvas-bricks-modal";
 import { ModelModal } from "./model-modal";
 import { useModelFavorites } from "@/lib/model-favorites";
 import { toJpeg, toPng } from "html-to-image";
@@ -59,9 +65,12 @@ export type WebPageModalProps = {
   conversationId?: string | null;
   conversationTitle?: string | null;
   initialPrompt?: string;
+  initialTab?: "pages" | "apps";
+  initialPageId?: string | null;
   models?: Model[];
   currentModel?: string;
   onRefreshModels?: () => Promise<void>;
+  onOpenInCanvas?: (files: CanvasFile[], title: string, bricks: PageBrick[], pageId: string) => void;
 };
 
 export type PagePresetDef = {
@@ -196,14 +205,19 @@ export function WebPageModal({
   conversationId,
   conversationTitle,
   initialPrompt,
+  initialTab = "pages",
+  initialPageId = null,
   models,
   currentModel,
   onRefreshModels,
+  onOpenInCanvas,
 }: WebPageModalProps) {
   const [pages, setPages] = useState<WebPage[]>([]);
+  const [sidebarTab, setSidebarTab] = useState<"pages" | "apps">(initialTab);
   const [selectedPageId, setSelectedPageId] = useState<string | null>(null);
   const [selectedPage, setSelectedPage] = useState<WebPage | null>(null);
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
+  const [bricksModalOpen, setBricksModalOpen] = useState(false);
   const [selectedModel, setSelectedModel] = useState<string>(currentModel || "");
   const { isFavorite } = useModelFavorites("llm");
 
@@ -534,8 +548,48 @@ export function WebPageModal({
   // Load pages list on open
   useEffect(() => {
     if (!isOpen) return;
-    void loadPages();
-  }, [isOpen]);
+    if (initialTab) setSidebarTab(initialTab);
+    void loadPages(initialPageId);
+  }, [isOpen, initialTab, initialPageId]);
+
+  // Listen for CLAIR_BRICK_CALL postMessage from the app iframe
+  useEffect(() => {
+    if (!isOpen) return;
+    function handleBrickMessage(event: MessageEvent) {
+      const data = event.data as {
+        type?: string;
+        requestId?: string;
+        brickId?: string;
+        inputs?: Record<string, unknown>;
+      } | null;
+      if (!data || data.type !== "CLAIR_BRICK_CALL" || !data.requestId) return;
+      const iframeWin = iframeRef.current?.contentWindow;
+      if (!iframeWin || event.source !== iframeWin) return;
+      if (!selectedPage) return;
+
+      void executePageBrick({
+        page_id: selectedPage.id,
+        brick_id: data.brickId,
+        inputs: data.inputs ?? {},
+        model: selectedModel || undefined,
+      })
+        .then((result) => {
+          iframeWin.postMessage(
+            { type: "CLAIR_BRICK_RESULT", requestId: data.requestId, ok: true, result },
+            "*",
+          );
+        })
+        .catch((err) => {
+          iframeWin.postMessage(
+            { type: "CLAIR_BRICK_RESULT", requestId: data.requestId, ok: false, error: errorMessage(err) },
+            "*",
+          );
+        });
+    }
+
+    window.addEventListener("message", handleBrickMessage);
+    return () => window.removeEventListener("message", handleBrickMessage);
+  }, [isOpen, selectedPage, selectedModel]);
 
   // When initialPrompt changes
   useEffect(() => {
@@ -545,15 +599,37 @@ export function WebPageModal({
     }
   }, [initialPrompt]);
 
-  async function loadPages() {
+  const pageItems = useMemo(
+    () => pages.filter((p) => (p.kind || "page") !== "app"),
+    [pages],
+  );
+  const appItems = useMemo(
+    () => pages.filter((p) => p.kind === "app"),
+    [pages],
+  );
+  const displayedSidebarItems = sidebarTab === "apps" ? appItems : pageItems;
+
+  async function loadPages(targetPageId?: string | null) {
     setLoading(true);
     setError(null);
     try {
       const data = await fetchWebPages();
       setPages(data);
+      if (targetPageId) {
+        const found = data.find((p) => p.id === targetPageId);
+        if (found) {
+          setSidebarTab(found.kind === "app" ? "apps" : "pages");
+        }
+        await selectPage(targetPageId);
+        return;
+      }
       // Only auto-select existing page if there is NO conversation context and NO initialPrompt
       if (data.length > 0 && !selectedPageId && !initialPrompt && !conversationId) {
-        await selectPage(data[0].id);
+        const preferred =
+          (initialTab === "apps"
+            ? data.find((p) => p.kind === "app")
+            : data.find((p) => (p.kind || "page") !== "app")) ?? data[0];
+        await selectPage(preferred.id);
       }
     } catch (err) {
       setError(errorMessage(err));
@@ -663,6 +739,7 @@ export function WebPageModal({
         title: title.trim() || undefined,
         conversation_id: useConversation && conversationId ? conversationId : undefined,
         model: selectedModel || undefined,
+        kind: sidebarTab === "apps" ? "app" : "page",
         page_type: pageType,
         target_audience: targetAudience,
         author_persona: authorPersona.trim() || undefined,
@@ -1210,6 +1287,58 @@ export function WebPageModal({
                 <button
                   type="button"
                   className={styles.btn}
+                  onClick={() => setBricksModalOpen(true)}
+                  title="Configurer les briques préfaites et agents IA attachés à cette page/application"
+                >
+                  <Puzzle size={13} />
+                  <span>
+                    Briques IA
+                    {(selectedPage.bricks?.length || 0) > 0
+                      ? ` (${selectedPage.bricks?.length})`
+                      : ""}
+                  </span>
+                </button>
+
+                {onOpenInCanvas &&
+                  ((selectedPage.latest_canvas_files?.length || 0) > 0 ||
+                    selectedPage.kind === "app") && (
+                    <button
+                      type="button"
+                      className={styles.btn}
+                      onClick={() => {
+                        const files: CanvasFile[] =
+                          selectedPage.latest_canvas_files &&
+                          selectedPage.latest_canvas_files.length > 0
+                            ? selectedPage.latest_canvas_files.map((f) => ({
+                                path: f.path,
+                                language: f.language || "text",
+                                content: f.content,
+                              }))
+                            : [
+                                {
+                                  path: "index.html",
+                                  language: "html",
+                                  content: activeHtml || selectedPage.latest_html || "",
+                                },
+                              ];
+                        onOpenInCanvas(
+                          files,
+                          selectedPage.title,
+                          selectedPage.bricks || [],
+                          selectedPage.id,
+                        );
+                        onClose();
+                      }}
+                      title="Ouvrir le code source multi-fichiers dans le Code Canvas"
+                    >
+                      <Code2 size={13} />
+                      <span>Ouvrir dans Canvas</span>
+                    </button>
+                  )}
+
+                <button
+                  type="button"
+                  className={styles.btn}
                   onClick={() => {
                     setPrompt(selectedPage.title);
                     setTitle(selectedPage.title);
@@ -1262,6 +1391,26 @@ export function WebPageModal({
           {/* Sidebar */}
           <aside className={`${styles.sidebar} ${!sidebarOpen ? styles.collapsed : ""}`}>
             <div className={styles.sidebarHeader}>
+              <div className={styles.sidebarTabs} role="tablist" aria-label="Filtrer par type">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={sidebarTab === "pages"}
+                  className={`${styles.sidebarTabBtn} ${sidebarTab === "pages" ? styles.active : ""}`}
+                  onClick={() => setSidebarTab("pages")}
+                >
+                  <span>📄 Mes Pages ({pageItems.length})</span>
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={sidebarTab === "apps"}
+                  className={`${styles.sidebarTabBtn} ${sidebarTab === "apps" ? styles.active : ""}`}
+                  onClick={() => setSidebarTab("apps")}
+                >
+                  <span>🧩 Mes Apps ({appItems.length})</span>
+                </button>
+              </div>
               <button
                 type="button"
                 className={styles.newBtn}
@@ -1272,7 +1421,7 @@ export function WebPageModal({
                 }}
               >
                 <Plus size={16} />
-                <span>Nouvelle Page Web</span>
+                <span>{sidebarTab === "apps" ? "Nouvelle Page / App" : "Nouvelle Page Web"}</span>
               </button>
             </div>
 
@@ -1282,11 +1431,16 @@ export function WebPageModal({
                   <LoaderCircle size={18} className="spin" style={{ margin: "0 auto" }} />
                 </li>
               )}
-              {!loading && pages.length === 0 && (
-                <li className={styles.emptyState}>Aucune page créée pour le moment.</li>
+              {!loading && displayedSidebarItems.length === 0 && (
+                <li className={styles.emptyState}>
+                  {sidebarTab === "apps"
+                    ? "Aucune application Canvas intégrée pour le moment. Ouvrez le Code Canvas puis cliquez sur « Intégrer à Mes Apps »."
+                    : "Aucune page créée pour le moment."}
+                </li>
               )}
-              {pages.map((p) => {
+              {displayedSidebarItems.map((p) => {
                 const isSelected = selectedPageId === p.id;
+                const bricksCount = p.bricks?.length || 0;
                 return (
                   <li key={p.id} className={styles.pageItem}>
                     <button
@@ -1297,6 +1451,9 @@ export function WebPageModal({
                       <div className={styles.pageItemTitle}>{p.title}</div>
                       <div className={styles.pageItemMeta}>
                         <span>v{p.latest_version_number || 1}</span>
+                        {bricksCount > 0 && (
+                          <span className={styles.appBrickPill}>🧩 {bricksCount}</span>
+                        )}
                         {p.is_published && <span className={styles.pubPill}>Publiée</span>}
                       </div>
                     </button>
@@ -2448,6 +2605,49 @@ export function WebPageModal({
           }}
           onClose={() => setIsModelPickerOpen(false)}
           onRefreshModels={onRefreshModels}
+        />
+      )}
+
+      {/* Premade Bricks / AI Agents Configurator for the selected App/Page */}
+      {selectedPage && (
+        <CanvasBricksModal
+          isOpen={bricksModalOpen}
+          bricks={selectedPage.bricks || []}
+          models={models || []}
+          currentModel={selectedModel}
+          pageId={selectedPage.id}
+          onSave={async (nextBricks) => {
+            const updated = await updateWebPage(selectedPage.id, { bricks: nextBricks });
+            setSelectedPage(updated);
+            setPages((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+            if (updated.versions && updated.versions.length > 0) {
+              setSelectedVersionId(updated.versions[0].id);
+            }
+            setPreviewNonce((n) => n + 1);
+          }}
+          onInsertTurnkeyWidget={(brick, nextBricks) => {
+            const updatedHtml = injectBrickIntoCanvasHtml(activeHtml, brick, selectedPage.title);
+            void updateWebPage(selectedPage.id, {
+              bricks: nextBricks,
+              html_content: updatedHtml,
+              prompt_used: `Insertion widget ${brick.name}`,
+            }).then((updated) => {
+              setSelectedPage(updated);
+              setPages((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+              if (updated.versions && updated.versions.length > 0) {
+                setSelectedVersionId(updated.versions[0].id);
+              }
+              setViewMode("preview");
+              setPreviewNonce((n) => n + 1);
+            }).catch((err) => {
+              setError(errorMessage(err));
+            });
+          }}
+          onWireBrickWithAI={(brick) => {
+            const wirePrompt = buildBrickWiringPrompt(brick, []);
+            void handleRefine(wirePrompt);
+          }}
+          onClose={() => setBricksModalOpen(false)}
         />
       )}
     </div>

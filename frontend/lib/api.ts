@@ -359,12 +359,24 @@ export type ProposePageTopicsResponse = {
   topics: PageTopicItem[];
 };
 
+import type { BrickExecutionResult, PageBrick } from "./canvas-bricks";
+import type { AppDiagram } from "./canvas-diagram";
+
+export type { AppDiagram, BrickExecutionResult, PageBrick };
+
+export type WebPageCanvasFile = {
+  path: string;
+  language: string;
+  content: string;
+};
+
 export type WebPageVersion = {
   id: string;
   page_id: string;
   version_number: number;
   prompt_used: string;
   html_content?: string;
+  canvas_files?: WebPageCanvasFile[];
   created_at: string;
 };
 
@@ -373,6 +385,8 @@ export type WebPage = {
   user_id: string;
   title: string;
   slug: string;
+  kind?: "page" | "app";
+  bricks?: PageBrick[];
   public_token: string;
   is_published: boolean;
   created_at: string;
@@ -381,6 +395,7 @@ export type WebPage = {
   latest_version_number: number;
   latest_html?: string;
   latest_prompt?: string;
+  latest_canvas_files?: WebPageCanvasFile[];
   versions?: WebPageVersion[];
 };
 
@@ -767,6 +782,7 @@ export async function createWebPage(payload: {
   title?: string;
   conversation_id?: string;
   model?: string;
+  kind?: "page" | "app";
   page_type?: string;
   target_audience?: string;
   author_persona?: string;
@@ -784,6 +800,9 @@ export async function createWebPage(payload: {
   font_family?: string;
   text_effects?: string[];
   selected_topics?: PageTopicItem[];
+  html_content?: string;
+  canvas_files?: WebPageCanvasFile[];
+  bricks?: PageBrick[];
 }): Promise<WebPage> {
   return api<WebPage>("/pages", {
     method: "POST",
@@ -793,10 +812,68 @@ export async function createWebPage(payload: {
 
 export async function updateWebPage(
   pageId: string,
-  payload: { title?: string; is_published?: boolean }
+  payload: {
+    title?: string;
+    is_published?: boolean;
+    kind?: "page" | "app";
+    bricks?: PageBrick[];
+    html_content?: string;
+    canvas_files?: WebPageCanvasFile[];
+    prompt_used?: string;
+  }
 ): Promise<WebPage> {
   return api<WebPage>(`/pages/${pageId}`, {
     method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function executePageBrick(payload: {
+  page_id?: string;
+  brick_id?: string;
+  brick?: PageBrick;
+  inputs: Record<string, unknown>;
+  model?: string;
+}): Promise<BrickExecutionResult> {
+  return api<BrickExecutionResult>("/pages/bricks/execute", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function proposeAppDiagram(payload: {
+  prompt: string;
+  title?: string;
+  model?: string;
+}): Promise<AppDiagram> {
+  return api<AppDiagram>("/pages/diagram/propose", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export type DiagramInterviewQuestion = {
+  id: string;
+  question: string;
+  options: string[];
+};
+
+export type DiagramInterviewResponse = {
+  status: "questions" | "ready";
+  assistant_message: string;
+  selected_brick_ids: string[];
+  questions: DiagramInterviewQuestion[];
+  diagram: AppDiagram | null;
+};
+
+export async function interviewAppDiagram(payload: {
+  messages: { role: "user" | "assistant"; content: string }[];
+  available_templates?: { templateId: string; name: string; tagline: string }[];
+  model?: string;
+  force_finalize?: boolean;
+}): Promise<DiagramInterviewResponse> {
+  return api<DiagramInterviewResponse>("/pages/diagram/interview", {
+    method: "POST",
     body: JSON.stringify(payload),
   });
 }

@@ -462,6 +462,7 @@ def sanitize_and_enhance_html(
     title: str = "",
     layout_style: str = "auto",
     orientation: str = "portrait",
+    bricks: list[dict] | None = None,
 ) -> str:
     """
     Garantit la complétude structurelle, la sécurité des liens et le runtime d'interactivité.
@@ -470,6 +471,7 @@ def sanitize_and_enhance_html(
     - Rend visibles les barres d'onglets masquées par défaut.
     - Injecte le gabarit physique A4 si la page est une fiche A4.
     - Injecte CLAIR_PAGE_RUNTIME_JS pour assurer la navigation, les onglets et l'auto-fit A4.
+    - Injecte le pont `window.clair.runBrick(...)` lorsque des briques sont fournies (ou présentes).
     """
     code = html_code.strip()
     if not code:
@@ -530,6 +532,12 @@ def sanitize_and_enhance_html(
             code = code.replace("</html>", f"{runtime_tag}</html>", 1)
         else:
             code += runtime_tag
+
+    # 7. Injecter / actualiser le runtime des Briques Préfaites (window.clair.runBrick)
+    if bricks is not None:
+        from .page_bricks import inject_bricks_runtime_html
+
+        code = inject_bricks_runtime_html(code, bricks)
 
     return code
 

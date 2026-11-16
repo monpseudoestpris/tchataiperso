@@ -295,6 +295,71 @@
 .sidebarHeader {
   padding: 0.65rem;
   border-bottom: 1px solid var(--border-color, #e2e8f0);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.sidebarTabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.25rem;
+  padding: 3px;
+  border-radius: 8px;
+  background: #e2e8f0;
+}
+
+:global([data-theme="dark"]) .sidebarTabs,
+:global(.dark) .sidebarTabs {
+  background: #1e293b;
+}
+
+.sidebarTabBtn {
+  border: none;
+  background: transparent;
+  color: #475569;
+  font-size: 0.74rem;
+  font-weight: 600;
+  padding: 0.36rem 0.45rem;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  transition: all 0.15s ease;
+}
+
+:global([data-theme="dark"]) .sidebarTabBtn,
+:global(.dark) .sidebarTabBtn {
+  color: #94a3b8;
+}
+
+.sidebarTabBtn.active {
+  background: #ffffff;
+  color: #0284c7;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+
+:global([data-theme="dark"]) .sidebarTabBtn.active,
+:global(.dark) .sidebarTabBtn.active {
+  background: #0f172a;
+  color: #38bdf8;
+}
+
+.appBrickPill {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(99, 102, 241, 0.15);
+  color: #4f46e5;
+  font-size: 0.66rem;
+  font-weight: 700;
+}
+
+:global([data-theme="dark"]) .appBrickPill,
+:global(.dark) .appBrickPill {
+  background: rgba(129, 140, 248, 0.2);
+  color: #a5b4fc;
 }
 
 :global([data-theme="dark"]) .sidebarHeader,

@@ -1,3 +1,5 @@
+import { buildBricksClientRuntimeScript, type PageBrick } from "./canvas-bricks";
+
 export type CanvasFile = {
   path: string;
   language: string;
@@ -313,8 +315,9 @@ export function collectConversationCanvasFiles(
 
 /**
  * Builds a self-contained HTML preview document if the Canvas files contain HTML (or CSS/JS).
+ * Also injects the cLAIr Bricks runtime (`window.clair.runBrick(...)` + optional brick dock).
  */
-export function buildCanvasPreviewHtml(files: CanvasFile[]): string | null {
+export function buildCanvasPreviewHtml(files: CanvasFile[], bricks: PageBrick[] = []): string | null {
   if (!files.length) return null;
   const htmlFile =
     files.find(file => /(?:^|\/)index\.html?$/i.test(file.path)) ??
@@ -345,6 +348,14 @@ export function buildCanvasPreviewHtml(files: CanvasFile[]): string | null {
     }
   }
 
+  // Inject cLAIr Bricks runtime before app scripts so app.js can call window.clair.runBrick directly
+  const bricksScript = buildBricksClientRuntimeScript(bricks);
+  if (/<\/body>/i.test(doc)) {
+    doc = doc.replace(/<\/body>/i, () => `${bricksScript}\n</body>`);
+  } else {
+    doc = `${doc}\n${bricksScript}`;
+  }
+
   // Replace linked local scripts or inject them before </body>
   const combinedJs = jsFiles.map(file => `// ${file.path}\n${file.content}`).join("\n\n");
   if (combinedJs) {
@@ -356,7 +367,7 @@ export function buildCanvasPreviewHtml(files: CanvasFile[]): string | null {
     });
     const scriptTag = `<script>\n${combinedJs}\n</script>`;
     if (/<\/body>/i.test(doc)) {
-      doc = doc.replace(/<\/body>/i, `${scriptTag}\n</body>`);
+      doc = doc.replace(/<\/body>/i, () => `${scriptTag}\n</body>`);
     } else {
       doc = `${doc}\n${scriptTag}`;
     }

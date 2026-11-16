@@ -525,4 +525,457 @@ def test_a4_strict_presets_and_enforcer(client):
     assert "fitA4Sheets" in html_out
 
 
+def test_canvas_app_integration_and_ai_bricks(client):
+    sample_brick = {
+        "id": "agent_analyse",
+        "name": "Analyste Synthèse",
+        "type": "ai_agent",
+        "description": "Analyse un texte et renvoie un JSON structuré.",
+        "model": "openai/gpt-4o-mini",
+        "system_prompt": "Analyse le texte fourni avec rigueur.",
+        "web_search_enabled": False,
+        "show_widget": True,
+        "inputs": [
+            {
+                "key": "texte",
+                "label": "Texte source",
+                "type": "textarea",
+                "required": True,
+                "placeholder": "Collez un texte...",
+                "default_value": "",
+                "options": [],
+            }
+        ],
+        "output_spec": {
+            "format": "json",
+            "description": "Objet JSON avec résumé et score",
+            "fields": [
+                {"key": "resume", "type": "string", "description": "Synthèse"},
+                {"key": "score", "type": "number", "description": "Score sur 100"},
+                {"key": "valide", "type": "boolean", "description": "Est conforme"},
+                {"key": "points", "type": "string[]", "description": "Liste de points"},
+            ],
+        },
+    }
+
+    canvas_files = [
+        {
+            "path": "index.html",
+            "language": "html",
+            "content": "<!DOCTYPE html><html><body><h1>Mon App Kanban</h1><div id='root'></div></body></html>",
+        },
+        {
+            "path": "app.js",
+            "language": "javascript",
+            "content": "console.log('ready');",
+        },
+    ]
+
+    # 1. Create a Canvas app inside cLAIr Pages ("Mes Apps")
+    res = client.post(
+        "/api/pages",
+        json={
+            "prompt": "Import Canvas App",
+            "title": "Mon App Kanban",
+            "kind": "app",
+            "html_content": "<!DOCTYPE html><html><head><title>Mon App Kanban</title></head><body><h1>Mon App Kanban</h1></body></html>",
+            "canvas_files": canvas_files,
+            "bricks": [sample_brick],
+        },
+    )
+    assert res.status_code == 201, res.text
+    app_data = res.json()
+    assert app_data["kind"] == "app"
+    assert app_data["title"] == "Mon App Kanban"
+    assert len(app_data["bricks"]) == 1
+    assert app_data["bricks"][0]["id"] == "agent_analyse"
+    assert len(app_data["latest_canvas_files"]) == 2
+    assert "clair-bricks-runtime-script" in app_data["latest_html"]
+    assert "window.clair.runBrick" in app_data["latest_html"]
+    page_id = app_data["id"]
+
+    # 2. Validation: missing required input returns 422
+    res_missing = client.post(
+        "/api/pages/bricks/execute",
+        json={"page_id": page_id, "brick_id": "agent_analyse", "inputs": {}},
+    )
+    assert res_missing.status_code == 422
+
+    # 3. Execute brick attached to the saved app (demo mode returns structured schema)
+    res_exec = client.post(
+        "/api/pages/bricks/execute",
+        json={
+            "page_id": page_id,
+            "brick_id": "agent_analyse",
+            "inputs": {"texte": "Architecture modulaire FastAPI + Next.js"},
+        },
+    )
+    assert res_exec.status_code == 200, res_exec.text
+    exec_json = res_exec.json()
+    assert exec_json["brick_id"] == "agent_analyse"
+    assert exec_json["format"] == "json"
+    assert isinstance(exec_json["output"], dict)
+    assert set(exec_json["output"].keys()) >= {"resume", "score", "valide", "points"}
+    assert isinstance(exec_json["output"]["score"], (int, float))
+    assert isinstance(exec_json["output"]["valide"], bool)
+    assert isinstance(exec_json["output"]["points"], list)
+
+    # 4. Update bricks via PATCH and verify latest_html runtime updates
+    updated_brick = {**sample_brick, "id": "agent_coach", "name": "Coach V2"}
+    res_patch = client.patch(
+        f"/api/pages/{page_id}",
+        json={"bricks": [updated_brick]},
+    )
+    assert res_patch.status_code == 200, res_patch.text
+    patched = res_patch.json()
+    assert patched["bricks"][0]["id"] == "agent_coach"
+    assert "agent_coach" in patched["latest_html"]
+
+
+def test_execute_brick_with_mocked_llm_json_schema(tmp_path, monkeypatch):
+    import httpx
+    from app import page_bricks
+
+    settings = Settings(
+        _env_file=None,
+        app_data_dir=tmp_path,
+        demo_mode=False,
+        llm_api_key="fake-test-key",
+        default_model="openai/gpt-4o-mini",
+    )
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+        is_success = True
+
+        def json(self):
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": '```json\n{"note": "18", "ok": "true", "conseils": ["Aérer les titres", "Ajouter un exemple"]}\n```'
+                        }
+                    }
+                ]
+            }
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, headers=None, json=None):
+            captured["url"] = url
+            captured["json"] = json
+            return FakeResponse()
+
+    monkeypatch.setattr(page_bricks.httpx, "AsyncClient", FakeAsyncClient)
+
+    with authenticated_client(settings) as authed_client:
+        res = authed_client.post(
+            "/api/pages/bricks/execute",
+            json={
+                "brick": {
+                    "id": "correcteur",
+                    "name": "Correcteur",
+                    "type": "ai_agent",
+                    "model": "mistralai/mistral-small-3.2-24b-instruct",
+                    "system_prompt": "Corrige la copie.",
+                    "inputs": [{"key": "copie", "label": "Copie", "type": "textarea", "required": True}],
+                    "output_spec": {
+                        "format": "json",
+                        "description": "Correction chiffrée",
+                        "fields": [
+                            {"key": "note", "type": "number", "description": "Note sur 20"},
+                            {"key": "ok", "type": "boolean", "description": "Validé"},
+                            {"key": "conseils", "type": "string[]", "description": "Conseils"},
+                        ],
+                    },
+                },
+                "inputs": {"copie": "La photosynthèse transforme la lumière en énergie chimique."},
+            },
+        )
+        assert res.status_code == 200, res.text
+        data = res.json()
+        assert captured["json"]["model"] == "mistralai/mistral-small-3.2-24b-instruct"
+        assert data["output"]["note"] == 18
+        assert data["output"]["ok"] is True
+        assert data["output"]["conseils"] == ["Aérer les titres", "Ajouter un exemple"]
+
+
+def test_chatbot_brick_with_history_and_widget_style(tmp_path, monkeypatch):
+    from app import page_bricks
+
+    settings = Settings(
+        _env_file=None,
+        app_data_dir=tmp_path,
+        demo_mode=False,
+        llm_api_key="fake-test-key",
+        default_model="openai/gpt-4o-mini",
+    )
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+        is_success = True
+
+        def json(self):
+            return {"choices": [{"message": {"content": "Bien sûr, voici la suite de notre échange."}}]}
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, headers=None, json=None):
+            captured["json"] = json
+            return FakeResponse()
+
+    monkeypatch.setattr(page_bricks.httpx, "AsyncClient", FakeAsyncClient)
+
+    with authenticated_client(settings) as authed_client:
+        res_app = authed_client.post(
+            "/api/pages",
+            json={
+                "prompt": "App avec Bot IA",
+                "title": "App Bot IA",
+                "kind": "app",
+                "html_content": "<!DOCTYPE html><html><body><div data-clair-brick='bot_ia_chat'></div></body></html>",
+                "bricks": [
+                    {
+                        "id": "bot_ia_chat",
+                        "name": "Bot IA Conversationnel",
+                        "type": "ai_agent",
+                        "model": "auto",
+                        "widget_style": "chatbot",
+                        "welcome_message": "Bienvenue sur le bot !",
+                        "system_prompt": "Tu es un bot utile.",
+                        "inputs": [{"key": "message", "label": "Message", "type": "textarea", "required": True}],
+                        "output_spec": {"format": "markdown", "description": "Réponse", "fields": []},
+                    }
+                ],
+            },
+        )
+        assert res_app.status_code == 201, res_app.text
+        created = res_app.json()
+        assert created["bricks"][0]["widget_style"] == "chatbot"
+        assert created["bricks"][0]["welcome_message"] == "Bienvenue sur le bot !"
+        assert "buildChatbotPanel" in created["latest_html"]
+
+        res_chat = authed_client.post(
+            "/api/pages/bricks/execute",
+            json={
+                "page_id": created["id"],
+                "brick_id": "bot_ia_chat",
+                "inputs": {
+                    "message": "Peux-tu résumer ?",
+                    "_history": [
+                        {"role": "user", "content": "Bonjour"},
+                        {"role": "assistant", "content": "Bonjour ! Comment aider ?"},
+                    ],
+                },
+            },
+        )
+        assert res_chat.status_code == 200, res_chat.text
+        sent_messages = captured["json"]["messages"]
+        assert len(sent_messages) == 4  # system + 2 history turns + current user turn
+        assert sent_messages[1] == {"role": "user", "content": "Bonjour"}
+        assert sent_messages[2] == {"role": "assistant", "content": "Bonjour ! Comment aider ?"}
+        assert "_history" not in sent_messages[3]["content"]
+
+
+def test_propose_app_diagram_and_default_internal_brick(client):
+    res = client.post(
+        "/api/pages/diagram/propose",
+        json={"prompt": "App Le NiaisBot où j'explique un sujet à un bot naïf qui fait évoluer sa jauge de compréhension et son score"},
+    )
+    assert res.status_code == 200, res.text
+    diagram = res.json()
+    assert diagram["title"]
+    assert isinstance(diagram["nodes"], list) and len(diagram["nodes"]) >= 3
+    assert isinstance(diagram["edges"], list) and len(diagram["edges"]) >= 2
+
+    ai_nodes = [n for n in diagram["nodes"] if n.get("kind") == "ai_brick"]
+    assert len(ai_nodes) >= 1
+    brick = ai_nodes[0]["brick"]
+    assert brick["show_widget"] is False
+    assert len(brick["inputs"]) >= 1
+    assert brick["output_spec"]["format"] == "json"
+    assert len(brick["output_spec"]["fields"]) >= 2
+
+
+def test_diagram_interview_selects_bricks_and_asks_questions(client):
+    # Turn 1: agent analyzes request, selects bricks, and asks clarifying questions
+    res1 = client.post(
+        "/api/pages/diagram/interview",
+        json={
+            "messages": [
+                {"role": "user", "content": "Je veux une app avec un bot qui me fait réviser et un quiz"},
+            ],
+            "available_templates": [
+                {"templateId": "bot_ia_chat", "name": "Bot IA Conversationnel", "tagline": "Chatbot"},
+                {"templateId": "generateur_quiz", "name": "Générateur de Quiz QCM", "tagline": "Quiz"},
+            ],
+        },
+    )
+    assert res1.status_code == 200, res1.text
+    step1 = res1.json()
+    assert step1["status"] == "questions"
+    assert len(step1["questions"]) >= 2
+    assert "bot_ia_chat" in step1["selected_brick_ids"]
+    assert "generateur_quiz" in step1["selected_brick_ids"]
+    assert step1["diagram"] is None
+
+    # Turn 2: user answers questions -> agent builds the complete diagram with internal bricks
+    res2 = client.post(
+        "/api/pages/diagram/interview",
+        json={
+            "messages": [
+                {"role": "user", "content": "Je veux une app avec un bot qui me fait réviser et un quiz"},
+                {"role": "assistant", "content": step1["assistant_message"]},
+                {"role": "user", "content": "Un bot naïf façon Feynman avec jauge de compréhension et score /100"},
+            ],
+        },
+    )
+    assert res2.status_code == 200, res2.text
+    step2 = res2.json()
+    assert step2["status"] == "ready"
+    assert step2["diagram"] is not None
+    ai_nodes = [n for n in step2["diagram"]["nodes"] if n.get("kind") == "ai_brick"]
+    assert len(ai_nodes) >= 1
+    assert ai_nodes[0]["brick"]["show_widget"] is False
+
+
+def test_finance_eod_brick_execution_and_interview(tmp_path, monkeypatch):
+    from app import finance, page_bricks
+
+    bars = [
+        {"date": f"2026-10-{i:02d}", "open": 100 + i, "high": 102 + i, "low": 99 + i, "close": 100 + i, "volume": 1000000}
+        for i in range(1, 25)
+    ]
+    tech = page_bricks._compute_technical_indicators_summary(bars)
+    assert tech["last_close"] == 124.0
+    assert tech["sma_20"] is not None
+    assert tech["rsi_14"] == 100.0
+
+    # Mock get_financial_dashboard_data and LLM completion
+    async def fake_dashboard(settings, query, limit_bars=30, chart_range="1m"):
+        return {
+            "symbol": "AAPL",
+            "eod_ticker": "AAPL.US",
+            "yahoo_symbol": "AAPL",
+            "long_name": "Apple Inc.",
+            "exchange": "NASDAQ",
+            "currency": "USD",
+            "price": 124.0,
+            "change": 1.5,
+            "change_percent": 1.22,
+            "volume": 1000000,
+            "eod_bars": bars,
+            "financial_stats": {"valuation": {"pe_trailing": "28.5"}, "profitability": {"roe": "140%"}},
+        }
+
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+        is_success = True
+
+        def json(self):
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": '{"ticker": "AAPL", "prix_actuel": 124.0, "rsi_14": 100.0, "tendance_technique": "Haussière"}'
+                        }
+                    }
+                ]
+            }
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, headers=None, json=None):
+            captured["messages"] = json["messages"]
+            return FakeResponse()
+
+    monkeypatch.setattr(finance, "get_financial_dashboard_data", fake_dashboard)
+    monkeypatch.setattr(page_bricks.httpx, "AsyncClient", FakeAsyncClient)
+
+    settings = Settings(
+        _env_file=None,
+        app_data_dir=tmp_path,
+        demo_mode=False,
+        llm_api_key="fake-test-key",
+        default_model="openai/gpt-4o-mini",
+    )
+
+    with authenticated_client(settings) as authed_client:
+        res = authed_client.post(
+            "/api/pages/bricks/execute",
+            json={
+                "brick": {
+                    "id": "finance_eod_indicateurs",
+                    "name": "Cotation EOD & Indicateurs",
+                    "type": "finance_eod_agent",
+                    "finance_data_enabled": True,
+                    "system_prompt": "Analyse EOD",
+                    "inputs": [{"key": "symbole", "label": "Symbole", "type": "text", "required": True}],
+                    "output_spec": {
+                        "format": "json",
+                        "description": "Indicateurs EOD",
+                        "fields": [
+                            {"key": "ticker", "type": "string", "description": "Ticker"},
+                            {"key": "prix_actuel", "type": "number", "description": "Prix"},
+                            {"key": "rsi_14", "type": "number", "description": "RSI"},
+                            {"key": "tendance_technique", "type": "string", "description": "Tendance"},
+                        ],
+                    },
+                },
+                "inputs": {"symbole": "AAPL"},
+            },
+        )
+        assert res.status_code == 200, res.text
+        data = res.json()
+        assert data["output"]["ticker"] == "AAPL"
+        assert data["output"]["prix_actuel"] == 124.0
+        assert "DONNÉES BOURSIÈRES RÉELLES" in captured["messages"][-1]["content"]
+        assert "rsi_14" in captured["messages"][-1]["content"]
+
+        # Interview picks finance bricks on finance prompt
+        res_int = authed_client.post(
+            "/api/pages/diagram/interview",
+            json={
+                "messages": [{"role": "user", "content": "Je veux une app bourse avec cours EOD et indicateurs RSI"}],
+                "force_finalize": True,
+            },
+        )
+        assert res_int.status_code == 200, res_int.text
+        int_data = res_int.json()
+        assert "finance_eod_indicateurs" in int_data["selected_brick_ids"]
+
+
+
+
+
+
+
 

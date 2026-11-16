@@ -957,11 +957,82 @@ class ProposePageTopicsResponse(BaseModel):
     topics: list[PageTopicItem] = Field(default_factory=list)
 
 
+class CanvasFileSchema(BaseModel):
+    path: str = Field(min_length=1, max_length=255)
+    language: str = Field(default="text", max_length=50)
+    content: str = Field(default="", max_length=500000)
+
+
+class BrickInputFieldSchema(BaseModel):
+    key: str = Field(min_length=1, max_length=80)
+    label: str = Field(default="", max_length=120)
+    type: Literal["text", "textarea", "number", "select", "json"] = "text"
+    required: bool = True
+    placeholder: str = Field(default="", max_length=240)
+    default_value: str = Field(default="", max_length=1000)
+    options: list[str] = Field(default_factory=list, max_length=30)
+
+
+class BrickOutputFieldSchema(BaseModel):
+    key: str = Field(min_length=1, max_length=80)
+    type: Literal["string", "number", "boolean", "string[]"] = "string"
+    description: str = Field(default="", max_length=250)
+
+
+class BrickOutputSpecSchema(BaseModel):
+    format: Literal["markdown", "text", "json", "list"] = "markdown"
+    description: str = Field(default="", max_length=1000)
+    fields: list[BrickOutputFieldSchema] = Field(default_factory=list, max_length=25)
+
+
+class PageBrickSchema(BaseModel):
+    id: str = Field(min_length=1, max_length=80)
+    name: str = Field(min_length=1, max_length=120)
+    type: Literal["ai_agent", "web_search_agent", "finance_eod_agent"] = "ai_agent"
+    description: str = Field(default="", max_length=400)
+    model: str = Field(default="auto", max_length=200)
+    system_prompt: str = Field(default="", max_length=8000)
+    web_search_enabled: bool = False
+    finance_data_enabled: bool = False
+    show_widget: bool = False
+    widget_style: Literal["auto", "chatbot", "scorecard", "quiz", "rewriter", "cards"] = "auto"
+    welcome_message: str = Field(default="", max_length=1000)
+    inputs: list[BrickInputFieldSchema] = Field(default_factory=list, max_length=20)
+    output_spec: BrickOutputSpecSchema = Field(default_factory=BrickOutputSpecSchema)
+
+
+class ProposeAppDiagramRequest(BaseModel):
+    prompt: str = Field(min_length=1, max_length=8000)
+    title: str | None = Field(default=None, max_length=200)
+    model: str | None = Field(default=None, max_length=200)
+
+
+class DiagramInterviewMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=8000)
+
+
+class InterviewAppDiagramRequest(BaseModel):
+    messages: list[DiagramInterviewMessage] = Field(min_length=1, max_length=20)
+    available_templates: list[dict[str, Any]] = Field(default_factory=list, max_length=30)
+    model: str | None = Field(default=None, max_length=200)
+    force_finalize: bool = False
+
+
+class ExecutePageBrickRequest(BaseModel):
+    page_id: str | None = Field(default=None, max_length=36)
+    brick_id: str | None = Field(default=None, max_length=80)
+    brick: PageBrickSchema | None = None
+    inputs: dict[str, Any] = Field(default_factory=dict)
+    model: str | None = Field(default=None, max_length=200)
+
+
 class CreateWebPage(BaseModel):
     prompt: str = Field(default="", max_length=15000)
     title: str | None = Field(default=None, max_length=200)
     conversation_id: str | None = Field(default=None, max_length=36)
     model: str | None = Field(default=None, max_length=200)
+    kind: Literal["page", "app"] = "page"
     page_type: str = Field(default="auto", max_length=50)
     target_audience: str = Field(default="general", max_length=50)
     author_persona: str | None = Field(default=None, max_length=300)
@@ -979,6 +1050,9 @@ class CreateWebPage(BaseModel):
     font_family: str = Field(default="auto", max_length=50)
     text_effects: list[str] = Field(default_factory=list, max_length=10)
     selected_topics: list[PageTopicItem] = Field(default_factory=list, max_length=100)
+    html_content: str | None = Field(default=None, max_length=2000000)
+    canvas_files: list[CanvasFileSchema] = Field(default_factory=list, max_length=60)
+    bricks: list[PageBrickSchema] = Field(default_factory=list, max_length=20)
 
     @field_validator("prompt")
     @classmethod
@@ -1002,6 +1076,11 @@ class RefineWebPage(BaseModel):
 class UpdateWebPage(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=200)
     is_published: bool | None = None
+    kind: Literal["page", "app"] | None = None
+    bricks: list[PageBrickSchema] | None = Field(default=None, max_length=20)
+    html_content: str | None = Field(default=None, max_length=2000000)
+    canvas_files: list[CanvasFileSchema] | None = Field(default=None, max_length=60)
+    prompt_used: str | None = Field(default=None, max_length=500)
 
 
 HermesToolName = Literal["web_search", "memory", "skills", "code_execution", "create_page"]

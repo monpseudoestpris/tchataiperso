@@ -2,10 +2,31 @@
 
 import {
   Check, Code2, Copy, Download, Eye, FileCode2, FileJson, FilePlus2, FileText,
-  FolderArchive, FolderTree, Globe, LoaderCircle, Maximize2, Minimize2, Play,
-  RefreshCw, RotateCcw, Sparkles, Terminal, Trash2, X,
+  FolderArchive, FolderTree, GitBranch, Globe, LoaderCircle, Maximize2, Minimize2, Play,
+  Puzzle, RefreshCw, Rocket, RotateCcw, Sparkles, Terminal, Trash2, X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import {
+  createWebPage,
+  errorMessage,
+  executePageBrick,
+  updateWebPage,
+  type Model,
+  type PageBrick,
+  type WebPage,
+} from "@/lib/api";
+import {
+  buildBrickWiringPrompt,
+  createBrickFromTemplate,
+  injectBrickIntoCanvasHtml,
+  PREMADE_BRICK_TEMPLATES,
+} from "@/lib/canvas-bricks";
+import {
+  buildAppPromptFromDiagram,
+  createInitialDiagram,
+  syncBricksIntoDiagram,
+  type AppDiagram,
+} from "@/lib/canvas-diagram";
 import {
   buildCanvasPreviewHtml,
   createZipBlob,
@@ -14,6 +35,8 @@ import {
   triggerBlobDownload,
   type CanvasFile,
 } from "@/lib/code-canvas";
+import { CanvasBricksModal } from "./canvas-bricks-modal";
+import { CanvasDiagramEditor } from "./canvas-diagram-editor";
 
 type CodeCanvasProps = {
   title: string;
@@ -23,6 +46,13 @@ type CodeCanvasProps = {
   onSelectPath: (path: string) => void;
   onClose: () => void;
   onQuickPrompt?: (prompt: string) => void;
+  onRunPrompt?: (prompt: string) => void;
+  models?: Model[];
+  currentModel?: string;
+  conversationId?: string | null;
+  initialBricks?: PageBrick[];
+  integratedPageId?: string | null;
+  onIntegratedToPages?: (page: WebPage) => void;
 };
 
 const QUICK_CODE_PROMPTS = [
@@ -74,11 +104,18 @@ export function CodeCanvas({
   onSelectPath,
   onClose,
   onQuickPrompt,
+  onRunPrompt,
+  models = [],
+  currentModel,
+  conversationId,
+  initialBricks,
+  integratedPageId,
+  onIntegratedToPages,
 }: CodeCanvasProps) {
   // User overrides (edited content or custom added files) and deleted custom paths
   const [overrides, setOverrides] = useState<Record<string, string>>({});
   const [customFiles, setCustomFiles] = useState<Record<string, CanvasFile>>({});
-  const [viewMode, setViewMode] = useState<"code" | "preview">("code");
+  const [userViewMode, setUserViewMode] = useState<"diagram" | "code" | "preview" | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [explorerOpen, setExplorerOpen] = useState(true);
   const [copied, setCopied] = useState(false);
@@ -87,8 +124,99 @@ export function CodeCanvas({
   const [newFileName, setNewFileName] = useState("");
   const [previewNonce, setPreviewNonce] = useState(0);
 
+  // Premade bricks, Diagram architecture & cLAIr Pages ("Mes Apps") integration state
+  const [bricks, setBricks] = useState<PageBrick[]>(() => initialBricks ?? []);
+  const [diagramState, setDiagramState] = useState<AppDiagram>(() =>
+    createInitialDiagram(title || "Nouvelle Application IA", initialBricks ?? []),
+  );
+  const [savedAppId, setSavedAppId] = useState<string | null>(() => integratedPageId ?? null);
+  const [bricksModalOpen, setBricksModalOpen] = useState(false);
+  const [integrating, setIntegrating] = useState(false);
+  const [integrateStatus, setIntegrateStatus] = useState<{ ok?: string; err?: string } | null>(null);
+
+  const diagram = useMemo(
+    () => syncBricksIntoDiagram(diagramState, bricks),
+    [diagramState, bricks],
+  );
+
+  function setDiagram(nextDiagram: AppDiagram) {
+    setDiagramState(nextDiagram);
+  }
+
+  function setViewMode(mode: "diagram" | "code" | "preview") {
+    setUserViewMode(mode);
+  }
+
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const gutterRef = useRef<HTMLDivElement>(null);
+  const previewIframeRef = useRef<HTMLIFrameElement>(null);
+
+  useEffect(() => {
+    function handleBrickMessage(event: MessageEvent) {
+      const data = event.data as {
+        type?: string;
+        requestId?: string;
+        brickId?: string;
+        inputs?: Record<string, unknown>;
+      } | null;
+      if (!data || data.type !== "CLAIR_BRICK_CALL" || !data.requestId) return;
+      const iframeWin = previewIframeRef.current?.contentWindow;
+      if (!iframeWin || event.source !== iframeWin) return;
+
+      const needle = String(data.brickId || "").toLowerCase();
+      const targetBrick =
+        bricks.find(
+          b =>
+            b.id.toLowerCase() === needle ||
+            b.name.toLowerCase() === needle ||
+            needle === "default",
+        ) ?? bricks[0];
+
+      if (!targetBrick) {
+        iframeWin.postMessage(
+          {
+            type: "CLAIR_BRICK_RESULT",
+            requestId: data.requestId,
+            ok: false,
+            error: "Aucune brique IA configurée dans ce projet Canvas. Ajoutez-en une via le bouton « Briques IA ».",
+          },
+          "*",
+        );
+        return;
+      }
+
+      void executePageBrick({
+        brick: targetBrick,
+        inputs: data.inputs ?? {},
+        model: targetBrick.model === "auto" ? currentModel : targetBrick.model,
+      })
+        .then(result => {
+          iframeWin.postMessage(
+            {
+              type: "CLAIR_BRICK_RESULT",
+              requestId: data.requestId,
+              ok: true,
+              result,
+            },
+            "*",
+          );
+        })
+        .catch(err => {
+          iframeWin.postMessage(
+            {
+              type: "CLAIR_BRICK_RESULT",
+              requestId: data.requestId,
+              ok: false,
+              error: errorMessage(err),
+            },
+            "*",
+          );
+        });
+    }
+
+    window.addEventListener("message", handleBrickMessage);
+    return () => window.removeEventListener("message", handleBrickMessage);
+  }, [currentModel, bricks]);
 
   // Merge AI files with user edits and custom files
   const files = useMemo<CanvasFile[]>(() => {
@@ -124,8 +252,92 @@ export function CodeCanvas({
     return files[0];
   }, [files, selectedPath, streaming, streamingFile]);
 
-  const previewHtml = useMemo(() => buildCanvasPreviewHtml(files), [files]);
+  const previewHtml = useMemo(() => buildCanvasPreviewHtml(files, bricks), [files, bricks]);
   const canPreview = previewHtml !== null;
+  const viewMode: "diagram" | "code" | "preview" =
+    userViewMode ?? (files.length === 0 ? "diagram" : "code");
+  const canIntegrateApp =
+    canPreview || files.some(f => /\.(?:html?|css|mjs|js)$/i.test(f.path));
+
+  function buildAppHtmlForIntegration(): string | null {
+    if (previewHtml) return previewHtml;
+    const css = files
+      .filter(f => /\.css$/i.test(f.path))
+      .map(f => f.content)
+      .join("\n\n");
+    const js = files
+      .filter(f => /\.(?:js|mjs)$/i.test(f.path))
+      .map(f => f.content)
+      .join("\n\n");
+    if (!css && !js) return null;
+    const safeTitle = (title || "Application Canvas").replace(/[<>&"]/g, "");
+    return `<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>${safeTitle}</title>
+  <style>${css}</style>
+</head>
+<body>
+  <main id="app" style="max-width:960px;margin:2rem auto;padding:1.5rem;font-family:system-ui,sans-serif;">
+    <h1>${safeTitle}</h1>
+  </main>
+  <script>${js}</script>
+</body>
+</html>`;
+  }
+
+  async function handleIntegrateToMesApps() {
+    if (!files.length || integrating) return;
+    const compiledHtml = buildAppHtmlForIntegration();
+    if (!compiledHtml) {
+      setIntegrateStatus({
+        err: "Ajoutez au moins un fichier HTML, CSS ou JS pour intégrer cette application dans cLAIr Pages.",
+      });
+      return;
+    }
+
+    setIntegrating(true);
+    setIntegrateStatus(null);
+    const cleanCanvasFiles = files.map(f => ({
+      path: f.path,
+      language: f.language,
+      content: f.content,
+    }));
+
+    try {
+      let page: WebPage;
+      if (savedAppId) {
+        page = await updateWebPage(savedAppId, {
+          title: title || "Application Canvas",
+          kind: "app",
+          html_content: compiledHtml,
+          canvas_files: cleanCanvasFiles,
+          bricks,
+          prompt_used: "Mise à jour depuis Code Canvas",
+        });
+      } else {
+        page = await createWebPage({
+          prompt: `Application Code Canvas : ${title || "Projet Canvas"}`,
+          title: title || "Application Canvas",
+          conversation_id: conversationId ?? undefined,
+          model: currentModel,
+          kind: "app",
+          html_content: compiledHtml,
+          canvas_files: cleanCanvasFiles,
+          bricks,
+        });
+        setSavedAppId(page.id);
+      }
+      setIntegrateStatus({ ok: "Application intégrée dans « Mes Apps » !" });
+      onIntegratedToPages?.(page);
+    } catch (err) {
+      setIntegrateStatus({ err: errorMessage(err) });
+    } finally {
+      setIntegrating(false);
+    }
+  }
 
   // Auto-scroll editor while active file is streaming
   useEffect(() => {
@@ -270,32 +482,68 @@ export function CodeCanvas({
         </div>
 
         <div className="code-canvas-actions">
-          {files.length > 0 && (
-            <div className="code-canvas-mode-switch" role="tablist" aria-label="Affichage du Canvas">
-              <button
-                type="button"
-                role="tab"
-                aria-selected={viewMode === "code"}
-                className={viewMode === "code" ? "is-active" : ""}
-                onClick={() => setViewMode("code")}
-              >
-                <Code2 size={13} />
-                <span>Éditeur</span>
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={viewMode === "preview"}
-                className={viewMode === "preview" ? "is-active" : ""}
-                disabled={!canPreview}
-                title={canPreview ? "Exécuter l'aperçu web interactif" : "Ajoutez un fichier HTML pour activer l'aperçu web"}
-                onClick={() => setViewMode("preview")}
-              >
-                <Play size={13} />
-                <span>Aperçu</span>
-              </button>
-            </div>
-          )}
+          <div className="code-canvas-mode-switch" role="tablist" aria-label="Affichage du Canvas">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={viewMode === "diagram"}
+              className={viewMode === "diagram" ? "is-active" : ""}
+              onClick={() => setViewMode("diagram")}
+              title="Concevoir l'architecture de l'app (UI + Briques IA internes + flux) avant ou pendant la génération"
+            >
+              <GitBranch size={13} />
+              <span>Diagramme</span>
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={viewMode === "code"}
+              className={viewMode === "code" ? "is-active" : ""}
+              onClick={() => setViewMode("code")}
+            >
+              <Code2 size={13} />
+              <span>Éditeur</span>
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={viewMode === "preview"}
+              className={viewMode === "preview" ? "is-active" : ""}
+              disabled={!canPreview}
+              title={canPreview ? "Exécuter l'aperçu web interactif" : "Ajoutez un fichier HTML pour activer l'aperçu web"}
+              onClick={() => setViewMode("preview")}
+            >
+              <Play size={13} />
+              <span>Aperçu</span>
+            </button>
+          </div>
+
+          <button
+            type="button"
+            className="code-canvas-bricks-button"
+            onClick={() => setBricksModalOpen(true)}
+            title="Adjoindre des briques préfaites (Agent IA avec modèle, prompt, entrées et sorties)"
+          >
+            <Puzzle size={14} />
+            <span>Briques IA{bricks.length > 0 ? ` (${bricks.length})` : ""}</span>
+          </button>
+
+          <button
+            type="button"
+            className="code-canvas-integrate-button"
+            disabled={!files.length || !canIntegrateApp || integrating || streaming}
+            onClick={() => void handleIntegrateToMesApps()}
+            title={
+              !canIntegrateApp
+                ? "Ajoutez un fichier HTML/CSS/JS pour intégrer cette app dans cLAIr Pages"
+                : savedAppId
+                  ? "Mettre à jour l'application dans cLAIr Pages → Mes Apps"
+                  : "Intégrer cette application dans cLAIr Pages → Mes Apps"
+            }
+          >
+            {integrating ? <LoaderCircle size={14} className="spin" /> : <Rocket size={14} />}
+            <span>{integrating ? "Intégration…" : savedAppId ? "MàJ Mes Apps" : "Intégrer à Mes Apps"}</span>
+          </button>
 
           <button
             type="button"
@@ -330,7 +578,44 @@ export function CodeCanvas({
         </div>
       </header>
 
-      {!files.length ? (
+      {integrateStatus && (
+        <div
+          className={`code-canvas-notice ${integrateStatus.err ? "is-error" : "is-ok"}`}
+          role="status"
+        >
+          <span>{integrateStatus.err || integrateStatus.ok}</span>
+          <button type="button" onClick={() => setIntegrateStatus(null)} aria-label="Fermer la notification">
+            <X size={13} />
+          </button>
+        </div>
+      )}
+
+      {viewMode === "diagram" ? (
+        <CanvasDiagramEditor
+          diagram={diagram}
+          models={models}
+          currentModel={currentModel}
+          hasExistingFiles={files.length > 0}
+          onDiagramChange={(nextDiagram, syncBricks) => {
+            setDiagram(nextDiagram);
+            setBricks(syncBricks);
+          }}
+          onGenerateFromDiagram={(activeDiagram, syncBricks) => {
+            setDiagram(activeDiagram);
+            setBricks(syncBricks);
+            setViewMode("code");
+            const compiledPrompt = buildAppPromptFromDiagram(
+              activeDiagram,
+              files.map(f => f.path),
+            );
+            if (onRunPrompt) {
+              onRunPrompt(compiledPrompt);
+            } else {
+              onQuickPrompt?.(compiledPrompt);
+            }
+          }}
+        />
+      ) : !files.length ? (
         <div className="code-canvas-empty">
           <div className="code-canvas-empty-orb">
             <Code2 size={30} strokeWidth={1.6} />
@@ -342,6 +627,48 @@ export function CodeCanvas({
           </p>
           {onQuickPrompt && (
             <div className="code-canvas-quick-list">
+              <span>Démarrer avec une brique toute faite (sans coder) :</span>
+              <button
+                type="button"
+                className="code-canvas-quick-card"
+                onClick={() => {
+                  const botTpl = PREMADE_BRICK_TEMPLATES[0];
+                  const botBrick = createBrickFromTemplate(botTpl, bricks);
+                  const nextBricks = [...bricks, botBrick];
+                  const nextHtml = injectBrickIntoCanvasHtml(null, botBrick, botBrick.name);
+                  setBricks(nextBricks);
+                  setCustomFiles(old => ({
+                    ...old,
+                    "index.html": { path: "index.html", language: "html", content: nextHtml },
+                  }));
+                  onSelectPath("index.html");
+                  setViewMode("preview");
+                  setPreviewNonce(n => n + 1);
+                }}
+              >
+                <div>
+                  <strong>
+                    <Puzzle size={13} />
+                    Bot IA Conversationnel prêt à l&apos;emploi
+                  </strong>
+                  <small>Génère immédiatement une app avec un Bot IA (historique + bulles) prête pour Mes Apps</small>
+                </div>
+                <span>Lancer →</span>
+              </button>
+              <button
+                type="button"
+                className="code-canvas-quick-card"
+                onClick={() => setBricksModalOpen(true)}
+              >
+                <div>
+                  <strong>
+                    <Puzzle size={13} />
+                    Parcourir les {PREMADE_BRICK_TEMPLATES.length} briques prêtes à l&apos;emploi
+                  </strong>
+                  <small>Bot IA, Quiz QCM interactif, Studio Réécriture, Coach noté /20, Veille Web, Auditeur Code…</small>
+                </div>
+                <span>Choisir →</span>
+              </button>
               <span>Exemples de projets à générer :</span>
               {QUICK_CODE_PROMPTS.map(item => (
                 <button
@@ -386,6 +713,7 @@ export function CodeCanvas({
             </div>
           </div>
           <iframe
+            ref={previewIframeRef}
             key={previewNonce}
             className="code-canvas-iframe"
             title="Aperçu de l'application Canvas"
@@ -575,6 +903,65 @@ export function CodeCanvas({
           </div>
         </div>
       )}
+      <CanvasBricksModal
+        isOpen={bricksModalOpen}
+        bricks={bricks}
+        models={models}
+        currentModel={currentModel}
+        pageId={savedAppId}
+        onSave={async nextBricks => {
+          setBricks(nextBricks);
+          setPreviewNonce(n => n + 1);
+          if (savedAppId) {
+            try {
+              await updateWebPage(savedAppId, { bricks: nextBricks });
+            } catch (err) {
+              setIntegrateStatus({ err: errorMessage(err) });
+            }
+          }
+        }}
+        onInsertTurnkeyWidget={(brick, nextBricks) => {
+          setBricks(nextBricks);
+          const htmlFile =
+            files.find(file => /(?:^|\/)index\.html?$/i.test(file.path)) ??
+            files.find(file => /\.html?$/i.test(file.path));
+          const targetPath = htmlFile ? htmlFile.path : "index.html";
+          const nextHtml = injectBrickIntoCanvasHtml(htmlFile?.content, brick, title || brick.name);
+
+          if (aiFiles.some(item => item.path === targetPath)) {
+            setOverrides(old => ({ ...old, [targetPath]: nextHtml }));
+          } else {
+            setCustomFiles(old => ({
+              ...old,
+              [targetPath]: { path: targetPath, language: "html", content: nextHtml },
+            }));
+            setOverrides(old => {
+              const next = { ...old };
+              delete next[targetPath];
+              return next;
+            });
+          }
+          onSelectPath(targetPath);
+          setViewMode("preview");
+          setPreviewNonce(n => n + 1);
+          setIntegrateStatus({
+            ok: `Widget « ${brick.name} » inséré dans ${targetPath} ! Vous pouvez maintenant l'intégrer à Mes Apps.`,
+          });
+        }}
+        onWireBrickWithAI={
+          onQuickPrompt
+            ? (brick, nextBricks) => {
+                setBricks(nextBricks);
+                const promptText = buildBrickWiringPrompt(
+                  brick,
+                  files.map(f => f.path),
+                );
+                onQuickPrompt(promptText);
+              }
+            : undefined
+        }
+        onClose={() => setBricksModalOpen(false)}
+      />
     </aside>
   );
 }

@@ -15,6 +15,7 @@ from sqlalchemy.orm import sessionmaker
 
 from .config import Settings
 from .models import Conversation, WebPage, WebPageVersion, now
+from .page_bricks import build_bricks_prompt_context, normalize_bricks
 from .page_generator import extract_title_from_html, generate_page_html, slugify
 from .page_runtime import sanitize_and_enhance_html
 from .serializers import web_page_json
@@ -29,6 +30,7 @@ async def create_draft_web_page(
     title: str | None = None,
     model: str | None = None,
     conversation_id: str | None = None,
+    kind: str = "page",
     page_type: str = "educational",
     target_audience: str | None = None,
     author_persona: str | None = None,
@@ -47,8 +49,22 @@ async def create_draft_web_page(
     text_effects: list[str] | str | None = None,
     selected_topics: list[dict[str, Any]] | None = None,
     html_content: str | None = None,
+    canvas_files: list[dict[str, Any]] | None = None,
+    bricks: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Génère et enregistre une nouvelle page Web cLAIr strictement en brouillon."""
+    """Génère et enregistre une nouvelle page Web ou App cLAIr strictement en brouillon."""
+    resolved_kind = "app" if kind == "app" else "page"
+    normalized_bricks = normalize_bricks(bricks)
+    normalized_canvas_files = [
+        {
+            "path": str(f.get("path") or "").strip(),
+            "language": str(f.get("language") or "text").strip(),
+            "content": str(f.get("content") or ""),
+        }
+        for f in (canvas_files or [])
+        if isinstance(f, dict) and str(f.get("path") or "").strip()
+    ]
+
     with sessions() as db:
         count = db.scalar(select(func.count(WebPage.id)).where(WebPage.user_id == user_id))
         if count and count >= 100:
@@ -92,18 +108,23 @@ async def create_draft_web_page(
 
     if html_content and html_content.strip():
         resolved_title = (
-            fallback_title or extract_title_from_html(html_content, fallback="Brouillon cLAIr Page")
+            fallback_title or extract_title_from_html(html_content, fallback="Application Canvas" if resolved_kind == "app" else "Brouillon cLAIr Page")
         ).strip()
         final_html = sanitize_and_enhance_html(
             html_content.strip(),
             title=resolved_title,
             layout_style=layout_style,
             orientation=orientation,
+            bricks=normalized_bricks if (normalized_bricks or resolved_kind == "app") else None,
         )
     else:
+        effective_prompt = prompt or ""
+        bricks_ctx = build_bricks_prompt_context(normalized_bricks)
+        if bricks_ctx:
+            effective_prompt = f"{effective_prompt}\n\n{bricks_ctx}".strip()
         resolved_title, final_html = await generate_page_html(
             settings=settings,
-            prompt=prompt,
+            prompt=effective_prompt,
             chat_transcript=chat_transcript,
             title=fallback_title,
             model=selected_model,
@@ -125,6 +146,14 @@ async def create_draft_web_page(
             text_effects=resolved_effects,
             selected_topics=selected_topics,
         )
+        if normalized_bricks:
+            final_html = sanitize_and_enhance_html(
+                final_html,
+                title=resolved_title,
+                layout_style=layout_style,
+                orientation=orientation,
+                bricks=normalized_bricks,
+            )
 
     clean_slug = slugify(resolved_title)
 
@@ -133,6 +162,8 @@ async def create_draft_web_page(
             user_id=user_id,
             title=resolved_title,
             slug=clean_slug,
+            kind=resolved_kind,
+            bricks=normalized_bricks,
             is_published=False,
         )
         db.add(page)
@@ -141,8 +172,9 @@ async def create_draft_web_page(
         version = WebPageVersion(
             page_id=page.id,
             version_number=1,
-            prompt_used=prompt or "Création initiale",
+            prompt_used=prompt or ("Import Code Canvas" if resolved_kind == "app" else "Création initiale"),
             html_content=final_html,
+            canvas_files=normalized_canvas_files,
         )
         db.add(version)
         page.updated_at = now()

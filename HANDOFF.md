@@ -1,78 +1,80 @@
 # HANDOFF.md — État du projet
 
 ## 1. Project Overview
-Application de chat IA multi-fournisseurs (`tchataiperso`) composée d'un backend **FastAPI / SQLAlchemy 2 / Alembic / SQLite** (`backend/`) et d'un frontend **Next.js 16 / React 19 / TypeScript** (`frontend/`), incluant un espace **Marchés Financiers** (`FinanceModal`) avec données boursières (EODHD / Yahoo Finance), analyse technique (`lightweight-charts`, `technicalindicators`), veille d'actualités et analyse de documents.
+Application de chat IA multi-fournisseurs (`tchataiperso`) composée d'un backend **FastAPI / SQLAlchemy 2 / Alembic / SQLite** (`backend/`) et d'un frontend **Next.js 16 / React 19 / TypeScript** (`frontend/`), incluant :
+- L'éditeur multi-fichiers **Code Canvas** (`CodeCanvas`) avec aperçu HTML/CSS/JS isolé et export `.zip`.
+- Le studio **cLAIr Pages** (`WebPageModal`) structuré en **📄 Mes Pages** et **🧩 Mes Apps**, avec système de **Briques Préfaites** (Agent IA avec modèle, prompt, entrées et sorties attendues).
+- L'espace **Marchés Financiers** (`FinanceModal`) avec cotations EODHD/Yahoo, indicateurs personnalisés, actualités, rapports trimestriels et onglet **MOAT** (travaux antérieurs non committés conservés).
 
 ## 2. Current Objective
-Extension de la modale **Marchés Financiers** (`FinanceModal`) selon le plan validé dans `implementation_plan.md` + ajout de l'onglet **MOAT** :
-1. Tableau de suivi d'actions personnalisé avec variations **1J, 1S, 1M, 3M, 1A** et ouverture directe du graphique + indicateurs au clic sur une ligne.
-2. Créateur/éditeur d'indicateurs techniques personnalisés façon TradingView (formules sans `eval`, persistance par utilisateur).
-3. Recherche, synthèse IA Markdown et archivage en base des actualités par action.
-4. Importation de rapports trimestriels (PDF, DOCX, TXT/MD/CSV ou texte collé), extraction textuelle, analyse/résumé structuré IA et stockage en base.
-5. Onglet **MOAT** par action : signaux financiers objectifs (marges, ROE/ROA, croissance CA, levier), analyse IA (« Analyste en Investissement Stratégique » Buffett/Dalio/McKinsey) sur les 7 types de MOAT (`Cost Advantage`, `Switching Costs`, `Network Effects`, `Brand Power`, `Regulatory Moat`, `Intangible Assets`, `Efficient Scale`) avec facteurs favorables vs défavorables, cartographie PESTEL/Interne en deux tableaux Risques & FCS (priorité Élevée/Moyenne), analyse compétitive, valorisation et persistance en base.
+Intégration des applications **Code Canvas** dans **cLAIr Pages (« Mes Apps »)**, système de **Briques Préfaites** (12 modèles prêts à l'emploi) et **Éditeur de Diagramme d'Architecture d'Application** (`🗺️ Diagramme`) :
+1. Permettre l'intégration en 1 clic d'une application générée dans **Code Canvas** vers **cLAIr Pages** sous l'onglet dédié **🧩 Mes Apps** (avec conservation des fichiers sources multi-fichiers `canvas_files` et réouverture dans le Canvas).
+2. Permettre de concevoir l'application visuellement dans un **Diagramme d'Architecture** (`ui_input` ↔ `ai_brick` ↔ `ui_output`) avant ou pendant la génération du code, de façon à ce que les agents IA propulsent directement les composants propres de l'interface (bulles, jauges, scores) sans bulle flottante superposée (`show_widget: false` par défaut).
 
-**Statut** : Implémentation terminée et vérifiée par build TypeScript/Next.js et suite de tests backend.
+**Statut** : Implémentation terminée et vérifiée par build TypeScript/Next.js, ESLint ciblé et tests pytest backend.
 
 ## 3. Completed Work
-- **Modèles SQLAlchemy & Migrations Alembic** : Tables `finance_watchlist_items`, `finance_custom_indicators`, `finance_stock_news`, `finance_quarterly_reports`, `finance_stock_moats` ajoutées dans `backend/app/models.py`, migrations idempotentes `0020_add_finance_workspace.py` et `0021_add_finance_moat.py`, révisions enregistrées dans `backend/app/cli.py`.
-- **Services backend & API REST (`/api/finance/...`)** :
-  - `backend/app/finance_watchlist.py` : `compute_period_returns`, `resolve_watchlist_instrument`, `fetch_watchlist_quotes`, 6 actions par défaut (`DEFAULT_WATCHLIST_SEEDS`).
-  - `backend/app/finance_news.py` : collecte Yahoo Finance + `providers.search_web` et synthèse Markdown LLM (avec repli hors-ligne/démo).
-  - `backend/app/finance_reports.py` : `extract_report_text` (PDF via `pypdf`, DOCX via `python-docx`, TXT/MD/CSV, plafond `MAX_REPORT_EXTRACTED_CHARS = 120000`) et `analyze_quarterly_report` (résumé Markdown + `key_metrics` JSON).
-  - `backend/app/finance_moat.py` : `compute_moat_quantitative_signals`, `analyze_and_build_stock_moat` (croisant fondamentaux, derniers rapports trimestriels et actualités stockés pour le titre, avec repli quantitatif hors-ligne/démo).
-  - `backend/app/schemas.py`, `backend/app/serializers.py`, `backend/app/routers/finance.py` : endpoints CRUD watchlist, indicateurs personnalisés, recherche/historique news, import/téléchargement/suppression rapports trimestriels et analyse/historique MOAT (`/api/finance/moat*`).
-- **Moteur d'indicateurs & UI Frontend** :
-  - `frontend/lib/custom-indicators.ts` : parseur/évaluateur AST sécurisé (sans `eval` ni `new Function`), présets (`CUSTOM_INDICATOR_PRESETS`), validation de formule (`validateCustomFormula`).
-  - `frontend/components/finance-watchlist-table.tsx` : tableau triable 1J/1S/1M/3M/1A, ajout/suppression, clic ligne ouvrant la vue `"Analyse technique"`.
-  - `frontend/components/finance-custom-indicator-modal.tsx` : assistant rapide + mode formule libre avec aperçu et lignes guides.
-  - `frontend/components/finance-tv-chart.tsx` : rendu des indicateurs personnalisés en overlay ou panneaux oscillateurs séparés, bouton `+ Créer un indicateur`, édition et suppression.
-  - `frontend/components/finance-moat-panel.tsx`, `frontend/components/finance-news-panel.tsx` & `frontend/components/finance-reports-panel.tsx` : onglets « MOAT », « Actualités & Veille » et « Rapports trimestriels » intégrés dans `frontend/components/finance-modal.tsx`.
-  - `frontend/lib/api.ts` & `frontend/app/globals.css` : types, appels API et styles clair/sombre/responsive.
+- **Schéma SQLAlchemy & Migration Alembic (`0022_add_webpage_apps_and_bricks`)** :
+  - Ajout des colonnes `kind` (`"page"` | `"app"`) et `bricks` (`JSON`) sur `web_pages`, et `canvas_files` (`JSON`) sur `web_page_versions` dans `backend/app/models.py`, `backend/migrations/versions/0022_add_webpage_apps_and_bricks.py`, `backend/app/cli.py` et initialisation idempotente au démarrage dans `backend/app/main.py`.
+- **Service Backend des Briques Préfaites & Diagramme IA (`backend/app/page_bricks.py`)** :
+  - `normalize_bricks` (`show_widget=False` par défaut, support `finance_data_enabled` / `finance_eod_agent`), `build_bricks_prompt_context`, `execute_page_brick` (collecte des données boursières réelles EODHD / Yahoo Finance, calcul des indicateurs techniques `SMA20`, `SMA50`, `RSI14`, `MACD` et signaux MOAT quantitatifs via `_fetch_brick_finance_context` / `_compute_technical_indicators_summary`, prise en charge de `_history` multi-tours, recherche web SearXNG optionnelle), `propose_app_diagram`, `interview_app_diagram`, `build_bricks_runtime_js` et `inject_bricks_runtime_html`.
+- **API REST & Services Pages (`backend/app/`)** :
+  - Extension de `schemas.py`, `serializers.py`, `page_runtime.py`, `page_service.py`, `routers/pages.py` et `context.py` (`CODE_MODE_PROMPT` interdisant les réponses IA simulées en dur) pour supporter `kind`, `html_content`, `canvas_files`, `bricks`, `POST /api/pages/bricks/execute`, `POST /api/pages/diagram/propose` et `POST /api/pages/diagram/interview`.
+- **Frontend Canvas, Diagramme, Briques & Mes Apps (`frontend/`)** :
+  - `frontend/lib/canvas-diagram.ts` : types `AppDiagram` / `DiagramNode` / `DiagramEdge`, presets (`DIAGRAM_PRESETS` dont *Bot de l'App + Jauge & Score type NiaisBot* et *Cockpit Boursier EOD & Indicateurs*), synchronisation bidirectionnelle `Diagram <-> PageBrick[]` et compilateur `buildAppPromptFromDiagram`.
+  - `frontend/components/canvas-diagram-editor.tsx` (+ `.module.css`) : éditeur visuel interactif (génération de diagramme par IA, glisser-déposer des blocs, flèches SVG avec variables d'entrée/sortie, inspecteur modèle/prompt/entrées/sorties, bouton **« Générer l'App depuis ce Diagramme »** / **« Câbler ce diagramme dans l'App »**).
+  - `frontend/lib/canvas-bricks.ts` : types `PageBrick`, catalogue de **16 briques prêtes à l'emploi** (`PREMADE_BRICK_TEMPLATES` incluant 4 briques **Finance & Bourse** : Cotation EOD & Indicateurs, Analyste Fondamental Bourse, Évaluateur MOAT Boursier, Veille Boursière & Catalyseurs), `injectBrickIntoCanvasHtml`, `buildBrickWiringPrompt` et runtime client `buildBricksClientRuntimeScript`.
+  - `frontend/lib/code-canvas.ts` & `frontend/lib/api.ts` : injection du runtime des briques dans `buildCanvasPreviewHtml` et ajout de `executePageBrick` + `proposeAppDiagram`.
+  - `frontend/components/canvas-bricks-modal.tsx` (+ `.module.css`) : galerie filtrable par catégorie des 12 briques prêtes à l'emploi, choix du style de widget, configurateur complet, test en direct, insertion directe et câblage assisté par IA.
+  - `frontend/components/code-canvas.tsx` & `frontend/app/globals.css` : onglet **`🗺️ Diagramme`** (actif par défaut quand le Canvas est vide) aux côtés d'**Éditeur** et **Aperçu**, synchronisation avec les briques, boutons **« Briques IA »** et **« Intégrer à Mes Apps »**, écouteur `postMessage`.
+  - `frontend/components/web-page-modal.tsx` (+ `.module.css`) & `frontend/components/chat-app.tsx` : onglets **📄 Mes Pages** / **🧩 Mes Apps**, gestion des briques, bouton **« Ouvrir dans Canvas »**, lancement direct depuis le diagramme via `onRunPrompt` et persistance de session Canvas via `canvasSessionKey`.
 
 ## 4. Key Decisions
-- **Persistance SQLite par utilisateur** plutôt que `localStorage` seul, afin d'aligner l'espace Finance sur le reste de l'application ; seul le marqueur d'amorçage initial `clair_watchlist_seeded_v1` est conservé en `localStorage` pour ne pas réinjecter les valeurs par défaut si l'utilisateur vide volontairement son suivi.
-- **Parseur arithmétique/AST dédié** (`frontend/lib/custom-indicators.ts`) au lieu d'une évaluation dynamique JS pour éliminer tout risque d'exécution de code arbitraire sur les formules saisies.
-- **Conservation des modifications non commitées antérieures** (fonctionnalités Ideogram v2 dans `images.py`, `providers.py`, `openrouter.py`, `image-*.tsx`, etc.) laissées intactes dans l'arbre de travail.
+- **Moteur interne de l'App par défaut (`show_widget: false`)** : les briques IA ne superposent plus de bouton flottant sur l'interface de l'app par défaut ; elles servent de cerveau appelé par les contrôles natifs de l'application (`window.clair.runBrick`), avec option explicite *« Bulle flottante de test »* si souhaitée.
+- **Conception visuelle par Diagramme (`AppDiagram`)** : permet de définir en amont les composants UI d'entrée, les nœuds Agent IA (modèle, prompt, entrées, sorties JSON) et les sorties UI (bulles, jauges, scores) avant de compiler une spécification stricte interdisant les fausses réponses simulées en dur.
+- **Pont `postMessage` parent ↔ iframe (`CLAIR_BRICK_CALL` / `CLAIR_BRICK_RESULT`)** : évite toute exposition de clés API ou de jetons d'authentification dans le code HTML généré.
+- **Conservation des modifications non commitées antérieures** (travaux `FinanceModal`/MOAT et `Ideogram v2`) intactes dans l'arbre de travail.
 
 ## 5. Modified Files
 - Créés (backend) :
-  - `backend/migrations/versions/0020_add_finance_workspace.py`
-  - `backend/migrations/versions/0021_add_finance_moat.py`
-  - `backend/app/finance_watchlist.py`
-  - `backend/app/finance_news.py`
-  - `backend/app/finance_reports.py`
-  - `backend/app/finance_moat.py`
+  - `backend/migrations/versions/0022_add_webpage_apps_and_bricks.py`
+  - `backend/app/page_bricks.py`
 - Modifiés (backend) :
-  - `backend/app/models.py`
   - `backend/app/cli.py`
+  - `backend/app/models.py`
+  - `backend/app/main.py`
   - `backend/app/schemas.py`
   - `backend/app/serializers.py`
-  - `backend/app/routers/finance.py`
-  - `backend/tests/test_finance.py`
+  - `backend/app/page_runtime.py`
+  - `backend/app/page_service.py`
+  - `backend/app/routers/pages.py`
+  - `backend/app/context.py`
+  - `backend/tests/test_pages.py`
 - Créés (frontend) :
-  - `frontend/lib/custom-indicators.ts`
-  - `frontend/components/finance-watchlist-table.tsx`
-  - `frontend/components/finance-custom-indicator-modal.tsx`
-  - `frontend/components/finance-moat-panel.tsx`
-  - `frontend/components/finance-news-panel.tsx`
-  - `frontend/components/finance-reports-panel.tsx`
+  - `frontend/lib/canvas-bricks.ts`
+  - `frontend/lib/canvas-diagram.ts`
+  - `frontend/components/canvas-bricks-modal.tsx`
+  - `frontend/components/canvas-bricks-modal.module.css`
+  - `frontend/components/canvas-diagram-editor.tsx`
+  - `frontend/components/canvas-diagram-editor.module.css`
 - Modifiés (frontend) :
+  - `frontend/lib/code-canvas.ts`
   - `frontend/lib/api.ts`
-  - `frontend/components/finance-tv-chart.tsx`
-  - `frontend/components/finance-modal.tsx`
+  - `frontend/components/code-canvas.tsx`
+  - `frontend/components/web-page-modal.tsx`
+  - `frontend/components/web-page-modal.module.css`
+  - `frontend/components/chat-app.tsx`
   - `frontend/app/globals.css`
 
 ## 6. Verification
-- `npm --prefix frontend run typecheck && npm --prefix frontend run build` : **RÉUSSI** (exécuté après la dernière édition frontend ; 0 erreur TypeScript, build Next.js 16.4.2 réussi).
-- `npx --prefix frontend eslint --config frontend/eslint.config.mjs --max-warnings 0 frontend/components/finance-moat-panel.tsx` : **RÉUSSI** (0 erreur, 0 warning sur le panneau MOAT).
-- `PYTHONPATH=backend backend/.venv/bin/pytest backend/tests/test_finance.py backend/tests/test_finance_statements.py backend/tests/test_migrations.py -v` : **RÉUSSI — 43 passed, 1 warning** (couvre `compute_period_returns`, `compute_moat_quantitative_signals`, extraction `.txt`/`.pdf`, CRUD complet `/api/finance/*` y compris `/moat*` et migration Alembic `0021_add_finance_moat`).
-- `npm --prefix frontend run lint` (global) : **ÉCHOUÉ** lors d'un passage antérieur en raison d'erreurs préexistantes dans le dépôt et de règles `react-hooks/set-state-in-effect` / `react/no-unescaped-entities` / `@typescript-eslint/no-unused-vars` dans certains autres fichiers.
-- Vérification visuelle interactive dans un navigateur réel : **non exécutée**.
+- `PYTHONPATH=backend backend/.venv/bin/pytest backend/tests/test_pages.py backend/tests/test_migrations.py -v` : **RÉUSSI — 20 passed, 1 warning** (inclut `test_canvas_app_integration_and_ai_bricks`, `test_execute_brick_with_mocked_llm_json_schema`, `test_chatbot_brick_with_history_and_widget_style`, `test_propose_app_diagram_and_default_internal_brick`, `test_diagram_interview_selects_bricks_and_asks_questions` et `test_finance_eod_brick_execution_and_interview`).
+- `npx --prefix frontend eslint --config frontend/eslint.config.mjs --max-warnings 0 frontend/lib/canvas-bricks.ts frontend/lib/canvas-diagram.ts frontend/components/canvas-bricks-modal.tsx` : **RÉUSSI** (0 erreur, 0 warning).
+- `npm --prefix frontend run typecheck && npm --prefix frontend run build` : **RÉUSSI** (0 erreur TypeScript, build Next.js 16.4.2 réussi après les dernières éditions frontend).
+- Vérification interactive manuelle en navigateur : **non exécutée**.
 
 ## 7. Known Issues and Risks
-- Le calcul des indicateurs personnalisés avec périodes longues (ex. `sma(close, 200)`) dépend du nombre de barres chargées pour la durée sélectionnée (`timeframe` par défaut `1m` ; passer à `3m`/`1y`/`5y` dans l'interface pour obtenir plus d'historique).
-- Des règles ESLint strictes (`react-hooks/set-state-in-effect` introduite par React 19 ESLint plugin, ainsi que quelques imports/entités dans `finance-modal.tsx`) restent signalées au lint même si `tsc --noEmit` et `next build` passent sans erreur.
-- L'arbre Git contient également des modifications non commitées antérieures liées à Ideogram v2 (hors périmètre de cette tâche).
+- Les pages publiques partagées (`/p/{token}`) restent servies en CSP stricte hors authentification : les briques Agent IA nécessitent d'être exécutées depuis l'environnement authentifié (**Aperçu Code Canvas** ou **cLAIr Pages → Mes Apps**).
+- Le lint ESLint global (`npm --prefix frontend run lint`) n'a pas été relancé sur l'ensemble des anciens fichiers du dépôt (erreurs préexistantes documentées précédemment).
 
 ## 8. Next Action
-Effectuer un test manuel en navigateur sur l'interface (`/`) dans la modale **Marchés Financiers** (ajout/suppression dans le suivi, clic sur une ligne, création d'un indicateur personnalisé, recherche d'actualités et import d'un PDF trimestriel) puis nettoyer si souhaité les avertissements ESLint restants avant commit.
+Tester le parcours bout-en-bout en navigateur : générer une application web dans le tchat en mode **Code · Canvas**, lui adjoindre une brique **Agent IA** (modèle, prompt, entrées, sorties JSON), la câbler ou la tester via le widget intégré, puis cliquer sur **« Intégrer à Mes Apps »** pour vérifier l'ouverture directe dans **cLAIr Pages → Mes Apps**.

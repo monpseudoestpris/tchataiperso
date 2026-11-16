@@ -38,8 +38,8 @@ import { ChatAttachedSites } from "@/components/chat-attached-sites";
 import { CreativityControl, formatCreativityBadge } from "@/components/creativity-control";
 import { SidebarCreativityPotentiometer } from "@/components/sidebar-creativity-potentiometer";
 import { WebPageModal } from "@/components/web-page-modal";
-import { ApiError, api, attachUrl, createLearnReportFromMessage, createReportFromMessage, errorMessage, fetchTopics, linkConversationToTopic, unlinkConversationFromTopic, skillToSlug, streamMessage, type Attachment, type AuthUser, type Config, type Conversation, type DocumentExtraction, type FamilyGroupInfo, type FinancialDashboardData, type GeneratedSound, type Memory, type Message, type Model, type MultiAgentConfig, type SamplingParameters, type Skill, type Source, type StageModelsConfig, type TopicSpace } from "@/lib/api";
-import { collectConversationCanvasFiles, createZipBlob, extractCanvasFiles, hasExplicitCanvasFiles, triggerBlobDownload } from "@/lib/code-canvas";
+import { ApiError, api, attachUrl, createLearnReportFromMessage, createReportFromMessage, errorMessage, fetchTopics, linkConversationToTopic, unlinkConversationFromTopic, skillToSlug, streamMessage, type Attachment, type AuthUser, type Config, type Conversation, type DocumentExtraction, type FamilyGroupInfo, type FinancialDashboardData, type GeneratedSound, type Memory, type Message, type Model, type MultiAgentConfig, type PageBrick, type SamplingParameters, type Skill, type Source, type StageModelsConfig, type TopicSpace, type WebPage } from "@/lib/api";
+import { collectConversationCanvasFiles, createZipBlob, extractCanvasFiles, hasExplicitCanvasFiles, triggerBlobDownload, type CanvasFile } from "@/lib/code-canvas";
 import { hasInteractiveLearnModules, stripInteractiveModulesForBody } from "@/lib/learn-parser";
 import { useModelFavorites } from "@/lib/model-favorites";
 
@@ -1177,9 +1177,16 @@ export function ChatApp() {
     setFinanceModalOpen(true);
   }
   const [canvasOpen, setCanvasOpen] = useState(false);
+  const [canvasSessionKey, setCanvasSessionKey] = useState(0);
   const [canvasMessageId, setCanvasMessageId] = useState<string | null>(null);
   const [canvasSelectedPath, setCanvasSelectedPath] = useState<string | null>(null);
   const [canvasIncludeUnnamed, setCanvasIncludeUnnamed] = useState(false);
+  const [canvasImportedApp, setCanvasImportedApp] = useState<{
+    pageId: string;
+    title: string;
+    files: CanvasFile[];
+    bricks: PageBrick[];
+  } | null>(null);
   const [imageStudioOpen, setImageStudioOpen] = useState(false);
   const [imageStudioPrompt, setImageStudioPrompt] = useState("");
   const [soundStudioOpen, setSoundStudioOpen] = useState(false);
@@ -1195,6 +1202,8 @@ export function ChatApp() {
   const [blogModalSeedPrompt, setBlogModalSeedPrompt] = useState("");
   const [webPagesModalOpen, setWebPagesModalOpen] = useState(false);
   const [webPagesModalPrompt, setWebPagesModalPrompt] = useState<string | undefined>(undefined);
+  const [webPagesModalTab, setWebPagesModalTab] = useState<"pages" | "apps">("pages");
+  const [webPagesInitialPageId, setWebPagesInitialPageId] = useState<string | null>(null);
   const [hermesModalOpen, setHermesModalOpen] = useState(false);
   const [topics, setTopics] = useState<TopicSpace[]>([]);
   const [topicModalOpen, setTopicModalOpen] = useState(false);
@@ -1643,6 +1652,10 @@ export function ChatApp() {
   );
 
   function openCanvasForMessage(messageId: string, filePath?: string, forceUnnamed = false) {
+    if (canvasImportedApp) {
+      setCanvasImportedApp(null);
+      setCanvasSessionKey(k => k + 1);
+    }
     setCanvasMessageId(messageId);
     setCanvasIncludeUnnamed(forceUnnamed);
     if (filePath) setCanvasSelectedPath(filePath);
@@ -1655,6 +1668,7 @@ export function ChatApp() {
     setCodeMode(old => {
       const next = !old;
       if (next) {
+        setCanvasImportedApp(null);
         setCanvasMessageId(null);
         setContextOpen(false);
         setSkillsOpen(false);
@@ -1692,6 +1706,8 @@ export function ChatApp() {
 
   function openWebPagesModal(seedPrompt?: string) {
     setWebPagesModalPrompt(seedPrompt);
+    setWebPagesModalTab("pages");
+    setWebPagesInitialPageId(null);
     setWebPagesModalOpen(true);
     setSidebarOpen(false);
   }
@@ -1735,6 +1751,8 @@ export function ChatApp() {
       setPendingCreativity(loaded.creativity ?? null);
       setPendingSamplingParams(loaded.sampling_params ?? null);
       setActiveTopicSpaceId(loaded.topic_space_id ?? null);
+      setCanvasImportedApp(null);
+      setCanvasSessionKey(k => k + 1);
       setCanvasMessageId(null); setCanvasSelectedPath(null); setCanvasIncludeUnnamed(false);
       if (hasCanvas) { setContextOpen(false); setCanvasOpen(true); }
       if (warning) setError(warning);
@@ -1751,6 +1769,8 @@ export function ChatApp() {
     setPendingCreativity(null);
     setPendingSamplingParams(null);
     setActiveTopicSpaceId(topicId ?? null);
+    setCanvasImportedApp(null);
+    setCanvasSessionKey(k => k + 1);
     setCanvasMessageId(null); setCanvasSelectedPath(null); setCanvasIncludeUnnamed(false);
     setStreamingId(null); setStatus("");
     if (!codeMode) setCanvasOpen(false);
@@ -1946,6 +1966,7 @@ export function ChatApp() {
     planFeedback?: string,
     overrideText?: string,
     overrideFiles?: Attachment[],
+    forceCodeMode?: boolean,
   ) {
     event?.preventDefault();
     if (!config) return;
@@ -2037,8 +2058,9 @@ export function ChatApp() {
 
       const isAutoWeb = !useDeepSearch && !useLearnMode && effectiveWebMode === "auto";
       const isAlwaysWeb = !useDeepSearch && !useLearnMode && effectiveWebMode === "always";
-      const useCodeMode = codeMode;
+      const useCodeMode = forceCodeMode ?? codeMode;
       if (useCodeMode) {
+        setCanvasImportedApp(null);
         setCanvasMessageId(null);
         setContextOpen(false);
         setSkillsOpen(false);
@@ -3502,8 +3524,9 @@ export function ChatApp() {
 
         {canvasOpen && (
           <CodeCanvas
-            title={conversation?.title || "Projet Canvas"}
-            aiFiles={canvasFiles}
+            key={canvasSessionKey}
+            title={canvasImportedApp ? canvasImportedApp.title : (conversation?.title || "Projet Canvas")}
+            aiFiles={canvasImportedApp ? canvasImportedApp.files : canvasFiles}
             streaming={Boolean(streamingId)}
             selectedPath={canvasSelectedPath}
             onSelectPath={setCanvasSelectedPath}
@@ -3512,6 +3535,32 @@ export function ChatApp() {
               setCodeMode(true);
               setDraft(promptText);
               textareaRef.current?.focus();
+            }}
+            onRunPrompt={promptText => {
+              setCodeMode(true);
+              void send(
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                promptText,
+                undefined,
+                true,
+              );
+            }}
+            models={config?.models ?? []}
+            currentModel={model}
+            conversationId={conversation?.id}
+            initialBricks={canvasImportedApp?.bricks}
+            integratedPageId={canvasImportedApp?.pageId}
+            onIntegratedToPages={(createdApp: WebPage) => {
+              setWebPagesModalTab("apps");
+              setWebPagesInitialPageId(createdApp.id);
+              setWebPagesModalOpen(true);
             }}
           />
         )}
@@ -3729,13 +3778,31 @@ export function ChatApp() {
 
     <WebPageModal
       isOpen={webPagesModalOpen}
-      onClose={() => setWebPagesModalOpen(false)}
+      onClose={() => {
+        setWebPagesModalOpen(false);
+        setWebPagesInitialPageId(null);
+      }}
       conversationId={conversation?.id}
       conversationTitle={conversation?.title}
       initialPrompt={webPagesModalPrompt}
+      initialTab={webPagesModalTab}
+      initialPageId={webPagesInitialPageId}
       models={config?.models ?? []}
       currentModel={model}
       onRefreshModels={refreshModels}
+      onOpenInCanvas={(files, appTitle, appBricks, pageId) => {
+        setCanvasImportedApp({
+          pageId,
+          title: appTitle,
+          files,
+          bricks: appBricks,
+        });
+        setCanvasSessionKey(k => k + 1);
+        setCanvasSelectedPath(files[0]?.path ?? null);
+        setContextOpen(false);
+        setSkillsOpen(false);
+        setCanvasOpen(true);
+      }}
     />
 
     {hermesModalOpen && (

@@ -400,6 +400,7 @@ def web_page_version_json(version: WebPageVersion, include_html: bool = True) ->
         "page_id": version.page_id,
         "version_number": version.version_number,
         "prompt_used": version.prompt_used,
+        "canvas_files": getattr(version, "canvas_files", None) or [],
         "created_at": stamp(version.created_at),
     }
     if include_html:
@@ -415,12 +416,15 @@ def web_page_json(page: WebPage, include_versions: bool = False, include_latest_
         "user_id": page.user_id,
         "title": page.title,
         "slug": page.slug,
+        "kind": getattr(page, "kind", None) or "page",
+        "bricks": getattr(page, "bricks", None) or [],
         "public_token": page.public_token,
         "is_published": page.is_published,
         "created_at": stamp(page.created_at),
         "updated_at": stamp(page.updated_at),
         "versions_count": len(versions),
         "latest_version_number": latest.version_number if latest else 0,
+        "latest_canvas_files": (getattr(latest, "canvas_files", None) or []) if latest else [],
     }
     if include_latest_html and latest:
         data["latest_html"] = latest.html_content

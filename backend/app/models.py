@@ -349,6 +349,8 @@ class WebPage(Base):
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     title: Mapped[str] = mapped_column(String(200), default="Page Web cLAIr")
     slug: Mapped[str] = mapped_column(String(200), default="page-web")
+    kind: Mapped[str] = mapped_column(String(20), default="page")
+    bricks: Mapped[list] = mapped_column(JSON, default=list)
     public_token: Mapped[str] = mapped_column(String(32), unique=True, index=True, default=short_token)
     is_published: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
@@ -368,6 +370,7 @@ class WebPageVersion(Base):
     version_number: Mapped[int] = mapped_column(Integer, default=1)
     prompt_used: Mapped[str] = mapped_column(Text, default="")
     html_content: Mapped[str] = mapped_column(Text, default="")
+    canvas_files: Mapped[list] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
     page: Mapped[WebPage] = relationship(back_populates="versions")

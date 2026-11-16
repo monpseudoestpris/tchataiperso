@@ -133,6 +133,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             with engine.begin() as conn:
                 if "categories" not in blog_columns:
                     conn.execute(text("ALTER TABLE blogs ADD COLUMN categories JSON NOT NULL DEFAULT '[\"news\"]'"))
+        if "web_pages" in inspector.get_table_names():
+            wp_columns = {column["name"] for column in inspector.get_columns("web_pages")}
+            with engine.begin() as conn:
+                if "kind" not in wp_columns:
+                    conn.execute(text("ALTER TABLE web_pages ADD COLUMN kind VARCHAR(20) NOT NULL DEFAULT 'page'"))
+                if "bricks" not in wp_columns:
+                    conn.execute(text("ALTER TABLE web_pages ADD COLUMN bricks JSON NOT NULL DEFAULT '[]'"))
+        if "web_page_versions" in inspector.get_table_names():
+            wpv_columns = {column["name"] for column in inspector.get_columns("web_page_versions")}
+            with engine.begin() as conn:
+                if "canvas_files" not in wpv_columns:
+                    conn.execute(text("ALTER TABLE web_page_versions ADD COLUMN canvas_files JSON NOT NULL DEFAULT '[]'"))
         for table in ("conversations", "attachments", "memories"):
             if "user_id" not in {column["name"] for column in inspector.get_columns(table)}:
                 raise RuntimeError("Base non migrée; exécutez les étapes `migrate-schema`, `create-admin` et `migrate-legacy` du README.")
