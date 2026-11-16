@@ -25,6 +25,7 @@ const config: NextConfig = {
   allowedDevOrigins,
   poweredByHeader: false,
   experimental: {
+    agentUpgrade: "security",
     proxyClientMaxBodySize: "45mb",
     proxyTimeout: 660_000,
   },
