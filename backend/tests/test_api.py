@@ -900,6 +900,242 @@ def test_multi_model_image_generation_with_openrouter(tmp_path, monkeypatch):
         assert item["filename"].startswith("gemini-3-pro-image-")
 
 
+def test_image_studio_edit_uploaded_and_gallery_image(tmp_path, monkeypatch):
+    import base64 as _b64
+
+    settings = Settings(_env_file=None, app_data_dir=tmp_path, ideogram_api_key="image", llm_api_key="llm", demo_mode=False)
+    src_png = b"\x89PNG\r\n\x1a\nimported-src"
+    mask_png = b"\x89PNG\r\n\x1a\nmask-png"
+    edited_png = b"\x89PNG\r\n\x1a\nedited-out"
+    calls = []
+
+    async def generate(
+        _settings,
+        prompt,
+        ratio,
+        negative_prompt=None,
+        model="ideogram",
+        reference_image=None,
+        mask_image=None,
+        image_weight=None,
+    ):
+        calls.append({
+            "prompt": prompt,
+            "ratio": ratio,
+            "model": model,
+            "reference_image": reference_image,
+            "mask_image": mask_image,
+            "image_weight": image_weight,
+        })
+        return edited_png, "image/png"
+
+    async def improve(_settings, model, prompt, style_keywords=None, negative_prompt=None, reference_image=None, is_edit=False):
+        assert is_edit is True
+        assert reference_image == (edited_png, "image/png")
+        return f"Instruction retouche : {prompt}"
+
+    monkeypatch.setattr(providers, "generate_image", generate)
+    monkeypatch.setattr(providers, "improve_image_prompt", improve)
+    with authenticated_client(settings) as client:
+        # 1. Invalid uploaded image is rejected cleanly
+        bad_upload = client.post("/api/images", json={
+            "prompt": "Ajoute des lunettes",
+            "model": "google/gemini-3.1-flash-image",
+            "reference_image_data": "data:image/png;base64," + _b64.b64encode(b"not-an-image").decode("ascii"),
+        })
+        assert bad_upload.status_code == 422
+
+        # 2. Editing with a non-Ideogram model (e.g. Gemini) is rejected with HTTP 400
+        data_url = "data:image/png;base64," + _b64.b64encode(src_png).decode("ascii")
+        non_ideogram = client.post("/api/images", json={
+            "prompt": "Remplace le fond par une forêt",
+            "aspect_ratio": "16:9",
+            "model": "google/gemini-3.1-flash-image",
+            "reference_image_data": data_url,
+        })
+        assert non_ideogram.status_code == 400
+        assert calls == []
+
+        # 2b. Valid uploaded image with Ideogram 4.5
+        first = client.post("/api/images", json={
+            "prompt": "Remplace le fond par une forêt",
+            "aspect_ratio": "16:9",
+            "model": "ideogram-4-5",
+            "reference_image_data": data_url,
+        })
+        assert first.status_code == 201
+        first_item = first.json()
+        assert calls[-1]["reference_image"] == (src_png, "image/png")
+        assert calls[-1]["model"] == "ideogram-4-5"
+
+        # 3. Improve prompt in edit mode referencing saved gallery image
+        improved = client.post("/api/images/improve", json={
+            "prompt": "rends le ciel violet",
+            "source_image_id": first_item["id"],
+            "is_edit": True,
+        })
+        assert improved.status_code == 200
+        assert improved.json() == {"prompt": "Instruction retouche : rends le ciel violet"}
+
+        # 4. Iterative edit using gallery source_image_id with Ideogram + image_weight
+        second = client.post("/api/images", json={
+            "prompt": improved.json()["prompt"],
+            "aspect_ratio": "16:9",
+            "model": "ideogram",
+            "source_image_id": first_item["id"],
+            "image_weight": 80,
+        })
+        assert second.status_code == 201
+        assert calls[-1]["reference_image"] == (edited_png, "image/png")
+        assert calls[-1]["image_weight"] == 80
+        assert calls[-1]["model"] == "ideogram"
+
+        # 5. Unknown source_image_id returns 404
+        missing = client.post("/api/images", json={
+            "prompt": "Test",
+            "model": "ideogram",
+            "source_image_id": "nonexistent-id",
+        })
+        assert missing.status_code == 404
+
+        # 6. Inpaint with reference_image_data + mask_image_data forwards mask_image
+        mask_url = "data:image/png;base64," + _b64.b64encode(mask_png).decode("ascii")
+        inpaint_res = client.post("/api/images", json={
+            "prompt": "Remplace la zone par un chapeau rouge",
+            "aspect_ratio": "1:1",
+            "model": "ideogram",
+            "reference_image_data": data_url,
+            "mask_image_data": mask_url,
+        })
+        assert inpaint_res.status_code == 201
+        assert calls[-1]["reference_image"] == (src_png, "image/png")
+        assert calls[-1]["mask_image"] == (mask_png, "image/png")
+        assert calls[-1]["image_weight"] is None
+
+        # 7. Mask without reference image returns 400
+        no_ref_inpaint = client.post("/api/images", json={
+            "prompt": "Remplace la zone",
+            "model": "ideogram",
+            "mask_image_data": mask_url,
+        })
+        assert no_ref_inpaint.status_code == 400
+
+        # 8. Newer Ideogram model IDs (ideogram-4-5) route cleanly through Ideogram API key check
+        inpaint_45 = client.post("/api/images", json={
+            "prompt": "Lunettes dorées",
+            "aspect_ratio": "1:1",
+            "model": "ideogram-4-5",
+            "reference_image_data": data_url,
+            "mask_image_data": mask_url,
+        })
+        assert inpaint_45.status_code == 201
+        assert inpaint_45.json()["filename"].startswith("ideogram-4-5-")
+        assert calls[-1]["model"] == "ideogram-4-5"
+
+
+def test_image_studio_specialized_ideogram_v2_actions(tmp_path, monkeypatch):
+    import base64 as _b64
+
+    settings = Settings(_env_file=None, app_data_dir=tmp_path, ideogram_api_key="image", demo_mode=False)
+    src_png = b"\x89PNG\r\n\x1a\nsrc-v2"
+    mask_png = b"\x89PNG\r\n\x1a\nmask-v2"
+    out_png = b"\x89PNG\r\n\x1a\nout-v2"
+    calls = []
+
+    async def generate(
+        _settings,
+        prompt,
+        ratio,
+        negative_prompt=None,
+        model="ideogram",
+        reference_image=None,
+        mask_image=None,
+        image_weight=None,
+        edit_action=None,
+        transparent_background=False,
+        out_metadata=None,
+    ):
+        calls.append({
+            "prompt": prompt,
+            "model": model,
+            "reference_image": reference_image,
+            "mask_image": mask_image,
+            "edit_action": edit_action,
+            "transparent_background": transparent_background,
+        })
+        if out_metadata is not None and edit_action == "layerize":
+            out_metadata["text_blocks"] = [
+                {"text": "PROMO -50%", "x": 12, "y": 24, "width": 180, "height": 40, "font_name": "Montserrat", "color": "#ff0000"}
+            ]
+        return out_png, "image/png"
+
+    monkeypatch.setattr(providers, "generate_image", generate)
+    with authenticated_client(settings) as client:
+        data_url = "data:image/png;base64," + _b64.b64encode(src_png).decode("ascii")
+        mask_url = "data:image/png;base64," + _b64.b64encode(mask_png).decode("ascii")
+
+        # 1. Remove background with empty prompt succeeds and stores fallback prompt
+        rm_bg = client.post("/api/images", json={
+            "prompt": "",
+            "model": "ideogram-4-5",
+            "reference_image_data": data_url,
+            "edit_action": "remove_background",
+        })
+        assert rm_bg.status_code == 201
+        assert rm_bg.json()["edit_action"] == "remove_background"
+        assert "arrière-plan" in rm_bg.json()["prompt"].lower()
+        assert calls[-1]["edit_action"] == "remove_background"
+
+        # 2. Remove object requires mask -> 400 without mask, 201 with mask + empty prompt
+        no_mask = client.post("/api/images", json={
+            "prompt": "",
+            "model": "ideogram",
+            "reference_image_data": data_url,
+            "edit_action": "remove_object",
+        })
+        assert no_mask.status_code == 400
+
+        rm_obj = client.post("/api/images", json={
+            "prompt": "",
+            "model": "ideogram",
+            "reference_image_data": data_url,
+            "mask_image_data": mask_url,
+            "edit_action": "remove_object",
+        })
+        assert rm_obj.status_code == 201
+        assert calls[-1]["edit_action"] == "remove_object"
+        assert calls[-1]["mask_image"] == (mask_png, "image/png")
+
+        # 3. Replace background requires prompt -> 422 when empty
+        no_prompt_bg = client.post("/api/images", json={
+            "prompt": "   ",
+            "model": "ideogram",
+            "reference_image_data": data_url,
+            "edit_action": "replace_background",
+        })
+        assert no_prompt_bg.status_code == 422
+
+        # 4. Layerize returns extracted text_blocks in API response
+        layerized = client.post("/api/images", json={
+            "prompt": "",
+            "model": "ideogram-3",
+            "reference_image_data": data_url,
+            "edit_action": "layerize",
+        })
+        assert layerized.status_code == 201
+        assert layerized.json()["edit_action"] == "layerize"
+        assert layerized.json()["text_blocks"][0]["text"] == "PROMO -50%"
+
+        # 5. Transparent PNG flag forwards cleanly
+        trans = client.post("/api/images", json={
+            "prompt": "Un badge doré",
+            "model": "ideogram",
+            "transparent_background": True,
+        })
+        assert trans.status_code == 201
+        assert calls[-1]["transparent_background"] is True
+
+
 
 def test_summary_includes_old_document_text_and_preserves_unsummarized_turns(tmp_path, monkeypatch):
     settings = Settings(_env_file=None, app_data_dir=tmp_path, llm_api_key="key", summary_every_messages=8,

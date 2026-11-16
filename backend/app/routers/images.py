@@ -1,4 +1,5 @@
 import re
+from typing import Any
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -44,27 +45,153 @@ def list_generated_images(
         ]
 
 
+def _resolve_reference_image(
+    reference_image_data: str | None,
+    source_image_id: str | None,
+    upload_dir,
+    user: User,
+    sessions: sessionmaker,
+) -> tuple[bytes, str] | None:
+    if reference_image_data:
+        try:
+            return providers.decode_reference_image(reference_image_data)
+        except providers.ProviderError as exc:
+            raise HTTPException(422, str(exc)) from exc
+    if source_image_id:
+        with sessions() as db:
+            item = db.scalar(
+                select(GeneratedImage).where(
+                    GeneratedImage.id == source_image_id,
+                    GeneratedImage.user_id == user.id,
+                )
+            )
+            if not item or not (upload_dir / item.storage_name).is_file():
+                raise HTTPException(404, "Image source introuvable")
+            raw_bytes = (upload_dir / item.storage_name).read_bytes()
+        detected_mime = providers._detect_image_mime(raw_bytes) or item.mime_type
+        if not providers._image_signature_matches(raw_bytes, detected_mime):
+            raise HTTPException(422, "L'image source sélectionnée n'est pas valide.")
+        return raw_bytes, detected_mime
+    return None
+
+
+def _resolve_mask_image(
+    mask_image_data: str | None,
+    reference_image: tuple[bytes, str] | None,
+) -> tuple[bytes, str] | None:
+    if not mask_image_data:
+        return None
+    if reference_image is None:
+        raise HTTPException(400, "An input reference image is required when using an inpaint mask.")
+    try:
+        return providers.decode_reference_image(mask_image_data)
+    except providers.ProviderError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+def _build_generate_kwargs(
+    reference_image: tuple[bytes, str] | None,
+    mask_image: tuple[bytes, str] | None,
+    image_weight: int | None,
+    edit_action: str | None = None,
+    transparent_background: bool = False,
+    out_metadata: dict[str, Any] | None = None,
+) -> dict:
+    gen_kwargs: dict = {}
+    if reference_image is not None:
+        gen_kwargs["reference_image"] = reference_image
+        if mask_image is not None:
+            gen_kwargs["mask_image"] = mask_image
+        elif image_weight is not None:
+            gen_kwargs["image_weight"] = image_weight
+    if edit_action is not None:
+        gen_kwargs["edit_action"] = edit_action
+    if transparent_background:
+        gen_kwargs["transparent_background"] = True
+    if out_metadata is not None:
+        gen_kwargs["out_metadata"] = out_metadata
+    return gen_kwargs
+
+
+def _validate_edit_request(
+    body: CreateImage,
+    is_ideogram: bool,
+    reference_image: tuple[bytes, str] | None,
+    mask_image: tuple[bytes, str] | None,
+) -> None:
+    if (
+        reference_image is not None
+        or mask_image is not None
+        or body.edit_action is not None
+        or body.transparent_background
+    ) and not is_ideogram:
+        raise HTTPException(
+            400,
+            "La retouche d’image et ces outils spécialisés sont uniquement disponibles avec les modèles Ideogram.",
+        )
+    if (
+        body.edit_action in {"remix", "inpaint", "remove_background", "replace_background", "remove_object", "layerize"}
+        and reference_image is None
+    ):
+        raise HTTPException(400, "Une image source est requise pour ce mode d’édition.")
+    if body.edit_action in {"inpaint", "remove_object"} and mask_image is None:
+        raise HTTPException(400, "Un masque est requis pour ce mode d’édition.")
+
+
+def _fallback_prompt_for_action(prompt: str, edit_action: str | None) -> str:
+    cleaned = (prompt or "").strip()
+    if cleaned:
+        return cleaned
+    return {
+        "remove_background": "Suppression de l’arrière-plan (Ideogram 1.0)",
+        "remove_object": "Suppression d’objet (Ideogram 1.0)",
+        "layerize": "Extraction de calques texte — Layerize (Ideogram 3.0)",
+    }.get(edit_action or "", "Image générée")
+
+
 @router.post("/api/images/improve")
 async def improve_image(
     body: ImproveImagePrompt,
+    request: Request,
     user: User = Depends(current_user),
     settings: Settings = Depends(get_settings),
+    sessions: sessionmaker = Depends(get_sessions),
 ):
     if settings.demo_mode or not settings.enabled(settings.llm_api_key):
         raise HTTPException(503, "L'amélioration du prompt nécessite une clé LLM_API_KEY et le mode IA réel")
+    upload_dir = get_upload_dir(request)
+    reference_image = _resolve_reference_image(
+        body.reference_image_data, body.source_image_id, upload_dir, user, sessions
+    )
     model = (
         (body.model.strip() if body.model and body.model.strip() else None)
         or settings.image_prompt_model
         or "google/gemini-4-argon"
         or settings.default_model
     )
+    improve_kwargs: dict = {}
+    if reference_image is not None:
+        improve_kwargs["reference_image"] = reference_image
+    if body.is_edit or reference_image is not None:
+        improve_kwargs["is_edit"] = True
     try:
         prompt = await providers.improve_image_prompt(
-            settings, model, body.prompt, body.style_keywords, body.negative_prompt
+            settings, model, body.prompt, body.style_keywords, body.negative_prompt, **improve_kwargs
         )
     except providers.ProviderError as exc:
         raise HTTPException(502, str(exc)) from exc
     return {"prompt": prompt}
+
+
+def _image_model_label(model_id: str) -> str:
+    return {
+        "ideogram-4-5": "Ideogram 4.5",
+        "ideogram-4": "Ideogram 4.0",
+        "ideogram-3": "Ideogram 3.0",
+        "ideogram-3-transparent": "Ideogram 3.0 Transparent",
+        "ideogram": "Ideogram Auto",
+        "ideogram-auto": "Ideogram Auto",
+    }.get(model_id, model_id)
 
 
 @router.post("/api/images", status_code=201)
@@ -76,13 +203,18 @@ async def create_studio_image(
     sessions: sessionmaker = Depends(get_sessions),
 ):
     upload_dir = get_upload_dir(request)
-    is_ideogram = body.model == "ideogram"
+    is_ideogram = providers.is_ideogram_model(body.model)
     if is_ideogram and not settings.enabled(settings.ideogram_api_key):
         raise HTTPException(503, "La génération d'image avec Ideogram nécessite IDEOGRAM_API_KEY et un mode IA réel")
     if not is_ideogram and not settings.enabled(settings.llm_api_key):
         raise HTTPException(503, "La génération d'image avec ce modèle nécessite LLM_API_KEY et un mode IA réel")
     if body.aspect_ratio not in IMAGE_ASPECT_RATIOS:
         raise HTTPException(422, "Ratio d'image non pris en charge")
+    reference_image = _resolve_reference_image(
+        body.reference_image_data, body.source_image_id, upload_dir, user, sessions
+    )
+    mask_image = _resolve_mask_image(body.mask_image_data, reference_image)
+    _validate_edit_request(body, is_ideogram, reference_image, mask_image)
     with sessions() as db:
         count = db.scalar(select(func.count()).select_from(GeneratedImage).where(GeneratedImage.user_id == user.id))
         if count >= MAX_GENERATED_IMAGES:
@@ -91,20 +223,30 @@ async def create_studio_image(
     await lock.acquire()
     path = None
     try:
+        out_metadata: dict[str, Any] | None = {} if body.edit_action == "layerize" else None
+        gen_kwargs = _build_generate_kwargs(
+            reference_image,
+            mask_image,
+            body.image_weight,
+            edit_action=body.edit_action,
+            transparent_background=body.transparent_background,
+            out_metadata=out_metadata,
+        )
         content, mime = await providers.generate_image(
-            settings, body.prompt, body.aspect_ratio, body.negative_prompt, model=body.model
+            settings, body.prompt, body.aspect_ratio, body.negative_prompt, model=body.model, **gen_kwargs
         )
         storage_name = str(uuid4())
         path = upload_dir / storage_name
         path.write_bytes(content)
         extension = {"image/png": "png", "image/webp": "webp", "image/gif": "gif"}.get(mime, "jpg")
-        model_prefix = "ideogram" if is_ideogram else re.sub(r"[^a-zA-Z0-9_-]", "-", body.model.split("/")[-1])[:24]
+        model_prefix = re.sub(r"[^a-zA-Z0-9_-]", "-", body.model if is_ideogram else body.model.split("/")[-1])[:24]
+        effective_prompt = _fallback_prompt_for_action(body.prompt, body.edit_action)
         with sessions() as db:
             image_id = str(uuid4())
             item = GeneratedImage(
                 id=image_id,
                 user_id=user.id,
-                prompt=body.prompt,
+                prompt=effective_prompt,
                 aspect_ratio=body.aspect_ratio,
                 filename=f"{model_prefix}-{image_id[:8]}.{extension}",
                 mime_type=mime,
@@ -114,7 +256,12 @@ async def create_studio_image(
             db.add(item)
             db.commit()
             db.refresh(item)
-            return generated_image_json(item)
+            result = generated_image_json(item)
+            if body.edit_action is not None:
+                result["edit_action"] = body.edit_action
+            if out_metadata and "text_blocks" in out_metadata:
+                result["text_blocks"] = out_metadata["text_blocks"]
+            return result
     except providers.ProviderError as exc:
         if path:
             path.unlink(missing_ok=True)
@@ -182,34 +329,49 @@ async def create_image(
     sessions: sessionmaker = Depends(get_sessions),
 ):
     upload_dir = get_upload_dir(request)
-    is_ideogram = body.model == "ideogram"
+    is_ideogram = providers.is_ideogram_model(body.model)
     if is_ideogram and not settings.enabled(settings.ideogram_api_key):
         raise HTTPException(503, "La génération d'image avec Ideogram nécessite IDEOGRAM_API_KEY et un mode IA réel")
     if not is_ideogram and not settings.enabled(settings.llm_api_key):
         raise HTTPException(503, "La génération d'image avec ce modèle nécessite LLM_API_KEY et un mode IA réel")
     if body.aspect_ratio not in IMAGE_ASPECT_RATIOS:
         raise HTTPException(422, "Ratio d'image non pris en charge")
+    reference_image = _resolve_reference_image(
+        body.reference_image_data, body.source_image_id, upload_dir, user, sessions
+    )
+    mask_image = _resolve_mask_image(body.mask_image_data, reference_image)
+    _validate_edit_request(body, is_ideogram, reference_image, mask_image)
     lock = claim(request, user.id, conversation_id)
     await lock.acquire()
     path = None
     try:
         with sessions() as db:
             get_conversation(db, conversation_id, user.id)
+        gen_kwargs = _build_generate_kwargs(
+            reference_image,
+            mask_image,
+            body.image_weight,
+            edit_action=body.edit_action,
+            transparent_background=body.transparent_background,
+        )
         content, mime = await providers.generate_image(
-            settings, body.prompt, body.aspect_ratio, body.negative_prompt, model=body.model
+            settings, body.prompt, body.aspect_ratio, body.negative_prompt, model=body.model, **gen_kwargs
         )
         storage_name = str(uuid4())
         path = upload_dir / storage_name
         path.write_bytes(content)
-        model_label = "Ideogram" if is_ideogram else body.model
-        model_prefix = "ideogram" if is_ideogram else re.sub(r"[^a-zA-Z0-9_-]", "-", body.model.split("/")[-1])[:24]
+        model_label = _image_model_label(body.model) if is_ideogram else body.model
+        model_prefix = re.sub(r"[^a-zA-Z0-9_-]", "-", body.model if is_ideogram else body.model.split("/")[-1])[:24]
+        effective_prompt = _fallback_prompt_for_action(body.prompt, body.edit_action)
         with sessions() as db:
             conversation = get_conversation(db, conversation_id, user.id)
-            prompt = Message(conversation_id=conversation_id, role="user", content=f"Génère une image : {body.prompt}")
+            prompt_prefix = "Modifie l'image :" if reference_image is not None else "Génère une image :"
+            answer_prefix = "Image modifiée avec" if reference_image is not None else "Image générée avec"
+            prompt = Message(conversation_id=conversation_id, role="user", content=f"{prompt_prefix} {effective_prompt}")
             answer = Message(
                 conversation_id=conversation_id,
                 role="assistant",
-                content=f"Image générée avec {model_label} : {body.prompt}",
+                content=f"{answer_prefix} {model_label} : {effective_prompt}",
             )
             db.add_all([prompt, answer])
             db.flush()

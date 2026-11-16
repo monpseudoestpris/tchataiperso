@@ -14,6 +14,7 @@ import {
   Search,
   Sparkles,
   Star,
+  WandSparkles,
   X,
 } from "lucide-react";
 import type { ImageModel } from "@/lib/api";
@@ -32,8 +33,9 @@ type SortOption = "recommended" | "name_asc";
 const IMAGE_PROVIDERS = [
   { id: "all", label: "Tous" },
   { id: "favorites", label: "⭐ Favoris" },
+  { id: "editing", label: "🪄 Édition (Ideogram)" },
   { id: "top", label: "⭐ Top Collection" },
-  { id: "ideogram", label: "Ideogram v2" },
+  { id: "ideogram", label: "Ideogram" },
   { id: "google", label: "Google" },
   { id: "openai", label: "OpenAI" },
   { id: "bytedance", label: "ByteDance" },
@@ -110,6 +112,7 @@ export function ImageModelModal({
     return models.filter(item => {
       // Tab filter
       if (activeTab === "favorites" && !favoritesSet.has(item.id)) return false;
+      if (activeTab === "editing" && !item.supports_image_editing) return false;
       if (activeTab === "top" && !item.is_top) return false;
       if (activeTab === "google" && !item.id.toLowerCase().startsWith("google/")) return false;
       if (activeTab === "openai" && !item.id.toLowerCase().startsWith("openai/")) return false;
@@ -126,10 +129,14 @@ export function ImageModelModal({
         return false;
       }
       if (activeTab === "recraft" && !item.id.toLowerCase().startsWith("recraft")) return false;
-      if (activeTab === "ideogram" && item.provider !== "ideogram" && item.id !== "ideogram") return false;
+      if (activeTab === "ideogram" && item.provider !== "ideogram" && !item.id.startsWith("ideogram")) return false;
       if (activeTab === "other") {
         const p = item.id.split("/")[0].toLowerCase();
-        if (["google", "openai", "bytedance-seed", "black-forest-labs", "recraft", "ideogram"].includes(p)) {
+        if (
+          item.provider === "ideogram" ||
+          item.id.startsWith("ideogram") ||
+          ["google", "openai", "bytedance-seed", "black-forest-labs", "recraft", "ideogram"].includes(p)
+        ) {
           return false;
         }
       }
@@ -167,8 +174,18 @@ export function ImageModelModal({
       if (sort === "name_asc") {
         return a.name.localeCompare(b.name);
       }
-      if (a.id === "ideogram") return -1;
-      if (b.id === "ideogram") return 1;
+      const ideogramOrder: Record<string, number> = {
+        "ideogram-4-5": -5,
+        "ideogram-4": -4,
+        "ideogram": -3,
+        "ideogram-3": -2,
+        "ideogram-3-transparent": -1,
+      };
+      const aIdeo = ideogramOrder[a.id];
+      const bIdeo = ideogramOrder[b.id];
+      if (aIdeo !== undefined && bIdeo !== undefined) return aIdeo - bIdeo;
+      if (aIdeo !== undefined) return -1;
+      if (bIdeo !== undefined) return 1;
       if (a.is_top && !b.is_top) return -1;
       if (!a.is_top && b.is_top) return 1;
       return a.name.localeCompare(b.name);
@@ -248,6 +265,12 @@ export function ImageModelModal({
               </button>
             </div>
             <div className="model-active-banner-right">
+              {activeModelObj.supports_image_editing && (
+                <span className="model-tag-pill vision" style={{ background: "#f3e8ff", color: "#6d28d9", borderColor: "#ddd6fe" }}>
+                  <WandSparkles size={11} />
+                  <span>Édition (Ideogram)</span>
+                </span>
+              )}
               {activeModelObj.is_top && (
                 <span className="model-tag-pill vision" style={{ background: "#fef3c7", color: "#b45309", borderColor: "#fde68a" }}>
                   <Sparkles size={11} />
@@ -453,6 +476,15 @@ export function ImageModelModal({
                         >
                           <Sparkles size={10} />
                           <span>Top Collection</span>
+                        </span>
+                      )}
+                      {item.supports_image_editing && (
+                        <span
+                          className="image-model-edit-badge"
+                          title="Prend en charge l'import, la retouche et l'inpainting d'images (Ideogram uniquement)"
+                        >
+                          <WandSparkles size={10} />
+                          <span>Édition</span>
                         </span>
                       )}
                     </div>

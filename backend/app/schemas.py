@@ -1,7 +1,7 @@
 import re
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class FigureAnnotation(BaseModel):
@@ -418,22 +418,36 @@ class ImproveSkillPrompt(BaseModel):
 
 
 class CreateImage(BaseModel):
-    prompt: str = Field(min_length=1, max_length=4000)
+    prompt: str = Field(default="", max_length=4000)
     aspect_ratio: str = "1:1"
     negative_prompt: str | None = Field(default=None, max_length=2000)
     model: str = Field(default="ideogram", max_length=150)
+    reference_image_data: str | None = Field(default=None, max_length=15_000_000)
+    mask_image_data: str | None = Field(default=None, max_length=15_000_000)
+    source_image_id: str | None = Field(default=None, max_length=64)
+    image_weight: int | None = Field(default=None, ge=1, le=100)
+    edit_action: Literal[
+        "remix",
+        "inpaint",
+        "remove_background",
+        "replace_background",
+        "remove_object",
+        "layerize",
+    ] | None = None
+    transparent_background: bool = False
 
-    @field_validator("prompt")
-    @classmethod
-    def trim_image_prompt(cls, value: str) -> str:
-        value = value.strip()
-        if not value:
+    @model_validator(mode="after")
+    def validate_image_prompt(self) -> "CreateImage":
+        cleaned = (self.prompt or "").strip()
+        promptless_actions = {"remove_background", "remove_object", "layerize"}
+        if not cleaned and self.edit_action not in promptless_actions:
             raise ValueError("Le prompt ne peut pas être vide")
-        return value
+        self.prompt = cleaned
+        return self
 
-    @field_validator("negative_prompt")
+    @field_validator("negative_prompt", "reference_image_data", "mask_image_data", "source_image_id")
     @classmethod
-    def sanitize_negative_prompt(cls, value: str | None) -> str | None:
+    def sanitize_optional_image_field(cls, value: str | None) -> str | None:
         if value is None:
             return None
         cleaned = value.strip()
@@ -452,6 +466,9 @@ class ImproveImagePrompt(BaseModel):
     model: str | None = Field(default=None, max_length=150)
     style_keywords: str | None = Field(default=None, max_length=500)
     negative_prompt: str | None = Field(default=None, max_length=2000)
+    reference_image_data: str | None = Field(default=None, max_length=15_000_000)
+    source_image_id: str | None = Field(default=None, max_length=64)
+    is_edit: bool = False
 
     @field_validator("prompt")
     @classmethod
@@ -461,7 +478,7 @@ class ImproveImagePrompt(BaseModel):
             raise ValueError("Le prompt ne peut pas être vide")
         return value
 
-    @field_validator("model", "style_keywords", "negative_prompt")
+    @field_validator("model", "style_keywords", "negative_prompt", "reference_image_data", "source_image_id")
     @classmethod
     def sanitize_optional_str(cls, value: str | None) -> str | None:
         if value is None:
@@ -1011,4 +1028,113 @@ class HermesRunRequest(BaseModel):
         if not cleaned:
             raise ValueError("L'objectif confié à Hermes Agent ne peut pas être vide")
         return cleaned
+
+
+_HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{3,8}$")
+
+
+class AddWatchlistItemRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=120)
+
+    @field_validator("query")
+    @classmethod
+    def trim_query(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Veuillez saisir un nom d'action ou un ticker.")
+        return cleaned
+
+
+class CustomIndicatorGuideLine(BaseModel):
+    value: float
+    color: str = Field(default="#94a3b8", max_length=30)
+
+    @field_validator("color")
+    @classmethod
+    def validate_color(cls, value: str) -> str:
+        cleaned = value.strip()
+        return cleaned if _HEX_COLOR_RE.fullmatch(cleaned) else "#94a3b8"
+
+
+class CreateCustomIndicatorRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    formula: str = Field(min_length=1, max_length=600)
+    pane: Literal["overlay", "oscillator"] = "overlay"
+    series_type: Literal["line", "histogram", "dots"] = "line"
+    color: str = Field(default="#3b82f6", max_length=30)
+    guide_lines: list[CustomIndicatorGuideLine] = Field(default_factory=list, max_length=6)
+    enabled_by_default: bool = True
+
+    @field_validator("name", "formula")
+    @classmethod
+    def trim_non_empty(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Ce champ ne peut pas être vide.")
+        return cleaned
+
+    @field_validator("color")
+    @classmethod
+    def validate_indicator_color(cls, value: str) -> str:
+        cleaned = value.strip()
+        return cleaned if _HEX_COLOR_RE.fullmatch(cleaned) else "#3b82f6"
+
+
+class UpdateCustomIndicatorRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    formula: str | None = Field(default=None, min_length=1, max_length=600)
+    pane: Literal["overlay", "oscillator"] | None = None
+    series_type: Literal["line", "histogram", "dots"] | None = None
+    color: str | None = Field(default=None, max_length=30)
+    guide_lines: list[CustomIndicatorGuideLine] | None = Field(default=None, max_length=6)
+    enabled_by_default: bool | None = None
+
+    @field_validator("name", "formula")
+    @classmethod
+    def trim_optional_non_empty(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Ce champ ne peut pas être vide.")
+        return cleaned
+
+    @field_validator("color")
+    @classmethod
+    def validate_optional_color(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned if _HEX_COLOR_RE.fullmatch(cleaned) else "#3b82f6"
+
+
+class SearchStockNewsRequest(BaseModel):
+    symbol: str = Field(min_length=1, max_length=32)
+    company_name: str = Field(default="", max_length=200)
+    focus_query: str = Field(default="", max_length=200)
+
+    @field_validator("symbol")
+    @classmethod
+    def trim_symbol(cls, value: str) -> str:
+        cleaned = value.strip().upper()
+        if not cleaned:
+            raise ValueError("Le symbole boursier est requis.")
+        return cleaned
+
+
+class AnalyzeStockMoatRequest(BaseModel):
+    symbol: str = Field(min_length=1, max_length=32)
+    company_name: str = Field(default="", max_length=200)
+    custom_focus: str = Field(default="", max_length=240)
+    financial_stats: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("symbol")
+    @classmethod
+    def trim_moat_symbol(cls, value: str) -> str:
+        cleaned = value.strip().upper()
+        if not cleaned:
+            raise ValueError("Le symbole boursier est requis.")
+        return cleaned
+
+
 

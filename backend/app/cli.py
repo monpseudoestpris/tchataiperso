@@ -55,6 +55,8 @@ def prepare_schema(settings: Settings) -> None:
         "0017_add_blog_categories",
         "0018_add_chat_sites",
         "0019_add_creativity_params",
+        "0020_add_finance_workspace",
+        "0021_add_finance_moat",
     }:
         raise SystemExit(f"Révision de base non reconnue : {current}")
 

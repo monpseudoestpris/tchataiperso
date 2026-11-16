@@ -65,6 +65,7 @@ export type ImageModel = {
   description?: string;
   supported_aspect_ratios?: string[];
   supported_resolutions?: string[];
+  supports_image_editing?: boolean;
   is_top?: boolean;
 };
 export type Config = {
@@ -111,6 +112,22 @@ export type Attachment = {
     financial_stats?: FinancialStats;
   } | null;
 };
+export type LayerizeTextBlock = {
+  text: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  angle?: number;
+  font_name?: string;
+  font_alternatives?: string[];
+  font_size?: number;
+  line_height?: number;
+  color?: string;
+  alignment?: string;
+  formatting?: string[];
+  role?: string;
+};
 export type GeneratedImage = {
   id: string;
   prompt: string;
@@ -121,6 +138,8 @@ export type GeneratedImage = {
   url: string;
   download_url: string;
   created_at: string;
+  edit_action?: string;
+  text_blocks?: LayerizeTextBlock[];
 };
 export type GeneratedSound = {
   id: string;
@@ -1124,6 +1143,237 @@ export async function fetchFinanceDetails(
   return api<FinancialDashboardData>(
     `/finance/details?query=${encodeURIComponent(query)}&range=${range}`,
   );
+}
+
+export type WatchlistItem = {
+  id: string;
+  symbol: string;
+  yahoo_symbol: string;
+  eod_ticker: string;
+  name: string;
+  exchange: string;
+  currency: string;
+  position: number;
+  price: number | null;
+  change_1d_pct: number | null;
+  change_1w_pct: number | null;
+  change_1m_pct: number | null;
+  change_3m_pct: number | null;
+  change_1y_pct: number | null;
+};
+
+export async function fetchWatchlist(seedDefaults = false, includeQuotes = true): Promise<WatchlistItem[]> {
+  const res = await api<{ items: WatchlistItem[] }>(
+    `/finance/watchlist?seed_defaults=${seedDefaults}&include_quotes=${includeQuotes}`,
+  );
+  return res.items || [];
+}
+
+export async function addWatchlistItem(query: string): Promise<WatchlistItem> {
+  return api<WatchlistItem>("/finance/watchlist", {
+    method: "POST",
+    body: JSON.stringify({ query }),
+  });
+}
+
+export async function seedDefaultWatchlist(): Promise<WatchlistItem[]> {
+  const res = await api<{ items: WatchlistItem[] }>("/finance/watchlist/seed-defaults", {
+    method: "POST",
+  });
+  return res.items || [];
+}
+
+export async function deleteWatchlistItem(itemId: string): Promise<void> {
+  return api<void>(`/finance/watchlist/${itemId}`, { method: "DELETE" });
+}
+
+export type CustomIndicatorGuideLine = {
+  value: number;
+  color: string;
+};
+
+export type CustomIndicator = {
+  id: string;
+  name: string;
+  formula: string;
+  pane: "overlay" | "oscillator";
+  series_type: "line" | "histogram" | "dots";
+  color: string;
+  guide_lines: CustomIndicatorGuideLine[];
+  enabled_by_default: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export async function fetchCustomIndicators(): Promise<CustomIndicator[]> {
+  const res = await api<{ items: CustomIndicator[] }>("/finance/indicators");
+  return res.items || [];
+}
+
+export async function createCustomIndicator(payload: {
+  name: string;
+  formula: string;
+  pane: "overlay" | "oscillator";
+  series_type: "line" | "histogram" | "dots";
+  color: string;
+  guide_lines: CustomIndicatorGuideLine[];
+  enabled_by_default?: boolean;
+}): Promise<CustomIndicator> {
+  return api<CustomIndicator>("/finance/indicators", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateCustomIndicator(
+  indicatorId: string,
+  payload: Partial<{
+    name: string;
+    formula: string;
+    pane: "overlay" | "oscillator";
+    series_type: "line" | "histogram" | "dots";
+    color: string;
+    guide_lines: CustomIndicatorGuideLine[];
+    enabled_by_default: boolean;
+  }>,
+): Promise<CustomIndicator> {
+  return api<CustomIndicator>(`/finance/indicators/${indicatorId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteCustomIndicator(indicatorId: string): Promise<void> {
+  return api<void>(`/finance/indicators/${indicatorId}`, { method: "DELETE" });
+}
+
+export type StockNewsArticle = {
+  title: string;
+  url: string;
+  source: string;
+  published_at: string;
+  snippet?: string;
+};
+
+export type StockNewsEntry = {
+  id: string;
+  symbol: string;
+  company_name: string;
+  search_query: string;
+  summary_markdown: string;
+  articles: StockNewsArticle[];
+  created_at: string;
+};
+
+export async function fetchStockNews(symbol?: string): Promise<StockNewsEntry[]> {
+  const q = symbol ? `?symbol=${encodeURIComponent(symbol)}` : "";
+  const res = await api<{ items: StockNewsEntry[] }>(`/finance/news${q}`);
+  return res.items || [];
+}
+
+export async function searchStockNews(payload: {
+  symbol: string;
+  company_name?: string;
+  focus_query?: string;
+}): Promise<StockNewsEntry> {
+  return api<StockNewsEntry>("/finance/news/search", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteStockNews(newsId: string): Promise<void> {
+  return api<void>(`/finance/news/${newsId}`, { method: "DELETE" });
+}
+
+export type QuarterlyReport = {
+  id: string;
+  symbol: string;
+  company_name: string;
+  title: string;
+  period_label: string;
+  source_type: "pdf" | "docx" | "text";
+  filename: string;
+  extracted_chars: number;
+  summary_markdown: string;
+  key_metrics: Record<string, string>;
+  has_file: boolean;
+  created_at: string;
+  extracted_text?: string;
+};
+
+export async function fetchQuarterlyReports(symbol?: string): Promise<QuarterlyReport[]> {
+  const q = symbol ? `?symbol=${encodeURIComponent(symbol)}` : "";
+  const res = await api<{ items: QuarterlyReport[] }>(`/finance/reports${q}`);
+  return res.items || [];
+}
+
+export async function fetchQuarterlyReport(reportId: string): Promise<QuarterlyReport> {
+  return api<QuarterlyReport>(`/finance/reports/${reportId}`);
+}
+
+export async function importQuarterlyReport(formData: FormData): Promise<QuarterlyReport> {
+  const response = await fetch("/api/finance/reports", {
+    method: "POST",
+    body: formData,
+  });
+  if (!response.ok) {
+    throw await responseError(response);
+  }
+  return (await response.json()) as QuarterlyReport;
+}
+
+export async function deleteQuarterlyReport(reportId: string): Promise<void> {
+  return api<void>(`/finance/reports/${reportId}`, { method: "DELETE" });
+}
+
+export type MoatPillar = {
+  name: string;
+  status: "strong" | "moderate" | "absent";
+  explanation: string;
+};
+
+export type MoatQuantitativeSignal = {
+  label: string;
+  value: string;
+  verdict: "favorable" | "neutral" | "weak";
+  reason: string;
+};
+
+export type StockMoatAnalysis = {
+  id: string;
+  symbol: string;
+  company_name: string;
+  moat_rating: "wide" | "narrow" | "none";
+  moat_score: number;
+  pillars: MoatPillar[];
+  strengths: string[];
+  weaknesses: string[];
+  quantitative_signals: MoatQuantitativeSignal[];
+  summary_markdown: string;
+  created_at: string;
+};
+
+export async function fetchStockMoats(symbol?: string): Promise<StockMoatAnalysis[]> {
+  const qs = symbol ? `?symbol=${encodeURIComponent(symbol)}` : "";
+  const res = await api<{ items: StockMoatAnalysis[] }>(`/finance/moat${qs}`);
+  return res.items || [];
+}
+
+export async function analyzeStockMoat(payload: {
+  symbol: string;
+  company_name?: string;
+  custom_focus?: string;
+  financial_stats?: FinancialStats;
+}): Promise<StockMoatAnalysis> {
+  return api<StockMoatAnalysis>("/finance/moat/analyze", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteStockMoat(moatId: string): Promise<void> {
+  return api<void>(`/finance/moat/${moatId}`, { method: "DELETE" });
 }
 
 export async function fetchTopics(): Promise<TopicSpace[]> {

@@ -904,6 +904,326 @@ def test_openrouter_image_generation_b64(settings, transport):
     assert len(requests) == 1
 
 
+def test_decode_reference_image_valid_and_invalid():
+    png = b"\x89PNG\r\n\x1a\n" + b"abcd"
+    data_url = "data:image/png;base64," + base64.b64encode(png).decode("ascii")
+    assert providers.decode_reference_image(data_url) == (png, "image/png")
+
+    jpeg = b"\xff\xd8\xff\xe0" + b"jpeg"
+    assert providers.decode_reference_image(base64.b64encode(jpeg).decode("ascii")) == (jpeg, "image/jpeg")
+
+    with pytest.raises(providers.ProviderError, match="invalide"):
+        providers.decode_reference_image("not-base64!!!")
+    with pytest.raises(providers.ProviderError, match="image reconnue"):
+        providers.decode_reference_image("data:image/png;base64," + base64.b64encode(b"plain text").decode("ascii"))
+
+
+def test_ideogram_remix_uses_multipart_image_and_weight(settings, transport):
+    src_png = b"\x89PNG\r\n\x1a\nsource-bytes"
+    out_png = b"\x89PNG\r\n\x1a\nremixed-bytes"
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        if request.url.host == "api.ideogram.ai":
+            assert request.method == "POST"
+            assert request.url.path == "/v2/image/remix/auto"
+            assert request.headers["api-key"] == "fake-ideogram-secret"
+            message = BytesParser(policy=policy.default).parsebytes(
+                b"Content-Type: " + request.headers["content-type"].encode("ascii") + b"\r\nMIME-Version: 1.0\r\n\r\n" + request.content
+            )
+            parts = {part.get_param("name", header="content-disposition"): part for part in message.iter_parts()}
+            assert parts["prompt"].get_payload(decode=True).decode("utf-8") == "Ajoute un ciel étoilé"
+            assert "aspect_ratio" not in parts
+            assert parts["image_weight"].get_payload(decode=True).decode("utf-8") == "75"
+            assert parts["image"].get_payload(decode=True) == src_png
+            assert parts["image"].get_content_type() == "image/png"
+            return httpx.Response(200, json={"data": [{"url": "https://images.example/remix.png"}]})
+        return httpx.Response(200, headers={"content-type": "image/png"}, stream=Chunks(out_png))
+
+    transport(handler)
+    result = asyncio.run(providers.generate_image(
+        settings,
+        "Ajoute un ciel étoilé",
+        "16:9",
+        model="ideogram",
+        reference_image=(src_png, "image/png"),
+        image_weight=75,
+    ))
+    assert result == (out_png, "image/png")
+    assert len(requests) == 2
+
+
+def test_ideogram_inpaint_uses_multipart_image_and_mask(settings, transport):
+    src_png = b"\x89PNG\r\n\x1a\nsource-bytes"
+    mask_png = b"\x89PNG\r\n\x1a\nmask-bytes"
+    out_png = b"\x89PNG\r\n\x1a\ninpainted-bytes"
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        if request.url.host == "api.ideogram.ai":
+            assert request.method == "POST"
+            assert request.url.path == "/v2/image/inpaint/ideogram-3"
+            assert request.headers["api-key"] == "fake-ideogram-secret"
+            message = BytesParser(policy=policy.default).parsebytes(
+                b"Content-Type: " + request.headers["content-type"].encode("ascii") + b"\r\nMIME-Version: 1.0\r\n\r\n" + request.content
+            )
+            parts = {part.get_param("name", header="content-disposition"): part for part in message.iter_parts()}
+            assert parts["prompt"].get_payload(decode=True).decode("utf-8") == "Des lunettes de soleil dorées"
+            assert parts["image"].get_payload(decode=True) == src_png
+            assert parts["image"].get_content_type() == "image/png"
+            assert parts["mask"].get_payload(decode=True) == mask_png
+            assert parts["mask"].get_content_type() == "image/png"
+            assert "aspect_ratio" not in parts
+            assert "negative_prompt" not in parts
+            return httpx.Response(200, json={"data": [{"url": "https://images.example/inpaint.png"}]})
+        return httpx.Response(200, headers={"content-type": "image/png"}, stream=Chunks(out_png))
+
+    transport(handler)
+    result = asyncio.run(providers.generate_image(
+        settings,
+        "Des lunettes de soleil dorées",
+        "16:9",
+        negative_prompt="flou",
+        model="ideogram",
+        reference_image=(src_png, "image/png"),
+        mask_image=(mask_png, "image/png"),
+    ))
+    assert result == (out_png, "image/png")
+    assert len(requests) == 2
+
+    with pytest.raises(providers.ProviderError, match="image source"):
+        asyncio.run(providers.generate_image(
+            settings,
+            "Test",
+            "1:1",
+            model="ideogram",
+            mask_image=(mask_png, "image/png"),
+        ))
+
+
+def test_ideogram_4_5_generate_and_precise_edit_endpoints(settings, transport):
+    src_png = b"\x89PNG\r\n\x1a\nsource-45"
+    mask_png = b"\x89PNG\r\n\x1a\nmask-45"
+    out_png = b"\x89PNG\r\n\x1a\nout-45"
+    paths = []
+
+    def handler(request):
+        if request.url.host == "api.ideogram.ai":
+            paths.append(request.url.path)
+            message = BytesParser(policy=policy.default).parsebytes(
+                b"Content-Type: " + request.headers["content-type"].encode("ascii") + b"\r\nMIME-Version: 1.0\r\n\r\n" + request.content
+            )
+            parts = {part.get_param("name", header="content-disposition"): part for part in message.iter_parts()}
+            if request.url.path == "/v2/image/precise-edit/ideogram-4-5":
+                assert parts["image"].get_payload(decode=True) == src_png
+                assert parts["mask"].get_payload(decode=True) == mask_png
+                assert parts["context_window"].get_payload(decode=True).decode("utf-8") == "auto"
+            elif request.url.path == "/v2/image/remix/ideogram-4":
+                assert parts["image"].get_payload(decode=True) == src_png
+                assert parts["image_weight"].get_payload(decode=True).decode("utf-8") == "60"
+            return httpx.Response(200, json={"data": [{"url": "https://images.example/v45.png"}]})
+        return httpx.Response(200, headers={"content-type": "image/png"}, stream=Chunks(out_png))
+
+    transport(handler)
+    assert asyncio.run(providers.generate_image(settings, "Affiche néon", "16:9", model="ideogram-4-5")) == (out_png, "image/png")
+    assert asyncio.run(providers.generate_image(
+        settings,
+        "Ajoute des lunettes",
+        "1:1",
+        model="ideogram-4-5",
+        reference_image=(src_png, "image/png"),
+        mask_image=(mask_png, "image/png"),
+    )) == (out_png, "image/png")
+    assert asyncio.run(providers.generate_image(
+        settings,
+        "Style aquarelle",
+        "1:1",
+        model="ideogram-4",
+        reference_image=(src_png, "image/png"),
+        image_weight=60,
+    )) == (out_png, "image/png")
+    assert paths == [
+        "/v2/image/generate/ideogram-4-5",
+        "/v2/image/precise-edit/ideogram-4-5",
+        "/v2/image/remix/ideogram-4",
+    ]
+
+
+def test_non_ideogram_image_edit_and_inpaint_rejected(settings, transport):
+    src_png = b"\x89PNG\r\n\x1a\nsource-bytes"
+    mask_png = b"\x89PNG\r\n\x1a\nmask-bytes"
+
+    def handler(request):
+        raise AssertionError(f"Unexpected HTTP call: {request.url}")
+
+    transport(handler)
+    with pytest.raises(providers.ProviderError, match="Ideogram"):
+        asyncio.run(providers.generate_image(
+            settings,
+            "Change la veste en rouge",
+            "4:3",
+            model="google/gemini-3.1-flash-image",
+            reference_image=(src_png, "image/png"),
+        ))
+    with pytest.raises(providers.ProviderError, match="Ideogram"):
+        asyncio.run(providers.generate_image(
+            settings,
+            "Ajoute un chapeau",
+            "1:1",
+            model="google/gemini-3.1-flash-image",
+            reference_image=(src_png, "image/png"),
+            mask_image=(mask_png, "image/png"),
+        ))
+
+
+def test_ideogram_specialized_v2_endpoints_and_async_polling(settings, transport, monkeypatch):
+    src_png = b"\x89PNG\r\n\x1a\nsource-spec"
+    mask_png = b"\x89PNG\r\n\x1a\nmask-spec"
+    out_png = b"\x89PNG\r\n\x1a\nout-spec"
+    seen = []
+    poll_count = 0
+
+    monkeypatch.setattr(providers, "_IDEOGRAM_POLL_INTERVAL", 0.0)
+
+    def handler(request):
+        nonlocal poll_count
+        seen.append((request.method, request.url.host, request.url.path))
+        if request.url.host != "api.ideogram.ai":
+            return httpx.Response(200, headers={"content-type": "image/png"}, stream=Chunks(out_png))
+
+        if request.method == "GET":
+            poll_count += 1
+            if poll_count == 1:
+                return httpx.Response(200, json={"generation_id": "gen-async-1", "status": "queued"})
+            return httpx.Response(200, json={
+                "generation_id": "gen-async-1",
+                "status": "completed",
+                "data": [{"url": "https://images.example/polled.png"}],
+            })
+
+        message = BytesParser(policy=policy.default).parsebytes(
+            b"Content-Type: " + request.headers["content-type"].encode("ascii") + b"\r\nMIME-Version: 1.0\r\n\r\n" + request.content
+        )
+        parts = {part.get_param("name", header="content-disposition"): part for part in message.iter_parts()}
+
+        if request.url.path == "/v2/image/remove-background/ideogram-1":
+            assert parts["image"].get_payload(decode=True) == src_png
+            assert "prompt" not in parts
+            return httpx.Response(200, json={"data": [{"url": "https://images.example/nobg.png"}]})
+
+        if request.url.path == "/v2/image/replace-background/ideogram-3":
+            assert parts["image"].get_payload(decode=True) == src_png
+            assert parts["prompt"].get_payload(decode=True).decode("utf-8") == "Une forêt enneigée"
+            return httpx.Response(200, json={"generation_id": "gen-async-1", "status": "pending"})
+
+        if request.url.path == "/v2/image/remove-object/ideogram-1":
+            assert parts["image"].get_payload(decode=True) == src_png
+            assert parts["mask"].get_payload(decode=True) == mask_png
+            assert "prompt" not in parts
+            return httpx.Response(200, json={"data": [{"url": "https://images.example/noobj.png"}]})
+
+        if request.url.path == "/v2/design/layerize/ideogram-3":
+            assert parts["image"].get_payload(decode=True) == src_png
+            assert "prompt" not in parts
+            return httpx.Response(200, json={
+                "base_image_url": "https://images.example/layerized-base.png",
+                "data": [{
+                    "url": "https://images.example/layerized-base.png",
+                    "text_blocks": [{
+                        "x": 10, "y": 20, "width": 200, "height": 50,
+                        "text": "HELLO WORLD", "font_name": "Inter", "font_size": 32,
+                        "color": "#112233", "role": "heading",
+                    }],
+                }],
+            })
+
+        if request.url.path == "/v2/image/generate/ideogram-3-transparent":
+            assert parts["prompt"].get_payload(decode=True).decode("utf-8") == "Un sticker chat"
+            assert parts["aspect_ratio"].get_payload(decode=True).decode("utf-8") == "1x1"
+            return httpx.Response(200, json={"data": [{"url": "https://images.example/trans.png"}]})
+
+        raise AssertionError(f"Unexpected Ideogram request: {request.method} {request.url.path}")
+
+    transport(handler)
+
+    # 1. Remove background
+    assert asyncio.run(providers.generate_image(
+        settings, "", "1:1", model="ideogram-3",
+        reference_image=(src_png, "image/png"), edit_action="remove_background",
+    )) == (out_png, "image/png")
+
+    # 2. Replace background + async polling GET /v2/generations/{id}
+    assert asyncio.run(providers.generate_image(
+        settings, "Une forêt enneigée", "1:1", model="ideogram-3",
+        reference_image=(src_png, "image/png"), edit_action="replace_background",
+    )) == (out_png, "image/png")
+
+    # 3. Remove object
+    assert asyncio.run(providers.generate_image(
+        settings, "", "1:1", model="ideogram",
+        reference_image=(src_png, "image/png"), mask_image=(mask_png, "image/png"),
+        edit_action="remove_object",
+    )) == (out_png, "image/png")
+
+    # 4. Layerize text blocks extraction
+    meta: dict = {}
+    assert asyncio.run(providers.generate_image(
+        settings, "", "1:1", model="ideogram-3",
+        reference_image=(src_png, "image/png"), edit_action="layerize", out_metadata=meta,
+    )) == (out_png, "image/png")
+    assert len(meta["text_blocks"]) == 1
+    assert meta["text_blocks"][0]["text"] == "HELLO WORLD"
+
+    # 5. Transparent generation via model ID and via transparent_background flag
+    assert asyncio.run(providers.generate_image(
+        settings, "Un sticker chat", "1:1", model="ideogram-3-transparent",
+    )) == (out_png, "image/png")
+    assert asyncio.run(providers.generate_image(
+        settings, "Un sticker chat", "1:1", model="ideogram", transparent_background=True,
+    )) == (out_png, "image/png")
+
+    api_calls = [(m, p) for m, h, p in seen if h == "api.ideogram.ai"]
+    assert api_calls == [
+        ("POST", "/v2/image/remove-background/ideogram-1"),
+        ("POST", "/v2/image/replace-background/ideogram-3"),
+        ("GET", "/v2/generations/gen-async-1"),
+        ("GET", "/v2/generations/gen-async-1"),
+        ("POST", "/v2/image/remove-object/ideogram-1"),
+        ("POST", "/v2/design/layerize/ideogram-3"),
+        ("POST", "/v2/image/generate/ideogram-3-transparent"),
+        ("POST", "/v2/image/generate/ideogram-3-transparent"),
+    ]
+
+
+def test_improve_image_prompt_edit_mode_with_reference(settings, transport):
+    src_png = b"\x89PNG\r\n\x1a\nsource-bytes"
+
+    def handler(request):
+        payload = json.loads(request.content.decode("utf-8"))
+        assert "retouche et édition d'images" in payload["messages"][0]["content"]
+        user_content = payload["messages"][1]["content"]
+        assert isinstance(user_content, list)
+        assert user_content[0]["type"] == "text"
+        assert "mets un chapeau" in user_content[0]["text"]
+        assert user_content[1]["type"] == "image_url"
+        assert user_content[1]["image_url"]["url"].startswith("data:image/png;base64,")
+        return httpx.Response(200, json={
+            "choices": [{"message": {"content": "Ajoute un chapeau rouge élégant sur le sujet en conservant la scène."}}]
+        })
+
+    transport(handler)
+    improved = asyncio.run(providers.improve_image_prompt(
+        settings,
+        "google/gemini-4-argon",
+        "mets un chapeau",
+        reference_image=(src_png, "image/png"),
+        is_edit=True,
+    ))
+    assert "chapeau rouge" in improved
+
+
 @pytest.mark.parametrize("url", [
     "https://localhost/image.png",
     "https://sub.localhost/image.png",

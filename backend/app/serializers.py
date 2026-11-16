@@ -11,6 +11,11 @@ from .models import (
     BlogPost,
     Conversation,
     DeepSearchReport,
+    FinanceCustomIndicator,
+    FinanceQuarterlyReport,
+    FinanceStockMoat,
+    FinanceStockNews,
+    FinanceWatchlistItem,
     GeneratedImage,
     GeneratedSound,
     LearnReport,
@@ -423,6 +428,85 @@ def web_page_json(page: WebPage, include_versions: bool = False, include_latest_
     if include_versions:
         data["versions"] = [web_page_version_json(v, include_html=True) for v in versions]
     return data
+
+
+def watchlist_item_json(item: FinanceWatchlistItem) -> dict:
+    return {
+        "id": item.id,
+        "symbol": item.symbol,
+        "yahoo_symbol": item.yahoo_symbol or item.symbol,
+        "eod_ticker": item.eod_ticker or item.symbol,
+        "name": item.name,
+        "exchange": item.exchange or "",
+        "currency": item.currency or "EUR",
+        "position": item.position,
+        "created_at": stamp(item.created_at),
+    }
+
+
+def custom_indicator_json(item: FinanceCustomIndicator) -> dict:
+    return {
+        "id": item.id,
+        "name": item.name,
+        "formula": item.formula,
+        "pane": item.pane or "overlay",
+        "series_type": item.series_type or "line",
+        "color": item.color or "#3b82f6",
+        "guide_lines": item.guide_lines if isinstance(item.guide_lines, list) else [],
+        "enabled_by_default": bool(item.enabled_by_default),
+        "created_at": stamp(item.created_at),
+        "updated_at": stamp(item.updated_at),
+    }
+
+
+def stock_news_json(item: FinanceStockNews) -> dict:
+    return {
+        "id": item.id,
+        "symbol": item.symbol,
+        "company_name": item.company_name or item.symbol,
+        "search_query": item.search_query or "",
+        "summary_markdown": item.summary_markdown or "",
+        "articles": item.articles if isinstance(item.articles, list) else [],
+        "created_at": stamp(item.created_at),
+    }
+
+
+def quarterly_report_json(item: FinanceQuarterlyReport, include_extracted: bool = False) -> dict:
+    data = {
+        "id": item.id,
+        "symbol": item.symbol,
+        "company_name": item.company_name or item.symbol,
+        "title": item.title,
+        "period_label": item.period_label or "",
+        "source_type": item.source_type or "pdf",
+        "filename": item.filename or "",
+        "extracted_chars": len(item.extracted_text or ""),
+        "summary_markdown": item.summary_markdown or "",
+        "key_metrics": item.key_metrics if isinstance(item.key_metrics, dict) else {},
+        "has_file": bool(item.storage_name),
+        "created_at": stamp(item.created_at),
+    }
+    if include_extracted:
+        data["extracted_text"] = item.extracted_text or ""
+    return data
+
+
+def stock_moat_json(item: FinanceStockMoat) -> dict:
+    return {
+        "id": item.id,
+        "symbol": item.symbol,
+        "company_name": item.company_name or item.symbol,
+        "moat_rating": item.moat_rating or "narrow",
+        "moat_score": int(item.moat_score if item.moat_score is not None else 50),
+        "pillars": item.pillars if isinstance(item.pillars, list) else [],
+        "strengths": item.strengths if isinstance(item.strengths, list) else [],
+        "weaknesses": item.weaknesses if isinstance(item.weaknesses, list) else [],
+        "quantitative_signals": item.quantitative_signals if isinstance(item.quantitative_signals, list) else [],
+        "summary_markdown": item.summary_markdown or "",
+        "created_at": stamp(item.created_at),
+    }
+
+
 
 
 

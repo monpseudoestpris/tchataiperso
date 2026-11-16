@@ -12,25 +12,75 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 _REPO_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 
 
-DEFAULT_IMAGE_MODELS: list[dict[str, Any]] = [
+IDEOGRAM_IMAGE_MODELS: list[dict[str, Any]] = [
     {
-        "id": "ideogram",
-        "name": "Ideogram v2 (Sélection auto)",
+        "id": "ideogram-4-5",
+        "name": "Ideogram 4.5 (Dernière génération)",
         "provider": "ideogram",
         "pricing_text": "Ideogram API",
-        "description": "Rendu typographique et artistique d'excellence, maîtrise inégalée du texte au cœur des images.",
-        "supported_aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"],
+        "description": "Dernier modèle phare d'Ideogram : photoréalisme avancé, typographie ultra-précise et édition chirurgicale Precise Edit jusqu'en 8K.",
+        "supported_aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "10:16", "16:10", "1:3", "3:1"],
         "supported_resolutions": ["1K", "2K"],
+        "supports_image_editing": True,
         "is_top": True,
     },
+    {
+        "id": "ideogram-4",
+        "name": "Ideogram 4.0",
+        "provider": "ideogram",
+        "pricing_text": "Ideogram API",
+        "description": "Génération haute fidélité, mise en page structurée, typographie soignée et mode Remix avancé.",
+        "supported_aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "10:16", "16:10", "1:3", "3:1"],
+        "supported_resolutions": ["1K", "2K"],
+        "supports_image_editing": True,
+        "is_top": True,
+    },
+    {
+        "id": "ideogram-3",
+        "name": "Ideogram 3.0",
+        "provider": "ideogram",
+        "pricing_text": "Ideogram API",
+        "description": "Génération, Remix et Inpainting dédié au pinceau avec contrôle précis des styles et palettes.",
+        "supported_aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "10:16", "16:10", "1:3", "3:1"],
+        "supported_resolutions": ["1K", "2K"],
+        "supports_image_editing": True,
+        "is_top": False,
+    },
+    {
+        "id": "ideogram-3-transparent",
+        "name": "Ideogram 3.0 Transparent (PNG détouré)",
+        "provider": "ideogram",
+        "pricing_text": "Ideogram API",
+        "description": "Génération directe d'images, logos, stickers et sujets isolés sur fond transparent (PNG avec canal alpha).",
+        "supported_aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "10:16", "16:10", "1:3", "3:1"],
+        "supported_resolutions": ["1K", "2K"],
+        "supports_image_editing": False,
+        "is_top": True,
+    },
+    {
+        "id": "ideogram",
+        "name": "Ideogram Auto (Sélection intelligente)",
+        "provider": "ideogram",
+        "pricing_text": "Ideogram API",
+        "description": "Laisse l'API Ideogram sélectionner automatiquement le modèle le plus adapté à votre demande.",
+        "supported_aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "10:16", "16:10", "1:3", "3:1"],
+        "supported_resolutions": ["1K", "2K"],
+        "supports_image_editing": True,
+        "is_top": True,
+    },
+]
+
+DEFAULT_IMAGE_MODELS: list[dict[str, Any]] = [
+    *IDEOGRAM_IMAGE_MODELS,
     {
         "id": "google/gemini-3.1-flash-image",
         "name": "Google: Nano Banana 2 (Gemini 3.1 Flash Image)",
         "provider": "openrouter",
         "pricing_text": "$0.50/M in · $60/M out",
-        "description": "Modèle phare de Google alliant qualité Pro et vitesse Flash. Compréhension contextuelle poussée et retouches itératives.",
+        "description": "Modèle phare de Google alliant qualité Pro et vitesse Flash. Compréhension contextuelle poussée et créations nettes.",
         "supported_aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "21:9"],
         "supported_resolutions": ["512", "1K", "2K", "4K"],
+        "supports_image_editing": False,
         "is_top": True,
     },
     {
@@ -41,6 +91,7 @@ DEFAULT_IMAGE_MODELS: list[dict[str, Any]] = [
         "description": "Précision artistique et fidélité de composition maximale pour créations graphiques exigeantes via l'Images API.",
         "supported_aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "21:9"],
         "supported_resolutions": ["1K", "2K", "4K"],
+        "supports_image_editing": False,
         "is_top": True,
     },
     {
@@ -48,9 +99,10 @@ DEFAULT_IMAGE_MODELS: list[dict[str, Any]] = [
         "name": "Google: Nano Banana 2.1",
         "provider": "openrouter",
         "pricing_text": "$1.50/M in · $30/M out",
-        "description": "Teintes de peau photoréalistes, éclairage et textures détaillés, fidélité factuelle et édition multi-passes.",
+        "description": "Teintes de peau photoréalistes, éclairage et textures détaillés, haute fidélité visuelle.",
         "supported_aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "21:9"],
         "supported_resolutions": ["1K", "2K", "4K"],
+        "supports_image_editing": False,
         "is_top": True,
     },
     {
@@ -61,6 +113,7 @@ DEFAULT_IMAGE_MODELS: list[dict[str, Any]] = [
         "description": "Génération ultra-rapide et économique à faible latence, idéale pour la production visuelle continue.",
         "supported_aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "21:9"],
         "supported_resolutions": ["1K", "2K"],
+        "supports_image_editing": False,
         "is_top": True,
     },
     {
@@ -71,6 +124,7 @@ DEFAULT_IMAGE_MODELS: list[dict[str, Any]] = [
         "description": "Modèle agentique avec chaîne de pensée avant rendu, recherche web intégrée et cohérence de style.",
         "supported_aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4"],
         "supported_resolutions": ["1K", "2K"],
+        "supports_image_editing": False,
         "is_top": True,
     },
     {
@@ -78,9 +132,10 @@ DEFAULT_IMAGE_MODELS: list[dict[str, Any]] = [
         "name": "Google: Nano Banana (Gemini 2.5 Flash Image)",
         "provider": "openrouter",
         "pricing_text": "$0.30/M in · $30/M out",
-        "description": "Génération et retouche d'image polyvalente avec forte compréhension du contexte textuel.",
+        "description": "Génération d'image polyvalente avec forte compréhension du contexte textuel.",
         "supported_aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"],
         "supported_resolutions": ["1K"],
+        "supports_image_editing": False,
         "is_top": True,
     },
     {
@@ -91,6 +146,7 @@ DEFAULT_IMAGE_MODELS: list[dict[str, Any]] = [
         "description": "Le modèle image le plus rapide et économique de Google (génération en ~4s), idéal pour l'exploration visuelle.",
         "supported_aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "21:9"],
         "supported_resolutions": ["1K"],
+        "supports_image_editing": False,
         "is_top": True,
     },
     {
@@ -101,6 +157,7 @@ DEFAULT_IMAGE_MODELS: list[dict[str, Any]] = [
         "description": "Palier haute vitesse de la gamme GPT Image 2.5, adapté au prototypage rapide et à l'illustration quotidienne.",
         "supported_aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "21:9"],
         "supported_resolutions": ["1K", "2K"],
+        "supports_image_editing": False,
         "is_top": True,
     },
     {
@@ -111,6 +168,7 @@ DEFAULT_IMAGE_MODELS: list[dict[str, Any]] = [
         "description": "Génération d'images haute fidélité d'OpenAI via l'Images API.",
         "supported_aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"],
         "supported_resolutions": ["1K", "2K"],
+        "supports_image_editing": False,
         "is_top": True,
     },
     {
@@ -121,6 +179,7 @@ DEFAULT_IMAGE_MODELS: list[dict[str, Any]] = [
         "description": "Composition fidèle au prompt, cohérence du sujet et rendu bilingue jusqu'en 4K.",
         "supported_aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"],
         "supported_resolutions": ["1K", "1.5K", "2K", "4K"],
+        "supports_image_editing": False,
         "is_top": True,
     },
     {
@@ -131,6 +190,7 @@ DEFAULT_IMAGE_MODELS: list[dict[str, Any]] = [
         "description": "Combine le raisonnement multimodal poussé de GPT-5.4 avec la génération visuelle haute définition.",
         "supported_aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "21:9"],
         "supported_resolutions": ["1K", "2K"],
+        "supports_image_editing": False,
         "is_top": True,
     },
     {
@@ -141,6 +201,7 @@ DEFAULT_IMAGE_MODELS: list[dict[str, Any]] = [
         "description": "Modèle le plus avancé de Google sur base Gemini 3 Pro. Rendu de texte long, haute fidélité visuelle et sorties 4K.",
         "supported_aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "21:9"],
         "supported_resolutions": ["1K", "2K", "4K"],
+        "supports_image_editing": False,
         "is_top": True,
     },
     {
@@ -151,6 +212,7 @@ DEFAULT_IMAGE_MODELS: list[dict[str, Any]] = [
         "description": "FLUX 3 ultra-rapide et abordable, excellent équilibre de photoréalisme et esthétique moderne.",
         "supported_aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "21:9"],
         "supported_resolutions": ["768", "1K", "1.5K", "2K", "4K"],
+        "supports_image_editing": False,
         "is_top": False,
     },
     {
@@ -161,6 +223,7 @@ DEFAULT_IMAGE_MODELS: list[dict[str, Any]] = [
         "description": "Rendu visuel d'exception, éclairages cinématiques et fidélité de composition du studio Black Forest Labs.",
         "supported_aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "21:9"],
         "supported_resolutions": ["768", "1K", "1.5K", "2K", "4K"],
+        "supports_image_editing": False,
         "is_top": False,
     },
     {
@@ -171,6 +234,7 @@ DEFAULT_IMAGE_MODELS: list[dict[str, Any]] = [
         "description": "Spécialisé en design vectoriel, logos, icônes, illustrations et typographie nette.",
         "supported_aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4"],
         "supported_resolutions": ["1K", "2K"],
+        "supports_image_editing": False,
         "is_top": False,
     },
 ]
@@ -260,7 +324,7 @@ class Settings(BaseSettings):
     image_prompt_model: str = "google/gemini-4-argon"
     skill_prompt_model: str = "google/gemini-4-argon"
     image_models: str = ""
-    default_image_model: str = "ideogram"
+    default_image_model: str = "ideogram-4-5"
     auto_web_search: bool = True
     hermes_enabled: bool = True
     hermes_api_url: str = "http://127.0.0.1:8642"
@@ -514,6 +578,7 @@ class Settings(BaseSettings):
                             "description": str(item.get("description", "")),
                             "supported_aspect_ratios": item.get("supported_aspect_ratios", []),
                             "supported_resolutions": item.get("supported_resolutions", []),
+                            "supports_image_editing": prov == "ideogram",
                             "is_top": bool(item.get("is_top", False)),
                         })
                     return filtered
@@ -522,18 +587,9 @@ class Settings(BaseSettings):
 
         results: list[dict[str, Any]] = []
 
-        # 1. Ideogram toujours inclus en tête de liste pour être sélectionnable
-        results.append({
-            "id": "ideogram",
-            "name": "Ideogram v2 (Sélection auto)",
-            "provider": "ideogram",
-            "pricing_text": "Ideogram API",
-            "description": "Rendu typographique et artistique d'excellence, maîtrise inégalée du texte au cœur des images.",
-            "supported_aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "10:16", "16:10", "1:3", "3:1"],
-            "supported_resolutions": ["1K", "2K"],
-            "is_top": True,
-            "_rank": -1,
-        })
+        # 1. Modèles Ideogram (4.5, 4.0, 3.0, Auto) inclus en tête de liste
+        for idx, item in enumerate(IDEOGRAM_IMAGE_MODELS):
+            results.append({**item, "_rank": -len(IDEOGRAM_IMAGE_MODELS) + idx})
 
         # 2. Dynamic OpenRouter image models if enabled
         if has_openrouter:

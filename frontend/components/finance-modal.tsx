@@ -1,8 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { FinanceCustomIndicatorModal } from "@/components/finance-custom-indicator-modal";
+import { FinanceMoatPanel } from "@/components/finance-moat-panel";
+import { FinanceNewsPanel } from "@/components/finance-news-panel";
+import { FinanceReportsPanel } from "@/components/finance-reports-panel";
 import { FinanceStatements } from "@/components/finance-statements";
 import { FinanceTvChart } from "@/components/finance-tv-chart";
+import { FinanceWatchlistTable } from "@/components/finance-watchlist-table";
 import {
   ArrowDownRight,
   ArrowUpRight,
@@ -12,11 +17,14 @@ import {
   ChevronRight,
   Copy,
   ExternalLink,
+  FileText,
   LineChart,
   LoaderCircle,
   MessageSquarePlus,
+  Newspaper,
   RefreshCw,
   Search,
+  ShieldCheck,
   Sparkles,
   Target,
   TrendingDown,
@@ -25,11 +33,22 @@ import {
   X,
 } from "lucide-react";
 import {
+  addWatchlistItem,
+  createCustomIndicator,
+  deleteCustomIndicator,
+  deleteWatchlistItem,
+  fetchCustomIndicators,
   fetchFinanceDetails,
+  fetchWatchlist,
+  seedDefaultWatchlist,
+  updateCustomIndicator,
+  type CustomIndicator,
+  type CustomIndicatorGuideLine,
   type FinanceRange,
   type EodBar,
   type FinancialDashboardData,
   type FinancialStats,
+  type WatchlistItem,
 } from "@/lib/api";
 
 type FinanceModalProps = {
@@ -40,7 +59,18 @@ type FinanceModalProps = {
   onInsertIntoChat?: (text: string) => void;
 };
 
-type ActiveTab = "valuation" | "profitability" | "balance_sheet" | "analysts" | "history" | "profile";
+type ActiveTab =
+  | "valuation"
+  | "profitability"
+  | "balance_sheet"
+  | "analysts"
+  | "history"
+  | "profile"
+  | "moat"
+  | "news"
+  | "reports";
+
+const WATCHLIST_SEED_STORAGE_KEY = "clair_watchlist_seeded_v1";
 
 const QUICK_SUGGESTIONS = [
   "Air Liquide",
@@ -98,10 +128,18 @@ export function FinanceModal({
   const [chartView, setChartView] = useState<"line" | "advanced">("line");
   const [hoveredBarIndex, setHoveredBarIndex] = useState<number | null>(null);
   const [copied, setCopied] = useState(false);
+  const [watchlist, setWatchlist] = useState<WatchlistItem[]>([]);
+  const [watchlistLoading, setWatchlistLoading] = useState(false);
+  const [customIndicators, setCustomIndicators] = useState<CustomIndicator[]>([]);
+  const [indicatorModalOpen, setIndicatorModalOpen] = useState(false);
+  const [editingIndicator, setEditingIndicator] = useState<CustomIndicator | null>(null);
+  const chartSectionRef = useRef<HTMLDivElement | null>(null);
 
   // Synchronize when opening modal
   useEffect(() => {
     if (!isOpen) return;
+
+    void loadWorkspaceData();
 
     if (initialData) {
       setData(initialData);
@@ -125,11 +163,42 @@ export function FinanceModal({
   useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") {
+        if (indicatorModalOpen) {
+          setIndicatorModalOpen(false);
+          setEditingIndicator(null);
+          return;
+        }
+        onClose();
+      }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen, onClose]);
+  }, [isOpen, indicatorModalOpen, onClose]);
+
+  async function loadWorkspaceData(forceRefreshWatchlist = false) {
+    setWatchlistLoading(true);
+    try {
+      const alreadySeeded =
+        typeof window !== "undefined" &&
+        window.localStorage.getItem(WATCHLIST_SEED_STORAGE_KEY) === "1";
+      const [wl, inds] = await Promise.all([
+        fetchWatchlist(!alreadySeeded),
+        fetchCustomIndicators(),
+      ]);
+      setWatchlist(wl);
+      setCustomIndicators(inds);
+      if (typeof window !== "undefined" && !alreadySeeded) {
+        window.localStorage.setItem(WATCHLIST_SEED_STORAGE_KEY, "1");
+      }
+    } catch {
+      if (forceRefreshWatchlist) {
+        setError("Impossible d'actualiser le suivi d'actions.");
+      }
+    } finally {
+      setWatchlistLoading(false);
+    }
+  }
 
   async function loadDetails(searchTarget: string) {
     const q = searchTarget.trim();
@@ -144,6 +213,85 @@ export function FinanceModal({
     } finally {
       setLoading(false);
     }
+  }
+
+  async function handleSelectWatchlistStock(item: WatchlistItem) {
+    const target = item.yahoo_symbol || item.symbol;
+    setQuery(item.name || item.symbol);
+    setChartView("advanced");
+    await loadDetails(target);
+    window.requestAnimationFrame(() => {
+      chartSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }
+
+  async function handleAddWatchlistStock(symbolInput: string) {
+    const created = await addWatchlistItem(symbolInput);
+    setWatchlist(prev => {
+      const exists = prev.some(entry => entry.id === created.id);
+      return exists ? prev.map(entry => (entry.id === created.id ? created : entry)) : [...prev, created];
+    });
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(WATCHLIST_SEED_STORAGE_KEY, "1");
+    }
+  }
+
+  async function handleRemoveWatchlistStock(itemId: string) {
+    await deleteWatchlistItem(itemId);
+    setWatchlist(prev => prev.filter(entry => entry.id !== itemId));
+  }
+
+  async function handleSeedDefaults() {
+    setWatchlistLoading(true);
+    try {
+      const seeded = await seedDefaultWatchlist();
+      setWatchlist(seeded);
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(WATCHLIST_SEED_STORAGE_KEY, "1");
+      }
+    } finally {
+      setWatchlistLoading(false);
+    }
+  }
+
+  async function handleSaveCustomIndicator(payload: {
+    id?: string;
+    name: string;
+    formula: string;
+    pane: "overlay" | "oscillator";
+    series_type: "line" | "histogram" | "dots";
+    color: string;
+    guide_lines: CustomIndicatorGuideLine[];
+    enabled_by_default: boolean;
+  }) {
+    if (payload.id) {
+      const updated = await updateCustomIndicator(payload.id, {
+        name: payload.name,
+        formula: payload.formula,
+        pane: payload.pane,
+        series_type: payload.series_type,
+        color: payload.color,
+        guide_lines: payload.guide_lines,
+        enabled_by_default: payload.enabled_by_default,
+      });
+      setCustomIndicators(prev => prev.map(item => (item.id === updated.id ? updated : item)));
+    } else {
+      const created = await createCustomIndicator({
+        name: payload.name,
+        formula: payload.formula,
+        pane: payload.pane,
+        series_type: payload.series_type,
+        color: payload.color,
+        guide_lines: payload.guide_lines,
+        enabled_by_default: payload.enabled_by_default,
+      });
+      setCustomIndicators(prev => [...prev, created]);
+    }
+  }
+
+  async function handleDeleteCustomIndicator(indicatorId: string) {
+    await deleteCustomIndicator(indicatorId);
+    setCustomIndicators(prev => prev.filter(item => item.id !== indicatorId));
   }
 
   function handleSearchSubmit(e: React.FormEvent) {
@@ -274,12 +422,12 @@ export function FinanceModal({
           <div className="finance-modal-header-actions">
             <button
               type="button"
-              className="modal-close-btn"
+              className="finance-modal-close-btn"
               onClick={onClose}
-              aria-label="Fermer la modale"
+              aria-label="Fermer la fenêtre Marchés Financiers"
               title="Fermer (Échap)"
             >
-              <X size={18} />
+              <X size={20} />
             </button>
           </div>
         </div>
@@ -322,6 +470,17 @@ export function FinanceModal({
 
         {/* Modal Body */}
         <div className="finance-modal-body">
+          <FinanceWatchlistTable
+            items={watchlist}
+            loading={watchlistLoading}
+            selectedSymbol={data?.yahoo_symbol || data?.symbol || null}
+            onSelectStock={item => void handleSelectWatchlistStock(item)}
+            onAddStock={handleAddWatchlistStock}
+            onRemoveStock={handleRemoveWatchlistStock}
+            onRefresh={() => void loadWorkspaceData(true)}
+            onSeedDefaults={handleSeedDefaults}
+          />
+
           {error && (
             <div className="finance-modal-error" role="alert">
               <span>⚠️ {error}</span>
@@ -473,7 +632,7 @@ export function FinanceModal({
               </div>
 
               {/* Section 1: Courbe interactive du cours via EOD */}
-              <div className="finance-chart-section">
+              <div className="finance-chart-section" ref={chartSectionRef}>
                 <div className="finance-chart-header">
                   <div className="finance-chart-title">
                     <span className="chart-icon-wrap">
@@ -529,6 +688,12 @@ export function FinanceModal({
                   <FinanceTvChart
                     bars={filteredBars}
                     dark={typeof document !== "undefined" && document.documentElement.dataset.theme === "dark"}
+                    customIndicators={customIndicators}
+                    onOpenIndicatorEditor={ind => {
+                      setEditingIndicator(ind ?? null);
+                      setIndicatorModalOpen(true);
+                    }}
+                    onDeleteCustomIndicator={id => void handleDeleteCustomIndicator(id)}
                   />
                 )}
 
@@ -622,6 +787,30 @@ export function FinanceModal({
                   >
                     <Building2 size={15} />
                     <span>Profil Entreprise</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`finance-tab-btn ${activeTab === "moat" ? "active" : ""}`}
+                    onClick={() => setActiveTab("moat")}
+                  >
+                    <ShieldCheck size={15} />
+                    <span>MOAT</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`finance-tab-btn ${activeTab === "news" ? "active" : ""}`}
+                    onClick={() => setActiveTab("news")}
+                  >
+                    <Newspaper size={15} />
+                    <span>Actualités &amp; Veille</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`finance-tab-btn ${activeTab === "reports" ? "active" : ""}`}
+                    onClick={() => setActiveTab("reports")}
+                  >
+                    <FileText size={15} />
+                    <span>Rapports trimestriels</span>
                   </button>
                 </div>
 
@@ -978,6 +1167,40 @@ export function FinanceModal({
                     </div>
                   </div>
                 )}
+
+                {/* Tab 7: Analyse MOAT */}
+                {activeTab === "moat" && (
+                  <div className="finance-tab-content">
+                    <FinanceMoatPanel
+                      symbol={data.yahoo_symbol || data.symbol}
+                      companyName={data.long_name || data.short_name || data.symbol}
+                      financialStats={data.financial_stats}
+                      onInsertIntoChat={onInsertIntoChat}
+                    />
+                  </div>
+                )}
+
+                {/* Tab 8: Actualités & Veille IA */}
+                {activeTab === "news" && (
+                  <div className="finance-tab-content">
+                    <FinanceNewsPanel
+                      symbol={data.yahoo_symbol || data.symbol}
+                      companyName={data.long_name || data.short_name || data.symbol}
+                      onInsertIntoChat={onInsertIntoChat}
+                    />
+                  </div>
+                )}
+
+                {/* Tab 8: Rapports trimestriels PDF / Texte */}
+                {activeTab === "reports" && (
+                  <div className="finance-tab-content">
+                    <FinanceReportsPanel
+                      symbol={data.yahoo_symbol || data.symbol}
+                      companyName={data.long_name || data.short_name || data.symbol}
+                      onInsertIntoChat={onInsertIntoChat}
+                    />
+                  </div>
+                )}
               </div>
             </>
           )}
@@ -1039,6 +1262,17 @@ export function FinanceModal({
           </div>
         </div>
       </div>
+
+      <FinanceCustomIndicatorModal
+        isOpen={indicatorModalOpen}
+        onClose={() => {
+          setIndicatorModalOpen(false);
+          setEditingIndicator(null);
+        }}
+        bars={filteredBars}
+        initialIndicator={editingIndicator}
+        onSave={handleSaveCustomIndicator}
+      />
     </div>
   );
 }

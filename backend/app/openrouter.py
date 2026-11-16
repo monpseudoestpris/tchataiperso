@@ -386,6 +386,7 @@ def fetch_openrouter_image_models(
                     "pricing_text": pricing_text,
                     "supported_aspect_ratios": [str(r) for r in aspect_ratios],
                     "supported_resolutions": [str(r) for r in resolutions],
+                    "supports_image_editing": False,
                     "is_top": is_top,
                     "_rank": rank,
                 }

@@ -1,45 +1,78 @@
-# Relais — 15 novembre 2026
+# HANDOFF.md — État du projet
 
 ## 1. Project Overview
-clAIr : tchat IA francophone, apprentissage, recherche, médias, génération de pages HTML autonomes (`cLAIr Pages`) et orchestration d'agents (Hermes Agent / NousResearch). Frontend Next.js 16.4 / React 19 / TypeScript ; backend FastAPI / SQLAlchemy / PostgreSQL (SQLite en dev/tests).
+Application de chat IA multi-fournisseurs (`tchataiperso`) composée d'un backend **FastAPI / SQLAlchemy 2 / Alembic / SQLite** (`backend/`) et d'un frontend **Next.js 16 / React 19 / TypeScript** (`frontend/`), incluant un espace **Marchés Financiers** (`FinanceModal`) avec données boursières (EODHD / Yahoo Finance), analyse technique (`lightweight-charts`, `technicalindicators`), veille d'actualités et analyse de documents.
 
 ## 2. Current Objective
-Résolution du blocage Hermes Gateway / MCP lors de la création de brouillons cLAIr Pages (`Délai dépassé de 90 s côté serveur` / faux signalement de panne serveur par Hermes Agent) et support de l'injection directe de contenu HTML pré-généré sans régénération LLM — **terminé et vérifié**.
+Extension de la modale **Marchés Financiers** (`FinanceModal`) selon le plan validé dans `implementation_plan.md` + ajout de l'onglet **MOAT** :
+1. Tableau de suivi d'actions personnalisé avec variations **1J, 1S, 1M, 3M, 1A** et ouverture directe du graphique + indicateurs au clic sur une ligne.
+2. Créateur/éditeur d'indicateurs techniques personnalisés façon TradingView (formules sans `eval`, persistance par utilisateur).
+3. Recherche, synthèse IA Markdown et archivage en base des actualités par action.
+4. Importation de rapports trimestriels (PDF, DOCX, TXT/MD/CSV ou texte collé), extraction textuelle, analyse/résumé structuré IA et stockage en base.
+5. Onglet **MOAT** par action : signaux financiers objectifs (marges, ROE/ROA, croissance CA, levier), analyse IA (« Analyste en Investissement Stratégique » Buffett/Dalio/McKinsey) sur les 7 types de MOAT (`Cost Advantage`, `Switching Costs`, `Network Effects`, `Brand Power`, `Regulatory Moat`, `Intangible Assets`, `Efficient Scale`) avec facteurs favorables vs défavorables, cartographie PESTEL/Interne en deux tableaux Risques & FCS (priorité Élevée/Moyenne), analyse compétitive, valorisation et persistance en base.
+
+**Statut** : Implémentation terminée et vérifiée par build TypeScript/Next.js et suite de tests backend.
 
 ## 3. Completed Work
-- **Diagnostic de la cause racine** :
-  - Hermes Agent invoquait l'outil MCP `clair_create_page` exposé par cLAIr.
-  - L'outil imposait un `timeout_seconds=90.0` hardcodé dans `backend/app/tool_registry.py` alors que la génération de page HTML par LLM (`page_generator.py`) applique un délai `_TIMEOUT=180.0s`.
-  - Lors d'une génération dense (ex: tableau de 20 figures de style, 3 exemples par ligne) ou avec un modèle distant volumineux (OpenRouter / Hermes 405B), la génération dépassait 90s, déclenchant un `asyncio.TimeoutError` traduit en `"Délai d'exécution dépassé (90 s) pour clair_create_page"`. Hermes interprétait cette coupure comme un serveur en panne.
-  - De plus, Hermes avait déjà rédigé et calibré localement les fichiers HTML/PDF dans son conteneur (`/opt/data/`), mais `clair_create_page` ne permettait pas de sauvegarder directement du HTML pré-généré, forçant une 2nde génération LLM inutile.
-- **Support HTML direct et extension du timeout (`backend/app/tool_registry.py` & `backend/app/page_service.py`)** :
-  - `ClairCreatePageInput` : ajout des champs optionnels `html_content` (jusqu'à 500k caractères) et `layout_style` (ex: `a4_1p`), avec validation exigeant au moins `content` ou `html_content`.
-  - `tool_registry.py` : augmentation du timeout d'exécution de `clair_create_page` de 90s à 180s pour s'aligner avec le timeout LLM de `page_generator.py`.
-  - `page_service.py` : `create_draft_web_page` détecte `html_content`, extrait le titre si omis via `extract_title_from_html`, applique la sécurisation et le runtime A4 via `sanitize_and_enhance_html`, et enregistre immédiatement le brouillon en base en quelques millisecondes sans appel LLM.
-- **Consignes système Hermes (`backend/app/hermes_agent.py`)** :
-  - Mise à jour du prompt système transmis à Hermes l'invitant à passer `html_content` et `layout_style` directement lorsqu'il a déjà composé le HTML complet.
-- **Tests unitaires et d'intégration (`backend/tests/test_hermes.py`)** :
-  - Validation du nouveau timeout à 180s.
-  - Test d'enregistrement direct d'un brouillon A4 avec `html_content` via l'adaptateur MCP (`tools/call`), vérifiant l'insertion en base sans appel à `generate_page_html`.
+- **Modèles SQLAlchemy & Migrations Alembic** : Tables `finance_watchlist_items`, `finance_custom_indicators`, `finance_stock_news`, `finance_quarterly_reports`, `finance_stock_moats` ajoutées dans `backend/app/models.py`, migrations idempotentes `0020_add_finance_workspace.py` et `0021_add_finance_moat.py`, révisions enregistrées dans `backend/app/cli.py`.
+- **Services backend & API REST (`/api/finance/...`)** :
+  - `backend/app/finance_watchlist.py` : `compute_period_returns`, `resolve_watchlist_instrument`, `fetch_watchlist_quotes`, 6 actions par défaut (`DEFAULT_WATCHLIST_SEEDS`).
+  - `backend/app/finance_news.py` : collecte Yahoo Finance + `providers.search_web` et synthèse Markdown LLM (avec repli hors-ligne/démo).
+  - `backend/app/finance_reports.py` : `extract_report_text` (PDF via `pypdf`, DOCX via `python-docx`, TXT/MD/CSV, plafond `MAX_REPORT_EXTRACTED_CHARS = 120000`) et `analyze_quarterly_report` (résumé Markdown + `key_metrics` JSON).
+  - `backend/app/finance_moat.py` : `compute_moat_quantitative_signals`, `analyze_and_build_stock_moat` (croisant fondamentaux, derniers rapports trimestriels et actualités stockés pour le titre, avec repli quantitatif hors-ligne/démo).
+  - `backend/app/schemas.py`, `backend/app/serializers.py`, `backend/app/routers/finance.py` : endpoints CRUD watchlist, indicateurs personnalisés, recherche/historique news, import/téléchargement/suppression rapports trimestriels et analyse/historique MOAT (`/api/finance/moat*`).
+- **Moteur d'indicateurs & UI Frontend** :
+  - `frontend/lib/custom-indicators.ts` : parseur/évaluateur AST sécurisé (sans `eval` ni `new Function`), présets (`CUSTOM_INDICATOR_PRESETS`), validation de formule (`validateCustomFormula`).
+  - `frontend/components/finance-watchlist-table.tsx` : tableau triable 1J/1S/1M/3M/1A, ajout/suppression, clic ligne ouvrant la vue `"Analyse technique"`.
+  - `frontend/components/finance-custom-indicator-modal.tsx` : assistant rapide + mode formule libre avec aperçu et lignes guides.
+  - `frontend/components/finance-tv-chart.tsx` : rendu des indicateurs personnalisés en overlay ou panneaux oscillateurs séparés, bouton `+ Créer un indicateur`, édition et suppression.
+  - `frontend/components/finance-moat-panel.tsx`, `frontend/components/finance-news-panel.tsx` & `frontend/components/finance-reports-panel.tsx` : onglets « MOAT », « Actualités & Veille » et « Rapports trimestriels » intégrés dans `frontend/components/finance-modal.tsx`.
+  - `frontend/lib/api.ts` & `frontend/app/globals.css` : types, appels API et styles clair/sombre/responsive.
 
 ## 4. Key Decisions
-- **Sauvegarde immédiate si `html_content` est présent** : évite tout gaspillage de tokens et tout risque de timeout en réutilisant le HTML déjà calibré par Hermes. Le code passe tout de même par `sanitize_and_enhance_html` pour fermer les balises orphelines, sécuriser les liens (`target="_blank"`, `rel="noopener"`) et greffer le runtime A4 clAIr.
-- **Alignement du timeout à 180s** : si l'agent ne fournit que du markdown dans `content`, le délai d'attente du registry correspond désormais au plafond réseau httpx du générateur de page.
+- **Persistance SQLite par utilisateur** plutôt que `localStorage` seul, afin d'aligner l'espace Finance sur le reste de l'application ; seul le marqueur d'amorçage initial `clair_watchlist_seeded_v1` est conservé en `localStorage` pour ne pas réinjecter les valeurs par défaut si l'utilisateur vide volontairement son suivi.
+- **Parseur arithmétique/AST dédié** (`frontend/lib/custom-indicators.ts`) au lieu d'une évaluation dynamique JS pour éliminer tout risque d'exécution de code arbitraire sur les formules saisies.
+- **Conservation des modifications non commitées antérieures** (fonctionnalités Ideogram v2 dans `images.py`, `providers.py`, `openrouter.py`, `image-*.tsx`, etc.) laissées intactes dans l'arbre de travail.
 
 ## 5. Modified Files
-- `backend/app/tool_registry.py` (schéma `ClairCreatePageInput`, passage de `html_content`/`layout_style`, timeout à 180s)
-- `backend/app/page_service.py` (prise en charge directe de `html_content` via `sanitize_and_enhance_html`)
-- `backend/app/hermes_agent.py` (directive système pour renseigner `html_content`)
-- `backend/tests/test_hermes.py` (tests du timeout et de la création directe par `html_content`)
-- `HANDOFF.md`
+- Créés (backend) :
+  - `backend/migrations/versions/0020_add_finance_workspace.py`
+  - `backend/migrations/versions/0021_add_finance_moat.py`
+  - `backend/app/finance_watchlist.py`
+  - `backend/app/finance_news.py`
+  - `backend/app/finance_reports.py`
+  - `backend/app/finance_moat.py`
+- Modifiés (backend) :
+  - `backend/app/models.py`
+  - `backend/app/cli.py`
+  - `backend/app/schemas.py`
+  - `backend/app/serializers.py`
+  - `backend/app/routers/finance.py`
+  - `backend/tests/test_finance.py`
+- Créés (frontend) :
+  - `frontend/lib/custom-indicators.ts`
+  - `frontend/components/finance-watchlist-table.tsx`
+  - `frontend/components/finance-custom-indicator-modal.tsx`
+  - `frontend/components/finance-moat-panel.tsx`
+  - `frontend/components/finance-news-panel.tsx`
+  - `frontend/components/finance-reports-panel.tsx`
+- Modifiés (frontend) :
+  - `frontend/lib/api.ts`
+  - `frontend/components/finance-tv-chart.tsx`
+  - `frontend/components/finance-modal.tsx`
+  - `frontend/app/globals.css`
 
 ## 6. Verification
-- `npm --prefix frontend run build` : **passé (exit 0)** — Next.js 16.4 Turbopack & TypeScript sans erreur.
-- `PYTHONPATH=backend backend/.venv/bin/pytest backend/tests/test_hermes.py -v` : **15 passed, 1 warning (exit 0)**.
-- `PYTHONPATH=backend backend/.venv/bin/pytest backend/tests/test_pages.py -v` : **12 passed, 1 warning (exit 0)**.
+- `npm --prefix frontend run typecheck && npm --prefix frontend run build` : **RÉUSSI** (exécuté après la dernière édition frontend ; 0 erreur TypeScript, build Next.js 16.4.2 réussi).
+- `npx --prefix frontend eslint --config frontend/eslint.config.mjs --max-warnings 0 frontend/components/finance-moat-panel.tsx` : **RÉUSSI** (0 erreur, 0 warning sur le panneau MOAT).
+- `PYTHONPATH=backend backend/.venv/bin/pytest backend/tests/test_finance.py backend/tests/test_finance_statements.py backend/tests/test_migrations.py -v` : **RÉUSSI — 43 passed, 1 warning** (couvre `compute_period_returns`, `compute_moat_quantitative_signals`, extraction `.txt`/`.pdf`, CRUD complet `/api/finance/*` y compris `/moat*` et migration Alembic `0021_add_finance_moat`).
+- `npm --prefix frontend run lint` (global) : **ÉCHOUÉ** lors d'un passage antérieur en raison d'erreurs préexistantes dans le dépôt et de règles `react-hooks/set-state-in-effect` / `react/no-unescaped-entities` / `@typescript-eslint/no-unused-vars` dans certains autres fichiers.
+- Vérification visuelle interactive dans un navigateur réel : **non exécutée**.
 
 ## 7. Known Issues and Risks
-- Les fichiers générés lors de la session précédente d'Hermes (`fiche-figures-de-style-A4.*`) se trouvent dans le volume Docker `hermes_data` du conteneur `clair-hermes` sous `/opt/data/`. Ils peuvent être extraits sur l'hôte via `docker compose cp clair-hermes:/opt/data/... ./`.
+- Le calcul des indicateurs personnalisés avec périodes longues (ex. `sma(close, 200)`) dépend du nombre de barres chargées pour la durée sélectionnée (`timeframe` par défaut `1m` ; passer à `3m`/`1y`/`5y` dans l'interface pour obtenir plus d'historique).
+- Des règles ESLint strictes (`react-hooks/set-state-in-effect` introduite par React 19 ESLint plugin, ainsi que quelques imports/entités dans `finance-modal.tsx`) restent signalées au lint même si `tsc --noEmit` et `next build` passent sans erreur.
+- L'arbre Git contient également des modifications non commitées antérieures liées à Ideogram v2 (hors périmètre de cette tâche).
 
 ## 8. Next Action
-Informer l'utilisateur du diagnostic, lui donner la commande Docker pour récupérer immédiatement ses fichiers prêts, et lui expliquer les correctifs appliqués.
+Effectuer un test manuel en navigateur sur l'interface (`/`) dans la modale **Marchés Financiers** (ajout/suppression dans le suivi, clic sur une ligne, création d'un indicateur personnalisé, recherche d'actualités et import d'un PDF trimestriel) puis nettoyer si souhaité les avertissements ESLint restants avant commit.

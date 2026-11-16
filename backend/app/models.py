@@ -373,6 +373,92 @@ class WebPageVersion(Base):
     page: Mapped[WebPage] = relationship(back_populates="versions")
 
 
+class FinanceWatchlistItem(Base):
+    """Action suivie par un utilisateur dans son tableau de bord financier."""
+    __tablename__ = "finance_watchlist_items"
+    __table_args__ = (UniqueConstraint("user_id", "symbol", name="uq_finance_watchlist_user_symbol"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    symbol: Mapped[str] = mapped_column(String(32))
+    yahoo_symbol: Mapped[str] = mapped_column(String(32), default="")
+    eod_ticker: Mapped[str] = mapped_column(String(32), default="")
+    name: Mapped[str] = mapped_column(String(200))
+    exchange: Mapped[str] = mapped_column(String(80), default="")
+    currency: Mapped[str] = mapped_column(String(16), default="EUR")
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class FinanceCustomIndicator(Base):
+    """Indicateur technique personnalisé (formule type TradingView) propre à l'utilisateur."""
+    __tablename__ = "finance_custom_indicators"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(100))
+    formula: Mapped[str] = mapped_column(Text)
+    pane: Mapped[str] = mapped_column(String(20), default="overlay")  # overlay | oscillator
+    series_type: Mapped[str] = mapped_column(String(20), default="line")  # line | histogram | dots
+    color: Mapped[str] = mapped_column(String(30), default="#3b82f6")
+    guide_lines: Mapped[list] = mapped_column(JSON, default=list)
+    enabled_by_default: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
+class FinanceStockNews(Base):
+    """Recherche et synthèse d'actualités sauvegardée pour une action donnée."""
+    __tablename__ = "finance_stock_news"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    company_name: Mapped[str] = mapped_column(String(200), default="")
+    search_query: Mapped[str] = mapped_column(String(250), default="")
+    summary_markdown: Mapped[str] = mapped_column(Text, default="")
+    articles: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class FinanceQuarterlyReport(Base):
+    """Rapport trimestriel ou financier importé (PDF/texte), analysé, résumé et stocké."""
+    __tablename__ = "finance_quarterly_reports"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    company_name: Mapped[str] = mapped_column(String(200), default="")
+    title: Mapped[str] = mapped_column(String(255))
+    period_label: Mapped[str] = mapped_column(String(60), default="")
+    source_type: Mapped[str] = mapped_column(String(20), default="pdf")  # pdf | docx | text
+    filename: Mapped[str] = mapped_column(String(255), default="")
+    storage_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    extracted_text: Mapped[str] = mapped_column(Text, default="")
+    summary_markdown: Mapped[str] = mapped_column(Text, default="")
+    key_metrics: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class FinanceStockMoat(Base):
+    """Analyse d'avantage concurrentiel (MOAT) générée et sauvegardée par action."""
+    __tablename__ = "finance_stock_moats"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    company_name: Mapped[str] = mapped_column(String(200), default="")
+    moat_rating: Mapped[str] = mapped_column(String(32), default="narrow")  # wide | narrow | none
+    moat_score: Mapped[int] = mapped_column(Integer, default=50)
+    pillars: Mapped[list] = mapped_column(JSON, default=list)
+    strengths: Mapped[list] = mapped_column(JSON, default=list)
+    weaknesses: Mapped[list] = mapped_column(JSON, default=list)
+    quantitative_signals: Mapped[list] = mapped_column(JSON, default=list)
+    summary_markdown: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+
 
 
 

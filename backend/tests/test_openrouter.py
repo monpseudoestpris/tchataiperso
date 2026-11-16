@@ -3,6 +3,8 @@ from unittest.mock import MagicMock, patch
 from app.config import Settings
 from app.openrouter import (
     _CACHE,
+    _IMAGE_CACHE,
+    fetch_openrouter_image_models,
     fetch_openrouter_models,
     format_openrouter_model,
     is_chat_model,
@@ -141,3 +143,42 @@ def test_models_api_endpoint(tmp_path):
     assert "default_model" in payload
     assert isinstance(payload["models"], list)
     assert any(m["id"] == "demo-chat" for m in payload["models"])
+
+
+def test_fetch_openrouter_image_models_marks_editing_support():
+    _IMAGE_CACHE["timestamp"] = 0.0
+    _IMAGE_CACHE["models"] = []
+
+    def fake_get(self, url, headers=None):
+        resp = MagicMock()
+        if url.endswith("/images/models"):
+            resp.status_code = 200
+            resp.json.return_value = {
+                "data": [
+                    {
+                        "id": "google/gemini-3.1-flash-image",
+                        "name": "Nano Banana 2",
+                        "supported_parameters": {"aspect_ratio": {"values": ["1:1", "16:9"]}},
+                    },
+                    {
+                        "id": "custom/image-only-model",
+                        "name": "Custom Text2Img",
+                        "supported_parameters": {"aspect_ratio": {"values": ["1:1"]}},
+                    },
+                    {
+                        "id": "custom/editor-by-param",
+                        "name": "Custom Editor",
+                        "supported_parameters": {"input_references": {"max": 4}},
+                    },
+                ]
+            }
+        else:
+            resp.status_code = 404
+        return resp
+
+    with patch("httpx.Client.get", new=fake_get):
+        models = fetch_openrouter_image_models(force_refresh=True)
+    by_id = {m["id"]: m for m in models}
+    assert by_id["google/gemini-3.1-flash-image"]["supports_image_editing"] is False
+    assert by_id["custom/image-only-model"]["supports_image_editing"] is False
+    assert by_id["custom/editor-by-param"]["supports_image_editing"] is False

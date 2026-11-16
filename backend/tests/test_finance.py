@@ -739,5 +739,282 @@ class TestFinanceApiMocked(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(data["financial_stats"]["analysts"]["recommendation"], "BUY")
 
 
+class FinanceWorkspaceTests(unittest.TestCase):
+    def test_compute_period_returns_horizons(self):
+        import datetime
+        from app.finance_watchlist import compute_period_returns
+
+        end = datetime.date(2026, 11, 13)
+        bars = []
+        # 265 trading days going back ~375 calendar days so 1A has an exact 365-day anchor
+        for offset_days in range(375, -1, -1):
+            d = end - datetime.timedelta(days=offset_days)
+            if d.weekday() >= 5:
+                continue
+            price = 100.0
+            if offset_days <= 1:
+                price = 110.0 if offset_days == 0 else 100.0
+            bars.append({"date": d.isoformat(), "close": price})
+
+        returns = compute_period_returns(bars, current_price=110.0)
+        self.assertEqual(returns["price"], 110.0)
+        self.assertEqual(returns["change_1d_pct"], 10.0)
+        self.assertEqual(returns["change_1w_pct"], 10.0)
+        self.assertEqual(returns["change_1m_pct"], 10.0)
+        self.assertEqual(returns["change_3m_pct"], 10.0)
+        self.assertEqual(returns["change_1y_pct"], 10.0)
+
+    def test_extract_report_text_txt_and_pdf(self):
+        import io
+        from pypdf import PdfWriter
+        from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
+        from app.finance_reports import extract_report_text
+
+        source_type, txt = extract_report_text("CA T3 2026 : 6,8 MdEUR (+3,4%)".encode("utf-8"), "rapport_t3.txt")
+        self.assertEqual(source_type, "text")
+        self.assertIn("6,8 MdEUR", txt)
+
+        writer = PdfWriter()
+        page = writer.add_blank_page(width=400, height=400)
+        font_dict = DictionaryObject({
+            NameObject("/Type"): NameObject("/Font"),
+            NameObject("/Subtype"): NameObject("/Type1"),
+            NameObject("/BaseFont"): NameObject("/Helvetica"),
+        })
+        resources = DictionaryObject({
+            NameObject("/Font"): DictionaryObject({NameObject("/F1"): font_dict})
+        })
+        page[NameObject("/Resources")] = resources
+        stream = DecodedStreamObject()
+        stream.set_data(b"BT /F1 12 Tf 40 350 Td (Resultat net T3 2026 en hausse) Tj ET")
+        page[NameObject("/Contents")] = writer._add_object(stream)
+        buf = io.BytesIO()
+        writer.write(buf)
+
+        pdf_type, pdf_txt = extract_report_text(buf.getvalue(), "rapport_t3.pdf")
+        self.assertEqual(pdf_type, "pdf")
+        self.assertIn("Resultat net T3 2026", pdf_txt)
+
+    def test_finance_workspace_endpoints_crud(self):
+        from tests.test_api import authenticated_client
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings = Settings(
+                _env_file=None,
+                app_data_dir=Path(tmpdir),
+                demo_mode=False,
+                eod_historical_data_key="demo",
+                openrouter_api_key="",
+                brave_api_key="",
+                duckduckgo_instant_answers_enabled=False,
+            )
+            with authenticated_client(settings) as client:
+                # 1. Watchlist: empty -> seed defaults -> add -> list -> delete
+                with patch("app.finance_watchlist.fetch_yahoo_chart", new=AsyncMock(return_value=None)), \
+                     patch("app.finance_watchlist.fetch_eodhd_realtime", new=AsyncMock(return_value={"close": 180.0, "change_p": 1.25})), \
+                     patch("app.finance_watchlist.fetch_eodhd_historical_eod", new=AsyncMock(return_value=[
+                         {"date": "2026-11-12", "close": 177.78},
+                         {"date": "2026-11-13", "close": 180.0},
+                     ])):
+                    seed_res = client.post("/api/finance/watchlist/seed-defaults")
+                    self.assertEqual(seed_res.status_code, 201)
+                    seeded = seed_res.json()["items"]
+                    self.assertGreaterEqual(len(seeded), 6)
+                    self.assertEqual(seeded[0]["price"], 180.0)
+                    self.assertEqual(seeded[0]["change_1d_pct"], 1.25)
+
+                    with patch("app.finance_watchlist.search_eodhd_ticker", new=AsyncMock(return_value={
+                        "Code": "MC", "Exchange": "PA", "Name": "LVMH Moet Hennessy", "Currency": "EUR"
+                    })), patch("app.finance_watchlist.search_yahoo_ticker", new=AsyncMock(return_value={"symbol": "MC.PA"})):
+                        add_res = client.post("/api/finance/watchlist", json={"query": "LVMH"})
+                        self.assertEqual(add_res.status_code, 201)
+                        mc_item = add_res.json()
+                        self.assertEqual(mc_item["symbol"], "MC.PA")
+
+                    list_res = client.get("/api/finance/watchlist?include_quotes=false")
+                    self.assertEqual(list_res.status_code, 200)
+                    first_id = list_res.json()["items"][0]["id"]
+                    del_res = client.delete(f"/api/finance/watchlist/{first_id}")
+                    self.assertEqual(del_res.status_code, 204)
+
+                # 2. Custom Indicators CRUD
+                create_ind = client.post("/api/finance/indicators", json={
+                    "name": "EMA Rapide 12",
+                    "formula": "ema(close, 12)",
+                    "pane": "overlay",
+                    "series_type": "line",
+                    "color": "#f59e0b",
+                    "guide_lines": [{"value": 0, "color": "#64748b", "label": "Zero"}],
+                    "enabled_by_default": True,
+                })
+                self.assertEqual(create_ind.status_code, 201)
+                ind_id = create_ind.json()["id"]
+                self.assertEqual(create_ind.json()["formula"], "ema(close, 12)")
+
+                patch_ind = client.patch(f"/api/finance/indicators/{ind_id}", json={
+                    "name": "RSI Lent 21",
+                    "formula": "rsi(close, 21)",
+                    "pane": "oscillator",
+                })
+                self.assertEqual(patch_ind.status_code, 200)
+                self.assertEqual(patch_ind.json()["pane"], "oscillator")
+
+                list_ind = client.get("/api/finance/indicators")
+                self.assertEqual(list_ind.status_code, 200)
+                self.assertEqual(len(list_ind.json()["items"]), 1)
+
+                self.assertEqual(client.delete(f"/api/finance/indicators/{ind_id}").status_code, 204)
+
+                # 3. Stock News search + storage
+                mock_articles = [
+                    {
+                        "title": "Air Liquide signe un contrat hydrogène majeur",
+                        "source": "Reuters",
+                        "url": "https://example.com/news-ai",
+                        "published_at": "2026-11-12T09:00:00Z",
+                        "snippet": "Contrat industriel de 15 ans.",
+                    }
+                ]
+                with patch("app.finance_news.fetch_yahoo_symbol_news", new=AsyncMock(return_value=mock_articles)):
+                    news_res = client.post("/api/finance/news/search", json={
+                        "symbol": "AI.PA",
+                        "company_name": "Air Liquide",
+                        "focus_query": "hydrogène",
+                    })
+                    self.assertEqual(news_res.status_code, 201)
+                    news_entry = news_res.json()
+                    self.assertEqual(news_entry["symbol"], "AI.PA")
+                    self.assertEqual(len(news_entry["articles"]), 1)
+                    self.assertIn("Air Liquide", news_entry["summary_markdown"])
+
+                listed_news = client.get("/api/finance/news?symbol=AI.PA")
+                self.assertEqual(listed_news.status_code, 200)
+                self.assertEqual(len(listed_news.json()["items"]), 1)
+                self.assertEqual(client.delete(f"/api/finance/news/{news_entry['id']}").status_code, 204)
+
+                # 4. Quarterly reports: pasted text + uploaded .txt file + download + delete
+                rep_text_res = client.post(
+                    "/api/finance/reports",
+                    data={
+                        "symbol": "AI.PA",
+                        "company_name": "Air Liquide",
+                        "title": "Résultats T3 2026",
+                        "period_label": "Q3 2026",
+                        "raw_text": "Chiffre d'affaires T3 2026 : 6,85 milliards EUR, marge opérationnelle 19,4%.",
+                    },
+                )
+                self.assertEqual(rep_text_res.status_code, 201)
+                rep1 = rep_text_res.json()
+                self.assertEqual(rep1["period_label"], "Q3 2026")
+                self.assertIn("Air Liquide", rep1["summary_markdown"])
+
+                rep_file_res = client.post(
+                    "/api/finance/reports",
+                    data={"symbol": "AI.PA", "company_name": "Air Liquide", "period_label": "FY 2025"},
+                    files={"file": ("rapport_2025.txt", b"Revenus annuels 27.1 MdEUR, FCF record.", "text/plain")},
+                )
+                self.assertEqual(rep_file_res.status_code, 201)
+                rep2 = rep_file_res.json()
+
+                dl_res = client.get(f"/api/finance/reports/{rep2['id']}/file")
+                self.assertEqual(dl_res.status_code, 200)
+                self.assertIn(b"Revenus annuels", dl_res.content)
+
+                list_rep = client.get("/api/finance/reports?symbol=AI.PA")
+                self.assertEqual(list_rep.status_code, 200)
+                self.assertEqual(len(list_rep.json()["items"]), 2)
+
+                detail_rep = client.get(f"/api/finance/reports/{rep1['id']}")
+                self.assertEqual(detail_rep.status_code, 200)
+                self.assertIn("6,85 milliards", detail_rep.json()["extracted_text"])
+
+                self.assertEqual(client.delete(f"/api/finance/reports/{rep1['id']}").status_code, 204)
+                self.assertEqual(client.delete(f"/api/finance/reports/{rep2['id']}").status_code, 204)
+
+                # 5. MOAT analysis CRUD + quantitative fallback
+                moat_res = client.post("/api/finance/moat/analyze", json={
+                    "symbol": "AI.PA",
+                    "company_name": "Air Liquide",
+                    "custom_focus": "contrats long terme gaz industriels",
+                    "financial_stats": {
+                        "profitability": {
+                            "gross_margin": "62.5%",
+                            "operating_margin": "19.8%",
+                            "roe": "17.4%",
+                            "roa": "8.5%",
+                            "revenue_growth": "4.2%",
+                        },
+                        "balance_sheet": {"debt_to_equity": "48.0%"},
+                        "profile": {
+                            "sector": "Basic Materials",
+                            "industry": "Specialty Chemicals",
+                            "summary": "Réseaux de gazoducs industriels et contrats long terme.",
+                        },
+                    },
+                })
+                self.assertEqual(moat_res.status_code, 201)
+                moat_item = moat_res.json()
+                self.assertEqual(moat_item["symbol"], "AI.PA")
+                self.assertIn(moat_item["moat_rating"], {"wide", "narrow", "none"})
+                self.assertEqual(len(moat_item["pillars"]), 7)
+                self.assertGreaterEqual(len(moat_item["strengths"]), 1)
+                self.assertGreaterEqual(len(moat_item["weaknesses"]), 1)
+                self.assertGreaterEqual(len(moat_item["quantitative_signals"]), 5)
+                self.assertIn("Tableau 1 : Cartographie des Facteurs de Risque", moat_item["summary_markdown"])
+                self.assertIn("Tableau 2 : Cartographie des Facteurs Clés de Succès", moat_item["summary_markdown"])
+
+                listed_moat = client.get("/api/finance/moat?symbol=AI.PA")
+                self.assertEqual(listed_moat.status_code, 200)
+                self.assertEqual(len(listed_moat.json()["items"]), 1)
+                self.assertEqual(client.delete(f"/api/finance/moat/{moat_item['id']}").status_code, 204)
+
+    def test_compute_moat_quantitative_signals(self):
+        from app.finance_moat import compute_moat_quantitative_signals
+
+        signals = compute_moat_quantitative_signals({
+            "profitability": {
+                "gross_margin": "72.0%",
+                "operating_margin": "31.5%",
+                "roe": "28.0%",
+                "revenue_growth": "-3.5%",
+            },
+            "balance_sheet": {"debt_to_equity": "180%"},
+        })
+        by_label = {s["label"]: s for s in signals}
+        self.assertEqual(by_label["Marge brute"]["verdict"], "favorable")
+        self.assertEqual(by_label["Marge opérationnelle"]["verdict"], "favorable")
+        self.assertEqual(by_label["ROE (Rentabilité capitaux)"]["verdict"], "favorable")
+        self.assertEqual(by_label["Croissance du CA"]["verdict"], "weak")
+        self.assertEqual(by_label["Dette / Capitaux propres"]["verdict"], "weak")
+
+    def test_alembic_upgrade_head_creates_finance_workspace_tables(self):
+        import os
+        from sqlalchemy import create_engine, inspect
+        from app import cli
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "alembic_finance.db"
+            db_url = f"sqlite:///{db_path}"
+            settings = Settings(
+                _env_file=None,
+                app_data_dir=Path(tmpdir),
+                database_url=db_url,
+            )
+            with patch.dict(os.environ, {"DATABASE_URL": db_url}):
+                cli.upgrade(settings, "head")
+            engine = create_engine(settings.db_url)
+            try:
+                tables = set(inspect(engine).get_table_names())
+            finally:
+                engine.dispose()
+            self.assertTrue({
+                "finance_watchlist_items",
+                "finance_custom_indicators",
+                "finance_stock_news",
+                "finance_quarterly_reports",
+                "finance_stock_moats",
+            }.issubset(tables))
+
+
 if __name__ == "__main__":
     unittest.main()

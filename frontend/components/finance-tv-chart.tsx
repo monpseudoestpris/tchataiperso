@@ -10,9 +10,11 @@ import {
   type Time,
   type UTCTimestamp,
 } from "lightweight-charts";
-import { useEffect, useRef, useState } from "react";
+import { Pencil, Plus, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
-import type { EodBar } from "@/lib/api";
+import type { CustomIndicator, EodBar } from "@/lib/api";
+import { evaluateCustomIndicator } from "@/lib/custom-indicators";
 import {
   adx,
   atr,
@@ -68,14 +70,66 @@ function toTime(date: string): Time {
 }
 
 function pick(times: Time[], values: Num[]) {
-  return values.flatMap((v, i) => (v == null ? [] : [{ time: times[i], value: v }]));
+  return values.flatMap((v, i) => (v == null || !Number.isFinite(v) ? [] : [{ time: times[i], value: v }]));
 }
 
-/** Graphique en chandeliers (TradingView lightweight-charts) avec indicateurs techniques. */
-export function FinanceTvChart({ bars, dark }: { bars: EodBar[]; dark: boolean }) {
+type FinanceTvChartProps = {
+  bars: EodBar[];
+  dark: boolean;
+  customIndicators?: CustomIndicator[];
+  onOpenIndicatorEditor?: (indicator?: CustomIndicator | null) => void;
+  onDeleteCustomIndicator?: (id: string) => void;
+};
+
+/** Graphique en chandeliers (TradingView lightweight-charts) avec indicateurs natifs et personnalisés. */
+export function FinanceTvChart({
+  bars,
+  dark,
+  customIndicators = [],
+  onOpenIndicatorEditor,
+  onDeleteCustomIndicator,
+}: FinanceTvChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const [active, setActive] = useState<Set<IndicatorKey>>(new Set(["sma20", "volume", "rsi"]));
+  const [activeCustom, setActiveCustom] = useState<Set<string>>(new Set());
+  const seenCustomIdsRef = useRef<Set<string>>(new Set());
+
+  // Active automatiquement tout nouvel indicateur personnalisé ayant enabled_by_default
+  useEffect(() => {
+    const newIds: string[] = [];
+    for (const ind of customIndicators) {
+      if (!seenCustomIdsRef.current.has(ind.id)) {
+        seenCustomIdsRef.current.add(ind.id);
+        if (ind.enabled_by_default) {
+          newIds.push(ind.id);
+        }
+      }
+    }
+    if (newIds.length > 0) {
+      setActiveCustom(prev => {
+        const next = new Set(prev);
+        for (const id of newIds) next.add(id);
+        return next;
+      });
+    }
+  }, [customIndicators]);
+
+  const customResults = useMemo(() => {
+    const rows = bars.filter(
+      b => b.close != null && b.open != null && b.high != null && b.low != null,
+    );
+    const out: Record<string, { values?: Num[]; error?: string }> = {};
+    for (const ind of customIndicators) {
+      if (!activeCustom.has(ind.id)) continue;
+      try {
+        out[ind.id] = { values: evaluateCustomIndicator(ind.formula, rows) };
+      } catch (err) {
+        out[ind.id] = { error: err instanceof Error ? err.message : "Erreur de formule." };
+      }
+    }
+    return out;
+  }, [bars, customIndicators, activeCustom]);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -131,6 +185,61 @@ export function FinanceTvChart({ bars, dark }: { bars: EodBar[]; dark: boolean }
       return s;
     };
 
+    const plotCustomSeries = (ind: CustomIndicator, values: Num[], paneIndex: number) => {
+      const pts = pick(times, values);
+      if (pts.length === 0) return;
+
+      let primarySeries: ReturnType<typeof addLine> | null = null;
+      if (ind.series_type === "histogram") {
+        const hist = chart.addSeries(
+          HistogramSeries,
+          { color: ind.color, priceLineVisible: false, lastValueVisible: paneIndex > 0, title: ind.name },
+          paneIndex,
+        );
+        hist.setData(
+          pts.map(p => ({
+            time: p.time,
+            value: p.value,
+            color: ind.pane === "oscillator" ? (p.value >= 0 ? `${ind.color}cc` : "#f43f5ecc") : ind.color,
+          })),
+        );
+        primarySeries = hist as unknown as ReturnType<typeof addLine>;
+      } else if (ind.series_type === "dots") {
+        const dots = chart.addSeries(
+          LineSeries,
+          {
+            color: ind.color,
+            lineVisible: false,
+            pointMarkersVisible: true,
+            pointMarkersRadius: 2,
+            priceLineVisible: false,
+            lastValueVisible: paneIndex > 0,
+            title: ind.name,
+          },
+          paneIndex,
+        );
+        dots.setData(pts);
+        primarySeries = dots;
+      } else {
+        primarySeries = addLine(values, ind.color, paneIndex, ind.name);
+      }
+
+      if (primarySeries && Array.isArray(ind.guide_lines)) {
+        for (const guide of ind.guide_lines) {
+          if (typeof guide?.value === "number" && Number.isFinite(guide.value)) {
+            primarySeries.createPriceLine({
+              price: guide.value,
+              color: guide.color || "#94a3b8",
+              lineWidth: 1,
+              lineStyle: 2,
+              axisLabelVisible: false,
+              title: "",
+            });
+          }
+        }
+      }
+    };
+
     if (active.has("sma20")) addLine(sma(closes, 20), "#3b82f6");
     if (active.has("sma50")) addLine(sma(closes, 50), "#f59e0b");
     if (active.has("sma200")) addLine(sma(closes, 200), "#ef4444");
@@ -172,12 +281,21 @@ export function FinanceTvChart({ bars, dark }: { bars: EodBar[]; dark: boolean }
       );
     }
 
+    // Indicateurs personnalisés en superposition (Overlay) sur le graphique principal (pane 0)
+    for (const ind of customIndicators) {
+      if (ind.pane !== "overlay" || !activeCustom.has(ind.id)) continue;
+      const res = customResults[ind.id];
+      if (res?.values) {
+        plotCustomSeries(ind, res.values, 0);
+      }
+    }
+
     let pane = 1;
     const guides = (line: ReturnType<typeof addLine>, levels: [number, string][]) =>
       levels.forEach(([price, color]) =>
         line.createPriceLine({ price, color, lineWidth: 1, lineStyle: 2, axisLabelVisible: false, title: "" }),
       );
-    // Un panneau dédié par oscillateur actif, dans l'ordre de la barre d'outils.
+    // Un panneau dédié par oscillateur natif actif, dans l'ordre de la barre d'outils.
     for (const key of OSCILLATOR_KEYS) {
       if (!active.has(key)) continue;
       if (key === "rsi") {
@@ -215,12 +333,22 @@ export function FinanceTvChart({ bars, dark }: { bars: EodBar[]; dark: boolean }
       pane++;
     }
 
+    // Panneau dédié pour chaque oscillateur personnalisé actif
+    for (const ind of customIndicators) {
+      if (ind.pane !== "oscillator" || !activeCustom.has(ind.id)) continue;
+      const res = customResults[ind.id];
+      if (res?.values) {
+        plotCustomSeries(ind, res.values, pane);
+        pane++;
+      }
+    }
+
     chart.timeScale().fitContent();
     return () => {
       chart.remove();
       chartRef.current = null;
     };
-  }, [bars, active, dark]);
+  }, [bars, active, activeCustom, customIndicators, customResults, dark]);
 
   function toggle(key: IndicatorKey) {
     setActive(prev => {
@@ -231,27 +359,140 @@ export function FinanceTvChart({ bars, dark }: { bars: EodBar[]; dark: boolean }
     });
   }
 
-  const panes = 1 + OSCILLATOR_KEYS.filter(k => active.has(k)).length;
+  function toggleCustom(id: string) {
+    setActiveCustom(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  const customOverlays = customIndicators.filter(ind => ind.pane === "overlay");
+  const customOscillators = customIndicators.filter(ind => ind.pane === "oscillator");
+  const activeCustomOscCount = customOscillators.filter(
+    ind => activeCustom.has(ind.id) && customResults[ind.id]?.values,
+  ).length;
+  const panes = 1 + OSCILLATOR_KEYS.filter(k => active.has(k)).length + activeCustomOscCount;
+  const customFormulaErrors = customIndicators
+    .filter(ind => activeCustom.has(ind.id) && customResults[ind.id]?.error)
+    .map(ind => `${ind.name} : ${customResults[ind.id]?.error}`);
+
   return (
     <div className="finance-tv-wrap">
-      {[
-        ["Tendance & prix", OVERLAYS],
-        ["Oscillateurs", OSCILLATORS],
-      ].map(([title, list]) => (
-        <div key={title as string} className="finance-tv-toolbar">
-          <small>{title as string}</small>
-          {(list as typeof OVERLAYS).map(i => (
+      <div className="finance-tv-toolbar">
+        <small>Tendance & prix</small>
+        {OVERLAYS.map(i => (
+          <button
+            key={i.key}
+            type="button"
+            className={`finance-tf-btn ${active.has(i.key) ? "active" : ""}`}
+            onClick={() => toggle(i.key)}
+          >
+            {i.label}
+          </button>
+        ))}
+        {customOverlays.map(ind => (
+          <span key={ind.id} className={`finance-custom-ind-pill ${activeCustom.has(ind.id) ? "active" : ""}`}>
             <button
-              key={i.key}
               type="button"
-              className={`finance-tf-btn ${active.has(i.key) ? "active" : ""}`}
-              onClick={() => toggle(i.key)}
+              className="finance-custom-ind-toggle"
+              onClick={() => toggleCustom(ind.id)}
+              title={`Formule : ${ind.formula}`}
             >
-              {i.label}
+              <span className="finance-custom-dot" style={{ background: ind.color }} />
+              <span>{ind.name}</span>
             </button>
-          ))}
-        </div>
-      ))}
+            {onOpenIndicatorEditor && (
+              <button
+                type="button"
+                className="finance-custom-ind-action"
+                onClick={() => onOpenIndicatorEditor(ind)}
+                title="Modifier cet indicateur"
+                aria-label={`Modifier ${ind.name}`}
+              >
+                <Pencil size={10} />
+              </button>
+            )}
+            {onDeleteCustomIndicator && (
+              <button
+                type="button"
+                className="finance-custom-ind-action is-del"
+                onClick={() => onDeleteCustomIndicator(ind.id)}
+                title="Supprimer cet indicateur"
+                aria-label={`Supprimer ${ind.name}`}
+              >
+                <Trash2 size={10} />
+              </button>
+            )}
+          </span>
+        ))}
+        {onOpenIndicatorEditor && (
+          <button
+            type="button"
+            className="finance-custom-add-btn"
+            onClick={() => onOpenIndicatorEditor(null)}
+            title="Créer un indicateur personnalisé façon TradingView"
+          >
+            <Plus size={12} />
+            <span>Indicateur perso</span>
+          </button>
+        )}
+      </div>
+
+      <div className="finance-tv-toolbar">
+        <small>Oscillateurs</small>
+        {OSCILLATORS.map(i => (
+          <button
+            key={i.key}
+            type="button"
+            className={`finance-tf-btn ${active.has(i.key) ? "active" : ""}`}
+            onClick={() => toggle(i.key)}
+          >
+            {i.label}
+          </button>
+        ))}
+        {customOscillators.map(ind => (
+          <span key={ind.id} className={`finance-custom-ind-pill ${activeCustom.has(ind.id) ? "active" : ""}`}>
+            <button
+              type="button"
+              className="finance-custom-ind-toggle"
+              onClick={() => toggleCustom(ind.id)}
+              title={`Formule : ${ind.formula}`}
+            >
+              <span className="finance-custom-dot" style={{ background: ind.color }} />
+              <span>{ind.name}</span>
+            </button>
+            {onOpenIndicatorEditor && (
+              <button
+                type="button"
+                className="finance-custom-ind-action"
+                onClick={() => onOpenIndicatorEditor(ind)}
+                title="Modifier cet indicateur"
+                aria-label={`Modifier ${ind.name}`}
+              >
+                <Pencil size={10} />
+              </button>
+            )}
+            {onDeleteCustomIndicator && (
+              <button
+                type="button"
+                className="finance-custom-ind-action is-del"
+                onClick={() => onDeleteCustomIndicator(ind.id)}
+                title="Supprimer cet indicateur"
+                aria-label={`Supprimer ${ind.name}`}
+              >
+                <Trash2 size={10} />
+              </button>
+            )}
+          </span>
+        ))}
+      </div>
+
+      {customFormulaErrors.length > 0 && (
+        <div className="finance-watchlist-error">⚠️ {customFormulaErrors.join(" · ")}</div>
+      )}
+
       {bars.length < 2 ? (
         <div className="finance-chart-empty">Pas assez de données pour cette durée.</div>
       ) : (

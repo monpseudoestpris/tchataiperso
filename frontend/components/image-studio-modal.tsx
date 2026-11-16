@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type PointerEvent as ReactPointerEvent } from "react";
 import {
-  Ban, Check, CircleAlert, Coins, Copy, Download, Expand, ExternalLink, ImagePlus,
-  LoaderCircle, Minimize2, RefreshCw, RotateCcw, SlidersHorizontal, Sparkles, Star, Trash2, WandSparkles, X,
+  Ban, Brush, Check, CircleAlert, Coins, Copy, Download, Eraser, Expand, ExternalLink, Eye, Grid2x2, ImagePlus,
+  Layers, LoaderCircle, Minimize2, Paintbrush, RefreshCw, Replace, RotateCcw, Scissors, SlidersHorizontal, Sparkles, Star, Trash2, Type, Undo2, Upload, WandSparkles, X,
 } from "lucide-react";
-import { api, errorMessage, type Config, type GeneratedImage, type ImageModel } from "@/lib/api";
+import { api, errorMessage, type Config, type GeneratedImage, type ImageModel, type LayerizeTextBlock } from "@/lib/api";
 import { ImageModelModal } from "@/components/image-model-modal";
 import { useModelFavorites } from "@/lib/model-favorites";
 
@@ -251,6 +251,191 @@ function formatDate(value: string) {
   }).format(new Date(value));
 }
 
+type SourceImage = {
+  kind: "upload" | "gallery";
+  name: string;
+  previewUrl: string;
+  dataUrl?: string;
+  sourceImageId?: string;
+  sizeBytes?: number;
+  width?: number;
+  height?: number;
+};
+
+type EditMode =
+  | "remix"
+  | "inpaint"
+  | "remove_background"
+  | "replace_background"
+  | "remove_object"
+  | "layerize";
+
+function isMaskEditMode(mode: EditMode): boolean {
+  return mode === "inpaint" || mode === "remove_object";
+}
+
+function isPromptOptionalEditMode(mode: EditMode): boolean {
+  return mode === "remove_background" || mode === "remove_object" || mode === "layerize";
+}
+
+function isBinaryPromptlessEditMode(mode: EditMode): boolean {
+  return mode === "remove_background" || mode === "remove_object";
+}
+
+const EDIT_MODE_COPY: Record<
+  EditMode,
+  {
+    label: string;
+    title: string;
+    promptLabel: string;
+    promptPlaceholder: string;
+    buttonLabel: string;
+    busyLabel: string;
+  }
+> = {
+  remix: {
+    label: "Retouche (Remix)",
+    title: "Modifier globalement l’image existante",
+    promptLabel: "Modifications à apporter à l’image",
+    promptPlaceholder:
+      "Décrivez les modifications souhaitées : changer les couleurs, ajouter un objet, modifier le style ou l’éclairage…",
+    buttonLabel: "Modifier l’image",
+    busyLabel: "Modification",
+  },
+  inpaint: {
+    label: "Inpaint (Pinceau)",
+    title: "Remplacer ou régénérer une zone peinte au pinceau",
+    promptLabel: "Contenu souhaité dans la zone peinte",
+    promptPlaceholder:
+      "Décrivez ce qui doit remplacer la zone peinte au pinceau (ex : des lunettes de soleil dorées, un bouquet de fleurs rouges…)",
+    buttonLabel: "Appliquer l’inpaint",
+    busyLabel: "Inpainting",
+  },
+  remove_background: {
+    label: "Détourer le fond",
+    title: "Ideogram 1.0 — Supprimer l’arrière-plan pour obtenir un PNG transparent",
+    promptLabel: "",
+    promptPlaceholder: "",
+    buttonLabel: "Détourer l’arrière-plan",
+    busyLabel: "Détourage",
+  },
+  replace_background: {
+    label: "Remplacer le fond",
+    title: "Ideogram 3.0 — Conserver le sujet et créer un nouvel arrière-plan",
+    promptLabel: "Description du nouvel arrière-plan",
+    promptPlaceholder:
+      "Décrivez le nouvel arrière-plan souhaité derrière le sujet (ex : un studio minimaliste, une plage au coucher du soleil…)",
+    buttonLabel: "Remplacer l’arrière-plan",
+    busyLabel: "Remplacement du fond",
+  },
+  remove_object: {
+    label: "Effacer un objet",
+    title: "Ideogram 1.0 — Supprimer proprement l’objet peint au pinceau",
+    promptLabel: "",
+    promptPlaceholder: "",
+    buttonLabel: "Effacer l’objet masqué",
+    busyLabel: "Suppression d’objet",
+  },
+  layerize: {
+    label: "Calques texte",
+    title: "Ideogram 3.0 Layerize — Extraire le fond nettoyé et les blocs de texte structurés",
+    promptLabel: "Contexte de l’image pour Layerize (optionnel)",
+    promptPlaceholder:
+      "Optionnel : décrivez brièvement l’affiche ou l’image pour aider la détection des calques de texte…",
+    buttonLabel: "Extraire les calques texte",
+    busyLabel: "Analyse Layerize",
+  },
+};
+
+type MaskTool = "brush" | "erase";
+
+type MaskPoint = { x: number; y: number };
+
+type MaskStroke = {
+  mode: MaskTool;
+  sizeRatio: number;
+  points: MaskPoint[];
+};
+
+const MAX_SOURCE_IMAGE_BYTES = 10 * 1024 * 1024;
+const ACCEPTED_SOURCE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+
+function renderStrokesToCanvas(
+  canvas: HTMLCanvasElement,
+  strokes: MaskStroke[],
+  width: number,
+  height: number,
+  binaryMask: boolean,
+  invertBinaryMask = false,
+) {
+  const ctx = canvas.getContext("2d");
+  if (!ctx || width <= 0 || height <= 0) return;
+  if (canvas.width !== width) canvas.width = width;
+  if (canvas.height !== height) canvas.height = height;
+  ctx.clearRect(0, 0, width, height);
+  if (binaryMask) {
+    ctx.globalCompositeOperation = "source-over";
+    // Inpaint: white (#FFFFFF) keeps, black (#000000) paints.
+    // Remove Object: black (#000000) keeps, white (#FFFFFF) removes.
+    ctx.fillStyle = invertBinaryMask ? "#000000" : "#ffffff";
+    ctx.fillRect(0, 0, width, height);
+  }
+  for (const stroke of strokes) {
+    if (stroke.points.length === 0) continue;
+    const radius = Math.max(1, (stroke.sizeRatio * width) / 2);
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.lineWidth = radius * 2;
+    if (binaryMask) {
+      ctx.globalCompositeOperation = "source-over";
+      const color = invertBinaryMask
+        ? (stroke.mode === "brush" ? "#ffffff" : "#000000")
+        : (stroke.mode === "brush" ? "#000000" : "#ffffff");
+      ctx.strokeStyle = color;
+      ctx.fillStyle = color;
+    } else if (stroke.mode === "brush") {
+      ctx.globalCompositeOperation = "source-over";
+      const overlayColor = invertBinaryMask ? "#ef4444" : "#9333ea";
+      ctx.strokeStyle = overlayColor;
+      ctx.fillStyle = overlayColor;
+    } else {
+      ctx.globalCompositeOperation = "destination-out";
+      ctx.strokeStyle = "#000000";
+      ctx.fillStyle = "#000000";
+    }
+    if (stroke.points.length === 1) {
+      ctx.beginPath();
+      ctx.arc(stroke.points[0].x * width, stroke.points[0].y * height, radius, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      ctx.beginPath();
+      ctx.moveTo(stroke.points[0].x * width, stroke.points[0].y * height);
+      for (let i = 1; i < stroke.points.length; i += 1) {
+        ctx.lineTo(stroke.points[i].x * width, stroke.points[i].y * height);
+      }
+      ctx.stroke();
+    }
+  }
+  ctx.globalCompositeOperation = "source-over";
+}
+
+function detectClosestAspectRatio(width: number, height: number): string {
+  if (!width || !height) return "1:1";
+  const target = width / height;
+  let best = "1:1";
+  let bestDiff = Infinity;
+  for (const item of ASPECT_RATIOS) {
+    const [w, h] = item.value.split(":").map(Number);
+    if (!w || !h) continue;
+    const diff = Math.abs(Math.log(target / (w / h)));
+    if (diff < bestDiff) {
+      bestDiff = diff;
+      best = item.value;
+    }
+  }
+  return best;
+}
+
 type ImageStudioModalProps = {
   config: Config | null;
   initialPrompt?: string;
@@ -273,7 +458,27 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
   const [styleKeywords, setStyleKeywords] = useState("");
   const [negativePrompt, setNegativePrompt] = useState("");
   const [showModelModal, setShowModelModal] = useState(false);
+  const [sourceImage, setSourceImage] = useState<SourceImage | null>(null);
+  const [previewingSource, setPreviewingSource] = useState(false);
+  const [isDraggingSource, setIsDraggingSource] = useState(false);
+  const [imageWeight, setImageWeight] = useState(70);
+  const [editMode, setEditMode] = useState<EditMode>("remix");
+  const [transparentBg, setTransparentBg] = useState(false);
+  const [showCheckerboard, setShowCheckerboard] = useState(false);
+  const [layerizeBlocksByImageId, setLayerizeBlocksByImageId] = useState<Record<string, LayerizeTextBlock[]>>({});
+  const [copiedBlockIndex, setCopiedBlockIndex] = useState<number | null>(null);
+  const [copiedLayerizeJsonId, setCopiedLayerizeJsonId] = useState<string | null>(null);
+  const [maskTool, setMaskTool] = useState<MaskTool>("brush");
+  const [brushSize, setBrushSize] = useState(40);
+  const [maskStrokes, setMaskStrokes] = useState<MaskStroke[]>([]);
+  const [canvasBox, setCanvasBox] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
   const promptRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
+  const sourceImgRef = useRef<HTMLImageElement>(null);
+  const maskCanvasRef = useRef<HTMLCanvasElement>(null);
+  const activeStrokeRef = useRef<MaskStroke | null>(null);
+  const isDrawingMaskRef = useRef(false);
 
   function toggleNegativePrompt(tag: string) {
     if (busy) return;
@@ -322,9 +527,9 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
       ? dynamicImageModels
       : (config?.image_models && config.image_models.length > 0
           ? config.image_models
-          : [{ id: "ideogram", name: "Ideogram v2 (Sélection auto)", provider: "ideogram" as const }]);
+          : [{ id: "ideogram-4-5", name: "Ideogram 4.5 (Dernière génération)", provider: "ideogram" as const }]);
 
-  const initialGenModel = config?.default_image_model || availableImageModels[0]?.id || "ideogram";
+  const initialGenModel = config?.default_image_model || availableImageModels[0]?.id || "ideogram-4-5";
   const [generationModel, setGenerationModel] = useState<string>(initialGenModel);
 
   async function loadModels(force = false) {
@@ -356,6 +561,13 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
   }, [config?.default_image_model, availableImageModels, generationModel]);
 
   const selectedGenModel = availableImageModels.find(m => m.id === generationModel) || availableImageModels[0];
+  const isIdeogramSelected =
+    selectedGenModel?.provider === "ideogram" || generationModel === "ideogram" || generationModel.startsWith("ideogram-");
+  const supportsIdeogramWeight = isIdeogramSelected && generationModel !== "ideogram-4-5";
+  const preferredIdeogramModel =
+    availableImageModels.find(m => m.id === "ideogram-4-5")
+    || availableImageModels.find(m => m.provider === "ideogram")
+    || { id: "ideogram-4-5", name: "Ideogram 4.5", provider: "ideogram" as const };
   const topModels = availableImageModels.filter(m => m.is_top);
   const otherModels = availableImageModels.filter(m => !m.is_top);
 
@@ -390,14 +602,285 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
   }, []);
 
   const selected = images.find(item => item.id === selectedId) ?? images[0] ?? null;
+  const activeMaskEdit = Boolean(sourceImage) && isMaskEditMode(editMode);
+  const invertMaskPolarity = editMode === "remove_object";
+  const isPromptRequired = !sourceImage || !isPromptOptionalEditMode(editMode);
+  const effectiveTransparentBg =
+    !sourceImage && isIdeogramSelected && (transparentBg || generationModel === "ideogram-3-transparent");
   const canGenerate =
     !!config?.features.image_generation &&
     !config.demo_mode &&
     availableImageModels.length > 0 &&
+    (!sourceImage || isIdeogramSelected) &&
+    (!isPromptRequired || !!prompt.trim()) &&
+    prompt.length <= 4000 &&
+    !busy;
+  const canImprove =
+    !!config?.features.chat &&
+    !config.demo_mode &&
+    (!sourceImage || !isPromptOptionalEditMode(editMode)) &&
     !!prompt.trim() &&
     prompt.length <= 4000 &&
     !busy;
-  const canImprove = !!config?.features.chat && !config.demo_mode && !!prompt.trim() && prompt.length <= 4000 && !busy;
+
+  const syncCanvasBox = useCallback(() => {
+    const img = sourceImgRef.current;
+    if (!img || !img.clientWidth || !img.clientHeight) {
+      setCanvasBox(null);
+      return;
+    }
+    const next = {
+      left: img.offsetLeft,
+      top: img.offsetTop,
+      width: img.clientWidth,
+      height: img.clientHeight,
+    };
+    setCanvasBox(prev =>
+      prev &&
+      prev.left === next.left &&
+      prev.top === next.top &&
+      prev.width === next.width &&
+      prev.height === next.height
+        ? prev
+        : next,
+    );
+  }, []);
+
+  useEffect(() => {
+    if (!sourceImage || !previewingSource || !isMaskEditMode(editMode) || busy === "generate") {
+      return;
+    }
+    syncCanvasBox();
+    const img = sourceImgRef.current;
+    const stage = stageRef.current;
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => syncCanvasBox());
+    if (img) observer.observe(img);
+    if (stage) observer.observe(stage);
+    return () => observer.disconnect();
+  }, [sourceImage, previewingSource, editMode, zoomed, busy, syncCanvasBox]);
+
+  useEffect(() => {
+    const canvas = maskCanvasRef.current;
+    if (!canvas || !canvasBox || !isMaskEditMode(editMode) || !previewingSource) return;
+    renderStrokesToCanvas(canvas, maskStrokes, canvasBox.width, canvasBox.height, false, invertMaskPolarity);
+  }, [maskStrokes, canvasBox, editMode, previewingSource, invertMaskPolarity]);
+
+  function getNormalizedPoint(event: ReactPointerEvent<HTMLCanvasElement>): MaskPoint | null {
+    const canvas = maskCanvasRef.current;
+    if (!canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    if (!rect.width || !rect.height) return null;
+    return {
+      x: Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)),
+      y: Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height)),
+    };
+  }
+
+  function handleMaskPointerDown(event: ReactPointerEvent<HTMLCanvasElement>) {
+    if (busy || !isMaskEditMode(editMode)) return;
+    const canvas = maskCanvasRef.current;
+    const point = getNormalizedPoint(event);
+    if (!canvas || !point) return;
+    const rect = canvas.getBoundingClientRect();
+    event.preventDefault();
+    canvas.setPointerCapture(event.pointerId);
+    const stroke: MaskStroke = {
+      mode: maskTool,
+      sizeRatio: brushSize / Math.max(1, rect.width),
+      points: [point],
+    };
+    activeStrokeRef.current = stroke;
+    isDrawingMaskRef.current = true;
+    renderStrokesToCanvas(canvas, [...maskStrokes, stroke], canvas.width, canvas.height, false, invertMaskPolarity);
+  }
+
+  function handleMaskPointerMove(event: ReactPointerEvent<HTMLCanvasElement>) {
+    if (!isDrawingMaskRef.current || !activeStrokeRef.current) return;
+    const canvas = maskCanvasRef.current;
+    const point = getNormalizedPoint(event);
+    if (!canvas || !point) return;
+    activeStrokeRef.current.points.push(point);
+    renderStrokesToCanvas(
+      canvas,
+      [...maskStrokes, activeStrokeRef.current],
+      canvas.width,
+      canvas.height,
+      false,
+      invertMaskPolarity,
+    );
+  }
+
+  function finishMaskStroke(event?: ReactPointerEvent<HTMLCanvasElement>) {
+    if (!isDrawingMaskRef.current || !activeStrokeRef.current) return;
+    const finished = activeStrokeRef.current;
+    activeStrokeRef.current = null;
+    isDrawingMaskRef.current = false;
+    if (event && maskCanvasRef.current?.hasPointerCapture(event.pointerId)) {
+      maskCanvasRef.current.releasePointerCapture(event.pointerId);
+    }
+    if (finished.points.length > 0) {
+      setMaskStrokes(prev => [...prev, finished]);
+    }
+  }
+
+  async function resolveSourceDimensions(src: SourceImage): Promise<{ width: number; height: number }> {
+    if (src.width && src.height) return { width: src.width, height: src.height };
+    const loadedImg = sourceImgRef.current;
+    if (loadedImg?.naturalWidth && loadedImg?.naturalHeight) {
+      return { width: loadedImg.naturalWidth, height: loadedImg.naturalHeight };
+    }
+    return new Promise((resolve, reject) => {
+      const probe = new window.Image();
+      probe.onload = () => resolve({ width: probe.naturalWidth || 1024, height: probe.naturalHeight || 1024 });
+      probe.onerror = () => reject(new Error("Impossible de mesurer les dimensions de l’image source."));
+      probe.src = src.previewUrl;
+    });
+  }
+
+  async function buildInpaintMaskDataUrl(src: SourceImage, invertPolarity: boolean): Promise<string> {
+    const { width, height } = await resolveSourceDimensions(src);
+    const offscreen = document.createElement("canvas");
+    renderStrokesToCanvas(offscreen, maskStrokes, width, height, true, invertPolarity);
+    const ctx = offscreen.getContext("2d");
+    if (ctx) {
+      const pixels = ctx.getImageData(0, 0, width, height).data;
+      let hasPaintedPixel = false;
+      for (let i = 0; i < pixels.length; i += 16) {
+        if (invertPolarity ? pixels[i] >= 128 : pixels[i] < 128) {
+          hasPaintedPixel = true;
+          break;
+        }
+      }
+      if (!hasPaintedPixel) {
+        throw new Error("EMPTY_MASK");
+      }
+    }
+    return offscreen.toDataURL("image/png");
+  }
+
+  function clearSourceImage() {
+    setSourceImage(null);
+    setPreviewingSource(false);
+    setEditMode("remix");
+    setMaskStrokes([]);
+    setCanvasBox(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
+  function activateSourceImage(next: SourceImage, ratio?: string) {
+    if (ratio) {
+      setAspectRatio(ratio);
+    }
+    setSourceImage(next);
+    setMaskStrokes([]);
+    setEditMode("remix");
+    setPreviewingSource(true);
+    setZoomed(false);
+    if (!isIdeogramSelected) {
+      setGenerationModel(preferredIdeogramModel.id);
+    }
+    promptRef.current?.focus();
+  }
+
+  function loadFileAsSourceImage(file: File) {
+    if (busy) return;
+    const extOk = /\.(png|jpe?g|webp|gif)$/i.test(file.name);
+    if (file.type && !ACCEPTED_SOURCE_TYPES.has(file.type)) {
+      setError("Format d'image non pris en charge. Utilisez PNG, JPEG, WEBP ou GIF.");
+      return;
+    }
+    if (!file.type && !extOk) {
+      setError("Format d'image non pris en charge. Utilisez PNG, JPEG, WEBP ou GIF.");
+      return;
+    }
+    if (file.size > MAX_SOURCE_IMAGE_BYTES) {
+      setError("L'image importée dépasse la limite de 10 Mo.");
+      return;
+    }
+    setError("");
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = typeof reader.result === "string" ? reader.result : "";
+      if (!dataUrl) {
+        setError("Impossible de lire l'image sélectionnée.");
+        return;
+      }
+      const probe = new window.Image();
+      probe.onload = () => {
+        const w = probe.naturalWidth || undefined;
+        const h = probe.naturalHeight || undefined;
+        activateSourceImage(
+          {
+            kind: "upload",
+            name: file.name || "image-importee.png",
+            previewUrl: dataUrl,
+            dataUrl,
+            sizeBytes: file.size,
+            width: w,
+            height: h,
+          },
+          w && h ? detectClosestAspectRatio(w, h) : undefined,
+        );
+      };
+      probe.onerror = () => {
+        activateSourceImage({
+          kind: "upload",
+          name: file.name || "image-importee.png",
+          previewUrl: dataUrl,
+          dataUrl,
+          sizeBytes: file.size,
+        });
+      };
+      probe.src = dataUrl;
+    };
+    reader.onerror = () => setError("Erreur lors de la lecture du fichier image.");
+    reader.readAsDataURL(file);
+  }
+
+  function handleDropSource(event: DragEvent) {
+    event.preventDefault();
+    event.stopPropagation();
+    setIsDraggingSource(false);
+    if (busy) return;
+    const file = event.dataTransfer?.files?.[0];
+    if (file) loadFileAsSourceImage(file);
+  }
+
+  function handleModalPaste(event: ClipboardEvent) {
+    if (busy) return;
+    const items = event.clipboardData?.items;
+    if (!items) return;
+    for (let i = 0; i < items.length; i += 1) {
+      const item = items[i];
+      if (item.kind === "file" && item.type.startsWith("image/")) {
+        const file = item.getAsFile();
+        if (file) {
+          event.preventDefault();
+          loadFileAsSourceImage(file);
+          return;
+        }
+      }
+    }
+  }
+
+  function loadGalleryImageForEdit(target: GeneratedImage) {
+    if (busy) return;
+    setError("");
+    if (prompt.trim() === target.prompt.trim()) {
+      setPrompt("");
+    }
+    activateSourceImage(
+      {
+        kind: "gallery",
+        name: target.filename,
+        previewUrl: target.url,
+        sourceImageId: target.id,
+        sizeBytes: target.size,
+      },
+      target.aspect_ratio,
+    );
+  }
 
   async function improvePrompt() {
     if (!canImprove) return;
@@ -412,6 +895,9 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
           model: improveModel,
           style_keywords: styleKeywords.trim() || undefined,
           negative_prompt: negativePrompt.trim() || undefined,
+          reference_image_data: sourceImage?.dataUrl,
+          source_image_id: sourceImage?.sourceImageId,
+          is_edit: !!sourceImage,
         }),
       });
       setPreviousPrompt(original);
@@ -439,20 +925,63 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
   async function generate(event?: FormEvent) {
     event?.preventDefault();
     if (!canGenerate) return;
-    setBusy("generate");
     setError("");
+    let maskImageData: string | undefined;
+    if (sourceImage && isMaskEditMode(editMode)) {
+      try {
+        maskImageData = await buildInpaintMaskDataUrl(sourceImage, editMode === "remove_object");
+      } catch (err) {
+        if (err instanceof Error && err.message === "EMPTY_MASK") {
+          setPreviewingSource(true);
+          setError(
+            editMode === "remove_object"
+              ? "Peignez au pinceau l’objet à supprimer sur l’image, ou choisissez un autre outil."
+              : "Peignez au pinceau la zone à modifier sur l’image, ou repassez en « Retouche globale ».",
+          );
+        } else {
+          setError(errorMessage(err));
+        }
+        return;
+      }
+    }
+    const payloadPrompt =
+      sourceImage && (editMode === "remove_background" || editMode === "remove_object")
+        ? ""
+        : prompt.trim();
+    const shouldUseNegativePrompt =
+      (!sourceImage || editMode === "remix") && negativePrompt.trim() ? negativePrompt.trim() : undefined;
+    setBusy("generate");
     try {
       const created = await api<GeneratedImage>("/images", {
         method: "POST",
         body: JSON.stringify({
-          prompt: prompt.trim(),
+          prompt: payloadPrompt,
           aspect_ratio: aspectRatio,
-          negative_prompt: negativePrompt.trim() || undefined,
+          negative_prompt: shouldUseNegativePrompt,
           model: generationModel,
+          reference_image_data: sourceImage?.dataUrl,
+          mask_image_data: maskImageData,
+          source_image_id: sourceImage?.sourceImageId,
+          image_weight:
+            sourceImage && editMode === "remix" && supportsIdeogramWeight ? imageWeight : undefined,
+          edit_action: sourceImage ? editMode : undefined,
+          transparent_background: effectiveTransparentBg ? true : undefined,
         }),
       });
       setImages(current => [created, ...current]);
       setSelectedId(created.id);
+      if (Array.isArray(created.text_blocks)) {
+        setLayerizeBlocksByImageId(prev => ({
+          ...prev,
+          [created.id]: created.text_blocks ?? [],
+        }));
+      }
+      if (effectiveTransparentBg || (sourceImage && editMode === "remove_background")) {
+        setShowCheckerboard(true);
+      } else {
+        setShowCheckerboard(false);
+      }
+      setPreviewingSource(false);
       setPreviousPrompt(null);
     } catch (err) {
       setError(errorMessage(err));
@@ -492,6 +1021,52 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
     }
   }
 
+  async function copyLayerizeText(text: string, index: number) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedBlockIndex(index);
+      setTimeout(() => setCopiedBlockIndex(current => (current === index ? null : current)), 2000);
+    } catch {
+      setCopiedBlockIndex(null);
+    }
+  }
+
+  async function copyLayerizeJson(imageId: string, blocks: LayerizeTextBlock[]) {
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(blocks, null, 2));
+      setCopiedLayerizeJsonId(imageId);
+      setTimeout(() => setCopiedLayerizeJsonId(current => (current === imageId ? null : current)), 2000);
+    } catch {
+      setCopiedLayerizeJsonId(null);
+    }
+  }
+
+  const editModeIcon = (mode: EditMode, size = 12) => {
+    switch (mode) {
+      case "remix":
+        return <Paintbrush size={size} />;
+      case "inpaint":
+        return <Brush size={size} />;
+      case "remove_background":
+        return <Scissors size={size} />;
+      case "replace_background":
+        return <Replace size={size} />;
+      case "remove_object":
+        return <Eraser size={size} />;
+      case "layerize":
+        return <Layers size={size} />;
+    }
+  };
+
+  function selectEditMode(nextMode: EditMode) {
+    setEditMode(nextMode);
+    setError("");
+    if (isMaskEditMode(nextMode)) {
+      setPreviewingSource(true);
+      setZoomed(false);
+    }
+  }
+
   function reuseImageSettings(target: GeneratedImage) {
     if (busy) return;
     setPrompt(target.prompt);
@@ -512,6 +1087,7 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
         role="dialog"
         aria-modal="true"
         aria-labelledby="image-studio-title"
+        onPaste={handleModalPaste}
         onKeyDown={event => {
           if (event.key === "Escape" && !busy) {
             if (zoomed) setZoomed(false);
@@ -566,198 +1142,410 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
         )}
 
         <div className="image-studio-body">
-          <div className="image-studio-controls">
+          <div
+            className="image-studio-controls"
+            onDragOver={event => {
+              event.preventDefault();
+              if (!busy) setIsDraggingSource(true);
+            }}
+            onDragLeave={event => {
+              if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                setIsDraggingSource(false);
+              }
+            }}
+            onDrop={handleDropSource}
+          >
             <form className="image-studio-form" onSubmit={event => void generate(event)}>
-              <div className="image-studio-field-header">
-                <label htmlFor="image-studio-prompt">Description de l’image</label>
-                <span>{prompt.length}/4000</span>
-              </div>
-              <textarea
-                id="image-studio-prompt"
-                ref={promptRef}
-                value={prompt}
-                onChange={event => setPrompt(event.target.value)}
-                placeholder="Décrivez votre scène, le sujet, la lumière, les couleurs, le cadrage ou le texte à intégrer entre guillemets…"
-                rows={4}
-                maxLength={4000}
-                disabled={!!busy}
-                onKeyDown={event => {
-                  if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-                    event.preventDefault();
-                    void generate();
-                  }
-                }}
-              />
-
-              <div className="image-keywords-section">
-                <div className="image-keywords-header">
-                  <div className="image-keywords-title">
-                    <SlidersHorizontal size={12} />
-                    <span>Mots-clés de style & ambiance</span>
-                    <span className="image-keywords-badge">guidage IA</span>
-                  </div>
-                  {styleKeywords.trim() && (
-                    <button
-                      type="button"
-                      className="image-keywords-clear"
-                      onClick={() => setStyleKeywords("")}
-                      disabled={!!busy}
-                    >
-                      Effacer
-                    </button>
+              <div className="image-source-section">
+                <div className="image-source-header">
+                  <span className="image-section-label">
+                    {sourceImage ? "Image source à modifier" : "Image à modifier (optionnel)"}
+                  </span>
+                  {sourceImage ? (
+                    <span className="image-source-mode-badge">
+                      <Paintbrush size={10} />
+                      <span>Mode retouche</span>
+                    </span>
+                  ) : (
+                    <span className="image-source-hint-pill">Import · Glisser · Ctrl+V</span>
                   )}
                 </div>
-                <input
-                  type="text"
-                  className="image-keywords-input"
-                  value={styleKeywords}
-                  onChange={e => setStyleKeywords(e.target.value)}
-                  placeholder="Ex : familial (pour une affiche), vaporeux, terrifiant, rouge..."
-                  disabled={!!busy}
-                  maxLength={300}
-                />
-                <div className="image-keywords-chips" aria-label="Suggestions de style">
-                  {SUGGESTED_STYLE_KEYWORDS.map(tag => {
-                    const active = styleKeywords
-                      .split(",")
-                      .map(s => s.trim().toLowerCase())
-                      .includes(tag.toLowerCase());
-                    return (
-                      <button
-                        key={tag}
-                        type="button"
-                        className={`image-keyword-chip ${active ? "is-active" : ""}`}
-                        onClick={() => toggleStyleKeyword(tag)}
-                        disabled={!!busy}
-                        title={active ? `Retirer « ${tag} »` : `Ajouter « ${tag} »`}
-                      >
-                        {active && <Check size={10} />}
-                        <span>{tag}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
 
-              <div className="image-negative-section">
-                <div className="image-negative-header">
-                  <div className="image-negative-title">
-                    <Ban size={12} />
-                    <span>Prompt négatif (ce qu’on ne veut pas)</span>
-                    <span className="image-negative-badge">exclusion</span>
-                  </div>
-                  {negativePrompt.trim() && (
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/gif"
+                  className="sr-only"
+                  style={{ display: "none" }}
+                  onChange={event => {
+                    const file = event.target.files?.[0];
+                    if (file) loadFileAsSourceImage(file);
+                  }}
+                />
+
+                {sourceImage ? (
+                  <div className="image-source-card">
                     <button
                       type="button"
-                      className="image-negative-clear"
-                      onClick={() => setNegativePrompt("")}
-                      disabled={!!busy}
+                      className="image-source-thumb"
+                      onClick={() => setPreviewingSource(old => !old)}
+                      title="Afficher / masquer l'image source dans le visualiseur"
                     >
-                      Effacer
+                      <img src={sourceImage.previewUrl} alt={sourceImage.name} />
                     </button>
-                  )}
-                </div>
-                <input
-                  type="text"
-                  className="image-negative-input"
-                  value={negativePrompt}
-                  onChange={e => setNegativePrompt(e.target.value)}
-                  placeholder="Ex : flou, texte, filigrane, membres déformés, basse qualité, mauvaise anatomie..."
-                  disabled={!!busy}
-                  maxLength={2000}
-                />
-                <div className="image-negative-chips" aria-label="Suggestions d'exclusions">
-                  {SUGGESTED_NEGATIVE_PROMPTS.map(tag => {
-                    const active = negativePrompt
-                      .split(",")
-                      .map(s => s.trim().toLowerCase())
-                      .includes(tag.toLowerCase());
-                    return (
-                      <button
-                        key={tag}
-                        type="button"
-                        className={`image-negative-chip ${active ? "is-active" : ""}`}
-                        onClick={() => toggleNegativePrompt(tag)}
-                        disabled={!!busy}
-                        title={active ? `Retirer « ${tag} »` : `Exclure « ${tag} »`}
-                      >
-                        {active && <Check size={10} />}
-                        <span>{tag}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="image-studio-prompt-tools">
-                <button
-                  type="button"
-                  className="image-improve-button"
-                  disabled={!canImprove}
-                  onClick={() => void improvePrompt()}
-                  title={
-                    config?.features.chat && !config.demo_mode
-                      ? `Enrichir les détails visuels, la lumière et la composition avec ${config?.models?.find(m => m.id === improveModel)?.name || "Gemini Argon"}`
-                      : "Nécessite LLM_API_KEY et le mode IA réel"
-                  }
-                >
-                  {busy === "improve" ? <LoaderCircle className="spin" size={15} /> : <WandSparkles size={15} />}
-                  <span>{busy === "improve" ? "Amélioration en cours…" : "Améliorer le prompt"}</span>
-                </button>
-                {previousPrompt !== null && (
+                    <div className="image-source-info">
+                      <strong title={sourceImage.name}>{sourceImage.name}</strong>
+                      <span>
+                        {sourceImage.width && sourceImage.height ? `${sourceImage.width}×${sourceImage.height} px` : "Image prête"}
+                        {sourceImage.sizeBytes ? ` · ${formatBytes(sourceImage.sizeBytes)}` : ""}
+                      </span>
+                      <div className="image-source-card-actions">
+                        <button
+                          type="button"
+                          className={`image-source-mini-btn ${previewingSource ? "is-active" : ""}`}
+                          onClick={() => setPreviewingSource(old => !old)}
+                          disabled={!!busy}
+                        >
+                          <Eye size={11} />
+                          <span>{previewingSource ? "Affichée" : "Voir"}</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="image-source-mini-btn"
+                          onClick={() => fileInputRef.current?.click()}
+                          disabled={!!busy}
+                        >
+                          <Upload size={11} />
+                          <span>Remplacer</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="image-source-mini-btn is-danger"
+                          onClick={clearSourceImage}
+                          disabled={!!busy}
+                          title="Retirer l'image source"
+                        >
+                          <X size={11} />
+                          <span>Retirer</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
                   <button
                     type="button"
-                    className="image-revert-button"
+                    className={`image-source-dropzone ${isDraggingSource ? "is-dragging" : ""}`}
+                    onClick={() => fileInputRef.current?.click()}
                     disabled={!!busy}
-                    onClick={() => {
-                      setPrompt(previousPrompt);
-                      setPreviousPrompt(null);
-                    }}
-                    title="Revenir au prompt précédent"
                   >
-                    <RotateCcw size={13} />
-                    <span>Rétablir</span>
+                    <Upload size={16} />
+                    <div>
+                      <strong>Importer une image à modifier</strong>
+                      <small>PNG, JPEG, WEBP, GIF (max 10 Mo) · ou cliquez sur « Modifier » dans la galerie</small>
+                    </div>
                   </button>
+                )}
+
+                {sourceImage && (
+                  <div className="image-edit-mode-toggle" role="tablist" aria-label="Mode d'édition d'image">
+                    {(Object.keys(EDIT_MODE_COPY) as EditMode[]).map(mode => (
+                      <button
+                        key={mode}
+                        type="button"
+                        role="tab"
+                        aria-selected={editMode === mode}
+                        title={EDIT_MODE_COPY[mode].title}
+                        className={`image-edit-mode-btn ${editMode === mode ? "is-active" : ""}`}
+                        onClick={() => selectEditMode(mode)}
+                        disabled={!!busy}
+                      >
+                        {editModeIcon(mode, 12)}
+                        <span>{EDIT_MODE_COPY[mode].label}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {sourceImage && isMaskEditMode(editMode) && (
+                  <div className="image-inpaint-hint">
+                    <span>
+                      {editMode === "remove_object"
+                        ? maskStrokes.length > 0
+                          ? `${maskStrokes.length} tracé${maskStrokes.length > 1 ? "s" : ""} sur l’objet à supprimer — aucun prompt nécessaire.`
+                          : "Peignez directement au pinceau rouge sur l’objet à effacer à droite."
+                        : maskStrokes.length > 0
+                          ? `${maskStrokes.length} tracé${maskStrokes.length > 1 ? "s" : ""} sur le masque — seule la zone peinte sera régénérée.`
+                          : "Peignez directement sur l’image à droite pour délimiter la zone à modifier."}
+                    </span>
+                  </div>
+                )}
+
+                {sourceImage && editMode === "remove_background" && (
+                  <div className="image-inpaint-hint">
+                    <span>Détourage automatique du sujet principal vers un PNG transparent (Ideogram 1.0). Aucun prompt requis.</span>
+                  </div>
+                )}
+
+                {sourceImage && editMode === "replace_background" && (
+                  <div className="image-inpaint-hint">
+                    <span>Ideogram 3.0 conserve automatiquement le sujet au premier plan et génère le décor décrit ci-dessous.</span>
+                  </div>
+                )}
+
+                {sourceImage && editMode === "layerize" && (
+                  <div className="image-inpaint-hint">
+                    <span>Layerize (Ideogram 3.0) extrait chaque bloc de texte (police, taille, couleur, position) et l’image de fond nettoyée.</span>
+                  </div>
+                )}
+
+                {sourceImage && !isIdeogramSelected && (
+                  <div className="image-source-warning" role="status">
+                    <CircleAlert size={14} />
+                    <div>
+                      <span>
+                        L’édition et les outils spécialisés (détourage, effacement d’objet, calques) sont uniquement pris en charge par <strong>Ideogram</strong>.
+                      </span>
+                      <button
+                        type="button"
+                        className="image-source-switch-btn"
+                        onClick={() => setGenerationModel(preferredIdeogramModel.id)}
+                      >
+                        Basculer vers {preferredIdeogramModel.name.split("(")[0].trim()}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {sourceImage && editMode === "remix" && supportsIdeogramWeight && (
+                  <div className="image-weight-control">
+                    <div className="image-weight-header">
+                      <label htmlFor="image-weight-slider">Fidélité à l’image originale (Ideogram)</label>
+                      <strong>{imageWeight}%</strong>
+                    </div>
+                    <input
+                      id="image-weight-slider"
+                      type="range"
+                      min={10}
+                      max={100}
+                      step={5}
+                      value={imageWeight}
+                      disabled={!!busy}
+                      onChange={e => setImageWeight(Number(e.target.value))}
+                    />
+                    <div className="image-weight-scale">
+                      <span>Plus créatif</span>
+                      <span>Plus fidèle</span>
+                    </div>
+                  </div>
                 )}
               </div>
 
-              <div className="image-style-section">
-                <div className="image-style-header">
-                  <span className="image-section-label">Styles & supports prédéfinis</span>
-                  <span className="image-style-count">
-                    {(styleCategory === "all" ? STYLE_PRESETS : STYLE_PRESETS.filter(item => item.category === styleCategory)).length} styles
-                  </span>
-                </div>
-                <div className="image-style-categories" role="tablist" aria-label="Catégories de styles">
-                  {STYLE_CATEGORIES.map(category => (
-                    <button
-                      key={category.id}
-                      type="button"
-                      role="tab"
-                      aria-selected={styleCategory === category.id}
-                      className={`image-style-category ${styleCategory === category.id ? "is-active" : ""}`}
+              {(!sourceImage || !isBinaryPromptlessEditMode(editMode)) && (
+                <>
+                  <div className="image-studio-field-header">
+                    <label htmlFor="image-studio-prompt">
+                      {sourceImage ? EDIT_MODE_COPY[editMode].promptLabel : "Description de l’image"}
+                    </label>
+                    <span>{prompt.length}/4000</span>
+                  </div>
+                  <textarea
+                    id="image-studio-prompt"
+                    ref={promptRef}
+                    value={prompt}
+                    onChange={event => setPrompt(event.target.value)}
+                    placeholder={
+                      sourceImage
+                        ? EDIT_MODE_COPY[editMode].promptPlaceholder
+                        : "Décrivez votre scène, le sujet, la lumière, les couleurs, le cadrage ou le texte à intégrer entre guillemets…"
+                    }
+                    rows={sourceImage && editMode === "layerize" ? 2 : 4}
+                    maxLength={4000}
+                    disabled={!!busy}
+                    onKeyDown={event => {
+                      if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                        event.preventDefault();
+                        void generate();
+                      }
+                    }}
+                  />
+                </>
+              )}
+
+              {(!sourceImage || !isPromptOptionalEditMode(editMode)) && (
+                <>
+                  <div className="image-keywords-section">
+                    <div className="image-keywords-header">
+                      <div className="image-keywords-title">
+                        <SlidersHorizontal size={12} />
+                        <span>Mots-clés de style & ambiance</span>
+                        <span className="image-keywords-badge">guidage IA</span>
+                      </div>
+                      {styleKeywords.trim() && (
+                        <button
+                          type="button"
+                          className="image-keywords-clear"
+                          onClick={() => setStyleKeywords("")}
+                          disabled={!!busy}
+                        >
+                          Effacer
+                        </button>
+                      )}
+                    </div>
+                    <input
+                      type="text"
+                      className="image-keywords-input"
+                      value={styleKeywords}
+                      onChange={e => setStyleKeywords(e.target.value)}
+                      placeholder="Ex : familial (pour une affiche), vaporeux, terrifiant, rouge..."
                       disabled={!!busy}
-                      onClick={() => setStyleCategory(category.id)}
-                    >
-                      {category.label}
-                    </button>
-                  ))}
-                </div>
-                <div className="image-style-chips" aria-label="Suggestions de style">
-                  {(styleCategory === "all" ? STYLE_PRESETS : STYLE_PRESETS.filter(item => item.category === styleCategory)).map(preset => (
+                      maxLength={300}
+                    />
+                    <div className="image-keywords-chips" aria-label="Suggestions de style">
+                      {SUGGESTED_STYLE_KEYWORDS.map(tag => {
+                        const active = styleKeywords
+                          .split(",")
+                          .map(s => s.trim().toLowerCase())
+                          .includes(tag.toLowerCase());
+                        return (
+                          <button
+                            key={tag}
+                            type="button"
+                            className={`image-keyword-chip ${active ? "is-active" : ""}`}
+                            onClick={() => toggleStyleKeyword(tag)}
+                            disabled={!!busy}
+                            title={active ? `Retirer « ${tag} »` : `Ajouter « ${tag} »`}
+                          >
+                            {active && <Check size={10} />}
+                            <span>{tag}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {(!sourceImage || editMode === "remix") && (
+                    <div className="image-negative-section">
+                      <div className="image-negative-header">
+                        <div className="image-negative-title">
+                          <Ban size={12} />
+                          <span>Prompt négatif (ce qu’on ne veut pas)</span>
+                          <span className="image-negative-badge">exclusion</span>
+                        </div>
+                        {negativePrompt.trim() && (
+                          <button
+                            type="button"
+                            className="image-negative-clear"
+                            onClick={() => setNegativePrompt("")}
+                            disabled={!!busy}
+                          >
+                            Effacer
+                          </button>
+                        )}
+                      </div>
+                      <input
+                        type="text"
+                        className="image-negative-input"
+                        value={negativePrompt}
+                        onChange={e => setNegativePrompt(e.target.value)}
+                        placeholder="Ex : flou, texte, filigrane, membres déformés, basse qualité, mauvaise anatomie..."
+                        disabled={!!busy}
+                        maxLength={2000}
+                      />
+                      <div className="image-negative-chips" aria-label="Suggestions d'exclusions">
+                        {SUGGESTED_NEGATIVE_PROMPTS.map(tag => {
+                          const active = negativePrompt
+                            .split(",")
+                            .map(s => s.trim().toLowerCase())
+                            .includes(tag.toLowerCase());
+                          return (
+                            <button
+                              key={tag}
+                              type="button"
+                              className={`image-negative-chip ${active ? "is-active" : ""}`}
+                              onClick={() => toggleNegativePrompt(tag)}
+                              disabled={!!busy}
+                              title={active ? `Retirer « ${tag} »` : `Exclure « ${tag} »`}
+                            >
+                              {active && <Check size={10} />}
+                              <span>{tag}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="image-studio-prompt-tools">
                     <button
-                      key={preset.label}
                       type="button"
-                      className="image-style-chip"
-                      disabled={!!busy}
-                      title={preset.prompt}
-                      onClick={() => applyStyleChip(preset.prompt)}
+                      className="image-improve-button"
+                      disabled={!canImprove}
+                      onClick={() => void improvePrompt()}
+                      title={
+                        config?.features.chat && !config.demo_mode
+                          ? `Enrichir les détails visuels, la lumière et la composition avec ${config?.models?.find(m => m.id === improveModel)?.name || "Gemini Argon"}`
+                          : "Nécessite LLM_API_KEY et le mode IA réel"
+                      }
                     >
-                      + {preset.label}
+                      {busy === "improve" ? <LoaderCircle className="spin" size={15} /> : <WandSparkles size={15} />}
+                      <span>{busy === "improve" ? "Amélioration en cours…" : "Améliorer le prompt"}</span>
                     </button>
-                  ))}
-                </div>
-              </div>
+                    {previousPrompt !== null && (
+                      <button
+                        type="button"
+                        className="image-revert-button"
+                        disabled={!!busy}
+                        onClick={() => {
+                          setPrompt(previousPrompt);
+                          setPreviousPrompt(null);
+                        }}
+                        title="Revenir au prompt précédent"
+                      >
+                        <RotateCcw size={13} />
+                        <span>Rétablir</span>
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="image-style-section">
+                    <div className="image-style-header">
+                      <span className="image-section-label">Styles & supports prédéfinis</span>
+                      <span className="image-style-count">
+                        {(styleCategory === "all" ? STYLE_PRESETS : STYLE_PRESETS.filter(item => item.category === styleCategory)).length} styles
+                      </span>
+                    </div>
+                    <div className="image-style-categories" role="tablist" aria-label="Catégories de styles">
+                      {STYLE_CATEGORIES.map(category => (
+                        <button
+                          key={category.id}
+                          type="button"
+                          role="tab"
+                          aria-selected={styleCategory === category.id}
+                          className={`image-style-category ${styleCategory === category.id ? "is-active" : ""}`}
+                          disabled={!!busy}
+                          onClick={() => setStyleCategory(category.id)}
+                        >
+                          {category.label}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="image-style-chips" aria-label="Suggestions de style">
+                      {(styleCategory === "all" ? STYLE_PRESETS : STYLE_PRESETS.filter(item => item.category === styleCategory)).map(preset => (
+                        <button
+                          key={preset.label}
+                          type="button"
+                          className="image-style-chip"
+                          disabled={!!busy}
+                          title={preset.prompt}
+                          onClick={() => applyStyleChip(preset.prompt)}
+                        >
+                          + {preset.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              )}
 
               <div className="image-model-gen-section">
                 <div className="image-model-gen-header">
@@ -835,6 +1623,12 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
                   )}
 
                   <div className="image-model-trigger-pills">
+                    {selectedGenModel?.supports_image_editing && (
+                      <div className="image-model-edit-pill" title="Prend en charge l'import et la modification d'images">
+                        <Paintbrush size={11} />
+                        <span>Édition d’image</span>
+                      </div>
+                    )}
                     {selectedGenModel?.pricing_text && (
                       <div className="image-model-pricing-pill" title="Tarif du modèle">
                         <Coins size={12} />
@@ -847,14 +1641,19 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
                       </div>
                     )}
                     <div className="image-model-meta-pill" title="Fournisseur API">
-                      <span>{selectedGenModel?.provider === "ideogram" ? "Ideogram v2" : "OpenRouter API"}</span>
+                      <span>{isIdeogramSelected ? "Ideogram API" : "OpenRouter API"}</span>
                     </div>
                   </div>
                 </div>
               </div>
 
               <div className="image-ratio-section">
-                <span className="image-section-label">Format de l’image</span>
+                <div className="image-ratio-header">
+                  <span className="image-section-label">Format de l’image</span>
+                  {sourceImage && (activeMaskEdit || isIdeogramSelected) && (
+                    <span className="image-ratio-locked-hint">Proportions source conservées</span>
+                  )}
+                </div>
                 <div className="image-ratio-grid" role="radiogroup" aria-label="Format d’image">
                   {ASPECT_RATIOS.map(item => (
                     <button
@@ -863,7 +1662,7 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
                       role="radio"
                       aria-checked={aspectRatio === item.value}
                       className={`image-ratio-option ${aspectRatio === item.value ? "is-selected" : ""}`}
-                      disabled={!!busy}
+                      disabled={!!busy || (!!sourceImage && (activeMaskEdit || isIdeogramSelected))}
                       onClick={() => setAspectRatio(item.value)}
                     >
                       <strong>{item.label}</strong>
@@ -873,16 +1672,54 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
                 </div>
               </div>
 
+              {!sourceImage && isIdeogramSelected && (
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={effectiveTransparentBg}
+                  className={`image-transparent-toggle ${effectiveTransparentBg ? "is-active" : ""}`}
+                  disabled={!!busy || generationModel === "ideogram-3-transparent"}
+                  onClick={() => setTransparentBg(prev => !prev)}
+                  title="Générer directement un PNG détouré sur fond transparent via Ideogram 3.0 Transparent"
+                >
+                  <Grid2x2 size={15} />
+                  <div>
+                    <strong>Fond transparent (PNG détouré)</strong>
+                    <small>
+                      {generationModel === "ideogram-3-transparent"
+                        ? "Activé automatiquement avec Ideogram 3.0 Transparent"
+                        : "Canal alpha natif via Ideogram 3.0 Transparent"}
+                    </small>
+                  </div>
+                  <span className="image-transparent-pill">
+                    {effectiveTransparentBg ? "Activé" : "Désactivé"}
+                  </span>
+                </button>
+              )}
+
               <button type="submit" className="image-generate-button" disabled={!canGenerate}>
                 {busy === "generate" ? (
                   <>
                     <LoaderCircle className="spin" size={17} />
-                    <span>Création avec {selectedGenModel?.name?.split("(")[0]?.trim() || "l'IA"}…</span>
+                    <span>
+                      {sourceImage
+                        ? EDIT_MODE_COPY[editMode].busyLabel
+                        : effectiveTransparentBg
+                          ? "Création PNG transparent"
+                          : "Création"}{" "}
+                      avec {selectedGenModel?.name?.split("(")[0]?.trim() || "l'IA"}…
+                    </span>
                   </>
                 ) : (
                   <>
-                    <Sparkles size={17} />
-                    <span>Générer avec {selectedGenModel?.name?.split("(")[0]?.trim() || "l'IA"}</span>
+                    {sourceImage ? editModeIcon(editMode, 17) : effectiveTransparentBg ? <Grid2x2 size={17} /> : <Sparkles size={17} />}
+                    <span>
+                      {sourceImage
+                        ? EDIT_MODE_COPY[editMode].buttonLabel
+                        : effectiveTransparentBg
+                          ? "Générer en PNG transparent"
+                          : `Générer avec ${selectedGenModel?.name?.split("(")[0]?.trim() || "l'IA"}`}
+                    </span>
                   </>
                 )}
               </button>
@@ -908,7 +1745,10 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
                       <button
                         type="button"
                         className="image-gallery-thumb"
-                        onClick={() => setSelectedId(item.id)}
+                        onClick={() => {
+                          setSelectedId(item.id);
+                          setPreviewingSource(false);
+                        }}
                         aria-label={`Afficher l’image : ${item.prompt.slice(0, 60)}`}
                       >
                         <img src={item.url} alt={item.prompt} loading="lazy" />
@@ -932,13 +1772,188 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
                 <div className="image-generating-orb">
                   <LoaderCircle className="spin" size={34} />
                 </div>
-                <h3>Ideogram compose votre image…</h3>
-                <p>« {prompt.trim()} »</p>
-                <span className="image-generating-badge">Format {aspectRatio} · Sauvegarde automatique</span>
+                <h3>
+                  {selectedGenModel?.name?.split("(")[0]?.trim() || "L'IA"}{" "}
+                  {sourceImage
+                    ? `${EDIT_MODE_COPY[editMode].busyLabel.toLowerCase()} en cours…`
+                    : "compose votre image…"}
+                </h3>
+                {prompt.trim() && <p>« {prompt.trim()} »</p>}
+                <span className="image-generating-badge">
+                  {sourceImage
+                    ? `${EDIT_MODE_COPY[editMode].label} · Proportions source conservées`
+                    : effectiveTransparentBg
+                      ? `Format ${aspectRatio} · PNG fond transparent (Ideogram 3.0)`
+                      : `Format ${aspectRatio} · Sauvegarde automatique`}
+                </span>
               </div>
+            ) : sourceImage && previewingSource ? (
+              <>
+                <div ref={stageRef} className="image-viewer-stage">
+                  <img
+                    ref={sourceImgRef}
+                    src={sourceImage.previewUrl}
+                    alt={sourceImage.name}
+                    className={`${zoomed ? "is-zoomed" : ""} ${activeMaskEdit ? "is-inpaint-target" : ""}`}
+                    onClick={() => {
+                      if (!activeMaskEdit) setZoomed(old => !old);
+                    }}
+                    onLoad={event => {
+                      const imgEl = event.currentTarget;
+                      const nw = imgEl.naturalWidth || undefined;
+                      const nh = imgEl.naturalHeight || undefined;
+                      if (nw && nh && (!sourceImage.width || !sourceImage.height)) {
+                        setSourceImage(prev => (prev ? { ...prev, width: nw, height: nh } : prev));
+                      }
+                      syncCanvasBox();
+                    }}
+                  />
+                  {activeMaskEdit && (
+                    <canvas
+                      ref={maskCanvasRef}
+                      className={`image-inpaint-canvas ${maskTool === "erase" ? "is-erasing" : ""}`}
+                      style={
+                        canvasBox
+                          ? {
+                              left: `${canvasBox.left}px`,
+                              top: `${canvasBox.top}px`,
+                              width: `${canvasBox.width}px`,
+                              height: `${canvasBox.height}px`,
+                            }
+                          : { display: "none" }
+                      }
+                      onPointerDown={handleMaskPointerDown}
+                      onPointerMove={handleMaskPointerMove}
+                      onPointerUp={finishMaskStroke}
+                      onPointerCancel={finishMaskStroke}
+                    />
+                  )}
+                  <div className="image-stage-floating-tools">
+                    <button
+                      type="button"
+                      className="image-stage-pill"
+                      onClick={() => setZoomed(old => !old)}
+                      title={zoomed ? "Réduire l’aperçu" : "Agrandir l’aperçu"}
+                    >
+                      {zoomed ? <Minimize2 size={14} /> : <Expand size={14} />}
+                      <span>{zoomed ? "Ajuster" : "Agrandir"}</span>
+                    </button>
+                  </div>
+                  {activeMaskEdit && (
+                    <div className="image-inpaint-toolbar" role="toolbar" aria-label="Outils de masquage">
+                      <button
+                        type="button"
+                        className={`image-inpaint-tool-btn ${maskTool === "brush" ? "is-active" : ""}`}
+                        onClick={() => setMaskTool("brush")}
+                        disabled={!!busy}
+                        title={
+                          editMode === "remove_object"
+                            ? "Pinceau : marquer l’objet à effacer"
+                            : "Pinceau : marquer la zone à modifier"
+                        }
+                      >
+                        <Brush size={14} />
+                        <span>Pinceau</span>
+                      </button>
+                      <button
+                        type="button"
+                        className={`image-inpaint-tool-btn ${maskTool === "erase" ? "is-active" : ""}`}
+                        onClick={() => setMaskTool("erase")}
+                        disabled={!!busy}
+                        title="Gomme : retirer du masque"
+                      >
+                        <Eraser size={14} />
+                        <span>Gomme</span>
+                      </button>
+                      <label className="image-inpaint-size-control" title="Taille du pinceau">
+                        <span>Taille</span>
+                        <input
+                          type="range"
+                          min={10}
+                          max={120}
+                          step={2}
+                          value={brushSize}
+                          disabled={!!busy}
+                          onChange={e => setBrushSize(Number(e.target.value))}
+                        />
+                        <strong>{brushSize}px</strong>
+                      </label>
+                      <button
+                        type="button"
+                        className="image-inpaint-tool-btn"
+                        onClick={() => setMaskStrokes(prev => prev.slice(0, -1))}
+                        disabled={maskStrokes.length === 0 || !!busy}
+                        title="Annuler le dernier tracé"
+                      >
+                        <Undo2 size={14} />
+                      </button>
+                      <button
+                        type="button"
+                        className="image-inpaint-tool-btn is-danger"
+                        onClick={() => setMaskStrokes([])}
+                        disabled={maskStrokes.length === 0 || !!busy}
+                        title="Effacer tout le masque"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                <footer className="image-viewer-details">
+                  <div className="image-viewer-meta">
+                    <div className="image-viewer-badges">
+                      <span className="image-source-viewer-pill">
+                        {editModeIcon(editMode, 12)}
+                        {editMode === "remove_object"
+                          ? "Masque Effacer un objet (Ideogram 1.0)"
+                          : editMode === "inpaint"
+                            ? generationModel === "ideogram-4-5"
+                              ? "Masque Precise Edit (Ideogram 4.5)"
+                              : "Masque Inpaint (Ideogram 3.0)"
+                            : EDIT_MODE_COPY[editMode].label}
+                      </span>
+                      {sourceImage.width && sourceImage.height && (
+                        <span>{sourceImage.width}×{sourceImage.height} px</span>
+                      )}
+                      {sourceImage.sizeBytes && <span>{formatBytes(sourceImage.sizeBytes)}</span>}
+                    </div>
+                    <p className="image-viewer-prompt">
+                      {editMode === "remove_object"
+                        ? `${sourceImage.name} — Peignez en rouge l’objet à supprimer puis lancez l’effacement.`
+                        : editMode === "inpaint"
+                          ? `${sourceImage.name} — Peignez en violet la zone à remplacer puis décrivez le résultat à gauche.`
+                          : `${sourceImage.name} — Configurez l’outil choisi à gauche puis lancez l’action.`}
+                    </p>
+                  </div>
+
+                  <div className="image-viewer-actions">
+                    {selected && (
+                      <button
+                        type="button"
+                        className="image-secondary-action"
+                        onClick={() => setPreviewingSource(false)}
+                      >
+                        <Eye size={15} />
+                        <span>Voir la galerie</span>
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="image-delete-action"
+                      onClick={clearSourceImage}
+                      disabled={!!busy}
+                      aria-label="Retirer l’image source"
+                      title="Retirer l’image source"
+                    >
+                      <X size={15} />
+                    </button>
+                  </div>
+                </footer>
+              </>
             ) : selected ? (
               <>
-                <div className="image-viewer-stage">
+                <div className={`image-viewer-stage ${showCheckerboard && selected.mime_type === "image/png" ? "is-checkerboard" : ""}`}>
                   <img
                     src={selected.url}
                     alt={selected.prompt}
@@ -946,6 +1961,17 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
                     onClick={() => setZoomed(old => !old)}
                   />
                   <div className="image-stage-floating-tools">
+                    {selected.mime_type === "image/png" && (
+                      <button
+                        type="button"
+                        className={`image-stage-pill ${showCheckerboard ? "is-active" : ""}`}
+                        onClick={() => setShowCheckerboard(old => !old)}
+                        title="Afficher ou masquer le damier de transparence"
+                      >
+                        <Grid2x2 size={14} />
+                        <span>Damier</span>
+                      </button>
+                    )}
                     <button
                       type="button"
                       className="image-stage-pill"
@@ -968,6 +1994,74 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
                   </div>
                 </div>
 
+                {(layerizeBlocksByImageId[selected.id] || selected.text_blocks) && (() => {
+                  const blocks = layerizeBlocksByImageId[selected.id] ?? selected.text_blocks ?? [];
+                  return (
+                    <section className="image-layerize-panel" aria-label="Calques de texte détectés par Layerize">
+                      <div className="image-layerize-header">
+                        <div className="image-layerize-title">
+                          <Type size={14} />
+                          <strong>Calques de texte détectés (Layerize)</strong>
+                          <span className="image-layerize-count">{blocks.length} bloc{blocks.length > 1 ? "s" : ""}</span>
+                        </div>
+                        {blocks.length > 0 && (
+                          <button
+                            type="button"
+                            className="image-layerize-copy-all"
+                            onClick={() => void copyLayerizeJson(selected.id, blocks)}
+                          >
+                            {copiedLayerizeJsonId === selected.id ? <Check size={12} /> : <Copy size={12} />}
+                            <span>{copiedLayerizeJsonId === selected.id ? "JSON copié" : "Copier JSON"}</span>
+                          </button>
+                        )}
+                      </div>
+                      {blocks.length === 0 ? (
+                        <p className="image-layerize-empty">Aucun bloc de texte détecté dans cette image.</p>
+                      ) : (
+                        <div className="image-layerize-list">
+                          {blocks.map((block, index) => {
+                            const validColor =
+                              block.color && /^#[0-9a-fA-F]{3,8}$/.test(block.color) ? block.color : null;
+                            return (
+                              <div key={`${block.text}-${index}`} className="image-layerize-item">
+                                <div className="image-layerize-item-main">
+                                  <div className="image-layerize-item-top">
+                                    <span className="image-layerize-text">« {block.text} »</span>
+                                    {block.role && <span className="image-layerize-role">{block.role}</span>}
+                                  </div>
+                                  <div className="image-layerize-meta">
+                                    {block.font_name && <span>Police : {block.font_name}</span>}
+                                    {typeof block.font_size === "number" && (
+                                      <span>{Math.round(block.font_size)} px</span>
+                                    )}
+                                    {validColor && (
+                                      <span className="image-layerize-color">
+                                        <i className="image-layerize-swatch" style={{ backgroundColor: validColor }} />
+                                        {validColor}
+                                      </span>
+                                    )}
+                                    <span>
+                                      Pos ({Math.round(block.x)}, {Math.round(block.y)}) · {Math.round(block.width)}×{Math.round(block.height)}
+                                    </span>
+                                  </div>
+                                </div>
+                                <button
+                                  type="button"
+                                  className="image-layerize-copy-btn"
+                                  onClick={() => void copyLayerizeText(block.text, index)}
+                                  title="Copier le texte de ce calque"
+                                >
+                                  {copiedBlockIndex === index ? <Check size={13} /> : <Copy size={13} />}
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </section>
+                  );
+                })()}
+
                 <footer className="image-viewer-details">
                   <div className="image-viewer-meta">
                     <div className="image-viewer-badges">
@@ -982,6 +2076,16 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
                   </div>
 
                   <div className="image-viewer-actions">
+                    <button
+                      type="button"
+                      className="image-edit-source-button"
+                      onClick={() => loadGalleryImageForEdit(selected)}
+                      disabled={!!busy}
+                      title="Charger cette image comme source pour lui apporter des modifications"
+                    >
+                      <Paintbrush size={15} />
+                      <span>Modifier cette image</span>
+                    </button>
                     <a
                       className="image-download-button"
                       href={selected.download_url}
