@@ -785,6 +785,40 @@ async def fetch_eodhd_realtime(
     return None
 
 
+def _to_adjusted_ohlc_bar(
+    date_str: str,
+    raw_open: Any,
+    raw_high: Any,
+    raw_low: Any,
+    raw_close: Any,
+    adj_close: Any,
+    volume: Any,
+) -> dict[str, Any] | None:
+    """Ajuste proportionnellement OHLC par le ratio `adjusted_close / close` (dividendes + splits)."""
+    c_raw = _safe_float(raw_close)
+    c_adj = _safe_float(adj_close)
+    base_close = c_adj if c_adj is not None else c_raw
+    if base_close is None or not date_str:
+        return None
+    factor = (c_adj / c_raw) if (c_adj is not None and c_raw is not None and c_raw > 0) else 1.0
+
+    def _scale(val: Any) -> float | None:
+        fv = _safe_float(val)
+        return round(fv * factor, 4) if fv is not None else None
+
+    adj_c = round(base_close, 4)
+    return {
+        "date": date_str,
+        "open": _scale(raw_open),
+        "high": _scale(raw_high),
+        "low": _scale(raw_low),
+        "close": adj_c,
+        "adjusted_close": adj_c,
+        "raw_close": round(c_raw, 4) if c_raw is not None else adj_c,
+        "volume": _safe_float(volume),
+    }
+
+
 async def fetch_eodhd_historical_eod(
     client: httpx.AsyncClient,
     ticker: str,
@@ -794,7 +828,7 @@ async def fetch_eodhd_historical_eod(
     """Fetches historical daily bars (EOD) from EOD Historical Data."""
     url = f"https://eodhd.com/api/eod/{urllib.parse.quote(ticker)}?order=d&fmt=json&limit={limit}&api_token={urllib.parse.quote(api_key)}"
     try:
-        resp = await client.get(url, timeout=10.0)
+        resp = await client.get(url, timeout=15.0)
         if resp.status_code == 200:
             data = resp.json()
             if isinstance(data, list):
@@ -812,10 +846,12 @@ async def fetch_eodhd_fundamentals(
     """Fetches fundamentals from EOD Historical Data (if plan permits)."""
     url = f"https://eodhd.com/api/fundamentals/{urllib.parse.quote(ticker)}?api_token={urllib.parse.quote(api_key)}&fmt=json"
     try:
-        resp = await client.get(url, timeout=10.0)
+        resp = await client.get(url, timeout=15.0)
         if resp.status_code == 200:
             data = resp.json()
-            if isinstance(data, dict) and any(k in data for k in ("General", "Highlights", "Valuation")):
+            if isinstance(data, dict) and any(
+                k in data for k in ("General", "Highlights", "Valuation", "Financials")
+            ):
                 return data
     except Exception as exc:
         _logger.debug("Fundamentals EODHD non disponibles pour %s: %s", ticker, exc)
@@ -965,16 +1001,26 @@ def build_eodhd_markdown(
             "| :--- | :---: | :---: | :---: | :---: | :---: | :---: |",
         ])
         for i, bar in enumerate(eod_bars[:8]):
+            adj_bar = _to_adjusted_ohlc_bar(
+                str(bar.get("date") or ""),
+                bar.get("open"),
+                bar.get("high"),
+                bar.get("low"),
+                bar.get("close"),
+                bar.get("adjusted_close"),
+                bar.get("volume"),
+            ) or {}
             b_date = bar.get("date", "N/A")
-            b_close = _safe_float(bar.get("close") or bar.get("adjusted_close"))
-            b_open = _safe_float(bar.get("open"))
-            b_high = _safe_float(bar.get("high"))
-            b_low = _safe_float(bar.get("low"))
-            b_vol = _safe_float(bar.get("volume"))
+            b_close = adj_bar.get("close")
+            b_open = adj_bar.get("open")
+            b_high = adj_bar.get("high")
+            b_low = adj_bar.get("low")
+            b_vol = adj_bar.get("volume")
 
             var_str = "—"
             if b_close is not None and i + 1 < len(eod_bars):
-                older_close = _safe_float(eod_bars[i + 1].get("close") or eod_bars[i + 1].get("adjusted_close"))
+                older_bar = eod_bars[i + 1]
+                older_close = _safe_float(older_bar.get("adjusted_close") or older_bar.get("close"))
                 if older_close and older_close > 0:
                     diff_pct = ((b_close - older_close) / older_close) * 100
                     var_str = f"{diff_pct:+.2f}%"
@@ -1222,19 +1268,22 @@ async def fetch_eodhd_quote_data(
             yahoo_summary=yahoo_summary,
         )
 
-        # Store chronological bars for frontend charting
-        chronological_bars = [
-            {
-                "date": b.get("date"),
-                "open": _safe_float(b.get("open")),
-                "high": _safe_float(b.get("high")),
-                "low": _safe_float(b.get("low")),
-                "close": _safe_float(b.get("close") or b.get("adjusted_close")),
-                "volume": _safe_float(b.get("volume")),
-            }
-            for b in reversed(eod_bars)
-            if b.get("date")
-        ] if eod_bars else []
+        # Store chronological adjusted OHLC bars for frontend charting & indicators
+        chronological_bars = []
+        if eod_bars:
+            for b in reversed(eod_bars):
+                if b.get("date"):
+                    adj_bar = _to_adjusted_ohlc_bar(
+                        str(b.get("date")),
+                        b.get("open"),
+                        b.get("high"),
+                        b.get("low"),
+                        b.get("close"),
+                        b.get("adjusted_close"),
+                        b.get("volume"),
+                    )
+                    if adj_bar:
+                        chronological_bars.append(adj_bar)
         meta["eod_bars"] = chronological_bars
 
         filename = f"📈 {meta['short_name']} ({ticker_candidate}) · EOD Historical Data"[:255]
@@ -1423,31 +1472,51 @@ async def get_financial_dashboard_data(
     query: str,
     limit_bars: int = 30,
     chart_range: str = DEFAULT_CHART_RANGE,
+    refresh: bool = False,
 ) -> dict[str, Any]:
     """
     Builds a complete financial dashboard data payload for the Finance Modal,
-    combining live quote & historical bars from EODHD with structured valuation,
-    financial statements, analyst consensus, and company profile from Yahoo Finance.
+    combining live quote, historical bars and fundamentals from EODHD (primary)
+    with Yahoo Finance as automatic fallback/enrichment, and persisting all
+    downloaded data into the dedicated finance warehouse database.
     """
+    from .finance_provider import (
+        extract_eodhd_financial_stats,
+        merge_financial_stats,
+        persist_eodhd_fundamentals_to_warehouse,
+    )
+    from .finance_warehouse import (
+        get_snapshot,
+        get_warehouse_stats,
+        save_snapshot,
+        upsert_eod_bars,
+        upsert_instrument,
+        warehouse_db_path,
+    )
+
     clean_target = query.strip()
     y_range, y_interval, intraday = CHART_RANGES.get(chart_range, CHART_RANGES[DEFAULT_CHART_RANGE])
-    # Plage par défaut : comportement historique (barres EODHD en priorité).
-    # Autres plages : la courbe provient du graphique Yahoo (granularité adaptée).
-    prefer_yahoo_bars = chart_range != DEFAULT_CHART_RANGE
+    range_bar_limits = {"1m": limit_bars, "3m": 66, "6m": 132, "1y": 260, "2y": 520, "5y": 1300, "10y": 2600, "max": 7500}
+    eod_limit = range_bar_limits.get(chart_range, limit_bars)
     eod_key = (
         settings.eod_historical_data_key.get_secret_value()
         if settings.enabled(settings.eod_historical_data_key)
         else ""
     )
+    use_warehouse = settings.finance_data_dir is not None or not (
+        _is_callable_mock(fetch_eodhd_realtime) or _is_callable_mock(fetch_yahoo_quote_summary)
+    )
+    db_path = warehouse_db_path(settings)
+    fund_ttl = max(60, int(settings.finance_fundamentals_ttl_hours) * 3600)
 
     async def _get_eod():
         if not eod_key or is_yahoo_finance_url(clean_target):
-            return None, None, []
+            return None, None, [], None
         try:
             async with httpx.AsyncClient(
                 headers={"User-Agent": DEFAULT_USER_AGENT},
                 follow_redirects=True,
-                timeout=12.0,
+                timeout=15.0,
             ) as client:
                 eod_item = None
                 ticker_candidate = None
@@ -1466,16 +1535,39 @@ async def get_financial_dashboard_data(
                             break
 
                 if not ticker_candidate:
-                    return None, None, []
+                    return None, None, [], None
 
-                rt_data = await fetch_eodhd_realtime(client, ticker_candidate, eod_key)
-                bars = await fetch_eodhd_historical_eod(client, ticker_candidate, eod_key, limit=limit_bars)
-                return eod_item, rt_data, bars
+                cached_eod_fund = None
+                if use_warehouse and not refresh:
+                    snap = get_snapshot(
+                        db_path,
+                        ticker_candidate,
+                        "fundamentals",
+                        provider="eodhd",
+                        max_age_seconds=fund_ttl,
+                        include_raw=True,
+                    )
+                    if snap and isinstance(snap.get("raw"), dict):
+                        cached_eod_fund = snap["raw"]
+
+                if cached_eod_fund is not None:
+                    rt_data, bars = await asyncio.gather(
+                        fetch_eodhd_realtime(client, ticker_candidate, eod_key),
+                        fetch_eodhd_historical_eod(client, ticker_candidate, eod_key, limit=eod_limit),
+                    )
+                    eod_fund = cached_eod_fund
+                else:
+                    rt_data, bars, eod_fund = await asyncio.gather(
+                        fetch_eodhd_realtime(client, ticker_candidate, eod_key),
+                        fetch_eodhd_historical_eod(client, ticker_candidate, eod_key, limit=eod_limit),
+                        fetch_eodhd_fundamentals(client, ticker_candidate, eod_key),
+                    )
+                return eod_item, rt_data, bars, eod_fund
         except Exception as e_exc:
             _logger.warning("Échec EODHD dashboard pour « %s »: %s", clean_target, e_exc)
-            return None, None, []
+            return None, None, [], None
 
-    async def _get_yahoo(eod_symbol: str | None = None):
+    async def _get_yahoo(eod_symbol: str | None = None, fetch_summary: bool = True, fetch_chart: bool = True):
         try:
             client, crumb = await get_yahoo_crumb_and_client()
             try:
@@ -1501,8 +1593,8 @@ async def get_financial_dashboard_data(
                 if not t:
                     t = lookup.upper().strip("$")
 
-                summary = await fetch_yahoo_quote_summary(client, t, crumb=crumb)
-                chart = await fetch_yahoo_chart(client, t, range_period=y_range, interval=y_interval)
+                summary = await fetch_yahoo_quote_summary(client, t, crumb=crumb) if fetch_summary else None
+                chart = await fetch_yahoo_chart(client, t, range_period=y_range, interval=y_interval) if fetch_chart else None
                 return top_q, summary, chart, t
             finally:
                 await client.aclose()
@@ -1510,22 +1602,41 @@ async def get_financial_dashboard_data(
             _logger.warning("Échec Yahoo dashboard pour « %s »: %s", clean_target, y_exc)
             return None, None, None, None
 
-    (eod_item, eod_rt, eod_bars), (yahoo_top, yahoo_sum, yahoo_chart, yahoo_sym) = await asyncio.gather(
-        _get_eod(), _get_yahoo(), return_exceptions=False
-    )
+    # EODHD prioritaire ; Yahoo Finance uniquement en backup (ou pour les barres intraday 1J/1Sem).
+    eod_item, eod_rt, eod_bars, eod_fund = await _get_eod()
+    eod_resolved_sym = (eod_item.get("ticker") if eod_item else None) or (eod_rt.get("code") if eod_rt else None)
 
-    if eod_item and not yahoo_sum:
-        eod_code = eod_item.get("ticker")
-        if eod_code:
-            yahoo_top, yahoo_sum, yahoo_chart, yahoo_sym = await _get_yahoo(eod_code)
+    need_yahoo_summary = eod_fund is None or (eod_rt is None and eod_fund is None)
+    need_yahoo_chart = intraday or not eod_bars
+    yahoo_top, yahoo_sum, yahoo_chart, yahoo_sym = (None, None, None, None)
+    if need_yahoo_summary or need_yahoo_chart:
+        yahoo_top, yahoo_sum, yahoo_chart, yahoo_sym = await _get_yahoo(
+            eod_resolved_sym,
+            fetch_summary=need_yahoo_summary,
+            fetch_chart=need_yahoo_chart,
+        )
 
-    if not eod_rt and not yahoo_sum and not yahoo_chart:
+    if not eod_rt and not eod_fund and not yahoo_sum and not yahoo_chart:
         raise HTTPException(404, f"Impossible d'identifier l'actif financier pour « {query} ».")
 
-    eod_ticker = (eod_item.get("ticker") if eod_item else None) or (eod_rt.get("code") if eod_rt else None) or ""
+    eod_gen = (eod_fund or {}).get("General") or {}
+    eod_ticker = (
+        (eod_item.get("ticker") if eod_item else None)
+        or (eod_rt.get("code") if eod_rt else None)
+        or (
+            f"{eod_gen['Code']}.{eod_gen['Exchange']}"
+            if eod_gen.get("Code") and eod_gen.get("Exchange")
+            else None
+        )
+        or ""
+    )
     display_symbol = eod_ticker or yahoo_sym or clean_target.upper().strip("$")
 
-    financial_stats = extract_structured_financial_stats(yahoo_sum, yahoo_chart)
+    eod_stats = extract_eodhd_financial_stats(eod_fund, eod_rt) if eod_fund else None
+    yahoo_stats = extract_structured_financial_stats(yahoo_sum, yahoo_chart) if yahoo_sum else None
+    financial_stats, fundamentals_source = merge_financial_stats(eod_stats, yahoo_stats)
+    if not financial_stats:
+        financial_stats = extract_structured_financial_stats(None, yahoo_chart)
 
     curr_price = _safe_float(eod_rt.get("close") if eod_rt else None)
     prev_close = _safe_float(eod_rt.get("previousClose") if eod_rt else None)
@@ -1552,49 +1663,73 @@ async def get_financial_dashboard_data(
             change_pct = round((change / prev_close) * 100, 2)
 
     short_name = (
-        (eod_item.get("Name") if eod_item else None)
+        (eod_gen.get("Name"))
+        or (eod_item.get("Name") if eod_item else None)
         or (yahoo_top.get("shortname") if yahoo_top else None)
         or (yahoo_sum.get("price", {}).get("shortName") if yahoo_sum else None)
         or display_symbol
     ).split(" - ")[0].split(" (")[0].strip()
 
     long_name = (
-        (yahoo_sum.get("price", {}).get("longName") if yahoo_sum else None)
+        (eod_gen.get("Name"))
+        or (yahoo_sum.get("price", {}).get("longName") if yahoo_sum else None)
         or (yahoo_top.get("longname") if yahoo_top else None)
         or (eod_item.get("Name") if eod_item else None)
         or short_name
     )
 
     exchange = (
-        (eod_item.get("Exchange") if eod_item else None)
+        (eod_gen.get("Exchange"))
+        or (eod_item.get("Exchange") if eod_item else None)
         or (yahoo_sum.get("price", {}).get("exchangeName") if yahoo_sum else None)
         or (display_symbol.split(".")[1] if "." in display_symbol else "Marché")
     )
 
     currency = (
-        (eod_item.get("Currency") if eod_item else None)
+        (eod_gen.get("CurrencyCode"))
+        or (eod_item.get("Currency") if eod_item else None)
         or (yahoo_sum.get("price", {}).get("currency") if yahoo_sum else None)
         or ("USD" if str(exchange).upper() == "US" else "EUR")
     )
 
-    isin = eod_item.get("ISIN") if eod_item else None
+    isin = eod_gen.get("ISIN") or (eod_item.get("ISIN") if eod_item else None)
 
     chronological_bars = []
-    if eod_bars and not (prefer_yahoo_bars and yahoo_chart and yahoo_chart.get("timestamp")):
+    warehouse_bars = []
+    bars_source = "eodhd"
+    if eod_bars and not (intraday and yahoo_chart and yahoo_chart.get("timestamp")):
         for b in reversed(eod_bars):
-            if b.get("date"):
-                chronological_bars.append({
-                    "date": b.get("date"),
+            d_str = str(b.get("date") or "").strip()
+            if not d_str:
+                continue
+            adj_bar = _to_adjusted_ohlc_bar(
+                d_str,
+                b.get("open"),
+                b.get("high"),
+                b.get("low"),
+                b.get("close"),
+                b.get("adjusted_close"),
+                b.get("volume"),
+            )
+            if adj_bar:
+                chronological_bars.append(adj_bar)
+                raw_c = _safe_float(b.get("close"))
+                warehouse_bars.append({
+                    "date": d_str,
                     "open": _safe_float(b.get("open")),
                     "high": _safe_float(b.get("high")),
                     "low": _safe_float(b.get("low")),
-                    "close": _safe_float(b.get("close") or b.get("adjusted_close")),
-                    "volume": _safe_float(b.get("volume")),
+                    "close": raw_c if raw_c is not None else adj_bar["close"],
+                    "adjusted_close": adj_bar["adjusted_close"],
+                    "volume": adj_bar["volume"],
                 })
 
     if not chronological_bars and yahoo_chart and "timestamp" in yahoo_chart:
+        bars_source = "yahoo_finance"
         ts = yahoo_chart.get("timestamp", [])
-        q_ind = yahoo_chart.get("indicators", {}).get("quote", [{}])[0]
+        indicators_node = yahoo_chart.get("indicators", {}) or {}
+        q_ind = (indicators_node.get("quote") or [{}])[0] or {}
+        c_adj = ((indicators_node.get("adjclose") or [{}])[0] or {}).get("adjclose", [])
         c_opens = q_ind.get("open", [])
         c_highs = q_ind.get("high", [])
         c_lows = q_ind.get("low", [])
@@ -1608,14 +1743,68 @@ async def get_financial_dashboard_data(
                 d_str = datetime.datetime.fromtimestamp(
                     ts[i] + tz_offset, datetime.timezone.utc
                 ).strftime(date_fmt)
-                chronological_bars.append({
-                    "date": d_str,
-                    "open": _safe_float(c_opens[i] if i < len(c_opens) else None),
-                    "high": _safe_float(c_highs[i] if i < len(c_highs) else None),
-                    "low": _safe_float(c_lows[i] if i < len(c_lows) else None),
-                    "close": _safe_float(c_val),
-                    "volume": _safe_float(c_vols[i] if i < len(c_vols) else None),
-                })
+                raw_o = c_opens[i] if i < len(c_opens) else None
+                raw_h = c_highs[i] if i < len(c_highs) else None
+                raw_l = c_lows[i] if i < len(c_lows) else None
+                raw_v = c_vols[i] if i < len(c_vols) else None
+                adj_val = (c_adj[i] if (not intraday and i < len(c_adj)) else None)
+                adj_bar = _to_adjusted_ohlc_bar(d_str, raw_o, raw_h, raw_l, c_val, adj_val, raw_v)
+                if adj_bar:
+                    chronological_bars.append(adj_bar)
+                    if not intraday:
+                        raw_cf = _safe_float(c_val)
+                        warehouse_bars.append({
+                            "date": d_str,
+                            "open": _safe_float(raw_o),
+                            "high": _safe_float(raw_h),
+                            "low": _safe_float(raw_l),
+                            "close": raw_cf,
+                            "adjusted_close": adj_bar["adjusted_close"],
+                            "volume": adj_bar["volume"],
+                        })
+
+    warehouse_stats: dict[str, Any] = {}
+    if use_warehouse:
+        try:
+            upsert_instrument(
+                db_path,
+                {
+                    "symbol": display_symbol,
+                    "eod_ticker": eod_ticker or display_symbol,
+                    "yahoo_symbol": yahoo_sym or display_symbol,
+                    "isin": isin,
+                    "short_name": short_name,
+                    "long_name": long_name,
+                    "exchange": exchange,
+                    "currency": currency,
+                    "country": eod_gen.get("CountryName") or (eod_item.get("Country") if eod_item else None) or financial_stats.get("profile", {}).get("country"),
+                    "sector": financial_stats.get("profile", {}).get("sector"),
+                    "industry": financial_stats.get("profile", {}).get("industry"),
+                },
+            )
+            if warehouse_bars and not intraday:
+                upsert_eod_bars(db_path, display_symbol, warehouse_bars, bars_source)
+            if eod_fund:
+                persist_eodhd_fundamentals_to_warehouse(
+                    settings,
+                    display_symbol,
+                    eod_fund,
+                    eod_ticker=eod_ticker or display_symbol,
+                    yahoo_symbol=yahoo_sym or display_symbol,
+                )
+            if yahoo_sum:
+                save_snapshot(
+                    db_path,
+                    display_symbol,
+                    "yahoo_finance",
+                    "quote_summary",
+                    yahoo_sum,
+                    yahoo_stats,
+                    currency=currency,
+                )
+            warehouse_stats = get_warehouse_stats(db_path, display_symbol)
+        except Exception as wh_exc:
+            _logger.warning("Persistance entrepôt financier ignorée (%s): %s", display_symbol, wh_exc)
 
     return {
         "symbol": display_symbol,
@@ -1633,10 +1822,12 @@ async def get_financial_dashboard_data(
         "previous_close": prev_close,
         "volume": volume,
         "exchange": exchange,
-        "country": (eod_item.get("Country") if eod_item else None) or financial_stats.get("profile", {}).get("country"),
+        "country": eod_gen.get("CountryName") or (eod_item.get("Country") if eod_item else None) or financial_stats.get("profile", {}).get("country"),
         "isin": isin,
-        "has_eod": bool(eod_rt or eod_bars),
+        "has_eod": bool(eod_rt or eod_bars or eod_fund),
         "has_yahoo": bool(yahoo_sum),
+        "fundamentals_source": fundamentals_source,
+        "warehouse_stats": warehouse_stats,
         "eod_bars": chronological_bars,
         "financial_stats": financial_stats,
         "url_eod": f"https://eodhd.com/financial-summary/{eod_ticker or display_symbol}",
@@ -1664,23 +1855,7 @@ async def fetch_and_parse_yahoo_finance(
 
     if eod_key and not is_yahoo_url:
         try:
-            y_summary = None
-            try:
-                y_c, y_crumb = await get_yahoo_crumb_and_client()
-                try:
-                    for v in query_variants(clean_target):
-                        t_q = await search_yahoo_ticker(y_c, v)
-                        if t_q:
-                            sym = t_q.get("symbol")
-                            if sym:
-                                y_summary = await fetch_yahoo_quote_summary(y_c, sym, crumb=y_crumb)
-                                break
-                finally:
-                    await y_c.aclose()
-            except Exception as y_exc:
-                _logger.debug("Enrichissement Yahoo Finance omis: %s", y_exc)
-
-            eod_tuple = await fetch_eodhd_quote_data(settings, clean_target, yahoo_summary=y_summary)
+            eod_tuple = await fetch_eodhd_quote_data(settings, clean_target)
             if eod_tuple:
                 return eod_tuple
         except Exception as eod_exc:

@@ -11,6 +11,11 @@ import httpx
 from fastapi import HTTPException
 
 from .config import Settings
+from .finance_warehouse import (
+    get_stored_eod_bars,
+    resolve_canonical_symbol,
+    warehouse_db_path,
+)
 from .finance import (
     DEFAULT_USER_AGENT,
     _safe_float,
@@ -78,7 +83,7 @@ def compute_period_returns(
     dated_bars: list[tuple[datetime.date, float]] = []
     for bar in bars:
         d = _parse_bar_date(str(bar.get("date") or ""))
-        c = _safe_float(bar.get("close"))
+        c = _safe_float(bar.get("adjusted_close") or bar.get("close"))
         if d is not None and c is not None and c > 0:
             dated_bars.append((d, c))
     dated_bars.sort(key=lambda item: item[0])
@@ -252,9 +257,11 @@ async def _fetch_single_watchlist_quote(
     item: Any,
     eod_key: str,
     sem: asyncio.Semaphore,
+    client: httpx.AsyncClient,
 ) -> dict[str, Any]:
     base_payload = {
         "id": item.id,
+        "list_id": getattr(item, "list_id", None),
         "symbol": item.symbol,
         "yahoo_symbol": item.yahoo_symbol or item.symbol,
         "eod_ticker": item.eod_ticker or item.symbol,
@@ -276,41 +283,46 @@ async def _fetch_single_watchlist_quote(
     if yahoo_sym.endswith(".US"):
         yahoo_sym = yahoo_sym[:-3]
 
+    db_path = warehouse_db_path(settings)
+    lookup_sym = item.eod_ticker or item.symbol or yahoo_sym
+    canonical = resolve_canonical_symbol(db_path, lookup_sym)
+    stored_bars = get_stored_eod_bars(db_path, canonical, limit=270)
+    fresh_cutoff = (datetime.date.today() - datetime.timedelta(days=4)).isoformat()
+    has_fresh_stored = bool(stored_bars and str(stored_bars[-1].get("date") or "") >= fresh_cutoff)
+
     async with sem:
-        bars: list[dict[str, Any]] = []
+        bars: list[dict[str, Any]] = stored_bars if has_fresh_stored else []
         current_price: float | None = None
         rt_change_pct: float | None = None
         currency = item.currency or "EUR"
 
         try:
-            async with httpx.AsyncClient(
-                headers={"User-Agent": DEFAULT_USER_AGENT},
-                follow_redirects=True,
-                timeout=10.0,
-            ) as client:
+            if eod_key and item.eod_ticker:
+                rt_data = await fetch_eodhd_realtime(client, item.eod_ticker, eod_key)
+                if rt_data:
+                    rt_p = _safe_float(rt_data.get("close"))
+                    rt_chg = _safe_float(rt_data.get("change_p"))
+                    if rt_p is not None and rt_p > 0:
+                        current_price = rt_p
+                    if rt_chg is not None:
+                        rt_change_pct = rt_chg
+                if not bars:
+                    eod_bars = await fetch_eodhd_historical_eod(client, item.eod_ticker, eod_key, limit=270)
+                    if eod_bars:
+                        bars = list(reversed(eod_bars))
+
+            if not bars:
                 chart = await fetch_yahoo_chart(client, yahoo_sym, range_period="1y", interval="1d")
                 if chart:
                     meta = chart.get("meta") or {}
-                    current_price = _safe_float(meta.get("regularMarketPrice"))
+                    if current_price is None:
+                        current_price = _safe_float(meta.get("regularMarketPrice"))
                     prev_close = _safe_float(meta.get("chartPreviousClose") or meta.get("previousClose"))
-                    if current_price is not None and prev_close and prev_close > 0:
+                    if rt_change_pct is None and current_price is not None and prev_close and prev_close > 0:
                         rt_change_pct = round(((current_price - prev_close) / prev_close) * 100.0, 2)
                     if meta.get("currency"):
                         currency = str(meta["currency"])
                     bars = _yahoo_chart_to_daily_bars(chart)
-
-                if eod_key and item.eod_ticker:
-                    rt_data = await fetch_eodhd_realtime(client, item.eod_ticker, eod_key)
-                    if rt_data:
-                        rt_p = _safe_float(rt_data.get("close"))
-                        rt_chg = _safe_float(rt_data.get("change_p"))
-                        if rt_p is not None and rt_p > 0:
-                            current_price = rt_p
-                        if rt_chg is not None:
-                            rt_change_pct = rt_chg
-                    if not bars:
-                        eod_bars = await fetch_eodhd_historical_eod(client, item.eod_ticker, eod_key, limit=270)
-                        bars = list(reversed(eod_bars))
         except Exception as exc:
             _logger.warning("Échec récupération variations watchlist pour %s: %s", item.symbol, exc)
 
@@ -329,6 +341,11 @@ async def fetch_watchlist_quotes(settings: Settings, items: list[Any]) -> list[d
         if settings.enabled(settings.eod_historical_data_key)
         else ""
     )
-    sem = asyncio.Semaphore(5)
-    tasks = [_fetch_single_watchlist_quote(settings, item, eod_key, sem) for item in items]
-    return list(await asyncio.gather(*tasks))
+    sem = asyncio.Semaphore(8)
+    async with httpx.AsyncClient(
+        headers={"User-Agent": DEFAULT_USER_AGENT},
+        follow_redirects=True,
+        timeout=10.0,
+    ) as client:
+        tasks = [_fetch_single_watchlist_quote(settings, item, eod_key, sem, client) for item in items]
+        return list(await asyncio.gather(*tasks))

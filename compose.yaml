@@ -32,6 +32,7 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://tchat:${POSTGRES_PASSWORD}@clair-db:5432/tchat
       APP_DATA_DIR: /app/data
+      FINANCE_DATA_DIR: /app/finance_data
       # L'environnement du shell est prioritaire sur .env (clés cloud injectées).
       LLM_API_KEY: ${LLM_API_KEY:-}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
@@ -62,6 +63,7 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3001,http://127.0.0.1:3001}
     volumes:
       - uploads_data:/app/data
+      - finance_data:/app/finance_data
       - ./.env:/app/.env:ro
     ports:
       - "127.0.0.1:8001:8001"
@@ -127,4 +129,5 @@ services:
 volumes:
   postgres_data:
   uploads_data:
+  finance_data:
   hermes_data:

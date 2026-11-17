@@ -1125,6 +1125,8 @@ export type EodBar = {
   high: number | null;
   low: number | null;
   close: number | null;
+  adjusted_close?: number | null;
+  raw_close?: number | null;
   volume: number | null;
 };
 
@@ -1188,6 +1190,13 @@ export type FinancialStats = {
   };
 };
 
+export type WarehouseStats = {
+  eod_bars_count?: number;
+  annual_periods_count?: number;
+  quarterly_periods_count?: number;
+  db_size_bytes?: number;
+};
+
 export type FinancialDashboardData = {
   symbol: string;
   eod_ticker: string;
@@ -1208,6 +1217,8 @@ export type FinancialDashboardData = {
   isin?: string | null;
   has_eod: boolean;
   has_yahoo: boolean;
+  fundamentals_source?: string;
+  warehouse_stats?: WarehouseStats;
   eod_bars: EodBar[];
   financial_stats: FinancialStats;
   url_eod: string;
@@ -1223,25 +1234,518 @@ export type StatementPeriod = {
   cashflow: StatementRow[];
   ratios: StatementRatio[];
 };
-export type FinancialStatements = { symbol: string; annual: StatementPeriod; quarterly: StatementPeriod };
+export type EarningsHistoryRow = {
+  date: string;
+  report_date?: string | null;
+  currency?: string | null;
+  eps_actual: number | null;
+  eps_estimate: number | null;
+  eps_difference: number | null;
+  surprise_pct: number | null;
+};
+export type FinancialStatements = {
+  symbol: string;
+  canonical_symbol?: string;
+  currency?: string;
+  source_provider?: string;
+  source_label?: string;
+  cached?: boolean;
+  updated_at?: string | null;
+  warehouse_stats?: WarehouseStats;
+  annual: StatementPeriod;
+  quarterly: StatementPeriod;
+  earnings_history?: EarningsHistoryRow[];
+  highlights?: Record<string, string | number | null>;
+};
 
-export async function fetchFinanceStatements(symbol: string): Promise<FinancialStatements> {
-  return api<FinancialStatements>(`/finance/statements?symbol=${encodeURIComponent(symbol)}`);
+export async function fetchFinanceStatements(
+  symbol: string,
+  refresh = false,
+): Promise<FinancialStatements> {
+  const qs = new URLSearchParams({ symbol });
+  if (refresh) qs.set("refresh", "true");
+  return api<FinancialStatements>(`/finance/statements?${qs.toString()}`);
 }
 
-export type FinanceRange = "1d" | "1w" | "1m" | "3m" | "6m" | "1y" | "2y" | "5y" | "max";
+export type FinanceRange = "1d" | "1w" | "1m" | "3m" | "6m" | "1y" | "2y" | "5y" | "10y" | "max";
 
 export async function fetchFinanceDetails(
   query: string,
   range: FinanceRange = "1m",
+  refresh = false,
 ): Promise<FinancialDashboardData> {
-  return api<FinancialDashboardData>(
-    `/finance/details?query=${encodeURIComponent(query)}&range=${range}`,
+  const qs = new URLSearchParams({ query, range });
+  if (refresh) qs.set("refresh", "true");
+  return api<FinancialDashboardData>(`/finance/details?${qs.toString()}`);
+}
+
+export type DossierMetricRow = {
+  key: string;
+  label: string;
+  format: string;
+  values: (number | null)[];
+  yoy: (number | null)[];
+};
+
+export type DossierScoreCriteria = {
+  key: string;
+  label: string;
+  values: (number | null)[];
+  avg?: number;
+};
+
+export type FinancialDossier = {
+  symbol: string;
+  currency: string;
+  source_provider: string;
+  source_label: string;
+  warehouse_stats?: WarehouseStats;
+  header: {
+    name: string;
+    logo_url?: string | null;
+    cap_category: string;
+    market_cap: number | null;
+    dividend_yield_pct: number | null;
+    beta: number | null;
+    ih_score: number | null;
+    ih_quality: string;
+    ih_trend: string;
+    price_dynamics: string;
+    sector?: string | null;
+    industry?: string | null;
+    employees?: number | null;
+    website?: string;
+    address?: string;
+    isin?: string | null;
+    description?: string;
+  };
+  capital_valuation: {
+    shares_outstanding: number | null;
+    float_pct: number | null;
+    insiders_pct: number | null;
+    institutions_pct: number | null;
+    short_ratio: number | null;
+    short_pct_float: number | null;
+    pe_ttm: number | null;
+    pe_forward: number | null;
+    peg: number | null;
+    pb: number | null;
+    ev_ebitda: number | null;
+    ev_revenue: number | null;
+    op_margin_ttm: number | null;
+    net_margin_ttm: number | null;
+    gross_margin_ttm: number | null;
+    roe_ttm: number | null;
+    roa_ttm: number | null;
+    rev_growth_q_yoy: number | null;
+    eps_growth_q_yoy: number | null;
+    price: number | null;
+    target_price: number | null;
+    mma50: number | null;
+    mma200: number | null;
+    low_52w: number | null;
+    high_52w: number | null;
+  };
+  performance: {
+    horizons: { key: string; label: string; pct: number | null }[];
+  };
+  performance_chart: { date: string; price: number; adj_price: number; index_100: number }[];
+  risk: {
+    horizons: string[];
+    rf_rates_pct?: number[];
+    metrics: { key: string; label: string; format: string; group: string; values: (number | null)[] }[];
+  };
+  stakeholders: {
+    analysts: {
+      total: number;
+      strong_buy: number;
+      buy: number;
+      hold: number;
+      sell: number;
+      strong_sell: number;
+      target_price: number | null;
+      rating: number | null;
+    };
+    officers: { name: string; title: string; age: number | null }[];
+    insiders: {
+      date: string;
+      name: string;
+      relation: string;
+      action: string;
+      shares: number | null;
+      price: number | null;
+      amount: number | null;
+      signed_amount: number | null;
+    }[];
+    insiders_net_amount: number | null;
+    funds: { name: string; date: string; shares: number | null; weight_pct: number | null; change_pct: number | null }[];
+    institutions: { name: string; date: string; shares: number | null; weight_pct: number | null; change_pct: number | null }[];
+  };
+  annual_tables: {
+    years: string[];
+    dates: string[];
+    summary: DossierMetricRow[];
+    profitability: DossierMetricRow[];
+    solvency: DossierMetricRow[];
+    distribution: DossierMetricRow[];
+    efficiency: DossierMetricRow[];
+    ih_score: {
+      years: string[];
+      criteria: DossierScoreCriteria[];
+      trend_criteria: DossierScoreCriteria[];
+      latest_score: number | null;
+      quality_label?: string;
+      trend: string;
+    };
+    piotroski: {
+      years: string[];
+      criteria: DossierScoreCriteria[];
+      scores: number[];
+      latest_score: number | null;
+    };
+    altman: {
+      years: string[];
+      criteria: DossierScoreCriteria[];
+      scores: (number | null)[];
+      latest_score: number | null;
+    };
+  };
+  dividends_matrix: {
+    years: number[];
+    rows: { year: number; months: (number | null)[]; total: number | null }[];
+  };
+  statements: {
+    annual: StatementPeriod;
+    quarterly: StatementPeriod;
+    earnings_history: EarningsHistoryRow[];
+  };
+  news?: {
+    source: string;
+    provider: string;
+    updated_at?: string | null;
+    items: DossierNewsItem[];
+    sentiment_summary?: {
+      avg_normalized: number;
+      latest_normalized: number;
+      latest_date: string;
+      article_count: number;
+      days_covered: number;
+      series: { date: string; normalized: number; count: number }[];
+    } | null;
+  };
+  historical_market_cap?: {
+    latest_value: number;
+    latest_date: string;
+    min_value: number;
+    max_value: number;
+    points: { date: string; value: number }[];
+  } | null;
+  earnings_calendar?: {
+    report_date: string;
+    fiscal_date: string;
+    timing: string;
+    currency: string;
+    estimate: number | null;
+    actual: number | null;
+    difference: number | null;
+    surprise_pct: number | null;
+  }[];
+  macro_context?: {
+    country_iso3: string;
+    country_name: string;
+    gdp_growth_pct?: { value: number; date: string } | null;
+    inflation_pct?: { value: number; date: string } | null;
+    unemployment_pct?: { value: number; date: string } | null;
+    us_treasury?: {
+      date: string;
+      rate_52w_pct: number | null;
+      rate_13w_pct: number | null;
+      rate_4wk_pct: number | null;
+      risk_free_pct: number;
+    } | null;
+  } | null;
+  intrinsic_valuation?: IntrinsicValuationPayload | null;
+  uncle_stock_scores?: UncleStockScoresPayload | null;
+  ai_analysis: { markdown: string; updated_at?: string | null; model?: string | null } | null;
+};
+
+export interface UncleStockScoreComponent {
+  name: string;
+  input: number | string | boolean | null;
+  transformed_input: number | string | null;
+  weight: number | null;
+  contribution: number | null;
+}
+
+export interface UncleStockScoreResult {
+  id: string;
+  name: string;
+  category: string;
+  unit: string;
+  available: boolean;
+  raw_score: number | string | null;
+  clamped_score: number | string | null;
+  normalized_score: number | null;
+  final_score: number | string | null;
+  display_value: string;
+  components: UncleStockScoreComponent[];
+  warnings: string[];
+  summary: string;
+  source_version: string;
+}
+
+export interface UncleStockScoreItem {
+  id: string;
+  name: string;
+  category: string;
+  unit: string;
+  available: boolean;
+  verified: UncleStockScoreResult;
+  documented: UncleStockScoreResult;
+}
+
+export interface UncleStockScoresPayload {
+  available: boolean;
+  source_version: string;
+  summary: {
+    advice_verified: string;
+    advice_documented: string;
+    categories: string;
+    uncle_stock_score_verified: number | null;
+    uncle_stock_score_documented: number | null;
+    quality_score: number | null;
+    value_score: number | null;
+    financial_health_score: number | null;
+    trap_score: number | null;
+  };
+  items: UncleStockScoreItem[];
+}
+
+export interface IntrinsicAggregate {
+  intrinsic_value: number;
+  price_to_iv: number | null;
+  margin_of_safety_pct: number | null;
+  weight_used: number;
+  weight_max: number;
+  methods_used: number;
+  methods_total: number;
+}
+
+export interface IntrinsicMethodResult {
+  id: string;
+  name: string;
+  category: "weighted" | "complementary";
+  weight: number;
+  unclestock_value: number | null;
+  corrected_value: number | null;
+  status_unclestock: "valid" | "excluded" | "unavailable";
+  status_corrected: "valid" | "excluded" | "unavailable";
+  price_to_iv_unclestock: number | null;
+  margin_of_safety_unclestock_pct: number | null;
+  price_to_iv_corrected: number | null;
+  margin_of_safety_corrected_pct: number | null;
+  exclusion_reason?: string | null;
+  warnings: string[];
+  assumptions: string[];
+  intermediates: Record<string, number | string | null>;
+}
+
+export interface IntrinsicValuationPayload {
+  available: boolean;
+  reason?: string;
+  currency?: string;
+  country_iso3?: string;
+  current_price?: number | null;
+  shares?: number | null;
+  cost_of_capital: Record<string, number | null>;
+  growth_inputs?: Record<string, number | null>;
+  owner_returns: Record<string, number | null>;
+  summary: {
+    unclestock: IntrinsicAggregate | null;
+    corrected: IntrinsicAggregate | null;
+  };
+  methods: IntrinsicMethodResult[];
+  scenarios: {
+    key: string;
+    label: string;
+    growth_pct: number;
+    wacc_pct: number;
+    intrinsic_value: number | null;
+    margin_of_safety_pct: number | null;
+  }[];
+  sensitivity: {
+    growth_headers_pct: number[];
+    rows: {
+      wacc_pct: number;
+      cells: { growth_pct: number; wacc_pct: number; value: number | null; undervalued: boolean }[];
+    }[];
+  } | null;
+}
+
+export interface DossierNewsItem {
+  title: string;
+  url: string;
+  source: string;
+  published_at: string;
+  snippet?: string;
+  tags?: string[];
+  sentiment?: {
+    polarity?: number;
+    pos?: number;
+    neu?: number;
+    neg?: number;
+  } | null;
+}
+
+export async function fetchFinanceDossier(symbol: string, refresh = false): Promise<FinancialDossier> {
+  const qs = new URLSearchParams({ symbol });
+  if (refresh) qs.set("refresh", "true");
+  return api<FinancialDossier>(`/finance/dossier?${qs.toString()}`);
+}
+
+export async function analyzeFinanceDossier(
+  symbol: string,
+  modelId?: string,
+): Promise<{ markdown: string; updated_at?: string | null; model?: string | null }> {
+  return api<{ markdown: string; updated_at?: string | null; model?: string | null }>("/finance/dossier/analyze", {
+    method: "POST",
+    body: JSON.stringify({ symbol, model_id: modelId || null }),
+  });
+}
+
+export type PrincipalIndexInfo = {
+  code: string;
+  tier?: "major" | "minor";
+  name: string;
+  region: string;
+  flag: string;
+  currency: string;
+  eod_ticker: string;
+  yahoo_symbol: string;
+  description: string;
+  constituents_count: number;
+  last_price: number | null;
+  change_pct: number | null;
+  as_of: string | null;
+};
+
+export type WarehouseOverview = {
+  instruments_count: number;
+  eod_bars_count: number;
+  fundamental_facts_count: number;
+  snapshots_count: number;
+  index_constituents_count: number;
+  db_size_bytes: number;
+};
+
+export type IndexConstituent = {
+  symbol: string;
+  eod_ticker: string;
+  yahoo_symbol: string;
+  name: string;
+  sector: string;
+  industry: string;
+  exchange: string;
+  weight_pct: number | null;
+  position: number;
+  cached_in_warehouse: boolean;
+};
+
+export type IndexCompositionResponse = {
+  index: PrincipalIndexInfo & {
+    cached_count: number;
+    source: string;
+    sectors: string[];
+  };
+  constituents: IndexConstituent[];
+};
+
+export type CatalogSearchItem = {
+  symbol: string;
+  eod_ticker: string;
+  yahoo_symbol: string;
+  name: string;
+  exchange: string;
+  sector: string;
+  index_code: string | null;
+  cached: boolean;
+};
+
+export async function fetchPrincipalIndices(
+  includeQuotes = true,
+  tier: "major" | "minor" | "all" = "major",
+): Promise<{ indices: PrincipalIndexInfo[]; warehouse: WarehouseOverview }> {
+  const qs = new URLSearchParams();
+  if (!includeQuotes) qs.set("include_quotes", "false");
+  if (tier !== "major") qs.set("tier", tier);
+  const suffix = qs.toString();
+  return api<{ indices: PrincipalIndexInfo[]; warehouse: WarehouseOverview }>(
+    `/finance/indices${suffix ? `?${suffix}` : ""}`,
   );
 }
 
+export type EodhdIndxCatalogItem = {
+  code: string;
+  eod_ticker: string;
+  name: string;
+  country: string;
+  currency: string;
+  type: string;
+};
+
+export type EodhdIndxCatalogResponse = {
+  total: number;
+  matched: number;
+  source: string;
+  items: EodhdIndxCatalogItem[];
+};
+
+export async function fetchEodhdIndxCatalog(
+  query = "",
+  limit = 120,
+  refresh = false,
+): Promise<EodhdIndxCatalogResponse> {
+  const qs = new URLSearchParams();
+  if (query.trim()) qs.set("q", query.trim());
+  if (limit !== 120) qs.set("limit", String(limit));
+  if (refresh) qs.set("refresh", "true");
+  const suffix = qs.toString();
+  return api<EodhdIndxCatalogResponse>(`/finance/indices/eodhd-catalog${suffix ? `?${suffix}` : ""}`);
+}
+
+export async function fetchIndexComposition(
+  indexCode: string,
+  refresh = false,
+): Promise<IndexCompositionResponse> {
+  const qs = new URLSearchParams();
+  if (refresh) qs.set("refresh", "true");
+  const suffix = qs.toString();
+  return api<IndexCompositionResponse>(
+    `/finance/indices/${encodeURIComponent(indexCode)}${suffix ? `?${suffix}` : ""}`,
+  );
+}
+
+export async function searchFinanceCatalog(
+  query: string,
+  limit = 25,
+): Promise<CatalogSearchItem[]> {
+  const qs = new URLSearchParams({ q: query, limit: String(limit) });
+  const res = await api<{ items: CatalogSearchItem[] }>(`/finance/catalog/search?${qs.toString()}`);
+  return res.items || [];
+}
+
+export type FinanceWatchlistMeta = {
+  id: string;
+  name: string;
+  position: number;
+  items_count: number;
+  created_at?: string;
+  updated_at?: string;
+};
+
 export type WatchlistItem = {
   id: string;
+  list_id?: string | null;
   symbol: string;
   yahoo_symbol: string;
   eod_ticker: string;
@@ -1257,22 +1761,58 @@ export type WatchlistItem = {
   change_1y_pct: number | null;
 };
 
+export type WatchlistStateResponse = {
+  active_list_id: string;
+  lists: FinanceWatchlistMeta[];
+  items: WatchlistItem[];
+};
+
+export async function fetchWatchlistState(
+  seedDefaults = false,
+  includeQuotes = true,
+  listId?: string | null,
+): Promise<WatchlistStateResponse> {
+  const qs = new URLSearchParams({
+    seed_defaults: String(seedDefaults),
+    include_quotes: String(includeQuotes),
+  });
+  if (listId) qs.set("list_id", listId);
+  return api<WatchlistStateResponse>(`/finance/watchlist?${qs.toString()}`);
+}
+
 export async function fetchWatchlist(seedDefaults = false, includeQuotes = true): Promise<WatchlistItem[]> {
-  const res = await api<{ items: WatchlistItem[] }>(
-    `/finance/watchlist?seed_defaults=${seedDefaults}&include_quotes=${includeQuotes}`,
-  );
+  const res = await fetchWatchlistState(seedDefaults, includeQuotes);
   return res.items || [];
 }
 
-export async function addWatchlistItem(query: string): Promise<WatchlistItem> {
-  return api<WatchlistItem>("/finance/watchlist", {
+export async function createWatchlist(name: string): Promise<FinanceWatchlistMeta> {
+  return api<FinanceWatchlistMeta>("/finance/watchlists", {
     method: "POST",
-    body: JSON.stringify({ query }),
+    body: JSON.stringify({ name }),
   });
 }
 
-export async function seedDefaultWatchlist(): Promise<WatchlistItem[]> {
-  const res = await api<{ items: WatchlistItem[] }>("/finance/watchlist/seed-defaults", {
+export async function renameWatchlist(listId: string, name: string): Promise<FinanceWatchlistMeta> {
+  return api<FinanceWatchlistMeta>(`/finance/watchlists/${encodeURIComponent(listId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ name }),
+  });
+}
+
+export async function deleteWatchlist(listId: string): Promise<void> {
+  return api<void>(`/finance/watchlists/${encodeURIComponent(listId)}`, { method: "DELETE" });
+}
+
+export async function addWatchlistItem(query: string, listId?: string | null): Promise<WatchlistItem> {
+  return api<WatchlistItem>("/finance/watchlist", {
+    method: "POST",
+    body: JSON.stringify({ query, list_id: listId || null }),
+  });
+}
+
+export async function seedDefaultWatchlist(listId?: string | null): Promise<WatchlistItem[]> {
+  const qs = listId ? `?list_id=${encodeURIComponent(listId)}` : "";
+  const res = await api<{ items: WatchlistItem[] }>(`/finance/watchlist/seed-defaults${qs}`, {
     method: "POST",
   });
   return res.items || [];

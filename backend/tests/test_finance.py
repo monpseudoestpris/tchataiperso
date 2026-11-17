@@ -738,6 +738,39 @@ class TestFinanceApiMocked(unittest.IsolatedAsyncioTestCase):
             self.assertIn("profile", data["financial_stats"])
             self.assertEqual(data["financial_stats"]["analysts"]["recommendation"], "BUY")
 
+    async def test_adjusted_ohlc_scaling_in_dashboard_bars(self):
+        settings = Settings(
+            _env_file=None,
+            eod_historical_data_key="eod-test-key",
+            demo_mode=False,
+        )
+        # Barre pré-split 10:1 + dividende (facteur 0.098 = 117.6 / 1200)
+        mock_bars = [
+            {
+                "date": "2024-06-07",
+                "open": 1200.0,
+                "high": 1250.0,
+                "low": 1180.0,
+                "close": 1200.0,
+                "adjusted_close": 117.6,
+                "volume": 50000000,
+            }
+        ]
+        mock_eod_rt = {"code": "NVDA.US", "close": 140.0, "previousClose": 139.0, "change": 1.0, "change_p": 0.72}
+        with patch("app.finance.search_eodhd_ticker", return_value={"ticker": "NVDA.US", "Name": "NVIDIA", "Exchange": "US", "Currency": "USD"}), \
+             patch("app.finance.fetch_eodhd_realtime", return_value=mock_eod_rt), \
+             patch("app.finance.fetch_eodhd_historical_eod", return_value=mock_bars), \
+             patch("app.finance.fetch_eodhd_fundamentals", return_value={"General": {"Name": "NVIDIA", "Code": "NVDA", "Exchange": "US", "CurrencyCode": "USD"}}):
+            data = await get_financial_dashboard_data(settings, "NVDA")
+
+        bar = data["eod_bars"][0]
+        self.assertEqual(bar["close"], 117.6)
+        self.assertEqual(bar["adjusted_close"], 117.6)
+        self.assertEqual(bar["raw_close"], 1200.0)
+        self.assertEqual(bar["open"], 117.6)
+        self.assertEqual(bar["high"], 122.5)
+        self.assertEqual(bar["low"], 115.64)
+
 
 class FinanceWorkspaceTests(unittest.TestCase):
     def test_compute_period_returns_horizons(self):
@@ -836,6 +869,39 @@ class FinanceWorkspaceTests(unittest.TestCase):
                     first_id = list_res.json()["items"][0]["id"]
                     del_res = client.delete(f"/api/finance/watchlist/{first_id}")
                     self.assertEqual(del_res.status_code, 204)
+
+                    # 1b. Multiple custom watchlists CRUD + same stock in two separate lists
+                    wls_res = client.get("/api/finance/watchlists")
+                    self.assertEqual(wls_res.status_code, 200)
+                    default_wl = wls_res.json()["lists"][0]
+
+                    create_wl = client.post("/api/finance/watchlists", json={"name": "Tech US"})
+                    self.assertEqual(create_wl.status_code, 201)
+                    tech_wl = create_wl.json()
+                    self.assertEqual(tech_wl["name"], "Tech US")
+
+                    rename_wl = client.patch(f"/api/finance/watchlists/{tech_wl['id']}", json={"name": "IA & Cloud"})
+                    self.assertEqual(rename_wl.status_code, 200)
+                    self.assertEqual(rename_wl.json()["name"], "IA & Cloud")
+
+                    with patch("app.finance_watchlist.search_eodhd_ticker", new=AsyncMock(return_value={
+                        "Code": "NVDA", "Exchange": "US", "Name": "NVIDIA", "Currency": "USD"
+                    })), patch("app.finance_watchlist.search_yahoo_ticker", new=AsyncMock(return_value={"symbol": "NVDA"})):
+                        add_to_custom = client.post(
+                            "/api/finance/watchlist",
+                            json={"query": "NVDA", "list_id": tech_wl["id"]},
+                        )
+                        self.assertEqual(add_to_custom.status_code, 201)
+                        self.assertEqual(add_to_custom.json()["list_id"], tech_wl["id"])
+
+                    custom_view = client.get(f"/api/finance/watchlist?list_id={tech_wl['id']}&include_quotes=false")
+                    self.assertEqual(custom_view.status_code, 200)
+                    self.assertEqual(len(custom_view.json()["items"]), 1)
+
+                    del_custom = client.delete(f"/api/finance/watchlists/{tech_wl['id']}")
+                    self.assertEqual(del_custom.status_code, 204)
+                    del_last = client.delete(f"/api/finance/watchlists/{default_wl['id']}")
+                    self.assertEqual(del_last.status_code, 400)
 
                 # 2. Custom Indicators CRUD
                 create_ind = client.post("/api/finance/indicators", json={
@@ -1008,6 +1074,7 @@ class FinanceWorkspaceTests(unittest.TestCase):
             finally:
                 engine.dispose()
             self.assertTrue({
+                "finance_watchlists",
                 "finance_watchlist_items",
                 "finance_custom_indicators",
                 "finance_stock_news",

@@ -1,0 +1,936 @@
+<!doctype html>
+<html lang="fr" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="description" content="Guide détaillé des méthodes de calcul des valeurs intrinsèques d'Uncle Stock : DCF, Buffett, Graham, Lynch, Residual Income et autres." />
+<title>Valeurs intrinsèques — Guide de calcul</title>
+<style>
+:root{color-scheme:light;--bg:#f4f7fb;--paper:#ffffff;--text:#213047;--muted:#627185;--line:#e1e8f1;--brand:#2363e7;--brand2:#0f999a;--soft:#eef4ff;--warn:#fff7e8;--warnedge:#e7a445;--shadow:0 14px 46px rgba(23,51,90,.07);--sidebar:#101f37;--sidebartext:#dae7fb;--code:#eaf1fa}
+html[data-theme="dark"]{color-scheme:dark;--bg:#0c1423;--paper:#142239;--text:#e5edf8;--muted:#9eafc7;--line:#2b3e59;--brand:#85aaff;--brand2:#52c7c3;--soft:#182f51;--warn:#372c1c;--warnedge:#ce974b;--shadow:0 14px 46px rgba(0,0,0,.15);--sidebar:#0a101c;--sidebartext:#d3e2f5;--code:#203651}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:24px}
+body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;font-size:15.5px;line-height:1.75;-webkit-font-smoothing:antialiased}
+a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}
+.page{display:grid;grid-template-columns:292px minmax(0,1fr);min-height:100vh;max-width:1800px;margin:0 auto}
+.sidebar{background:var(--sidebar);color:var(--sidebartext);padding:28px 17px;position:sticky;top:0;height:100vh;overflow-y:auto;scrollbar-width:thin;scrollbar-color:#506681 transparent;align-self:start}
+.brand{padding:3px 13px 20px;margin-bottom:12px;border-bottom:1px solid rgba(218,231,251,.15)}
+.brand-mark{width:38px;height:38px;background:linear-gradient(135deg,#3281ff,#23beb1);border-radius:11px;display:flex;align-items:center;justify-content:center;color:white;font-weight:800;font-size:21px;box-shadow:0 7px 16px rgba(0,0,0,.14)}
+.brand h2{margin:10px 0 3px;color:#fff;font-size:18px;font-weight:750;line-height:1.3;letter-spacing:-.4px}
+.brand p{color:#9bb0cc;font-size:12px;line-height:1.5;margin:0}
+.nav-label{text-transform:uppercase;color:#829ab9;font-weight:700;letter-spacing:1.1px;font-size:10px;padding:10px 13px 6px}
+#TOC ul{list-style:none;padding:0;margin:0}#TOC ul ul{display:none}#TOC a{display:block;padding:7px 12px;color:#b7c8df;border-radius:9px;font-size:12.6px;line-height:1.38;font-weight:500;transition:background .15s,color .15s;border-left:2px solid transparent}#TOC a:hover,#TOC a.active{background:#203751;text-decoration:none;color:#fff;border-left-color:#49c5bd}
+.side-foot{margin-top:21px;padding:16px 13px;border-top:1px solid #31445f;color:#91a7c2;font-size:11px}
+.content{min-width:0;padding:36px clamp(18px,4vw,65px) 60px}
+.hero{border-radius:23px;padding:clamp(24px,4vw,44px);background:linear-gradient(125deg,#17365f 0%,#183f78 48%,#106e76 100%);color:#fff;box-shadow:0 19px 42px rgba(19,63,105,.16);margin-bottom:31px;position:relative;overflow:hidden}
+.hero:after{content:"";position:absolute;right:-110px;top:-180px;width:370px;height:370px;border:1px solid rgba(255,255,255,.1);box-shadow:0 0 0 55px rgba(255,255,255,.026),0 0 0 125px rgba(255,255,255,.025);border-radius:50%;pointer-events:none}
+.hero .eyebrow{letter-spacing:2px;text-transform:uppercase;font-size:11px;font-weight:750;color:#9ce2e1}
+.hero h1{margin:13px 0 15px;max-width:750px;font-size:clamp(31px,4vw,49px);line-height:1.13;letter-spacing:-1.8px;font-weight:800}
+.hero p{color:#d8e9fc;max-width:710px;line-height:1.65;font-size:15px;margin:0 0 24px}
+.chips{display:flex;gap:8px;flex-wrap:wrap;margin:22px 0 18px}
+.chip{border:1px solid rgba(255,255,255,.21);background:rgba(255,255,255,.095);padding:5px 11px;border-radius:100px;color:#f2f8ff;font-size:11px;font-weight:650}
+.hero-actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center;position:relative;z-index:2}
+.hero-actions button,.hero-actions a{border:1px solid rgba(255,255,255,.33);background:rgba(255,255,255,.13);border-radius:9px;padding:9px 13px;color:white;font-weight:700;font-size:12px;cursor:pointer;font-family:inherit;line-height:1.3}
+.hero-actions button:hover,.hero-actions a:hover{background:rgba(255,255,255,.23);text-decoration:none}
+.hero-actions .primary{background:white;color:#174a71;border:1px solid white}
+.article{background:var(--paper);border-radius:21px;padding:clamp(21px,4.4vw,57px);box-shadow:var(--shadow);max-width:1100px;margin:0 auto}
+.article>p:first-child{font-size:17px;line-height:1.83;color:var(--muted);margin:0 0 22px}
+.article h2{font-size:clamp(22px,2.4vw,29px);font-weight:790;letter-spacing:-.6px;line-height:1.25;margin:57px 0 19px;padding-top:2px;border-bottom:1px solid var(--line);padding-bottom:15px;scroll-margin-top:22px}
+.article h2:first-of-type{margin-top:35px}
+.article h3{font-size:18.2px;line-height:1.34;margin:35px 0 13px;color:var(--text);font-weight:750;letter-spacing:-.2px}
+.article p{margin:12px 0 16px}.article ul{margin:11px 0 20px;padding-left:21px}.article li{margin:5px 0;padding-left:3px}
+.article strong{font-weight:750}.article em{color:inherit}
+.article table{width:100%;border-collapse:collapse;margin:20px 0 25px;font-size:13.6px;line-height:1.55;border:1px solid var(--line);border-radius:10px;overflow:hidden;display:table}
+.article table th{padding:12px 13px;text-align:left;background:var(--soft);color:var(--text);font-weight:750;border-bottom:1px solid var(--line)}
+.article table td{padding:10px 13px;border-top:1px solid var(--line);vertical-align:top}
+.article tr:nth-child(even) td{background:color-mix(in srgb,var(--soft) 28%,transparent)}
+.article td[style*="right"],.article th[style*="right"]{font-variant-numeric:tabular-nums}
+.article p:has(> math[display="block"]){margin:20px 0;padding:18px 15px;overflow-x:auto;background:var(--soft);border:1px solid var(--line);border-left:3px solid var(--brand);border-radius:10px;text-align:center;line-height:1.7}
+.article .math.display{display:block;margin:20px 0;padding:18px 15px;overflow-x:auto;background:var(--soft);border:1px solid var(--line);border-left:3px solid var(--brand);border-radius:10px;text-align:center;line-height:1.7}
+.article .math.inline{white-space:nowrap}
+math[display="block"]{max-width:100%;font-size:1.11em} math{font-family:math,serif}
+.highlight-box,.warning-box,.example-panel{padding:20px 21px;border-radius:13px;margin:23px 0 29px;border:1px solid var(--line);border-left:4px solid var(--brand2);background:var(--soft)}
+.highlight-box p,.warning-box p,.example-panel p{margin:0}
+.warning-box{background:var(--warn);border-left-color:var(--warnedge)}
+.example-panel{background:transparent;border-left-color:var(--brand)}
+.example-panel table{margin:14px 0!important}
+.article hr{border:0;border-top:1px solid var(--line);margin:38px 0 24px}
+.article code{background:var(--code);padding:2px 5px;border-radius:5px;font-size:.94em}
+.article>p:last-child{color:var(--muted);font-size:13px}
+.footer{max-width:1100px;margin:22px auto 10px;text-align:center;color:var(--muted);font-size:12px}
+.top-link{position:fixed;bottom:24px;right:25px;background:var(--paper);color:var(--brand);border:1px solid var(--line);border-radius:50%;box-shadow:var(--shadow);height:43px;width:43px;display:flex;align-items:center;justify-content:center;font-weight:800;z-index:5}
+.top-link:hover{text-decoration:none}
+.mobile-nav{display:none}
+@media(max-width:980px){.page{grid-template-columns:minmax(0,1fr)}.sidebar{display:none}.content{padding:20px 14px 35px}.mobile-nav{display:block;margin-bottom:14px}.mobile-nav details{background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:10px 15px}.mobile-nav summary{cursor:pointer;font-weight:700;font-size:13px}.mobile-nav .mobile-toc{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:3px 12px;margin-top:12px}.mobile-nav a{font-size:12px;padding:6px 0}.hero{margin-bottom:18px}.article{border-radius:15px}}
+@media(max-width:600px){html,body{overflow-x:hidden}.article{padding:22px 17px}.article table{font-size:11.5px}.article table td,.article table th{padding:8px 6px}.article .math.display{padding:12px 6px}math[display="block"]{font-size:.92em}.hero{border-radius:15px}.hero h1{letter-spacing:-.9px}.content{padding:11px}.hero-actions button,.hero-actions a{font-size:11px}}
+@media print{@page{size:A4;margin:15mm}html,html[data-theme="dark"]{--bg:#fff;--paper:#fff;--text:#182435;--muted:#45576b;--line:#ccd6e1;--soft:#f3f6fa;--brand:#204a80;--brand2:#3d7d84;--warn:#fff9e9;color-scheme:light}body{background:#fff;font-size:10.4pt;line-height:1.45}.sidebar,.mobile-nav,.hero-actions,.top-link{display:none!important}.page{display:block}.content{padding:0}.hero{box-shadow:none;border-radius:0;background:#183f67!important;print-color-adjust:exact;-webkit-print-color-adjust:exact;padding:25px 30px;margin-bottom:20px}.hero h1{font-size:30px}.hero p{font-size:11pt}.hero .chips{margin:9px 0}.article{box-shadow:none;border-radius:0;padding:0;max-width:none}.article h2{page-break-after:avoid;break-after:avoid;font-size:17pt;margin-top:29px}.article h3{break-after:avoid}.article table,.article .math.display,.highlight-box,.warning-box,.example-panel{break-inside:avoid}.article p,.article li{orphans:3;widows:3}.footer{margin:20px 0}.article .math.display{padding:9px}.article table{font-size:9.5pt}}
+</style>
+</head>
+<body>
+<div class="page" id="haut">
+  <aside class="sidebar" aria-label="Sommaire">
+    <div class="brand"><div class="brand-mark">∑</div><h2>Valeurs intrinsèques</h2><p>Méthodes, formules et exemples<br>Guide de référence</p></div>
+    <div class="nav-label">Navigation · 20 chapitres</div>
+    <nav id="TOC" aria-label="Table des matières"><ul>
+<li><a href="#donnees" id="toc-donnees">1. Données nécessaires aux
+calculs</a></li>
+<li><a href="#dcf-fcf" id="toc-dcf-fcf">2. DCF FCF — Discounted Cash
+Flow</a></li>
+<li><a href="#dcf-oe" id="toc-dcf-oe">3. DCF Owner Earnings</a></li>
+<li><a href="#regression" id="toc-regression">4. DCF Owner Earnings par
+régression</a></li>
+<li><a href="#no-growth" id="toc-no-growth">5. DCF sans croissance — No
+Growth</a></li>
+<li><a href="#buffett" id="toc-buffett">6. Intrinsic Value
+Buffett</a></li>
+<li><a href="#residual-income" id="toc-residual-income">7. Residual
+Income Model</a></li>
+<li><a href="#epv" id="toc-epv">8. Earnings Power Value (EPV)</a></li>
+<li><a href="#ebitda" id="toc-ebitda">9. Valorisation fondée sur
+l’EBITDA</a></li>
+<li><a href="#lynch" id="toc-lynch">10. Intrinsic Value Lynch</a></li>
+<li><a href="#graham-formula" id="toc-graham-formula">11. Intrinsic
+Value — Graham Formula</a></li>
+<li><a href="#graham-number" id="toc-graham-number">12. Graham
+Number</a></li>
+<li><a href="#value-driver" id="toc-value-driver">13. Value Driver
+Formula — McKinsey</a></li>
+<li><a href="#hold-five" id="toc-hold-five">14. Intrinsic Value — Hold 5
+Years</a></li>
+<li><a href="#omalley" id="toc-omalley">15. Intrinsic Value —
+O’Malley</a></li>
+<li><a href="#payback" id="toc-payback">16. Intrinsic Value — x Years
+Payback</a></li>
+<li><a href="#aggregation" id="toc-aggregation">17. Agrégation : la
+valeur intrinsèque globale</a></li>
+<li><a href="#margin" id="toc-margin">18. Price / Intrinsic Value et
+Margin of Safety</a></li>
+<li><a href="#precautions" id="toc-precautions">19. Précautions pour un
+module fiable</a></li>
+<li><a href="#interface" id="toc-interface">20. Présentation recommandée
+dans l’application</a></li>
+</ul></nav>
+    <div class="side-foot">D'après la documentation Uncle Stock. Exemples fictifs et conseils de modélisation.</div>
+  </aside>
+  <div class="content">
+   <div class="mobile-nav"><details><summary>☰ Ouvrir le sommaire</summary><div class="mobile-toc" id="mobile-toc"></div></details></div>
+   <header class="hero">
+      <div class="eyebrow">Guide de valorisation financière</div>
+      <h1>Comprendre et calculer les valeurs intrinsèques</h1>
+      <p>DCF, Buffett, Graham, Lynch, Residual Income, Earnings Power Value… Une explication détaillée des formules du screener Uncle Stock, avec calculs, exemples et limites.</p>
+      <div class="chips"><span class="chip">20 sections</span><span class="chip">13 composantes pondérées</span><span class="chip">Exemples chiffrés</span><span class="chip">Mode imprimable</span></div>
+      <div class="hero-actions"><a href="#donnees" class="primary">Commencer la lecture</a><button type="button" id="theme-toggle" aria-label="Changer le thème">◐ &nbsp; Thème sombre</button><button type="button" onclick="window.print()">⎙ &nbsp; Imprimer / PDF</button></div>
+   </header>
+   <main class="article" id="lecture"><p>Les <strong>valeurs
+intrinsèques</strong> (<em>intrinsic values</em>) cherchent à estimer ce
+qu’une action vaut indépendamment de son cours de Bourse. La
+documentation d’<strong>Uncle Stock</strong> présente <strong>13
+composantes pondérées</strong> pour son indicateur global, ainsi que
+plusieurs variantes complémentaires.</p>
+<p>Ce guide reprend les méthodes, leur logique, les formules, les
+variables financières requises, des exemples chiffrés et les principales
+précautions pour construire un module de valorisation fiable. Les
+montants des exemples concernent des <strong>entreprises
+fictives</strong>.</p>
+<h2 id="donnees">1. Données nécessaires aux calculs</h2>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th style="text-align: left;">Variable</th>
+<th style="text-align: left;">Signification</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;"><strong>FCFF</strong></td>
+<td style="text-align: left;"><em>Free Cash Flow to the Firm</em> : flux
+de trésorerie disponibles pour tous les apporteurs de capitaux.</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><strong>OE</strong></td>
+<td style="text-align: left;"><em>Owner Earnings</em> : flux économiques
+attribuables aux actionnaires ordinaires.</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><strong>EPS</strong></td>
+<td style="text-align: left;"><em>Earnings Per Share</em> : bénéfice par
+action.</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><strong>BVPS</strong></td>
+<td style="text-align: left;"><em>Book Value Per Share</em> : valeur
+comptable par action.</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><strong>EBITDA</strong></td>
+<td style="text-align: left;">Résultat avant intérêts, impôts,
+dépréciations et amortissements.</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><strong>NOPAT</strong></td>
+<td style="text-align: left;">Résultat opérationnel après impôts.</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><strong>CROIC</strong></td>
+<td style="text-align: left;">Rendement du capital investi mesuré en
+trésorerie.</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><strong>WACC</strong></td>
+<td style="text-align: left;">Coût moyen pondéré du capital.</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><strong>Ke</strong></td>
+<td style="text-align: left;">Coût des capitaux propres.</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><strong>g</strong></td>
+<td style="text-align: left;">Taux de croissance annuel.</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><strong>N</strong></td>
+<td style="text-align: left;">Nombre d’actions en circulation.</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><strong>D</strong></td>
+<td style="text-align: left;">Dette nette.</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><strong>M</strong></td>
+<td style="text-align: left;">Intérêts minoritaires (<em>non-controlling
+interests</em>).</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><strong>PS</strong></td>
+<td style="text-align: left;">Actions préférentielles.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Convention :</strong> dans les équations, les taux sont
+exprimés en décimal : 8 % = 0,08. Les valeurs d’entreprise doivent être
+converties en valeurs des capitaux propres puis divisées par le nombre
+d’actions pour obtenir une valeur <strong>par action</strong>.</p>
+<h3 id="free-cash-flow-to-the-firm">1.1 Free Cash Flow to the Firm</h3>
+<p>Une présentation simplifiée du FCFF est :</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>F</mi><mi>C</mi><mi>F</mi><mi>F</mi><mo>=</mo><mi>C</mi><mi>F</mi><mi>O</mi><mo>−</mo><mi>C</mi><mi>a</mi><mi>p</mi><mi>E</mi><msub><mi>x</mi><mrow><mi>n</mi><mi>e</mi><mi>t</mi><mi>s</mi></mrow></msub><mo>+</mo><mi>I</mi><mi>n</mi><mi>t</mi><mi>é</mi><mi>r</mi><mi>ê</mi><mi>t</mi><mi>s</mi><mspace width="0.167em"></mspace><mrow><mo stretchy="true" form="prefix">(</mo><mn>1</mn><mo>−</mo><mi>T</mi><mo stretchy="true" form="postfix">)</mo></mrow></mrow><annotation encoding="application/x-tex">FCFF = CFO - CapEx_{nets} + Intérêts\,(1-T)</annotation></semantics></math></p>
+<ul>
+<li><strong>CFO</strong> : flux de trésorerie d’exploitation ;</li>
+<li><strong>CapEx nets</strong> : investissements nets ;</li>
+<li><strong>T</strong> : taux d’imposition.</li>
+</ul>
+<p>Les conventions de signes des investissements diffèrent selon les
+fournisseurs : un CapEx déjà négatif ne doit pas être soustrait une
+seconde fois.</p>
+<h3 id="coût-des-capitaux-propres-capm">1.2 Coût des capitaux propres
+(CAPM)</h3>
+<p>Uncle Stock borne le bêta entre 0 et 2 :</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>K</mi><mi>e</mi></msub><mo>=</mo><msub><mi>R</mi><mi>f</mi></msub><mo>+</mo><msub><mi>β</mi><mi>c</mi></msub><mo>×</mo><mi>E</mi><mi>R</mi><mi>P</mi><mo>,</mo><mspace width="2.0em"></mspace><msub><mi>β</mi><mi>c</mi></msub><mo>=</mo><mo>max</mo><mrow><mo stretchy="true" form="prefix">(</mo><mn>0</mn><mo>,</mo><mo>min</mo><mrow><mo stretchy="true" form="prefix">(</mo><mn>2</mn><mo>,</mo><mi>β</mi><mo stretchy="true" form="postfix">)</mo></mrow><mo stretchy="true" form="postfix">)</mo></mrow></mrow><annotation encoding="application/x-tex">K_e=R_f+\beta_c\times ERP,\qquad \beta_c=\max(0,\min(2,\beta))</annotation></semantics></math></p>
+<p>Avec un taux sans risque de 4 %, un bêta de 1,2 et une prime de
+risque de 5 % :</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>K</mi><mi>e</mi></msub><mo>=</mo><mn>4</mn><mi>%</mi><mo>+</mo><mn>1</mn><mo>,</mo><mn>2</mn><mo>×</mo><mn>5</mn><mi>%</mi><mo>=</mo><menclose notation="box"><mrow><mn>10</mn><mi>%</mi></mrow></menclose></mrow><annotation encoding="application/x-tex">K_e=4\%+1,2\times5\%=\boxed{10\%}</annotation></semantics></math></p>
+<h3 id="coût-moyen-pondéré-du-capital-wacc">1.3 Coût moyen pondéré du
+capital (WACC)</h3>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>W</mi><mi>A</mi><mi>C</mi><mi>C</mi><mo>=</mo><msub><mi>w</mi><mi>E</mi></msub><msub><mi>K</mi><mi>e</mi></msub><mo>+</mo><msub><mi>w</mi><mi>D</mi></msub><msub><mi>K</mi><mi>d</mi></msub></mrow><annotation encoding="application/x-tex">WACC=w_EK_e+w_DK_d</annotation></semantics></math></p>
+<p>Les poids correspondent au financement par fonds propres et dette ;
+(K_d) est ici le coût <strong>après impôts</strong> de la dette.</p>
+<p>Pour une entreprise financée à 70 % par fonds propres (coût 10 %) et
+30 % par dette (coût après impôts 5 %) :</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>W</mi><mi>A</mi><mi>C</mi><mi>C</mi><mo>=</mo><mn>0</mn><mo>,</mo><mn>70</mn><mo>×</mo><mn>10</mn><mi>%</mi><mo>+</mo><mn>0</mn><mo>,</mo><mn>30</mn><mo>×</mo><mn>5</mn><mi>%</mi><mo>=</mo><menclose notation="box"><mrow><mn>8</mn><mo>,</mo><mn>5</mn><mi>%</mi></mrow></menclose></mrow><annotation encoding="application/x-tex">WACC=0,70\times10\%+0,30\times5\%=\boxed{8,5\%}</annotation></semantics></math></p>
+<p>La documentation impose le plancher suivant :</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>W</mi><mi>A</mi><mi>C</mi><mi>C</mi><mo>≥</mo><mo>max</mo><mrow><mo stretchy="true" form="prefix">(</mo><mn>4</mn><mi>%</mi><mo>,</mo><msub><mi>R</mi><mi>f</mi></msub><mo>+</mo><mn>3</mn><mi>%</mi><mo stretchy="true" form="postfix">)</mo></mrow></mrow><annotation encoding="application/x-tex">WACC\geq\max(4\%,R_f+3\%)</annotation></semantics></math></p>
+<p>Lorsque le bêta est inconnu, Uncle Stock utilise une moyenne
+sectorielle du WACC.</p>
+<h3 id="croissance-prudente-rcagr-67">1.4 Croissance prudente : rCAGR 67
+%</h3>
+<p>Uncle Stock emploie une croissance fondée sur la régression plutôt
+que sur la seule comparaison de deux dates. Le schéma de base d’une
+régression log-linéaire est :</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mo>ln</mo><mrow><mo stretchy="true" form="prefix">(</mo><msub><mi>X</mi><mi>t</mi></msub><mo stretchy="true" form="postfix">)</mo></mrow><mo>=</mo><mi>a</mi><mo>+</mo><mi>b</mi><mi>t</mi><mo>,</mo><mspace width="2.0em"></mspace><mi>r</mi><mi>C</mi><mi>A</mi><mi>G</mi><mi>R</mi><mo>=</mo><msup><mi>e</mi><mi>b</mi></msup><mo>−</mo><mn>1</mn></mrow><annotation encoding="application/x-tex">\ln(X_t)=a+bt,\qquad rCAGR=e^b-1</annotation></semantics></math></p>
+<p>Le <strong>rCAGR 67 %</strong> combine la tendance et une mesure
+prudente de la dispersion. La documentation décrit son principe, mais ne
+donne pas tous les détails numériques permettant de reproduire
+parfaitement l’estimation à 67 %. On peut reproduire les valorisations
+si ce taux est disponible en entrée ; sa reconstruction exacte demande
+une spécification plus complète.</p>
+<h2 id="dcf-fcf">2. DCF FCF — Discounted Cash Flow</h2>
+<p><strong>Principe.</strong> Une entreprise vaut la somme de ses flux
+futurs de trésorerie, actualisés à aujourd’hui. C’est la méthode la plus
+fortement pondérée par Uncle Stock (<strong>poids 5</strong>).</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><menclose notation="box"><mrow><msub><mi>V</mi><mi>E</mi></msub><mo>=</mo><munderover><mo>∑</mo><mrow><mi>t</mi><mo>=</mo><mn>1</mn></mrow><mn>5</mn></munderover><mfrac><mrow><mi>F</mi><mi>C</mi><mi>F</mi><msub><mi>F</mi><mn>0</mn></msub><msup><mrow><mo stretchy="true" form="prefix">(</mo><mn>1</mn><mo>+</mo><mi>g</mi><mo stretchy="true" form="postfix">)</mo></mrow><mi>t</mi></msup></mrow><msup><mrow><mo stretchy="true" form="prefix">(</mo><mn>1</mn><mo>+</mo><mi>W</mi><mi>A</mi><mi>C</mi><mi>C</mi><mo stretchy="true" form="postfix">)</mo></mrow><mi>t</mi></msup></mfrac><mo>+</mo><mfrac><mrow><mi>F</mi><mi>C</mi><mi>F</mi><msub><mi>F</mi><mn>0</mn></msub><msup><mrow><mo stretchy="true" form="prefix">(</mo><mn>1</mn><mo>+</mo><mi>g</mi><mo stretchy="true" form="postfix">)</mo></mrow><mn>5</mn></msup></mrow><mrow><mi>W</mi><mi>A</mi><mi>C</mi><mi>C</mi><msup><mrow><mo stretchy="true" form="prefix">(</mo><mn>1</mn><mo>+</mo><mi>W</mi><mi>A</mi><mi>C</mi><mi>C</mi><mo stretchy="true" form="postfix">)</mo></mrow><mn>5</mn></msup></mrow></mfrac><mo>−</mo><mi>D</mi><mo>−</mo><mi>M</mi><mo>−</mo><mi>P</mi><mi>S</mi></mrow></menclose><annotation encoding="application/x-tex">\boxed{V_E=\sum_{t=1}^{5}\frac{FCFF_0(1+g)^t}{(1+WACC)^t}+\frac{FCFF_0(1+g)^5}{WACC(1+WACC)^5}-D-M-PS}</annotation></semantics></math></p>
+<ul>
+<li><strong>A. Projection sur cinq ans :</strong>
+(FCFF_t=FCFF_0(1+g)^t).</li>
+<li><strong>B. Actualisation :</strong> (PV_t=FCFF_t/(1+WACC)^t).</li>
+<li><strong>C. Valeur terminale :</strong> (VT_5=FCFF_5/WACC), puis
+(PV(VT)=VT_5/(1+WACC)^5).</li>
+</ul>
+<p>La valeur terminale suppose <strong>une croissance nulle après
+l’année 5</strong> : il ne faut pas lui ajouter implicitement un taux de
+croissance perpétuelle.</p>
+<h3 id="exemple-détaillé">Exemple détaillé</h3>
+<table>
+<thead>
+<tr class="header">
+<th style="text-align: left;">Hypothèse</th>
+<th style="text-align: right;">Valeur</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;">FCFF initial</td>
+<td style="text-align: right;">100 M€</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Croissance prudente</td>
+<td style="text-align: right;">4 %</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">WACC</td>
+<td style="text-align: right;">9 %</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Dette nette</td>
+<td style="text-align: right;">250 M€</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Intérêts minoritaires</td>
+<td style="text-align: right;">20 M€</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Actions préférentielles</td>
+<td style="text-align: right;">0 M€</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Nombre d’actions</td>
+<td style="text-align: right;">50 millions</td>
+</tr>
+</tbody>
+</table>
+<table>
+<thead>
+<tr class="header">
+<th style="text-align: right;">Année</th>
+<th style="text-align: right;">FCFF projeté</th>
+<th style="text-align: right;">Valeur actualisée</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">104,00 M€</td>
+<td style="text-align: right;">95,41 M€</td>
+</tr>
+<tr class="even">
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">108,16 M€</td>
+<td style="text-align: right;">91,04 M€</td>
+</tr>
+<tr class="odd">
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">112,49 M€</td>
+<td style="text-align: right;">86,86 M€</td>
+</tr>
+<tr class="even">
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">116,99 M€</td>
+<td style="text-align: right;">82,88 M€</td>
+</tr>
+<tr class="odd">
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">121,67 M€</td>
+<td style="text-align: right;">79,07 M€</td>
+</tr>
+<tr class="even">
+<td style="text-align: right;"><strong>Total</strong></td>
+<td style="text-align: right;"></td>
+<td style="text-align: right;"><strong>435,26 M€</strong></td>
+</tr>
+</tbody>
+</table>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>P</mi><mi>V</mi><mrow><mo stretchy="true" form="prefix">(</mo><mi>V</mi><mi>T</mi><mo stretchy="true" form="postfix">)</mo></mrow><mo>=</mo><mfrac><mrow><mn>121</mn><mo>,</mo><mn>67</mn><mi>/</mi><mn>0</mn><mo>,</mo><mn>09</mn></mrow><mrow><mn>1</mn><mo>,</mo><msup><mn>09</mn><mn>5</mn></msup></mrow></mfrac><mo>=</mo><mn>878</mn><mo>,</mo><mn>60</mn><mspace width="0.222em"></mspace><mrow><mi mathvariant="normal">M</mi><mi mathvariant="normal">€</mi></mrow></mrow><annotation encoding="application/x-tex">PV(VT)=\frac{121,67/0,09}{1,09^5}=878,60\ \mathrm{M€}</annotation></semantics></math></p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>E</mi><mi>V</mi><mo>=</mo><mn>435</mn><mo>,</mo><mn>26</mn><mo>+</mo><mn>878</mn><mo>,</mo><mn>60</mn><mo>=</mo><mn>1313</mn><mo>,</mo><mn>86</mn><mspace width="0.222em"></mspace><mrow><mi mathvariant="normal">M</mi><mi mathvariant="normal">€</mi></mrow></mrow><annotation encoding="application/x-tex">EV=435,26+878,60=1313,86\ \mathrm{M€}</annotation></semantics></math></p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>V</mi><mi>E</mi></msub><mo>=</mo><mn>1313</mn><mo>,</mo><mn>86</mn><mo>−</mo><mn>250</mn><mo>−</mo><mn>20</mn><mo>=</mo><mn>1043</mn><mo>,</mo><mn>86</mn><mspace width="0.222em"></mspace><mrow><mi mathvariant="normal">M</mi><mi mathvariant="normal">€</mi></mrow></mrow><annotation encoding="application/x-tex">V_E=1313,86-250-20=1043,86\ \mathrm{M€}</annotation></semantics></math></p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>I</mi><msub><mi>V</mi><mrow><mi>D</mi><mi>C</mi><mi>F</mi><mspace width="0.167em"></mspace><mi>F</mi><mi>C</mi><mi>F</mi></mrow></msub><mo>=</mo><mfrac><mrow><mn>1043</mn><mo>,</mo><mn>86</mn></mrow><mn>50</mn></mfrac><mo>=</mo><menclose notation="box"><mrow><mn>20</mn><mo>,</mo><mn>88</mn><mspace width="0.222em"></mspace><mrow><mi mathvariant="normal">€</mi><mi mathvariant="normal">/</mi><mi mathvariant="normal">a</mi><mi mathvariant="normal">c</mi><mi mathvariant="normal">t</mi><mi mathvariant="normal">i</mi><mi mathvariant="normal">o</mi><mi mathvariant="normal">n</mi></mrow></mrow></menclose></mrow><annotation encoding="application/x-tex">IV_{DCF\,FCF}=\frac{1043,86}{50}=\boxed{20,88\ \mathrm{€/action}}</annotation></semantics></math></p>
+<div class="highlight-box">
+<p><strong>Résultat : 20,88 € par action.</strong> Environ 67 % de la
+valeur d’entreprise provient ici de la valeur terminale. C’est pourquoi
+le WACC et la croissance après l’année 5 doivent être examinés avec
+attention.</p>
+</div>
+<h2 id="dcf-oe">3. DCF Owner Earnings</h2>
+<p>Cette méthode valorise des flux destinés aux actionnaires plutôt que
+les flux de l’ensemble de l’entreprise. Elle utilise donc le
+<strong>coût des capitaux propres (K_e)</strong>, et non le WACC.</p>
+<p>Les Owner Earnings sont ici présentés selon la définition retenue
+dans le guide :</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>O</mi><mi>E</mi><mo>=</mo><mi>C</mi><mi>F</mi><mi>O</mi><mo>−</mo><mi>S</mi><mi>B</mi><mi>C</mi><mo>−</mo><mi>N</mi><mi>C</mi><mi>I</mi><mo>−</mo><mi>M</mi><mi>a</mi><mi>i</mi><mi>n</mi><mi>t</mi><mi>e</mi><mi>n</mi><mi>a</mi><mi>n</mi><mi>c</mi><mi>e</mi><mi>C</mi><mi>a</mi><mi>p</mi><mi>E</mi><mi>x</mi></mrow><annotation encoding="application/x-tex">OE=CFO-SBC-NCI-MaintenanceCapEx</annotation></semantics></math></p>
+<p>Où <strong>SBC</strong> désigne les rémunérations en actions,
+<strong>NCI</strong> les parts minoritaires et
+<strong>MaintenanceCapEx</strong> les investissements de maintien. Leur
+définition exacte dépend des conventions de données de la
+plateforme.</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><menclose notation="box"><mrow><mi>I</mi><msub><mi>V</mi><mrow><mi>O</mi><mi>E</mi></mrow></msub><mo>=</mo><munderover><mo>∑</mo><mrow><mi>t</mi><mo>=</mo><mn>1</mn></mrow><mn>5</mn></munderover><mfrac><mrow><mi>O</mi><msub><mi>E</mi><mn>0</mn></msub><msup><mrow><mo stretchy="true" form="prefix">(</mo><mn>1</mn><mo>+</mo><mi>g</mi><mo stretchy="true" form="postfix">)</mo></mrow><mi>t</mi></msup></mrow><msup><mrow><mo stretchy="true" form="prefix">(</mo><mn>1</mn><mo>+</mo><msub><mi>K</mi><mi>e</mi></msub><mo stretchy="true" form="postfix">)</mo></mrow><mi>t</mi></msup></mfrac><mo>+</mo><mfrac><mrow><mi>O</mi><msub><mi>E</mi><mn>0</mn></msub><msup><mrow><mo stretchy="true" form="prefix">(</mo><mn>1</mn><mo>+</mo><mi>g</mi><mo stretchy="true" form="postfix">)</mo></mrow><mn>5</mn></msup></mrow><mrow><msub><mi>K</mi><mi>e</mi></msub><msup><mrow><mo stretchy="true" form="prefix">(</mo><mn>1</mn><mo>+</mo><msub><mi>K</mi><mi>e</mi></msub><mo stretchy="true" form="postfix">)</mo></mrow><mn>5</mn></msup></mrow></mfrac></mrow></menclose><annotation encoding="application/x-tex">\boxed{IV_{OE}=\sum_{t=1}^{5}\frac{OE_0(1+g)^t}{(1+K_e)^t}+\frac{OE_0(1+g)^5}{K_e(1+K_e)^5}}</annotation></semantics></math></p>
+<p>La dette nette n’est pas soustraite une seconde fois puisque la
+formule est fondée sur des flux destinés aux actionnaires ; il faut
+néanmoins vérifier que les <strong>Owner Earnings réellement injectés
+dans le modèle</strong> sont cohérents avec cette interprétation. La
+valeur terminale suppose une croissance nulle après l’année 5.</p>
+<h2 id="regression">4. DCF Owner Earnings par régression</h2>
+<h3 id="régression-linéaire">4.1 Régression linéaire</h3>
+<p>On ajuste une droite aux <strong>dix dernières années</strong>
+d’Owner Earnings :</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>O</mi><mi>E</mi><mrow><mo stretchy="true" form="prefix">(</mo><mi>t</mi><mo stretchy="true" form="postfix">)</mo></mrow><mo>=</mo><mi>a</mi><mi>t</mi><mo>+</mo><mi>b</mi></mrow><annotation encoding="application/x-tex">OE(t)=at+b</annotation></semantics></math></p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>a</mi><mo>=</mo><mfrac><mrow><munder><mo>∑</mo><mi>i</mi></munder><mrow><mo stretchy="true" form="prefix">(</mo><msub><mi>t</mi><mi>i</mi></msub><mo>−</mo><mover><mi>t</mi><mo accent="true">‾</mo></mover><mo stretchy="true" form="postfix">)</mo></mrow><mrow><mo stretchy="true" form="prefix">(</mo><mi>O</mi><msub><mi>E</mi><mi>i</mi></msub><mo>−</mo><mover><mrow><mi>O</mi><mi>E</mi></mrow><mo accent="true">¯</mo></mover><mo stretchy="true" form="postfix">)</mo></mrow></mrow><mrow><munder><mo>∑</mo><mi>i</mi></munder><msup><mrow><mo stretchy="true" form="prefix">(</mo><msub><mi>t</mi><mi>i</mi></msub><mo>−</mo><mover><mi>t</mi><mo accent="true">‾</mo></mover><mo stretchy="true" form="postfix">)</mo></mrow><mn>2</mn></msup></mrow></mfrac><mo>,</mo><mspace width="2.0em"></mspace><mi>b</mi><mo>=</mo><mover><mrow><mi>O</mi><mi>E</mi></mrow><mo accent="true">¯</mo></mover><mo>−</mo><mi>a</mi><mover><mi>t</mi><mo accent="true">‾</mo></mover></mrow><annotation encoding="application/x-tex">a=\frac{\sum_i(t_i-\bar t)(OE_i-\overline{OE})}{\sum_i(t_i-\bar t)^2},\qquad b=\overline{OE}-a\bar t</annotation></semantics></math></p>
+<p>Puis on projette les flux sur <strong>100 années</strong>, avec un
+taux d’actualisation égal au rendement du Treasury US à 30 ans plus 5
+points :</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><menclose notation="box"><mrow><mi>I</mi><msub><mi>V</mi><mrow><mi>l</mi><mi>i</mi><mi>n</mi><mi>e</mi><mi>a</mi><mi>r</mi></mrow></msub><mo>=</mo><munderover><mo>∑</mo><mrow><mi>t</mi><mo>=</mo><mn>1</mn></mrow><mn>100</mn></munderover><mfrac><msub><mover><mrow><mi>O</mi><mi>E</mi></mrow><mo accent="true">̂</mo></mover><mi>t</mi></msub><msup><mrow><mo stretchy="true" form="prefix">(</mo><mn>1</mn><mo>+</mo><mi>r</mi><mo stretchy="true" form="postfix">)</mo></mrow><mi>t</mi></msup></mfrac></mrow></menclose><mo>,</mo><mspace width="2.0em"></mspace><mi>r</mi><mo>=</mo><msub><mi>R</mi><mrow><mi>f</mi><mo>,</mo><mi>U</mi><mi>S</mi><mn>30</mn><mi>Y</mi></mrow></msub><mo>+</mo><mn>5</mn><mi>%</mi></mrow><annotation encoding="application/x-tex">\boxed{IV_{linear}=\sum_{t=1}^{100}\frac{\widehat{OE}_t}{(1+r)^t}},\qquad r=R_{f,US30Y}+5\%</annotation></semantics></math></p>
+<p>La documentation utilise « année civile − 1900 » comme variable de
+régression. Cette convention est équivalente à une autre origine
+temporelle si on recalcule les coefficients en conséquence.</p>
+<h3 id="régression-quadratique">4.2 Régression quadratique</h3>
+<p>On ajuste un polynôme du second degré à <strong>tout
+l’historique</strong> disponible :</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>O</mi><mi>E</mi><mrow><mo stretchy="true" form="prefix">(</mo><mi>t</mi><mo stretchy="true" form="postfix">)</mo></mrow><mo>=</mo><mi>a</mi><msup><mi>t</mi><mn>2</mn></msup><mo>+</mo><mi>b</mi><mi>t</mi><mo>+</mo><mi>c</mi></mrow><annotation encoding="application/x-tex">OE(t)=at^2+bt+c</annotation></semantics></math></p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><menclose notation="box"><mrow><mi>I</mi><msub><mi>V</mi><mrow><mi>q</mi><mi>u</mi><mi>a</mi><mi>d</mi><mi>r</mi><mi>a</mi><mi>t</mi><mi>i</mi><mi>c</mi></mrow></msub><mo>=</mo><munderover><mo>∑</mo><mrow><mi>t</mi><mo>=</mo><mn>1</mn></mrow><mn>100</mn></munderover><mfrac><mrow><mi>a</mi><msup><mi>t</mi><mn>2</mn></msup><mo>+</mo><mi>b</mi><mi>t</mi><mo>+</mo><mi>c</mi></mrow><msup><mrow><mo stretchy="true" form="prefix">(</mo><mn>1</mn><mo>+</mo><mi>r</mi><mo stretchy="true" form="postfix">)</mo></mrow><mi>t</mi></msup></mfrac></mrow></menclose><annotation encoding="application/x-tex">\boxed{IV_{quadratic}=\sum_{t=1}^{100}\frac{at^2+bt+c}{(1+r)^t}}</annotation></semantics></math></p>
+<p>Une extrapolation quadratique sur 100 ans peut générer des valeurs
+gigantesques ou négatives. Elle doit être interprétée avec une grande
+prudence.</p>
+<h3 id="dcf-oe-regression">4.3 DCF OE Regression</h3>
+<p>Uncle Stock retient le plus petit résultat :</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><menclose notation="box"><mrow><mi>I</mi><msub><mi>V</mi><mrow><mi>r</mi><mi>e</mi><mi>g</mi><mi>r</mi><mi>e</mi><mi>s</mi><mi>s</mi><mi>i</mi><mi>o</mi><mi>n</mi></mrow></msub><mo>=</mo><mo>min</mo><mrow><mo stretchy="true" form="prefix">(</mo><mi>I</mi><msub><mi>V</mi><mrow><mi>l</mi><mi>i</mi><mi>n</mi><mi>e</mi><mi>a</mi><mi>r</mi></mrow></msub><mo>,</mo><mi>I</mi><msub><mi>V</mi><mrow><mi>q</mi><mi>u</mi><mi>a</mi><mi>d</mi><mi>r</mi><mi>a</mi><mi>t</mi><mi>i</mi><mi>c</mi></mrow></msub><mo stretchy="true" form="postfix">)</mo></mrow></mrow></menclose><annotation encoding="application/x-tex">\boxed{IV_{regression}=\min(IV_{linear},IV_{quadratic})}</annotation></semantics></math></p>
+<p>Le minimum des deux modèles est plus prudent <strong>relativement aux
+deux prévisions</strong>, mais n’est pas une garantie de réalisme
+économique.</p>
+<h2 id="no-growth">5. DCF sans croissance — No Growth</h2>
+<p>C’est un point d’ancrage : les cash-flows restent constants
+indéfiniment.</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><menclose notation="box"><mrow><mi>I</mi><msub><mi>V</mi><mrow><mi>N</mi><mi>G</mi></mrow></msub><mo>=</mo><mfrac><mrow><mi>F</mi><mi>C</mi><mi>F</mi><msub><mi>F</mi><mn>0</mn></msub><mi>/</mi><mi>W</mi><mi>A</mi><mi>C</mi><mi>C</mi><mo>−</mo><mi>D</mi><mo>−</mo><mi>M</mi><mo>−</mo><mi>P</mi><mi>S</mi></mrow><mi>N</mi></mfrac></mrow></menclose><annotation encoding="application/x-tex">\boxed{IV_{NG}=\frac{FCFF_0/WACC-D-M-PS}{N}}</annotation></semantics></math></p>
+<p>Pour le même exemple que le DCF FCF :</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>I</mi><msub><mi>V</mi><mrow><mi>N</mi><mi>G</mi></mrow></msub><mo>=</mo><mfrac><mrow><mn>100</mn><mi>/</mi><mn>0</mn><mo>,</mo><mn>09</mn><mo>−</mo><mn>250</mn><mo>−</mo><mn>20</mn></mrow><mn>50</mn></mfrac><mo>=</mo><menclose notation="box"><mrow><mn>16</mn><mo>,</mo><mn>82</mn><mspace width="0.222em"></mspace><mi mathvariant="normal">€</mi></mrow></menclose></mrow><annotation encoding="application/x-tex">IV_{NG}=\frac{100/0,09-250-20}{50}=\boxed{16,82\ \mathrm{€}}</annotation></semantics></math></p>
+<table>
+<thead>
+<tr class="header">
+<th style="text-align: right;">DCF avec croissance</th>
+<th style="text-align: right;">DCF sans croissance</th>
+<th style="text-align: right;">Différence</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: right;"><strong>20,88 €</strong></td>
+<td style="text-align: right;"><strong>16,82 €</strong></td>
+<td style="text-align: right;"><strong>4,06 €</strong></td>
+</tr>
+</tbody>
+</table>
+<p>L’écart mesure ici la valeur supplémentaire liée aux cinq premières
+années de croissance. Un cash-flow courant exceptionnellement élevé peut
+toutefois rendre la méthode sans croissance trop optimiste.</p>
+<h2 id="buffett">6. Intrinsic Value Buffett</h2>
+<p>Il s’agit de la <strong>variante dite Buffett d’Uncle Stock</strong>
+: dividendes futurs plus valeur comptable au terme de dix ans, le tout
+actualisé. Ce n’est pas une formule universelle de Warren Buffett.</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><menclose notation="box"><mrow><mi>I</mi><msub><mi>V</mi><mi>B</mi></msub><mo>=</mo><munderover><mo>∑</mo><mrow><mi>t</mi><mo>=</mo><mn>1</mn></mrow><mn>10</mn></munderover><mfrac><mrow><mi>D</mi><mi>i</mi><msub><mi>v</mi><mn>0</mn></msub><msup><mrow><mo stretchy="true" form="prefix">(</mo><mn>1</mn><mo>+</mo><msub><mi>g</mi><mi>D</mi></msub><mo stretchy="true" form="postfix">)</mo></mrow><mi>t</mi></msup></mrow><msup><mrow><mo stretchy="true" form="prefix">(</mo><mn>1</mn><mo>+</mo><msub><mi>K</mi><mi>e</mi></msub><mo stretchy="true" form="postfix">)</mo></mrow><mi>t</mi></msup></mfrac><mo>+</mo><mfrac><mrow><mi>B</mi><mi>V</mi><mi>P</mi><msub><mi>S</mi><mn>0</mn></msub><msup><mrow><mo stretchy="true" form="prefix">(</mo><mn>1</mn><mo>+</mo><msub><mi>g</mi><mi>B</mi></msub><mo stretchy="true" form="postfix">)</mo></mrow><mn>10</mn></msup></mrow><msup><mrow><mo stretchy="true" form="prefix">(</mo><mn>1</mn><mo>+</mo><msub><mi>K</mi><mi>e</mi></msub><mo stretchy="true" form="postfix">)</mo></mrow><mn>10</mn></msup></mfrac></mrow></menclose><annotation encoding="application/x-tex">\boxed{IV_B=\sum_{t=1}^{10}\frac{Div_0(1+g_D)^t}{(1+K_e)^t}+\frac{BVPS_0(1+g_B)^{10}}{(1+K_e)^{10}}}</annotation></semantics></math></p>
+<ul>
+<li>(g_D) : croissance prudente des dividendes.</li>
+<li>(g_B) : croissance prudente de la valeur comptable.</li>
+<li>(K_e) : coût des capitaux propres.</li>
+</ul>
+<table>
+<thead>
+<tr class="header">
+<th style="text-align: left;">Paramètre</th>
+<th style="text-align: right;">Valeur</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;">Valeur comptable par action</td>
+<td style="text-align: right;">30 €</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Dividende annuel</td>
+<td style="text-align: right;">1,20 €</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Croissance des dividendes</td>
+<td style="text-align: right;">3 %</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Croissance de la valeur comptable</td>
+<td style="text-align: right;">5 %</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Coût des capitaux propres</td>
+<td style="text-align: right;">10 %</td>
+</tr>
+</tbody>
+</table>
+<p>Les dividendes actualisés sur dix ans valent <strong>8,51 €</strong>
+; la valeur comptable terminale actualisée vaut <strong>18,84
+€</strong>.</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>I</mi><msub><mi>V</mi><mi>B</mi></msub><mo>=</mo><mn>8</mn><mo>,</mo><mn>51</mn><mo>+</mo><mn>18</mn><mo>,</mo><mn>84</mn><mo>=</mo><menclose notation="box"><mrow><mn>27</mn><mo>,</mo><mn>35</mn><mspace width="0.222em"></mspace><mrow><mi mathvariant="normal">€</mi><mi mathvariant="normal">/</mi><mi mathvariant="normal">a</mi><mi mathvariant="normal">c</mi><mi mathvariant="normal">t</mi><mi mathvariant="normal">i</mi><mi mathvariant="normal">o</mi><mi mathvariant="normal">n</mi></mrow></mrow></menclose></mrow><annotation encoding="application/x-tex">IV_B=8,51+18,84=\boxed{27,35\ \mathrm{€/action}}</annotation></semantics></math></p>
+<p>La méthode est surtout lisible lorsque la valeur comptable, les
+bénéfices et les distributions sont prévisibles.</p>
+<h2 id="residual-income">7. Residual Income Model</h2>
+<p>Une entreprise ne crée de la valeur économique que si ses profits
+excèdent le coût du capital immobilisé.</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>R</mi><msub><mi>I</mi><mn>0</mn></msub><mo>=</mo><mi>E</mi><mi>P</mi><msub><mi>S</mi><mn>0</mn></msub><mo>−</mo><msub><mi>K</mi><mi>e</mi></msub><mo>×</mo><mi>B</mi><mi>V</mi><mi>P</mi><msub><mi>S</mi><mn>0</mn></msub></mrow><annotation encoding="application/x-tex">RI_0=EPS_0-K_e\times BVPS_0</annotation></semantics></math></p>
+<p>La méthode ajoute à la valeur comptable la somme actualisée des
+profits résiduels futurs :</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><menclose notation="box"><mrow><mi>I</mi><msub><mi>V</mi><mrow><mi>R</mi><mi>I</mi></mrow></msub><mo>=</mo><mi>B</mi><mi>V</mi><mi>P</mi><msub><mi>S</mi><mn>0</mn></msub><mo>+</mo><munderover><mo>∑</mo><mrow><mi>t</mi><mo>=</mo><mn>1</mn></mrow><mn>5</mn></munderover><mfrac><mrow><mi>R</mi><msub><mi>I</mi><mn>0</mn></msub><msup><mrow><mo stretchy="true" form="prefix">(</mo><mn>1</mn><mo>+</mo><mi>g</mi><mo stretchy="true" form="postfix">)</mo></mrow><mi>t</mi></msup></mrow><msup><mrow><mo stretchy="true" form="prefix">(</mo><mn>1</mn><mo>+</mo><msub><mi>K</mi><mi>e</mi></msub><mo stretchy="true" form="postfix">)</mo></mrow><mi>t</mi></msup></mfrac><mo>+</mo><mfrac><mrow><mi>R</mi><msub><mi>I</mi><mn>0</mn></msub><msup><mrow><mo stretchy="true" form="prefix">(</mo><mn>1</mn><mo>+</mo><mi>g</mi><mo stretchy="true" form="postfix">)</mo></mrow><mn>5</mn></msup></mrow><mrow><msub><mi>K</mi><mi>e</mi></msub><msup><mrow><mo stretchy="true" form="prefix">(</mo><mn>1</mn><mo>+</mo><msub><mi>K</mi><mi>e</mi></msub><mo stretchy="true" form="postfix">)</mo></mrow><mn>5</mn></msup></mrow></mfrac></mrow></menclose><annotation encoding="application/x-tex">\boxed{IV_{RI}=BVPS_0+\sum_{t=1}^{5}\frac{RI_0(1+g)^t}{(1+K_e)^t}+\frac{RI_0(1+g)^5}{K_e(1+K_e)^5}}</annotation></semantics></math></p>
+<p>Pour (BVPS=30 €), (EPS=4 €), (K_e=10%) et (g=3%) :</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>R</mi><msub><mi>I</mi><mn>0</mn></msub><mo>=</mo><mn>4</mn><mo>−</mo><mn>0</mn><mo>,</mo><mn>10</mn><mo>×</mo><mn>30</mn><mo>=</mo><mn>1</mn><mspace width="0.222em"></mspace><mi mathvariant="normal">€</mi></mrow><annotation encoding="application/x-tex">RI_0=4-0,10\times30=1\ \mathrm{€}</annotation></semantics></math></p>
+<p>La somme des revenus résiduels actualisés sur cinq ans est de
+<strong>4,12 €</strong> ; la composante terminale actualisée vaut
+<strong>7,20 €</strong>.</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>I</mi><msub><mi>V</mi><mrow><mi>R</mi><mi>I</mi></mrow></msub><mo>=</mo><mn>30</mn><mo>+</mo><mn>4</mn><mo>,</mo><mn>12</mn><mo>+</mo><mn>7</mn><mo>,</mo><mn>20</mn><mo>=</mo><menclose notation="box"><mrow><mn>41</mn><mo>,</mo><mn>32</mn><mspace width="0.222em"></mspace><mrow><mi mathvariant="normal">€</mi><mi mathvariant="normal">/</mi><mi mathvariant="normal">a</mi><mi mathvariant="normal">c</mi><mi mathvariant="normal">t</mi><mi mathvariant="normal">i</mi><mi mathvariant="normal">o</mi><mi mathvariant="normal">n</mi></mrow></mrow></menclose></mrow><annotation encoding="application/x-tex">IV_{RI}=30+4,12+7,20=\boxed{41,32\ \mathrm{€/action}}</annotation></semantics></math></p>
+<p><strong>Attention aux unités :</strong> si la charge de fonds propres
+est calculée pour toute l’entreprise, il faut la diviser par le nombre
+d’actions avant de la soustraire à un EPS.</p>
+<h2 id="epv">8. Earnings Power Value (EPV)</h2>
+<p>Popularisé par Bruce Greenwald, ce modèle mesure la capacité
+bénéficiaire <strong>durable et sans croissance</strong>.</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>E</mi><mi>P</mi><mi>V</mi><mo>=</mo><mfrac><mrow><mi>O</mi><mi>p</mi><mi>e</mi><mi>r</mi><mi>a</mi><mi>t</mi><mi>i</mi><mi>n</mi><mi>g</mi><mi>I</mi><mi>n</mi><mi>c</mi><mi>o</mi><mi>m</mi><msub><mi>e</mi><mrow><mi>n</mi><mi>o</mi><mi>r</mi><mi>m</mi><mi>a</mi><mi>l</mi><mi>i</mi><mi>s</mi><mi>é</mi></mrow></msub></mrow><mrow><mi>W</mi><mi>A</mi><mi>C</mi><mi>C</mi></mrow></mfrac></mrow><annotation encoding="application/x-tex">EPV=\frac{OperatingIncome_{normalisé}}{WACC}</annotation></semantics></math></p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><menclose notation="box"><mrow><mi>I</mi><msub><mi>V</mi><mrow><mi>E</mi><mi>P</mi><mi>V</mi></mrow></msub><mo>=</mo><mfrac><mrow><mi>E</mi><mi>P</mi><mi>V</mi><mo>−</mo><mi>D</mi><mo>−</mo><mi>M</mi><mo>−</mo><mi>P</mi><mi>S</mi></mrow><mi>N</mi></mfrac></mrow></menclose><annotation encoding="application/x-tex">\boxed{IV_{EPV}=\frac{EPV-D-M-PS}{N}}</annotation></semantics></math></p>
+<p>Exemple : résultat opérationnel normalisé de 120 M€, WACC de 9 %,
+dette nette 250 M€, intérêts minoritaires 20 M€ et 50 millions
+d’actions.</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>E</mi><mi>P</mi><mi>V</mi><mo>=</mo><mn>120</mn><mi>/</mi><mn>0</mn><mo>,</mo><mn>09</mn><mo>=</mo><mn>1333</mn><mo>,</mo><mn>33</mn><mspace width="0.222em"></mspace><mrow><mi mathvariant="normal">M</mi><mi mathvariant="normal">€</mi></mrow></mrow><annotation encoding="application/x-tex">EPV=120/0,09=1333,33\ \mathrm{M€}</annotation></semantics></math></p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>I</mi><msub><mi>V</mi><mrow><mi>E</mi><mi>P</mi><mi>V</mi></mrow></msub><mo>=</mo><mfrac><mrow><mn>1333</mn><mo>,</mo><mn>33</mn><mo>−</mo><mn>250</mn><mo>−</mo><mn>20</mn></mrow><mn>50</mn></mfrac><mo>=</mo><menclose notation="box"><mrow><mn>21</mn><mo>,</mo><mn>27</mn><mspace width="0.222em"></mspace><mrow><mi mathvariant="normal">€</mi><mi mathvariant="normal">/</mi><mi mathvariant="normal">a</mi><mi mathvariant="normal">c</mi><mi mathvariant="normal">t</mi><mi mathvariant="normal">i</mi><mi mathvariant="normal">o</mi><mi mathvariant="normal">n</mi></mrow></mrow></menclose></mrow><annotation encoding="application/x-tex">IV_{EPV}=\frac{1333,33-250-20}{50}=\boxed{21,27\ \mathrm{€/action}}</annotation></semantics></math></p>
+<p>La formule publiée utilise le résultat opérationnel normalisé. Une
+déclinaison financière plus conventionnelle peut utiliser un résultat
+normalisé <strong>après impôts</strong> : elle doit être distinguée de
+la reproduction littérale.</p>
+<h2 id="ebitda">9. Valorisation fondée sur l’EBITDA</h2>
+<p>Uncle Stock applique un multiple fixe de <strong>7,5 fois
+l’EBITDA</strong> :</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>E</mi><mi>V</mi><mo>=</mo><mn>7</mn><mo>,</mo><mn>5</mn><mo>×</mo><mi>E</mi><mi>B</mi><mi>I</mi><mi>T</mi><mi>D</mi><mi>A</mi></mrow><annotation encoding="application/x-tex">EV=7,5\times EBITDA</annotation></semantics></math></p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><menclose notation="box"><mrow><mi>I</mi><msub><mi>V</mi><mrow><mi>E</mi><mi>B</mi><mi>I</mi><mi>T</mi><mi>D</mi><mi>A</mi></mrow></msub><mo>=</mo><mfrac><mrow><mn>7</mn><mo>,</mo><mn>5</mn><mo>×</mo><mi>E</mi><mi>B</mi><mi>I</mi><mi>T</mi><mi>D</mi><mi>A</mi><mo>−</mo><mi>D</mi><mo>−</mo><mi>M</mi><mo>−</mo><mi>P</mi><mi>S</mi></mrow><mi>N</mi></mfrac></mrow></menclose><annotation encoding="application/x-tex">\boxed{IV_{EBITDA}=\frac{7,5\times EBITDA-D-M-PS}{N}}</annotation></semantics></math></p>
+<p>Pour un EBITDA de 150 M€, une dette nette de 250 M€, des intérêts
+minoritaires de 20 M€ et 50 millions d’actions :</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>I</mi><msub><mi>V</mi><mrow><mi>E</mi><mi>B</mi><mi>I</mi><mi>T</mi><mi>D</mi><mi>A</mi></mrow></msub><mo>=</mo><mfrac><mrow><mn>7</mn><mo>,</mo><mn>5</mn><mo>×</mo><mn>150</mn><mo>−</mo><mn>250</mn><mo>−</mo><mn>20</mn></mrow><mn>50</mn></mfrac><mo>=</mo><menclose notation="box"><mrow><mn>17</mn><mo>,</mo><mn>10</mn><mspace width="0.222em"></mspace><mrow><mi mathvariant="normal">€</mi><mi mathvariant="normal">/</mi><mi mathvariant="normal">a</mi><mi mathvariant="normal">c</mi><mi mathvariant="normal">t</mi><mi mathvariant="normal">i</mi><mi mathvariant="normal">o</mi><mi mathvariant="normal">n</mi></mrow></mrow></menclose></mrow><annotation encoding="application/x-tex">IV_{EBITDA}=\frac{7,5\times150-250-20}{50}=\boxed{17,10\ \mathrm{€/action}}</annotation></semantics></math></p>
+<p>Le multiple n’est pas universel. La description de la documentation
+évoque EV/EBITA, mais sa <strong>formule</strong> utilise EBITDA ;
+reproduire la formule signifie donc choisir EBITDA.</p>
+<h2 id="lynch">10. Intrinsic Value Lynch</h2>
+<p>La règle de Peter Lynch rapproche le <strong>PER</strong> du taux de
+croissance exprimé en points de pourcentage : 12 % de croissance peut
+conduire à un PER de 12.</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><menclose notation="box"><mrow><mi>I</mi><msub><mi>V</mi><mi>L</mi></msub><mo>=</mo><mi>E</mi><mi>P</mi><mi>S</mi><mo>×</mo><mrow><mo stretchy="true" form="prefix">(</mo><mn>100</mn><mi>g</mi><mo stretchy="true" form="postfix">)</mo></mrow></mrow></menclose><annotation encoding="application/x-tex">\boxed{IV_L=EPS\times(100g)}</annotation></semantics></math></p>
+<p>Uncle Stock utilise la croissance régressée de l’EBITDA. Pour
+(EPS=4 €) et (g=12%) :</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>I</mi><msub><mi>V</mi><mi>L</mi></msub><mo>=</mo><mn>4</mn><mo>×</mo><mn>12</mn><mo>=</mo><menclose notation="box"><mrow><mn>48</mn><mspace width="0.222em"></mspace><mi mathvariant="normal">€</mi></mrow></menclose></mrow><annotation encoding="application/x-tex">IV_L=4\times12=\boxed{48\ \mathrm{€}}</annotation></semantics></math></p>
+<h3 id="adjusted-lynch">Adjusted Lynch</h3>
+<p>Uncle Stock applique un facteur supplémentaire :</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>f</mi><mi>a</mi><mi>i</mi><mi>r</mi><mi>P</mi><mi>E</mi><mi>G</mi><mrow><mo stretchy="true" form="prefix">(</mo><mi>g</mi><mo stretchy="true" form="postfix">)</mo></mrow><mo>=</mo><mo>min</mo><mrow><mo stretchy="true" form="prefix">(</mo><mn>3</mn><mo>;</mo><mspace width="0.222em"></mspace><mn>0</mn><mo>,</mo><mn>5</mn><msup><mrow><mo stretchy="true" form="prefix">(</mo><mn>10</mn><mi>g</mi><mo>−</mo><mn>1</mn><mo>,</mo><mn>5</mn><mo stretchy="true" form="postfix">)</mo></mrow><mn>2</mn></msup><mo>+</mo><mn>1</mn><mo>,</mo><mn>98</mn><mo stretchy="true" form="postfix">)</mo></mrow></mrow><annotation encoding="application/x-tex">fairPEG(g)=\min\left(3;\ 0,5(10g-1,5)^2+1,98\right)</annotation></semantics></math></p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><menclose notation="box"><mrow><mi>I</mi><msub><mi>V</mi><mrow><mi>L</mi><mi>A</mi></mrow></msub><mo>=</mo><mi>f</mi><mi>a</mi><mi>i</mi><mi>r</mi><mi>P</mi><mi>E</mi><mi>G</mi><mrow><mo stretchy="true" form="prefix">(</mo><mi>g</mi><mo stretchy="true" form="postfix">)</mo></mrow><mo>×</mo><mi>I</mi><msub><mi>V</mi><mi>L</mi></msub></mrow></menclose><annotation encoding="application/x-tex">\boxed{IV_{LA}=fairPEG(g)\times IV_L}</annotation></semantics></math></p>
+<p>Avec (g=0,12) :</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>f</mi><mi>a</mi><mi>i</mi><mi>r</mi><mi>P</mi><mi>E</mi><mi>G</mi><mo>=</mo><mn>0</mn><mo>,</mo><mn>5</mn><msup><mrow><mo stretchy="true" form="prefix">(</mo><mn>1</mn><mo>,</mo><mn>2</mn><mo>−</mo><mn>1</mn><mo>,</mo><mn>5</mn><mo stretchy="true" form="postfix">)</mo></mrow><mn>2</mn></msup><mo>+</mo><mn>1</mn><mo>,</mo><mn>98</mn><mo>=</mo><mn>2</mn><mo>,</mo><mn>025</mn></mrow><annotation encoding="application/x-tex">fairPEG=0,5(1,2-1,5)^2+1,98=2,025</annotation></semantics></math></p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>I</mi><msub><mi>V</mi><mrow><mi>L</mi><mi>A</mi></mrow></msub><mo>=</mo><mn>2</mn><mo>,</mo><mn>025</mn><mo>×</mo><mn>48</mn><mo>=</mo><menclose notation="box"><mrow><mn>97</mn><mo>,</mo><mn>20</mn><mspace width="0.222em"></mspace><mi mathvariant="normal">€</mi></mrow></menclose></mrow><annotation encoding="application/x-tex">IV_{LA}=2,025\times48=\boxed{97,20\ \mathrm{€}}</annotation></semantics></math></p>
+<p><strong>Convention indispensable :</strong> le multiple de Lynch
+utilise 12 pour 12 %, tandis que la fonction (fairPEG) est ici évaluée
+avec (g=0,12). La documentation ne donne pas explicitement toutes les
+conventions internes ; il faut les fixer et les tester dans le code.</p>
+<h2 id="graham-formula">11. Intrinsic Value — Graham Formula</h2>
+<p>L’adaptation Uncle Stock combine EPS, croissance prudente et taux
+obligataire de référence.</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><menclose notation="box"><mrow><mi>I</mi><msub><mi>V</mi><mi>G</mi></msub><mo>=</mo><mi>E</mi><mi>P</mi><mi>S</mi><mo>×</mo><mrow><mo stretchy="true" form="prefix">(</mo><mn>7</mn><mo>+</mo><mn>100</mn><mo>ln</mo><mrow><mo stretchy="true" form="prefix">(</mo><mn>1</mn><mo>+</mo><mi>g</mi><mo stretchy="true" form="postfix">)</mo></mrow><mo>×</mo><mfrac><mrow><mn>4</mn><mo>,</mo><mn>4</mn></mrow><mi>Y</mi></mfrac><mo stretchy="true" form="postfix">)</mo></mrow></mrow></menclose><annotation encoding="application/x-tex">\boxed{IV_G=EPS\times\left(7+100\ln(1+g)\times\frac{4,4}{Y}\right)}</annotation></semantics></math></p>
+<p>La croissance est <strong>plafonnée à 15 %</strong>. (Y) représente
+le rendement des obligations d’entreprise A à 20 ans, exprimé en
+<strong>points de pourcentage</strong>.</p>
+<p>Pour un EPS de 4 €, une croissance de 8 % et un taux obligataire de
+5,5 % :</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mn>100</mn><mo>ln</mo><mrow><mo stretchy="true" form="prefix">(</mo><mn>1</mn><mo>,</mo><mn>08</mn><mo stretchy="true" form="postfix">)</mo></mrow><mo>≈</mo><mn>7</mn><mo>,</mo><mn>70</mn></mrow><annotation encoding="application/x-tex">100\ln(1,08)\approx7,70</annotation></semantics></math></p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>I</mi><msub><mi>V</mi><mi>G</mi></msub><mo>=</mo><mn>4</mn><mo>×</mo><mrow><mo stretchy="true" form="prefix">(</mo><mn>7</mn><mo>+</mo><mn>7</mn><mo>,</mo><mn>70</mn><mo>×</mo><mfrac><mrow><mn>4</mn><mo>,</mo><mn>4</mn></mrow><mrow><mn>5</mn><mo>,</mo><mn>5</mn></mrow></mfrac><mo stretchy="true" form="postfix">)</mo></mrow><mo>≈</mo><menclose notation="box"><mrow><mn>52</mn><mo>,</mo><mn>63</mn><mspace width="0.222em"></mspace><mi mathvariant="normal">€</mi></mrow></menclose></mrow><annotation encoding="application/x-tex">IV_G=4\times\left(7+7,70\times\frac{4,4}{5,5}\right)\approx\boxed{52,63\ \mathrm{€}}</annotation></semantics></math></p>
+<div class="warning-box">
+<p><strong>Ambiguïté de la documentation :</strong> une parenthèse
+manque dans la formule publiée. Selon que le facteur obligataire
+s’applique au seul terme de croissance ou à toute la parenthèse, on
+obtient ici environ <strong>52,63 €</strong> ou <strong>47,03
+€</strong>. Le module doit expliciter la convention retenue.</p>
+</div>
+<h2 id="graham-number">12. Graham Number</h2>
+<p>Le nombre de Graham utilise l’EPS et la valeur comptable tangible par
+action (<strong>TBVPS</strong>).</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><menclose notation="box"><mrow><mi>I</mi><msub><mi>V</mi><mrow><mi>G</mi><mi>N</mi></mrow></msub><mo>=</mo><msqrt><mrow><mn>22</mn><mo>,</mo><mn>5</mn><mo>×</mo><mi>E</mi><mi>P</mi><mi>S</mi><mo>×</mo><mi>T</mi><mi>B</mi><mi>V</mi><mi>P</mi><mi>S</mi></mrow></msqrt></mrow></menclose><annotation encoding="application/x-tex">\boxed{IV_{GN}=\sqrt{22,5\times EPS\times TBVPS}}</annotation></semantics></math></p>
+<p>Pour EPS = 4 € et TBVPS = 30 € :</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>I</mi><msub><mi>V</mi><mrow><mi>G</mi><mi>N</mi></mrow></msub><mo>=</mo><msqrt><mrow><mn>22</mn><mo>,</mo><mn>5</mn><mo>×</mo><mn>4</mn><mo>×</mo><mn>30</mn></mrow></msqrt><mo>=</mo><menclose notation="box"><mrow><mn>51</mn><mo>,</mo><mn>96</mn><mspace width="0.222em"></mspace><mi mathvariant="normal">€</mi></mrow></menclose></mrow><annotation encoding="application/x-tex">IV_{GN}=\sqrt{22,5\times4\times30}=\boxed{51,96\ \mathrm{€}}</annotation></semantics></math></p>
+<p>Le modèle n’est pas directement exploitable si les facteurs
+conduisent à une racine non réelle ; les valeurs négatives ou comptables
+atypiques doivent aussi être traitées avec prudence.</p>
+<h2 id="value-driver">13. Value Driver Formula — McKinsey</h2>
+<p>Cette formule articule les profits, la rentabilité du capital et le
+réinvestissement nécessaire à la croissance.</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><menclose notation="box"><mrow><mi>V</mi><mo>=</mo><mfrac><mrow><mi>C</mi><mi>a</mi><mi>s</mi><mi>h</mi><mi>N</mi><mi>O</mi><mi>P</mi><mi>A</mi><mi>T</mi><mrow><mo stretchy="true" form="prefix">(</mo><mn>1</mn><mo>+</mo><mi>g</mi><mo stretchy="true" form="postfix">)</mo></mrow><mrow><mo stretchy="true" form="prefix">(</mo><mn>1</mn><mo>−</mo><mfrac><mi>g</mi><mrow><mi>C</mi><mi>R</mi><mi>O</mi><mi>I</mi><mi>C</mi></mrow></mfrac><mo stretchy="true" form="postfix">)</mo></mrow></mrow><mrow><mi>W</mi><mi>A</mi><mi>C</mi><mi>C</mi><mo>−</mo><mi>g</mi></mrow></mfrac></mrow></menclose><annotation encoding="application/x-tex">\boxed{V=\frac{CashNOPAT(1+g)\left(1-\frac{g}{CROIC}\right)}{WACC-g}}</annotation></semantics></math></p>
+<p>Le facteur (1-g/CROIC) représente la fraction des profits qui reste
+disponible après les réinvestissements nécessaires pour soutenir le taux
+de croissance.</p>
+<h3 id="calcul-de-la-croissance">Calcul de la croissance</h3>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>g</mi><mn>1</mn></msub><mo>=</mo><mo>min</mo><mrow><mo stretchy="true" form="prefix">(</mo><mn>0</mn><mo>,</mo><mn>8</mn><mo>×</mo><mi>W</mi><mi>A</mi><mi>C</mi><mi>C</mi><mo>,</mo><mspace width="0.222em"></mspace><mi>C</mi><mi>R</mi><mi>O</mi><mi>I</mi><mi>C</mi><mo>×</mo><mi>R</mi><mi>R</mi><mo stretchy="true" form="postfix">)</mo></mrow></mrow><annotation encoding="application/x-tex">g_1=\min(0,8\times WACC,\ CROIC\times RR)</annotation></semantics></math></p>
+<p>Où <strong>RR</strong> est le taux de réinvestissement calculé sur
+cinq ans.</p>
+<table>
+<thead>
+<tr class="header">
+<th style="text-align: left;">Valeur de (g_1)</th>
+<th style="text-align: left;">Croissance retenue</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;">(g_1&lt;-3%)</td>
+<td style="text-align: left;">Pas de valeur intrinsèque calculée</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">(-3% à 0%)</td>
+<td style="text-align: left;">(g=0%)</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">(0% à 5%)</td>
+<td style="text-align: left;">(g=g_1)</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">(g_1&gt;5%)</td>
+<td style="text-align: left;">(g=max(5%,(g_1+4%)/2))</td>
+</tr>
+</tbody>
+</table>
+<p>Pour Cash-NOPAT = 100 M€, CROIC = 15 %, WACC = 9 % et RR = 30 % :</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>g</mi><mn>1</mn></msub><mo>=</mo><mo>min</mo><mrow><mo stretchy="true" form="prefix">(</mo><mn>0</mn><mo>,</mo><mn>8</mn><mo>×</mo><mn>9</mn><mi>%</mi><mo>,</mo><mn>15</mn><mi>%</mi><mo>×</mo><mn>30</mn><mi>%</mi><mo stretchy="true" form="postfix">)</mo></mrow><mo>=</mo><mn>4</mn><mo>,</mo><mn>5</mn><mi>%</mi></mrow><annotation encoding="application/x-tex">g_1=\min(0,8\times9\%,15\%\times30\%)=4,5\%</annotation></semantics></math></p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>V</mi><mo>=</mo><mfrac><mrow><mn>100</mn><mo>×</mo><mn>1</mn><mo>,</mo><mn>045</mn><mo>×</mo><mrow><mo stretchy="true" form="prefix">(</mo><mn>1</mn><mo>−</mo><mn>0</mn><mo>,</mo><mn>045</mn><mi>/</mi><mn>0</mn><mo>,</mo><mn>15</mn><mo stretchy="true" form="postfix">)</mo></mrow></mrow><mrow><mn>0</mn><mo>,</mo><mn>09</mn><mo>−</mo><mn>0</mn><mo>,</mo><mn>045</mn></mrow></mfrac><mo>=</mo><menclose notation="box"><mrow><mn>1625</mn><mo>,</mo><mn>56</mn><mspace width="0.222em"></mspace><mrow><mi mathvariant="normal">M</mi><mi mathvariant="normal">€</mi></mrow></mrow></menclose></mrow><annotation encoding="application/x-tex">V=\frac{100\times1,045\times(1-0,045/0,15)}{0,09-0,045}=\boxed{1625,56\ \mathrm{M€}}</annotation></semantics></math></p>
+<p>La formule brute conduit économiquement à une <strong>valeur
+d’entreprise</strong>. Pour obtenir une valeur par action en soustrayant
+250 M€ de dette nette et 20 M€ de minoritaires, avec 50 millions
+d’actions :</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>I</mi><mi>V</mi><mo>=</mo><mfrac><mrow><mn>1625</mn><mo>,</mo><mn>56</mn><mo>−</mo><mn>250</mn><mo>−</mo><mn>20</mn></mrow><mn>50</mn></mfrac><mo>=</mo><menclose notation="box"><mrow><mn>27</mn><mo>,</mo><mn>11</mn><mspace width="0.222em"></mspace><mrow><mi mathvariant="normal">€</mi><mi mathvariant="normal">/</mi><mi mathvariant="normal">a</mi><mi mathvariant="normal">c</mi><mi mathvariant="normal">t</mi><mi mathvariant="normal">i</mi><mi mathvariant="normal">o</mi><mi mathvariant="normal">n</mi></mrow></mrow></menclose></mrow><annotation encoding="application/x-tex">IV=\frac{1625,56-250-20}{50}=\boxed{27,11\ \mathrm{€/action}}</annotation></semantics></math></p>
+<p><strong>Cette conversion est une adaptation conseillée</strong>, non
+une soustraction explicitement présente dans la formule Value Driver
+publiée.</p>
+<h2 id="hold-five">14. Intrinsic Value — Hold 5 Years</h2>
+<p>Cette méthode estime le prix de revente au bout de cinq ans et les
+distributions reçues durant cette période, puis actualise les
+montants.</p>
+<h3 id="a.-owner-earnings-futurs-et-prix-de-revente">A. Owner Earnings
+futurs et prix de revente</h3>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>O</mi><msub><mi>E</mi><mn>5</mn></msub><mo>=</mo><mi>O</mi><msub><mi>E</mi><mn>0</mn></msub><msup><mrow><mo stretchy="true" form="prefix">(</mo><mn>1</mn><mo>+</mo><mi>g</mi><mo stretchy="true" form="postfix">)</mo></mrow><mn>5</mn></msup></mrow><annotation encoding="application/x-tex">OE_5=OE_0(1+g)^5</annotation></semantics></math></p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>P</mi><mn>5</mn></msub><mo>=</mo><mfrac><mrow><mi>O</mi><msub><mi>E</mi><mn>5</mn></msub></mrow><mrow><mi>Y</mi><mi>i</mi><mi>e</mi><mi>l</mi><msub><mi>d</mi><mrow><mi>O</mi><mi>E</mi></mrow></msub></mrow></mfrac></mrow><annotation encoding="application/x-tex">P_5=\frac{OE_5}{Yield_{OE}}</annotation></semantics></math></p>
+<p>Le rendement (Yield_{OE}) est un rendement historique moyen des Owner
+Earnings sur le prix.</p>
+<h3 id="b.-distributions-futures">B. Distributions futures</h3>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>D</mi><mi>i</mi><mi>s</mi><mi>t</mi><mi>r</mi><mi>i</mi><mi>b</mi><mi>u</mi><mi>t</mi><mi>i</mi><mi>o</mi><msub><mi>n</mi><mi>t</mi></msub><mo>=</mo><mi>O</mi><msub><mi>E</mi><mn>0</mn></msub><msup><mrow><mo stretchy="true" form="prefix">(</mo><mn>1</mn><mo>+</mo><mi>g</mi><mo stretchy="true" form="postfix">)</mo></mrow><mi>t</mi></msup><mo>×</mo><mi>P</mi><mi>a</mi><mi>y</mi><mi>o</mi><mi>u</mi><mi>t</mi></mrow><annotation encoding="application/x-tex">Distribution_t=OE_0(1+g)^t\times Payout</annotation></semantics></math></p>
+<h3 id="c.-valeur-actuelle">C. Valeur actuelle</h3>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><menclose notation="box"><mrow><mi>I</mi><msub><mi>V</mi><mrow><mi>H</mi><mn>5</mn></mrow></msub><mo>=</mo><mfrac><msub><mi>P</mi><mn>5</mn></msub><msup><mrow><mo stretchy="true" form="prefix">(</mo><mn>1</mn><mo>+</mo><msub><mi>K</mi><mi>e</mi></msub><mo stretchy="true" form="postfix">)</mo></mrow><mn>5</mn></msup></mfrac><mo>+</mo><munderover><mo>∑</mo><mrow><mi>t</mi><mo>=</mo><mn>1</mn></mrow><mn>5</mn></munderover><mfrac><mrow><mi>D</mi><mi>i</mi><mi>s</mi><mi>t</mi><mi>r</mi><mi>i</mi><mi>b</mi><mi>u</mi><mi>t</mi><mi>i</mi><mi>o</mi><msub><mi>n</mi><mi>t</mi></msub></mrow><msup><mrow><mo stretchy="true" form="prefix">(</mo><mn>1</mn><mo>+</mo><msub><mi>K</mi><mi>e</mi></msub><mo stretchy="true" form="postfix">)</mo></mrow><mi>t</mi></msup></mfrac></mrow></menclose><annotation encoding="application/x-tex">\boxed{IV_{H5}=\frac{P_5}{(1+K_e)^5}+\sum_{t=1}^{5}\frac{Distribution_t}{(1+K_e)^t}}</annotation></semantics></math></p>
+<p>Le résultat dépend sensiblement de l’hypothèse de rendement utilisée
+pour convertir les Owner Earnings futurs en prix de revente.</p>
+<h2 id="omalley">15. Intrinsic Value — O’Malley</h2>
+<p>Cette variante de Graham utilise les <strong>Owner Earnings
+prédictifs</strong>, la croissance historique prudente de ces flux et un
+taux obligataire :</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><menclose notation="box"><mrow><mi>I</mi><msub><mi>V</mi><mi>O</mi></msub><mo>=</mo><mi>O</mi><msub><mi>E</mi><mrow><mi>p</mi><mi>r</mi><mi>e</mi><mi>d</mi></mrow></msub><mo>×</mo><mrow><mo stretchy="true" form="prefix">(</mo><mn>15</mn><mo>+</mo><mn>10</mn><mi>g</mi><mo stretchy="true" form="postfix">)</mo></mrow><mo>×</mo><mfrac><mrow><mn>4</mn><mo>,</mo><mn>4</mn></mrow><mi>Y</mi></mfrac></mrow></menclose><annotation encoding="application/x-tex">\boxed{IV_O=OE_{pred}\times(15+10g)\times\frac{4,4}{Y}}</annotation></semantics></math></p>
+<p>Les Owner Earnings prédictifs sont estimés selon les méthodes de
+projection décrites par la documentation. Cette méthode constitue un
+<strong>indicateur complémentaire</strong>, absent de l’agrégation des
+13 composantes publiée.</p>
+<h2 id="payback">16. Intrinsic Value — x Years Payback</h2>
+<p>On estime la somme de la valeur comptable et des résultats après
+intérêts et impôts projetés sur (x) années, grâce à une régression
+linéaire sur dix années d’historique :</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>O</mi><msub><mi>I</mi><mi>t</mi></msub><mo>=</mo><mi>a</mi><mi>t</mi><mo>+</mo><mi>b</mi></mrow><annotation encoding="application/x-tex">OI_t=at+b</annotation></semantics></math></p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><menclose notation="box"><mrow><msub><mi>V</mi><mi>E</mi></msub><mo>=</mo><mi>B</mi><mi>V</mi><mo>+</mo><munderover><mo>∑</mo><mrow><mi>t</mi><mo>=</mo><mn>1</mn></mrow><mi>x</mi></munderover><mi>O</mi><msub><mi>I</mi><mi>t</mi></msub><mrow><mo stretchy="true" form="prefix">(</mo><mn>1</mn><mo>−</mo><mi>T</mi><mo stretchy="true" form="postfix">)</mo></mrow></mrow></menclose><annotation encoding="application/x-tex">\boxed{V_E=BV+\sum_{t=1}^{x}OI_t(1-T)}</annotation></semantics></math></p>
+<p>La formule publiée <strong>n’actualise pas</strong> les flux futurs.
+Il vaut mieux la voir comme un indicateur de récupération de valeur que
+comme un DCF au sens strict.</p>
+<h2 id="aggregation">17. Agrégation : la valeur intrinsèque globale</h2>
+<p>Uncle Stock calcule une <strong>moyenne pondérée</strong> de 13
+composantes, dont le cours de l’action lui-même.</p>
+<table>
+<thead>
+<tr class="header">
+<th style="text-align: left;">Composante</th>
+<th style="text-align: right;">Poids</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;">DCF FCF</td>
+<td style="text-align: right;"><strong>5</strong></td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Buffett</td>
+<td style="text-align: right;"><strong>4</strong></td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Residual Income</td>
+<td style="text-align: right;"><strong>3</strong></td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Graham Formula</td>
+<td style="text-align: right;"><strong>3</strong></td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Earnings Power Value</td>
+<td style="text-align: right;"><strong>3</strong></td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Value Driver</td>
+<td style="text-align: right;"><strong>2</strong></td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Lynch</td>
+<td style="text-align: right;"><strong>2</strong></td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Graham Number</td>
+<td style="text-align: right;"><strong>2</strong></td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">EBITDA</td>
+<td style="text-align: right;"><strong>2</strong></td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Hold 5 Years</td>
+<td style="text-align: right;"><strong>1</strong></td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">DCF sans croissance</td>
+<td style="text-align: right;"><strong>1</strong></td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Adjusted Lynch</td>
+<td style="text-align: right;"><strong>1</strong></td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Cours actuel</td>
+<td style="text-align: right;"><strong>1</strong></td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><strong>TOTAL</strong></td>
+<td style="text-align: right;"><strong>30</strong></td>
+</tr>
+</tbody>
+</table>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><menclose notation="box"><mrow><mi>I</mi><msub><mi>V</mi><mrow><mi>g</mi><mi>l</mi><mi>o</mi><mi>b</mi><mi>a</mi><mi>l</mi></mrow></msub><mo>=</mo><mfrac><mrow><munder><mo>∑</mo><mi>i</mi></munder><msub><mi>w</mi><mi>i</mi></msub><mi>I</mi><msub><mi>V</mi><mi>i</mi></msub></mrow><mrow><munder><mo>∑</mo><mi>i</mi></munder><msub><mi>w</mi><mi>i</mi></msub></mrow></mfrac></mrow></menclose><annotation encoding="application/x-tex">\boxed{IV_{global}=\frac{\sum_i w_i IV_i}{\sum_i w_i}}</annotation></semantics></math></p>
+<p>Si les 13 composantes sont disponibles, la somme des poids est
+<strong>30</strong>. Si certaines sont impossibles à calculer, une règle
+d’implémentation raisonnable consiste à renormaliser sur les méthodes
+disponibles ; la documentation ne décrit pas complètement les cas de
+données manquantes.</p>
+<h3 id="exemple-avec-trois-méthodes">Exemple avec trois méthodes</h3>
+<table>
+<thead>
+<tr class="header">
+<th style="text-align: left;">Méthode</th>
+<th style="text-align: right;">Valeur par action</th>
+<th style="text-align: right;">Poids</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;">DCF FCF</td>
+<td style="text-align: right;">20,88 €</td>
+<td style="text-align: right;">5</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Buffett</td>
+<td style="text-align: right;">27,35 €</td>
+<td style="text-align: right;">4</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Residual Income</td>
+<td style="text-align: right;">41,32 €</td>
+<td style="text-align: right;">3</td>
+</tr>
+</tbody>
+</table>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>I</mi><mi>V</mi><mo>=</mo><mfrac><mrow><mn>5</mn><mo>×</mo><mn>20</mn><mo>,</mo><mn>88</mn><mo>+</mo><mn>4</mn><mo>×</mo><mn>27</mn><mo>,</mo><mn>35</mn><mo>+</mo><mn>3</mn><mo>×</mo><mn>41</mn><mo>,</mo><mn>32</mn></mrow><mrow><mn>5</mn><mo>+</mo><mn>4</mn><mo>+</mo><mn>3</mn></mrow></mfrac><mo>=</mo><menclose notation="box"><mrow><mn>28</mn><mo>,</mo><mn>15</mn><mspace width="0.222em"></mspace><mi mathvariant="normal">€</mi></mrow></menclose></mrow><annotation encoding="application/x-tex">IV=\frac{5\times20,88+4\times27,35+3\times41,32}{5+4+3}=\boxed{28,15\ \mathrm{€}}</annotation></semantics></math></p>
+<p>Il s’agit d’une moyenne <strong>partielle</strong> de trois méthodes,
+non de la valorisation globale complète.</p>
+<h2 id="margin">18. Price / Intrinsic Value et Margin of Safety</h2>
+<p>Le <strong>Price / Intrinsic Value</strong> compare le cours de
+Bourse à la valorisation estimée :</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>P</mi><mi>r</mi><mi>i</mi><mi>c</mi><mi>e</mi><mi>T</mi><mi>o</mi><mi>I</mi><mi>V</mi><mo>=</mo><mfrac><mrow><mi>C</mi><mi>o</mi><mi>u</mi><mi>r</mi><mi>s</mi></mrow><mrow><mi>I</mi><mi>V</mi></mrow></mfrac></mrow><annotation encoding="application/x-tex">PriceToIV=\frac{Cours}{IV}</annotation></semantics></math></p>
+<p>La <strong>marge de sécurité</strong> est :</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><menclose notation="box"><mrow><mi>M</mi><mi>O</mi><mi>S</mi><mo>=</mo><mn>1</mn><mo>−</mo><mfrac><mrow><mi>C</mi><mi>o</mi><mi>u</mi><mi>r</mi><mi>s</mi></mrow><mrow><mi>I</mi><mi>V</mi></mrow></mfrac></mrow></menclose><annotation encoding="application/x-tex">\boxed{MOS=1-\frac{Cours}{IV}}</annotation></semantics></math></p>
+<p>Pour un cours de 15 € et une valeur intrinsèque de 20,88 € :</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>M</mi><mi>O</mi><mi>S</mi><mo>=</mo><mn>1</mn><mo>−</mo><mfrac><mn>15</mn><mrow><mn>20</mn><mo>,</mo><mn>88</mn></mrow></mfrac><mo>≈</mo><menclose notation="box"><mrow><mn>28</mn><mo>,</mo><mn>2</mn><mi>%</mi></mrow></menclose></mrow><annotation encoding="application/x-tex">MOS=1-\frac{15}{20,88}\approx\boxed{28,2\%}</annotation></semantics></math></p>
+<p>La marge de sécurité exprime un écart aux <strong>hypothèses du
+modèle</strong>, pas une garantie de gain futur.</p>
+<h2 id="precautions">19. Précautions pour un module fiable</h2>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th style="text-align: left;">Problème</th>
+<th style="text-align: left;">Traitement recommandé</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;">Croissance historique négative</td>
+<td style="text-align: left;">Contrôler la pertinence économique des
+projections.</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">FCFF négatif</td>
+<td style="text-align: left;">Éviter une perpétuité mécanique de flux
+négatifs.</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">EPS négatif</td>
+<td style="text-align: left;">Exclure les méthodes inapplicables.</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Dilution et rachats d’actions</td>
+<td style="text-align: left;">Employer un nombre d’actions cohérent avec
+les données financières.</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Valeur d’entreprise vs valeur des capitaux
+propres</td>
+<td style="text-align: left;">Convertir avant d’agréger et de comparer
+au cours.</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Croissance excessivement élevée</td>
+<td style="text-align: left;">Prévoir plafonds, garde-fous et
+scénarios.</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">WACC trop faible</td>
+<td style="text-align: left;">Appliquer la règle choisie et faire une
+analyse de sensibilité.</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Données manquantes</td>
+<td style="text-align: left;">Renvoyer « indisponible », pas une valeur
+zéro inventée.</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Valeurs aberrantes</td>
+<td style="text-align: left;">Les signaler et justifier leur éventuelle
+exclusion.</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Formules ambiguës</td>
+<td style="text-align: left;">Garder une version « publiée » et une
+version « corrigée ».</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Particularité d’Uncle Stock :</strong> le cours actuel
+participe à l’agrégation avec un poids de 1. Pour une valorisation
+indépendante, il est préférable de calculer également une
+<strong>moyenne sans le cours</strong>, tout en conservant une version «
+Uncle Stock » strictement comparable.</p>
+<h2 id="interface">20. Présentation recommandée dans l’application</h2>
+<p>Une bonne interface ne devrait pas afficher uniquement un chiffre
+final. Elle doit rendre visibles les <strong>hypothèses</strong>, les
+<strong>calculs intermédiaires</strong>, les <strong>méthodes
+exclues</strong> et les <strong>scénarios alternatifs</strong>.</p>
+<div class="example-panel">
+<p><strong>Exemple fictif — DCF FCF</strong></p>
+<table>
+<thead>
+<tr class="header">
+<th style="text-align: left;">Indicateur</th>
+<th style="text-align: right;">Valeur</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;">Valeur intrinsèque estimée</td>
+<td style="text-align: right;"><strong>20,88 € / action</strong></td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Cours de référence</td>
+<td style="text-align: right;">15,00 €</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Marge de sécurité</td>
+<td style="text-align: right;"><strong>28,2 %</strong></td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Flux actualisés sur cinq ans</td>
+<td style="text-align: right;">435,26 M€</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Valeur terminale actualisée</td>
+<td style="text-align: right;">878,60 M€</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Dette nette et minoritaires</td>
+<td style="text-align: right;">−270,00 M€</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Valeur des capitaux propres</td>
+<td style="text-align: right;"><strong>1 043,86 M€</strong></td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Nombre d’actions</td>
+<td style="text-align: right;">50 millions</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Hypothèses :</strong> croissance 4 % · WACC 9 % · horizon
+explicite 5 ans · croissance terminale 0 %.</p>
+</div>
+<h3 id="fonctionnalités-utiles">Fonctionnalités utiles</h3>
+<ul>
+<li>Afficher les résultats par méthode, avec le poids retenu pour
+l’agrégation.</li>
+<li>Permettre de développer les étapes du calcul (projections,
+actualisations, valeur terminale, dette nette).</li>
+<li>Proposer trois scénarios : <strong>prudent</strong>,
+<strong>central</strong> et <strong>optimiste</strong>.</li>
+<li>Ajouter une <strong>analyse de sensibilité WACC ×
+croissance</strong>.</li>
+<li>Afficher les avertissements : données insuffisantes, valeurs
+négatives, hypothèses extrêmes ou formules ambiguës.</li>
+<li>Comparer un mode <strong>fidèle à Uncle Stock</strong> et un mode
+<strong>corrigé / adapté au secteur</strong>.</li>
+</ul>
+<div class="highlight-box">
+<p><strong>À retenir.</strong> La programmation des formules est
+relativement simple. Le vrai travail est de choisir les hypothèses
+défendables et d’identifier les modèles pertinents pour chaque
+entreprise — banque, industrie cyclique, société très endettée, forte
+croissance, etc.</p>
+</div>
+<hr />
+<p><strong>Source méthodologique principale :</strong> <a
+href="https://www.unclestock.com/documentation/stock.html#FairvalueDCFFCF" target="_blank" rel="noopener noreferrer">Documentation
+Uncle Stock — Stock &amp; Value</a>. Les exemples chiffrés sont
+illustratifs. Les recommandations d’implémentation sont explicitement
+distinguées de la reproduction des formules publiées.</p></main>
+   <footer class="footer">Document autonome · Référence méthodologique : <a href="https://www.unclestock.com/documentation/stock.html#FairvalueDCFFCF" target="_blank" rel="noopener noreferrer">Uncle Stock</a> · Novembre 2026</footer>
+  </div>
+</div>
+<a href="#haut" class="top-link" aria-label="Revenir en haut">↑</a>
+<script>
+(function(){
+  const root=document.documentElement;
+  const toggle=document.getElementById('theme-toggle');
+  let saved='light';try{saved=localStorage.getItem('intrinsic-theme')||'light'}catch(e){}
+  function setTheme(t){root.setAttribute('data-theme',t);toggle.innerHTML=t==='dark'?'☼ &nbsp; Thème clair':'◐ &nbsp; Thème sombre';try{localStorage.setItem('intrinsic-theme',t)}catch(e){}}
+  setTheme(saved==='dark'?'dark':'light');
+  toggle.addEventListener('click',()=>setTheme(root.getAttribute('data-theme')==='dark'?'light':'dark'));
+  const links=[...document.querySelectorAll('#TOC a[href^="#"]')];
+  const mobile=document.getElementById('mobile-toc');
+  links.filter(a=>/^#(donnees|dcf-fcf|dcf-oe|regression|no-growth|buffett|residual-income|epv|ebitda|lynch|graham-formula|graham-number|value-driver|hold-five|omalley|payback|aggregation|margin|precautions|interface)/.test(a.getAttribute('href'))).forEach(a=>{const clone=a.cloneNode(true);clone.addEventListener('click',()=>document.querySelector('.mobile-nav details').open=false);mobile.appendChild(clone)});
+  if('IntersectionObserver' in window){
+    const obs=new IntersectionObserver(entries=>{const visibles=entries.filter(x=>x.isIntersecting).sort((a,b)=>a.boundingClientRect.top-b.boundingClientRect.top);if(!visibles.length)return;let id=visibles[0].target.id;links.forEach(a=>a.classList.toggle('active',a.getAttribute('href')==='#'+id));},{rootMargin:'-5% 0px -76% 0px',threshold:0});
+    document.querySelectorAll('.article h2[id]').forEach(x=>obs.observe(x));
+  }
+})();
+</script>
+</body>
+</html>

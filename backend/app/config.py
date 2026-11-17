@@ -273,6 +273,9 @@ class Settings(BaseSettings):
             self.refresh_from_env_file(force=True)
 
     app_data_dir: Path = Path("./data")
+    finance_data_dir: Path | None = None
+    finance_quote_ttl_seconds: int = 300
+    finance_fundamentals_ttl_hours: int = 24
     database_url: str = ""
     demo_mode: bool = False
     llm_api_key: SecretStr = SecretStr("")
@@ -637,6 +640,10 @@ class Settings(BaseSettings):
     @property
     def db_url(self) -> str:
         return self.database_url or f"sqlite:///{self.app_data_dir.resolve() / 'chat.db'}"
+
+    @property
+    def resolved_finance_data_dir(self) -> Path:
+        return (self.finance_data_dir or (self.app_data_dir / "finance")).resolve()
 
     def refresh_from_env_file(self, force: bool = False) -> None:
         if not self._watch_env:

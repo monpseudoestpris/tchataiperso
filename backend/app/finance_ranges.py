@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-ChartRange = Literal["1d", "1w", "1m", "3m", "6m", "1y", "2y", "5y", "max"]
+ChartRange = Literal["1d", "1w", "1m", "3m", "6m", "1y", "2y", "5y", "10y", "max"]
 
 DEFAULT_CHART_RANGE: ChartRange = "1m"
 
@@ -16,5 +16,6 @@ CHART_RANGES: dict[str, tuple[str, str, bool]] = {
     "1y": ("1y", "1d", False),
     "2y": ("2y", "1d", False),
     "5y": ("5y", "1wk", False),
+    "10y": ("10y", "1wk", False),
     "max": ("max", "1mo", False),
 }

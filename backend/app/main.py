@@ -164,6 +164,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             with engine.begin() as conn:
                 if "canvas_files" not in wpv_columns:
                     conn.execute(text("ALTER TABLE web_page_versions ADD COLUMN canvas_files JSON NOT NULL DEFAULT '[]'"))
+        if "finance_watchlist_items" in inspector.get_table_names():
+            wl_columns = {column["name"] for column in inspector.get_columns("finance_watchlist_items")}
+            wl_uqs = {u["name"] for u in inspector.get_unique_constraints("finance_watchlist_items") if u.get("name")}
+            with engine.begin() as conn:
+                if "list_id" not in wl_columns:
+                    conn.execute(text("ALTER TABLE finance_watchlist_items ADD COLUMN list_id VARCHAR(36)"))
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_finance_watchlist_items_list_id ON finance_watchlist_items (list_id)"))
+                if "uq_finance_watchlist_user_symbol" in wl_uqs and not settings.db_url.startswith("sqlite"):
+                    conn.execute(text("ALTER TABLE finance_watchlist_items DROP CONSTRAINT IF EXISTS uq_finance_watchlist_user_symbol"))
+                    conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_finance_watchlist_list_symbol ON finance_watchlist_items (list_id, symbol)"))
         for table in ("conversations", "attachments", "memories"):
             if "user_id" not in {column["name"] for column in inspector.get_columns(table)}:
                 raise RuntimeError("Base non migrée; exécutez les étapes `migrate-schema`, `create-admin` et `migrate-legacy` du README.")

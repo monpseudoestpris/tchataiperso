@@ -1,3 +1,5 @@
+import { ISO_PRESSURE_STRATEGIES, type IsoPressureMaType, type IsoPressureStrategy } from "./indicators";
+
 export type IndicatorKey =
   | "sma20"
   | "sma50"
@@ -12,6 +14,7 @@ export type IndicatorKey =
   | "rsi"
   | "macd"
   | "rex"
+  | "isopressure"
   | "stoch"
   | "willr"
   | "cci"
@@ -19,6 +22,22 @@ export type IndicatorKey =
   | "atr"
   | "adx"
   | "obv";
+
+export type IsoPressureParams = {
+  strategy: IsoPressureStrategy;
+  length: number;
+  showRaw: boolean;
+  show5: boolean;
+  show20: boolean;
+  show50: boolean;
+  show100: boolean;
+  show200: boolean;
+  wrsiTest: number;
+  wstochTest: number;
+  wcciTest: number;
+  wmfiTest: number;
+  maTypeTest: IsoPressureMaType;
+};
 
 export type IndicatorParamsMap = {
   sma20: { period: number };
@@ -32,6 +51,7 @@ export type IndicatorParamsMap = {
   rsi: { period: number; overbought: number; oversold: number };
   macd: { fast: number; slow: number; signal: number };
   rex: { period: number; signal: number };
+  isopressure: IsoPressureParams;
   stoch: { period: number; signal: number };
   willr: { period: number };
   cci: { period: number };
@@ -54,6 +74,21 @@ export const DEFAULT_INDICATOR_PARAMS: IndicatorParamsMap = {
   rsi: { period: 14, overbought: 70, oversold: 30 },
   macd: { fast: 12, slow: 26, signal: 9 },
   rex: { period: 14, signal: 14 },
+  isopressure: {
+    strategy: "Best Overall 5 20",
+    length: 14,
+    showRaw: false,
+    show5: true,
+    show20: true,
+    show50: false,
+    show100: false,
+    show200: false,
+    wrsiTest: 0.3,
+    wstochTest: 0.1,
+    wcciTest: 0.1,
+    wmfiTest: 0.5,
+    maTypeTest: "RMA",
+  },
   stoch: { period: 14, signal: 3 },
   willr: { period: 14 },
   cci: { period: 20 },
@@ -62,13 +97,26 @@ export const DEFAULT_INDICATOR_PARAMS: IndicatorParamsMap = {
   adx: { period: 14 },
 };
 
-export type ParamFieldDef = {
-  field: string;
-  label: string;
-  min: number;
-  max: number;
-  step: number;
-};
+export type ParamFieldDef =
+  | {
+      type?: "number";
+      field: string;
+      label: string;
+      min: number;
+      max: number;
+      step: number;
+    }
+  | {
+      type: "select";
+      field: string;
+      label: string;
+      options: readonly string[];
+    }
+  | {
+      type: "boolean";
+      field: string;
+      label: string;
+    };
 
 export const INDICATOR_PARAM_DEFS: Record<
   ConfigurableIndicatorKey,
@@ -123,6 +171,24 @@ export const INDICATOR_PARAM_DEFS: Record<
       { field: "signal", label: "Signal", min: 2, max: 100, step: 1 },
     ],
   },
+  isopressure: {
+    title: "IsoPressure (Isostock backtested)",
+    fields: [
+      { type: "select", field: "strategy", label: "Stratégie", options: ISO_PRESSURE_STRATEGIES },
+      { field: "length", label: "Période", min: 2, max: 100, step: 1 },
+      { type: "boolean", field: "showRaw", label: "Brute" },
+      { type: "boolean", field: "show5", label: "Pression 5" },
+      { type: "boolean", field: "show20", label: "Pression 20" },
+      { type: "boolean", field: "show50", label: "Pression 50" },
+      { type: "boolean", field: "show100", label: "Pression 100" },
+      { type: "boolean", field: "show200", label: "Pression 200" },
+      { field: "wrsiTest", label: "Poids RSI (Test)", min: 0, max: 1, step: 0.05 },
+      { field: "wstochTest", label: "Poids Stoch (Test)", min: 0, max: 1, step: 0.05 },
+      { field: "wcciTest", label: "Poids CCI (Test)", min: 0, max: 1, step: 0.05 },
+      { field: "wmfiTest", label: "Poids MFI (Test)", min: 0, max: 1, step: 0.05 },
+      { type: "select", field: "maTypeTest", label: "MA (Test)", options: ["RMA", "KMA", "EMA", "WMA", "DEMA", "ALMA", "HMA"] },
+    ],
+  },
   stoch: {
     title: "Stochastique",
     fields: [
@@ -169,6 +235,8 @@ export function formatIndicatorLabel(key: IndicatorKey, params: IndicatorParamsM
       return `MACD (${params.macd.fast},${params.macd.slow},${params.macd.signal})`;
     case "rex":
       return `REX (${params.rex.period},${params.rex.signal})`;
+    case "isopressure":
+      return `IsoPressure (${params.isopressure.length})`;
     case "stoch":
       return `Stoch. (${params.stoch.period},${params.stoch.signal})`;
     case "willr":

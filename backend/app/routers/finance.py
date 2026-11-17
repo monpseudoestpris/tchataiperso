@@ -3,14 +3,23 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse
+import httpx
 from sqlalchemy import func, select
 from sqlalchemy.orm import sessionmaker
 
 from ..config import Settings
 from ..deps import current_user, get_sessions, get_settings, get_upload_dir
 from ..finance import get_financial_dashboard_data
+from ..finance_dossier import generate_dossier_ai_analysis, get_financial_dossier
+from ..finance_indices import (
+    get_index_composition,
+    list_eodhd_indx_catalog,
+    list_principal_indices,
+    search_finance_catalog,
+)
+from ..providers import ProviderError
 from ..finance_moat import analyze_and_build_stock_moat
 from ..finance_news import search_and_summarize_stock_news
 from ..finance_ranges import ChartRange, DEFAULT_CHART_RANGE
@@ -22,6 +31,7 @@ from ..models import (
     FinanceQuarterlyReport,
     FinanceStockMoat,
     FinanceStockNews,
+    FinanceWatchlist,
     FinanceWatchlistItem,
     User,
 )
@@ -29,8 +39,10 @@ from ..schemas import (
     AddWatchlistItemRequest,
     AnalyzeStockMoatRequest,
     CreateCustomIndicatorRequest,
+    CreateWatchlistRequest,
     SearchStockNewsRequest,
     UpdateCustomIndicatorRequest,
+    UpdateWatchlistRequest,
 )
 from ..serializers import (
     custom_indicator_json,
@@ -38,6 +50,7 @@ from ..serializers import (
     stock_moat_json,
     stock_news_json,
     watchlist_item_json,
+    watchlist_json,
 )
 
 _logger = logging.getLogger("uvicorn.error")
@@ -53,6 +66,7 @@ async def get_finance_details(
         description="Nom d'entreprise, code ISIN ou ticker financier (ex. 'Air Liquide', 'AAPL', 'AI.PA')",
     ),
     range: ChartRange = Query(DEFAULT_CHART_RANGE, description="Durée d'affichage de la courbe"),
+    refresh: bool = Query(False, description="Forcer le re-téléchargement depuis les APIs financières"),
     settings: Settings = Depends(get_settings),
     user: User = Depends(current_user),
 ) -> dict[str, Any]:
@@ -66,7 +80,7 @@ async def get_finance_details(
         raise HTTPException(400, "Veuillez fournir un nom d'entreprise ou un ticker financier.")
 
     try:
-        return await get_financial_dashboard_data(settings, clean_q, limit_bars=30, chart_range=range)
+        return await get_financial_dashboard_data(settings, clean_q, limit_bars=30, chart_range=range, refresh=refresh)
     except HTTPException:
         raise
     except Exception as exc:
@@ -78,23 +92,227 @@ async def get_finance_details(
 
 @router.get("/statements")
 async def get_finance_statements(
-    symbol: str = Query(..., min_length=1, max_length=20, description="Ticker Yahoo (ex. 'AI.PA')"),
+    symbol: str = Query(..., min_length=1, max_length=20, description="Ticker (ex. 'AI.PA', 'AAPL.US')"),
+    refresh: bool = Query(False, description="Forcer le re-téléchargement depuis EODHD / Yahoo Finance"),
+    settings: Settings = Depends(get_settings),
     user: User = Depends(current_user),
 ) -> dict[str, Any]:
-    """Compte de résultat, bilan, flux de trésorerie (annuels et trimestriels) et ratios dérivés."""
+    """Compte de résultat, bilan, flux de trésorerie, BPA et ratios dérivés (historique complet)."""
     clean = symbol.strip()
     if not is_valid_symbol(clean):
         raise HTTPException(400, "Ticker invalide.")
-    return await get_financial_statements(clean)
+    return await get_financial_statements(clean, settings=settings, refresh=refresh)
+
+
+@router.get("/dossier")
+async def get_finance_dossier(
+    symbol: str = Query(..., min_length=1, max_length=20, description="Ticker (ex. 'AAPL.US', 'AI.PA')"),
+    refresh: bool = Query(False, description="Forcer le rafraîchissement des données et historiques"),
+    settings: Settings = Depends(get_settings),
+    user: User = Depends(current_user),
+) -> dict[str, Any]:
+    """Dossier boursier institutionnel complet (capital, valorisation, risque, scores, parties prenantes, dividendes, comptes)."""
+    clean = symbol.strip()
+    if not is_valid_symbol(clean):
+        raise HTTPException(400, "Ticker invalide.")
+    return await get_financial_dossier(settings, clean, refresh=refresh)
+
+
+@router.post("/dossier/analyze")
+async def analyze_finance_dossier(
+    body: dict[str, Any] = Body(...),
+    settings: Settings = Depends(get_settings),
+    user: User = Depends(current_user),
+) -> dict[str, Any]:
+    """Génère et mémorise l'analyse fondamentale éditoriale basée sur les chiffres réels du dossier."""
+    clean = str(body.get("symbol") or "").strip()
+    if not clean or not is_valid_symbol(clean):
+        raise HTTPException(400, "Ticker invalide.")
+    model_id = body.get("model_id")
+    try:
+        return await generate_dossier_ai_analysis(
+            settings, clean, model_id=str(model_id).strip() if model_id else None
+        )
+    except ProviderError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"Erreur réseau lors de l'analyse IA : {exc}") from exc
 
 
 # ---------------------------------------------------------------------------
-# Watchlist (Tableau de suivi 1J / 1S / 1M / 3M / 1A)
+# Indices principaux, Compositions & Recherche entrepôt rapide
 # ---------------------------------------------------------------------------
+
+
+@router.get("/indices")
+async def get_principal_indices(
+    include_quotes: bool = Query(True, description="Inclure les niveaux et variations journalières"),
+    tier: str = Query("major", pattern="^(major|minor|all)$", description="Périmètre des cotations à rafraîchir"),
+    settings: Settings = Depends(get_settings),
+    user: User = Depends(current_user),
+) -> dict[str, Any]:
+    """Liste les indices principaux et secondaires ainsi que l'état de l'entrepôt SQLite."""
+    return await list_principal_indices(settings, include_quotes=include_quotes, tier=tier)
+
+
+@router.get("/indices/eodhd-catalog")
+async def get_eodhd_indx_catalog_endpoint(
+    q: str = Query("", max_length=80, description="Filtre par code, nom ou pays"),
+    limit: int = Query(120, ge=1, le=300),
+    refresh: bool = Query(False, description="Forcer le re-téléchargement depuis EODHD"),
+    settings: Settings = Depends(get_settings),
+    user: User = Depends(current_user),
+) -> dict[str, Any]:
+    """Retourne le catalogue complet des indices EODHD (`/api/exchange-symbol-list/INDX`)."""
+    return await list_eodhd_indx_catalog(settings, query=q, limit=limit, refresh=refresh)
+
+
+@router.get("/indices/{index_code}")
+async def get_principal_index_composition(
+    index_code: str,
+    refresh: bool = Query(False, description="Forcer le re-téléchargement de la composition"),
+    settings: Settings = Depends(get_settings),
+    user: User = Depends(current_user),
+) -> dict[str, Any]:
+    """Retourne la composition sélectionnable d'un indice (CAC 40, S&P 500, NASDAQ 100, etc.)."""
+    payload = await get_index_composition(settings, index_code, refresh=refresh)
+    if payload is None:
+        raise HTTPException(404, f"Indice inconnu : {index_code}")
+    return payload
+
+
+@router.get("/catalog/search")
+async def search_finance_catalog_endpoint(
+    q: str = Query(..., min_length=1, max_length=80, description="Ticker, nom ou secteur"),
+    limit: int = Query(25, ge=1, le=80),
+    settings: Settings = Depends(get_settings),
+    user: User = Depends(current_user),
+) -> dict[str, Any]:
+    """Recherche rapide dans les actions déjà chargées en entrepôt et les compositions d'indices."""
+    return {"items": search_finance_catalog(settings, q, limit=limit)}
+
+
+# ---------------------------------------------------------------------------
+# Watchlists personnalisées & Tableau de suivi (1J / 1S / 1M / 3M / 1A)
+# ---------------------------------------------------------------------------
+
+
+def _ensure_user_watchlists(db: Any, user_id: str) -> list[FinanceWatchlist]:
+    """Garantit au moins une liste par défaut et rattache les anciens suivis sans list_id."""
+    lists = list(
+        db.scalars(
+            select(FinanceWatchlist)
+            .where(FinanceWatchlist.user_id == user_id)
+            .order_by(FinanceWatchlist.position.asc(), FinanceWatchlist.created_at.asc())
+        )
+    )
+    if not lists:
+        default_wl = FinanceWatchlist(user_id=user_id, name="Suivi principal", position=0)
+        db.add(default_wl)
+        db.commit()
+        db.refresh(default_wl)
+        lists = [default_wl]
+
+    orphans = list(
+        db.scalars(
+            select(FinanceWatchlistItem).where(
+                FinanceWatchlistItem.user_id == user_id,
+                FinanceWatchlistItem.list_id.is_(None),
+            )
+        )
+    )
+    if orphans:
+        first_id = lists[0].id
+        for item in orphans:
+            item.list_id = first_id
+        db.commit()
+    return lists
+
+
+def _watchlist_counts(db: Any, user_id: str) -> dict[str, int]:
+    rows = db.execute(
+        select(FinanceWatchlistItem.list_id, func.count(FinanceWatchlistItem.id))
+        .where(FinanceWatchlistItem.user_id == user_id)
+        .group_by(FinanceWatchlistItem.list_id)
+    ).all()
+    return {str(lid): int(cnt) for lid, cnt in rows if lid}
+
+
+def _resolve_target_watchlist(db: Any, user_id: str, list_id: str | None) -> tuple[list[FinanceWatchlist], FinanceWatchlist]:
+    lists = _ensure_user_watchlists(db, user_id)
+    if not list_id:
+        return lists, lists[0]
+    target = next((wl for wl in lists if wl.id == list_id), None)
+    if not target:
+        raise HTTPException(404, "Liste de suivi introuvable.")
+    return lists, target
+
+
+@router.get("/watchlists")
+def list_user_watchlists(
+    user: User = Depends(current_user),
+    sessions: sessionmaker = Depends(get_sessions),
+) -> dict[str, Any]:
+    with sessions() as db:
+        lists = _ensure_user_watchlists(db, user.id)
+        counts = _watchlist_counts(db, user.id)
+    return {"lists": [watchlist_json(wl, counts.get(wl.id, 0)) for wl in lists]}
+
+
+@router.post("/watchlists", status_code=201)
+def create_user_watchlist(
+    body: CreateWatchlistRequest,
+    user: User = Depends(current_user),
+    sessions: sessionmaker = Depends(get_sessions),
+) -> dict[str, Any]:
+    with sessions() as db:
+        lists = _ensure_user_watchlists(db, user.id)
+        if any(wl.name.lower() == body.name.lower() for wl in lists):
+            raise HTTPException(409, f"Une liste nommée « {body.name} » existe déjà.")
+        max_pos = max((wl.position for wl in lists), default=-1)
+        wl = FinanceWatchlist(user_id=user.id, name=body.name, position=max_pos + 1)
+        db.add(wl)
+        db.commit()
+        db.refresh(wl)
+    return watchlist_json(wl, 0)
+
+
+@router.patch("/watchlists/{list_id}")
+def rename_user_watchlist(
+    list_id: str,
+    body: UpdateWatchlistRequest,
+    user: User = Depends(current_user),
+    sessions: sessionmaker = Depends(get_sessions),
+) -> dict[str, Any]:
+    with sessions() as db:
+        lists, target = _resolve_target_watchlist(db, user.id, list_id)
+        if any(wl.id != list_id and wl.name.lower() == body.name.lower() for wl in lists):
+            raise HTTPException(409, f"Une liste nommée « {body.name} » existe déjà.")
+        target.name = body.name
+        db.commit()
+        db.refresh(target)
+        counts = _watchlist_counts(db, user.id)
+    return watchlist_json(target, counts.get(target.id, 0))
+
+
+@router.delete("/watchlists/{list_id}", status_code=204)
+def delete_user_watchlist(
+    list_id: str,
+    user: User = Depends(current_user),
+    sessions: sessionmaker = Depends(get_sessions),
+):
+    with sessions() as db:
+        lists, target = _resolve_target_watchlist(db, user.id, list_id)
+        if len(lists) <= 1:
+            raise HTTPException(400, "Vous devez conserver au moins une liste de suivi.")
+        db.delete(target)
+        db.commit()
+    return Response(status_code=204)
 
 
 @router.get("/watchlist")
 async def get_watchlist(
+    list_id: str | None = Query(None, description="ID de la liste personnalisée à afficher"),
     seed_defaults: bool = Query(False, description="Initialiser la liste par défaut si vide"),
     include_quotes: bool = Query(True, description="Calculer les cours et variations 1J/1S/1M/3M/1A"),
     settings: Settings = Depends(get_settings),
@@ -102,18 +320,23 @@ async def get_watchlist(
     sessions: sessionmaker = Depends(get_sessions),
 ) -> dict[str, Any]:
     with sessions() as db:
+        lists, target = _resolve_target_watchlist(db, user.id, list_id)
         items = list(
             db.scalars(
                 select(FinanceWatchlistItem)
-                .where(FinanceWatchlistItem.user_id == user.id)
+                .where(
+                    FinanceWatchlistItem.user_id == user.id,
+                    FinanceWatchlistItem.list_id == target.id,
+                )
                 .order_by(FinanceWatchlistItem.position.asc(), FinanceWatchlistItem.created_at.asc())
             )
         )
-        if not items and seed_defaults:
+        if not items and seed_defaults and target.id == lists[0].id:
             for idx, seed in enumerate(DEFAULT_WATCHLIST_SEEDS):
                 db.add(
                     FinanceWatchlistItem(
                         user_id=user.id,
+                        list_id=target.id,
                         symbol=seed["symbol"],
                         yahoo_symbol=seed["yahoo_symbol"],
                         eod_ticker=seed["eod_ticker"],
@@ -127,15 +350,28 @@ async def get_watchlist(
             items = list(
                 db.scalars(
                     select(FinanceWatchlistItem)
-                    .where(FinanceWatchlistItem.user_id == user.id)
+                    .where(
+                        FinanceWatchlistItem.user_id == user.id,
+                        FinanceWatchlistItem.list_id == target.id,
+                    )
                     .order_by(FinanceWatchlistItem.position.asc(), FinanceWatchlistItem.created_at.asc())
                 )
             )
+        counts = _watchlist_counts(db, user.id)
+        lists_payload = [watchlist_json(wl, counts.get(wl.id, 0)) for wl in lists]
 
     if not include_quotes:
-        return {"items": [watchlist_item_json(item) for item in items]}
+        return {
+            "active_list_id": target.id,
+            "lists": lists_payload,
+            "items": [watchlist_item_json(item) for item in items],
+        }
     enriched = await fetch_watchlist_quotes(settings, items)
-    return {"items": enriched}
+    return {
+        "active_list_id": target.id,
+        "lists": lists_payload,
+        "items": enriched,
+    }
 
 
 @router.post("/watchlist", status_code=201)
@@ -147,9 +383,11 @@ async def add_watchlist_item(
 ) -> dict[str, Any]:
     resolved = await resolve_watchlist_instrument(settings, body.query)
     with sessions() as db:
+        _, target = _resolve_target_watchlist(db, user.id, body.list_id)
         existing = db.scalar(
             select(FinanceWatchlistItem).where(
                 FinanceWatchlistItem.user_id == user.id,
+                FinanceWatchlistItem.list_id == target.id,
                 FinanceWatchlistItem.symbol == resolved["symbol"],
             )
         )
@@ -157,10 +395,14 @@ async def add_watchlist_item(
             item = existing
         else:
             max_pos = db.scalar(
-                select(func.max(FinanceWatchlistItem.position)).where(FinanceWatchlistItem.user_id == user.id)
+                select(func.max(FinanceWatchlistItem.position)).where(
+                    FinanceWatchlistItem.user_id == user.id,
+                    FinanceWatchlistItem.list_id == target.id,
+                )
             )
             item = FinanceWatchlistItem(
                 user_id=user.id,
+                list_id=target.id,
                 symbol=resolved["symbol"],
                 yahoo_symbol=resolved["yahoo_symbol"],
                 eod_ticker=resolved["eod_ticker"],
@@ -179,16 +421,26 @@ async def add_watchlist_item(
 
 @router.post("/watchlist/seed-defaults", status_code=201)
 async def seed_default_watchlist(
+    list_id: str | None = Query(None, description="ID de la liste cible"),
     settings: Settings = Depends(get_settings),
     user: User = Depends(current_user),
     sessions: sessionmaker = Depends(get_sessions),
 ) -> dict[str, Any]:
     with sessions() as db:
+        _, target = _resolve_target_watchlist(db, user.id, list_id)
         existing_symbols = set(
-            db.scalars(select(FinanceWatchlistItem.symbol).where(FinanceWatchlistItem.user_id == user.id))
+            db.scalars(
+                select(FinanceWatchlistItem.symbol).where(
+                    FinanceWatchlistItem.user_id == user.id,
+                    FinanceWatchlistItem.list_id == target.id,
+                )
+            )
         )
         max_pos = db.scalar(
-            select(func.max(FinanceWatchlistItem.position)).where(FinanceWatchlistItem.user_id == user.id)
+            select(func.max(FinanceWatchlistItem.position)).where(
+                FinanceWatchlistItem.user_id == user.id,
+                FinanceWatchlistItem.list_id == target.id,
+            )
         )
         next_pos = (max_pos if max_pos is not None else -1) + 1
         for seed in DEFAULT_WATCHLIST_SEEDS:
@@ -197,6 +449,7 @@ async def seed_default_watchlist(
             db.add(
                 FinanceWatchlistItem(
                     user_id=user.id,
+                    list_id=target.id,
                     symbol=seed["symbol"],
                     yahoo_symbol=seed["yahoo_symbol"],
                     eod_ticker=seed["eod_ticker"],
@@ -211,12 +464,15 @@ async def seed_default_watchlist(
         items = list(
             db.scalars(
                 select(FinanceWatchlistItem)
-                .where(FinanceWatchlistItem.user_id == user.id)
+                .where(
+                    FinanceWatchlistItem.user_id == user.id,
+                    FinanceWatchlistItem.list_id == target.id,
+                )
                 .order_by(FinanceWatchlistItem.position.asc(), FinanceWatchlistItem.created_at.asc())
             )
         )
     enriched = await fetch_watchlist_quotes(settings, items)
-    return {"items": enriched}
+    return {"active_list_id": target.id, "items": enriched}
 
 
 @router.delete("/watchlist/{item_id}", status_code=204)

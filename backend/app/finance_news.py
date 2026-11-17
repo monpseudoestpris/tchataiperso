@@ -21,6 +21,77 @@ _YAHOO_UA = (
 )
 
 
+async def fetch_eodhd_news(
+    ticker: str,
+    api_key: str,
+    limit: int = 15,
+) -> list[dict[str, Any]] | None:
+    """Récupère les actualités et sentiments EODHD (`/api/news`) pour un ticker.
+
+    Retourne `None` en cas d'erreur HTTP/réseau afin de permettre un basculement
+    propre vers Yahoo Finance, ou une liste d'articles normalisés.
+    """
+    clean_sym = ticker.strip()
+    if not clean_sym or not api_key:
+        return None
+    url = (
+        f"https://eodhd.com/api/news?s={urllib.parse.quote(clean_sym)}"
+        f"&limit={max(1, min(limit, 50))}&api_token={urllib.parse.quote(api_key)}&fmt=json"
+    )
+    try:
+        async with httpx.AsyncClient(timeout=12.0, follow_redirects=False) as client:
+            resp = await client.get(url)
+            if resp.status_code != 200:
+                return None
+            raw = resp.json()
+    except Exception as exc:
+        _logger.debug("Erreur récupération news EODHD (%s): %s", clean_sym, exc)
+        return None
+
+    if not isinstance(raw, list):
+        return None
+
+    articles: list[dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        link = str(item.get("link") or item.get("url") or "").strip()
+        title = str(item.get("title") or "").strip()
+        if not link or not title or not _safe_web_url(link):
+            continue
+        host = urllib.parse.urlparse(link).hostname or "EOD Historical Data"
+        if host.startswith("www."):
+            host = host[4:]
+        raw_date = str(item.get("date") or "").strip()
+        published_at = raw_date[:16].replace("T", " ") if raw_date else ""
+        content = str(item.get("content") or "").strip()
+        snippet = " ".join(content.split())[:420]
+        raw_tags = item.get("tags")
+        tags = [str(t).strip()[:40] for t in raw_tags[:5] if t and str(t).strip()] if isinstance(raw_tags, list) else []
+        sent_raw = item.get("sentiment")
+        sentiment: dict[str, float] | None = None
+        if isinstance(sent_raw, dict):
+            parsed_sent: dict[str, float] = {}
+            for sk in ("polarity", "pos", "neu", "neg"):
+                sv = sent_raw.get(sk)
+                if isinstance(sv, (int, float)) and not isinstance(sv, bool):
+                    parsed_sent[sk] = round(float(sv), 3)
+            if parsed_sent:
+                sentiment = parsed_sent
+        articles.append({
+            "title": title[:300],
+            "url": link,
+            "source": host[:80],
+            "published_at": published_at,
+            "snippet": snippet,
+            "tags": tags,
+            "sentiment": sentiment,
+        })
+        if len(articles) >= limit:
+            break
+    return articles
+
+
 async def fetch_yahoo_symbol_news(
     client: httpx.AsyncClient,
     symbol: str,
@@ -67,9 +138,9 @@ async def fetch_yahoo_symbol_news(
     return articles
 
 
-def _deduplicate_articles(articles: list[dict[str, str]], limit: int = 12) -> list[dict[str, str]]:
+def _deduplicate_articles(articles: list[dict[str, Any]], limit: int = 12) -> list[dict[str, Any]]:
     seen: set[str] = set()
-    result: list[dict[str, str]] = []
+    result: list[dict[str, Any]] = []
     for art in articles:
         url = str(art.get("url") or "").strip()
         title = str(art.get("title") or "").strip()
@@ -79,13 +150,18 @@ def _deduplicate_articles(articles: list[dict[str, str]], limit: int = 12) -> li
         if key in seen:
             continue
         seen.add(key)
-        result.append({
+        entry: dict[str, Any] = {
             "title": title[:300],
             "url": url,
             "source": str(art.get("source") or "Web")[:80],
             "published_at": str(art.get("published_at") or "")[:40],
             "snippet": str(art.get("snippet") or "")[:500],
-        })
+        }
+        if art.get("tags"):
+            entry["tags"] = list(art["tags"])
+        if art.get("sentiment"):
+            entry["sentiment"] = dict(art["sentiment"])
+        result.append(entry)
         if len(result) >= limit:
             break
     return result
@@ -191,7 +267,13 @@ async def search_and_summarize_stock_news(
     web_articles: list[dict[str, str]] = []
 
     if not settings.demo_mode:
-        async def _get_yahoo_news():
+        async def _get_primary_news():
+            if settings.enabled(settings.eod_historical_data_key):
+                eod_key = settings.eod_historical_data_key.get_secret_value()
+                eod_sym = clean_sym if "." in clean_sym else f"{clean_sym}.US"
+                eod_items = await fetch_eodhd_news(eod_sym, eod_key, limit=10)
+                if eod_items:
+                    return eod_items
             yahoo_lookup = clean_sym[:-3] if clean_sym.endswith(".US") else clean_sym
             async with httpx.AsyncClient(
                 headers={"User-Agent": _YAHOO_UA},
@@ -222,7 +304,7 @@ async def search_and_summarize_stock_news(
                 })
             return mapped
 
-        yahoo_articles, web_articles = await asyncio.gather(_get_yahoo_news(), _get_web_news())
+        yahoo_articles, web_articles = await asyncio.gather(_get_primary_news(), _get_web_news())
     else:
         yahoo_articles = [
             {

@@ -13,6 +13,7 @@ import {
   Trash2,
 } from "lucide-react";
 
+import { FinanceMetricLabel } from "@/components/finance-info-tip";
 import { MathMarkdown } from "@/components/math-markdown";
 import {
   analyzeStockMoat,
@@ -266,7 +267,7 @@ export function FinanceMoatPanel({
             {localSignals.map(sig => (
               <div key={sig.label} className={`finance-moat-signal-chip is-${sig.verdict}`}>
                 <div className="finance-moat-signal-top">
-                  <span>{sig.label}</span>
+                  <FinanceMetricLabel label={sig.label} />
                   <strong>{sig.value}</strong>
                 </div>
                 <small>{sig.reason}</small>

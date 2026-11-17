@@ -1,0 +1,556 @@
+<!doctype html><html lang="fr" data-theme="light"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="Guide détaillé des scores Uncle Stock : qualité, valorisation, santé financière, faillite et manipulation comptable, avec formules complètes et exemples."><title>Scores Uncle Stock — Guide détaillé des calculs</title><style>
+:root{color-scheme:light;--bg:#f4f7fb;--paper:#ffffff;--text:#213047;--muted:#627185;--line:#e1e8f1;--brand:#2363e7;--brand2:#0f999a;--soft:#eef4ff;--warn:#fff7e8;--warnedge:#e7a445;--shadow:0 14px 46px rgba(23,51,90,.07);--sidebar:#101f37;--sidebartext:#dae7fb;--code:#eaf1fa}
+html[data-theme="dark"]{color-scheme:dark;--bg:#0c1423;--paper:#142239;--text:#e5edf8;--muted:#9eafc7;--line:#2b3e59;--brand:#85aaff;--brand2:#52c7c3;--soft:#182f51;--warn:#372c1c;--warnedge:#ce974b;--shadow:0 14px 46px rgba(0,0,0,.15);--sidebar:#0a101c;--sidebartext:#d3e2f5;--code:#203651}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:24px}
+body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;font-size:15.5px;line-height:1.75;-webkit-font-smoothing:antialiased}
+a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}
+.page{display:grid;grid-template-columns:292px minmax(0,1fr);min-height:100vh;max-width:1800px;margin:0 auto}
+.sidebar{background:var(--sidebar);color:var(--sidebartext);padding:28px 17px;position:sticky;top:0;height:100vh;overflow-y:auto;scrollbar-width:thin;scrollbar-color:#506681 transparent;align-self:start}
+.brand{padding:3px 13px 20px;margin-bottom:12px;border-bottom:1px solid rgba(218,231,251,.15)}
+.brand-mark{width:38px;height:38px;background:linear-gradient(135deg,#3281ff,#23beb1);border-radius:11px;display:flex;align-items:center;justify-content:center;color:white;font-weight:800;font-size:21px;box-shadow:0 7px 16px rgba(0,0,0,.14)}
+.brand h2{margin:10px 0 3px;color:#fff;font-size:18px;font-weight:750;line-height:1.3;letter-spacing:-.4px}
+.brand p{color:#9bb0cc;font-size:12px;line-height:1.5;margin:0}
+.nav-label{text-transform:uppercase;color:#829ab9;font-weight:700;letter-spacing:1.1px;font-size:10px;padding:10px 13px 6px}
+#TOC ul{list-style:none;padding:0;margin:0}#TOC ul ul{display:none}#TOC a{display:block;padding:7px 12px;color:#b7c8df;border-radius:9px;font-size:12.6px;line-height:1.38;font-weight:500;transition:background .15s,color .15s;border-left:2px solid transparent}#TOC a:hover,#TOC a.active{background:#203751;text-decoration:none;color:#fff;border-left-color:#49c5bd}
+.side-foot{margin-top:21px;padding:16px 13px;border-top:1px solid #31445f;color:#91a7c2;font-size:11px}
+.content{min-width:0;padding:36px clamp(18px,4vw,65px) 60px}
+.hero{border-radius:23px;padding:clamp(24px,4vw,44px);background:linear-gradient(125deg,#17365f 0%,#183f78 48%,#106e76 100%);color:#fff;box-shadow:0 19px 42px rgba(19,63,105,.16);margin-bottom:31px;position:relative;overflow:hidden}
+.hero:after{content:"";position:absolute;right:-110px;top:-180px;width:370px;height:370px;border:1px solid rgba(255,255,255,.1);box-shadow:0 0 0 55px rgba(255,255,255,.026),0 0 0 125px rgba(255,255,255,.025);border-radius:50%;pointer-events:none}
+.hero .eyebrow{letter-spacing:2px;text-transform:uppercase;font-size:11px;font-weight:750;color:#9ce2e1}
+.hero h1{margin:13px 0 15px;max-width:750px;font-size:clamp(31px,4vw,49px);line-height:1.13;letter-spacing:-1.8px;font-weight:800}
+.hero p{color:#d8e9fc;max-width:710px;line-height:1.65;font-size:15px;margin:0 0 24px}
+.chips{display:flex;gap:8px;flex-wrap:wrap;margin:22px 0 18px}
+.chip{border:1px solid rgba(255,255,255,.21);background:rgba(255,255,255,.095);padding:5px 11px;border-radius:100px;color:#f2f8ff;font-size:11px;font-weight:650}
+.hero-actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center;position:relative;z-index:2}
+.hero-actions button,.hero-actions a{border:1px solid rgba(255,255,255,.33);background:rgba(255,255,255,.13);border-radius:9px;padding:9px 13px;color:white;font-weight:700;font-size:12px;cursor:pointer;font-family:inherit;line-height:1.3}
+.hero-actions button:hover,.hero-actions a:hover{background:rgba(255,255,255,.23);text-decoration:none}
+.hero-actions .primary{background:white;color:#174a71;border:1px solid white}
+.article{background:var(--paper);border-radius:21px;padding:clamp(21px,4.4vw,57px);box-shadow:var(--shadow);max-width:1100px;margin:0 auto}
+.article>p:first-child{font-size:17px;line-height:1.83;color:var(--muted);margin:0 0 22px}
+.article h2{font-size:clamp(22px,2.4vw,29px);font-weight:790;letter-spacing:-.6px;line-height:1.25;margin:57px 0 19px;padding-top:2px;border-bottom:1px solid var(--line);padding-bottom:15px;scroll-margin-top:22px}
+.article h2:first-of-type{margin-top:35px}
+.article h3{font-size:18.2px;line-height:1.34;margin:35px 0 13px;color:var(--text);font-weight:750;letter-spacing:-.2px}
+.article p{margin:12px 0 16px}.article ul{margin:11px 0 20px;padding-left:21px}.article li{margin:5px 0;padding-left:3px}
+.article strong{font-weight:750}.article em{color:inherit}
+.article table{width:100%;border-collapse:collapse;margin:20px 0 25px;font-size:13.6px;line-height:1.55;border:1px solid var(--line);border-radius:10px;overflow:hidden;display:table}
+.article table th{padding:12px 13px;text-align:left;background:var(--soft);color:var(--text);font-weight:750;border-bottom:1px solid var(--line)}
+.article table td{padding:10px 13px;border-top:1px solid var(--line);vertical-align:top}
+.article tr:nth-child(even) td{background:color-mix(in srgb,var(--soft) 28%,transparent)}
+.article td[style*="right"],.article th[style*="right"]{font-variant-numeric:tabular-nums}
+.article p:has(> math[display="block"]){margin:20px 0;padding:18px 15px;overflow-x:auto;background:var(--soft);border:1px solid var(--line);border-left:3px solid var(--brand);border-radius:10px;text-align:center;line-height:1.7}
+.article .math.display{display:block;margin:20px 0;padding:18px 15px;overflow-x:auto;background:var(--soft);border:1px solid var(--line);border-left:3px solid var(--brand);border-radius:10px;text-align:center;line-height:1.7}
+.article .math.inline{white-space:nowrap}
+math[display="block"]{max-width:100%;font-size:1.11em} math{font-family:math,serif}
+.highlight-box,.warning-box,.example-panel{padding:20px 21px;border-radius:13px;margin:23px 0 29px;border:1px solid var(--line);border-left:4px solid var(--brand2);background:var(--soft)}
+.highlight-box p,.warning-box p,.example-panel p{margin:0}
+.warning-box{background:var(--warn);border-left-color:var(--warnedge)}
+.example-panel{background:transparent;border-left-color:var(--brand)}
+.example-panel table{margin:14px 0!important}
+.article hr{border:0;border-top:1px solid var(--line);margin:38px 0 24px}
+.article code{background:var(--code);padding:2px 5px;border-radius:5px;font-size:.94em}
+.article>p:last-child{color:var(--muted);font-size:13px}
+.footer{max-width:1100px;margin:22px auto 10px;text-align:center;color:var(--muted);font-size:12px}
+.top-link{position:fixed;bottom:24px;right:25px;background:var(--paper);color:var(--brand);border:1px solid var(--line);border-radius:50%;box-shadow:var(--shadow);height:43px;width:43px;display:flex;align-items:center;justify-content:center;font-weight:800;z-index:5}
+.top-link:hover{text-decoration:none}
+.mobile-nav{display:none}
+@media(max-width:980px){.page{grid-template-columns:minmax(0,1fr)}.sidebar{display:none}.content{padding:20px 14px 35px}.mobile-nav{display:block;margin-bottom:14px}.mobile-nav details{background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:10px 15px}.mobile-nav summary{cursor:pointer;font-weight:700;font-size:13px}.mobile-nav .mobile-toc{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:3px 12px;margin-top:12px}.mobile-nav a{font-size:12px;padding:6px 0}.hero{margin-bottom:18px}.article{border-radius:15px}}
+@media(max-width:600px){html,body{overflow-x:hidden}.article{padding:22px 17px}.article table{font-size:11.5px}.article table td,.article table th{padding:8px 6px}.article .math.display{padding:12px 6px}math[display="block"]{font-size:.92em}.hero{border-radius:15px}.hero h1{letter-spacing:-.9px}.content{padding:11px}.hero-actions button,.hero-actions a{font-size:11px}}
+@media print{@page{size:A4;margin:15mm}html,html[data-theme="dark"]{--bg:#fff;--paper:#fff;--text:#182435;--muted:#45576b;--line:#ccd6e1;--soft:#f3f6fa;--brand:#204a80;--brand2:#3d7d84;--warn:#fff9e9;color-scheme:light}body{background:#fff;font-size:10.4pt;line-height:1.45}.sidebar,.mobile-nav,.hero-actions,.top-link{display:none!important}.page{display:block}.content{padding:0}.hero{box-shadow:none;border-radius:0;background:#183f67!important;print-color-adjust:exact;-webkit-print-color-adjust:exact;padding:25px 30px;margin-bottom:20px}.hero h1{font-size:30px}.hero p{font-size:11pt}.hero .chips{margin:9px 0}.article{box-shadow:none;border-radius:0;padding:0;max-width:none}.article h2{page-break-after:avoid;break-after:avoid;font-size:17pt;margin-top:29px}.article h3{break-after:avoid}.article table,.article .math.display,.highlight-box,.warning-box,.example-panel{break-inside:avoid}.article p,.article li{orphans:3;widows:3}.footer{margin:20px 0}.article .math.display{padding:9px}.article table{font-size:9.5pt}}
+
+/* Scores companion edition */
+.hero{background:linear-gradient(118deg,#172c52 0%,#1b477c 48%,#096d79 100%)}
+.brand-mark{background:linear-gradient(135deg,#5a85ff,#17b6af)}
+.article h2{scroll-margin-top:16px}
+.kicker{display:inline-flex;padding:4px 9px;border-radius:30px;background:var(--soft);border:1px solid var(--line);font-size:11px;font-weight:700;color:var(--muted);margin:5px 0 0}
+.formula-plain{padding:17px 19px;margin:18px 0;background:var(--soft);border:1px solid var(--line);border-left:4px solid var(--brand);border-radius:11px;overflow:auto;font-family:'Cascadia Code',Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.8}
+.formula-plain strong{color:var(--brand)}
+.source{margin:21px 0 22px;border:1px solid var(--line);border-radius:11px;overflow:hidden;background:var(--paper)}
+.source summary{list-style:none;padding:12px 15px;font-weight:700;font-size:12px;cursor:pointer;background:var(--soft);color:var(--text)}
+.source summary::before{content:'＋';margin-right:9px;color:var(--brand)}
+.source[open] summary::before{content:'−'}
+.source pre{white-space:pre-wrap;overflow-wrap:anywhere;font-family:'Cascadia Code',Consolas,monospace;font-size:11px;line-height:1.65;padding:17px;margin:0;max-height:480px;overflow:auto}
+.source pre span{color:var(--muted)}
+.mini-stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:11px;margin:15px 0 24px}
+.mini-stat{border:1px solid var(--line);border-radius:12px;background:var(--paper);padding:15px}
+.mini-stat .num{font-size:25px;line-height:1.3;font-weight:830;letter-spacing:-.5px;color:var(--brand)}
+.mini-stat .lab{font-size:11px;color:var(--muted);font-weight:650;margin-top:5px}
+.term-table{table-layout:auto}
+.term-table td:first-child{font-size:12px}
+.term-table td:last-child{font-weight:600;white-space:nowrap}
+.term-table td .note{font-size:11px;color:var(--muted);font-weight:400;white-space:normal}
+.factors td:nth-child(1){width:49px;text-align:center;font-weight:800;color:var(--brand)}
+.factors td:nth-child(3){white-space:nowrap;font-size:11.5px;color:var(--muted)}
+.factors td:nth-child(2){overflow-wrap:anywhere}
+.note-pill{display:inline-block;font-size:11px;padding:3px 9px;color:var(--text);background:var(--soft);border-radius:30px;border:1px solid var(--line);margin:3px 4px 3px 0}
+.pane-pair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:13px;margin:17px 0}
+.pane{padding:16px;border:1px solid var(--line);border-radius:11px;background:var(--soft)}
+.pane b{display:block;margin-bottom:5px}.pane p{font-size:13px;margin:0}
+.data-path{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:15px 0 23px}
+.data-path span{border:1px solid var(--line);background:var(--soft);border-radius:9px;padding:10px 13px;font-weight:730;font-size:12px}.data-path i{color:var(--brand);font-style:normal;font-weight:bold}
+.warning-box li{margin:4px 0}
+.article .summary-table td:first-child{font-weight:700}
+#search-box{display:block;width:100%;max-width:330px;padding:10px 13px;background:var(--paper);border:1px solid var(--line);color:var(--text);border-radius:9px;font:inherit;font-size:12.5px}
+.small{font-size:12px;color:var(--muted)}
+@media(max-width:650px){.pane-pair{grid-template-columns:1fr}.factors td:nth-child(3){white-space:normal}.mini-stat-grid{grid-template-columns:1fr 1fr}.article h2{font-size:21px}}
+@media print{.source:not([open]){display:none}.source[open] pre{max-height:none}.article h2{margin-top:27px}.hero{background:#173b65!important}.article .formula-plain{break-inside:avoid}}
+</style></head><body><div class="page" id="haut">
+<aside class="sidebar" aria-label="Sommaire"><div class="brand"><div class="brand-mark">∑</div><h2>Scores Uncle Stock</h2><p>31 scores et indicateurs<br>Formules et cas pratiques</p></div><div class="nav-label">Navigation · 36 chapitres</div><nav id="TOC" aria-label="Table des matières"><ul><li><a href="#principes">Principes mathématiques</a></li><li><a href="#architecture">Architecture des scores</a></li><li><a href="#score-advice">Advice</a></li><li><a href="#score-categories">Categories</a></li><li><a href="#score-is-undervalued">Is undervalued</a></li><li><a href="#score-trap-score">Trap score</a></li><li><a href="#score-uncle-stock-score">Uncle Stock score</a></li><li><a href="#score-quality-score">Quality score</a></li><li><a href="#score-value-score">Value score</a></li><li><a href="#score-yield-score">Yield score</a></li><li><a href="#score-balance-score">Balance score</a></li><li><a href="#score-balance-value-score">Balance value score</a></li><li><a href="#score-financial-health-score">Financial Health score</a></li><li><a href="#score-growth-rate">Growth rate</a></li><li><a href="#score-predictability-score">Predictability Score</a></li><li><a href="#score-piotroski-f-score">Piotroski F-score</a></li><li><a href="#score-mohanram-g-score">Mohanram G-score</a></li><li><a href="#score-montier-c-score">Montier C score</a></li><li><a href="#score-levermann-score">Levermann score</a></li><li><a href="#score-company-score">Company score</a></li><li><a href="#score-o-shaughnessy-value-composites-three">O&#x27;Shaughnessy Value Composites Three</a></li><li><a href="#score-greenblatt-score">Greenblatt score</a></li><li><a href="#score-pim-van-vliet-score">Pim Van Vliet score</a></li><li><a href="#score-erp5-score">ERP5 score</a></li><li><a href="#score-slater-score">Slater score</a></li><li><a href="#score-altman-z-score">Altman Z score</a></li><li><a href="#score-ohlson-o-score">Ohlson O-Score</a></li><li><a href="#score-beneish-m-score">Beneish M-score</a></li><li><a href="#score-dechow-f-score">Dechow F-Score</a></li><li><a href="#score-esg-score">ESG score</a></li><li><a href="#score-environment-score">Environment score</a></li><li><a href="#score-social-score">Social score</a></li><li><a href="#score-governance-score">Governance score</a></li><li><a href="#incoherences">Incohérences de la source</a></li><li><a href="#implementation">Implémentation</a></li><li><a href="#source">Référence et limites</a></li></ul></nav><div class="side-foot">Source : documentation Uncle Stock fournie. Exemples fictifs, sans conseil d’investissement.</div></aside>
+<div class="content"><div class="mobile-nav"><details><summary>☰ Ouvrir le sommaire</summary><div class="mobile-toc" id="mobile-toc"></div></details></div>
+<header class="hero"><div class="eyebrow">Guide de scoring fondamental</div><h1>Comprendre et calculer les scores Uncle Stock</h1><p>Quality, Value, Yield, Financial Health, Piotroski, Montier, Altman, Beneish, Dechow… Décryptage des facteurs, coefficients, seuils et limites pour une implémentation explicable.</p><div class="chips"><span class="chip">31 scores et indicateurs</span><span class="chip">36 sections</span><span class="chip">Formules originales</span><span class="chip">Exemples chiffrés</span><span class="chip">Lecture hors ligne</span></div><div class="hero-actions"><a class="primary" href="#principes">Commencer la lecture</a><button id="theme-toggle" type="button">◐ &nbsp; Thème sombre</button><button type="button" onclick="window.print()">⎙ &nbsp; Imprimer / PDF</button></div></header>
+<main class="article"><p>Cette édition reprend les <strong>31 entrées</strong> du document « Uncle Stock scores » transmis : agrégation générale, scores financiers, signaux de risque, indicateurs techniques et composants ESG. Elle complète les équations avec leur logique, les paramètres, des exemples fictifs et les ambiguïtés à résoudre avant une implémentation.</p>
+<p>Les formules « Source originale » sont <strong>transcrites sans correction</strong> : les indications et erreurs éventuelles de la page restent visibles pour assurer la traçabilité. Les hypothèses illustratives et recommandations d’implémentation sont distinguées du texte source.</p><h2 id="principes">1. Principes mathématiques communs</h2>
+<h3>Logarithme signé, spécifique à Uncle Stock</h3><p>Quand la documentation écrit <code>logarithm(x)</code>, elle n’emploie pas systématiquement <code>ln(x)</code>. La transformation publiée est :</p><div class="formula-plain">L(x) = sign(x) × ln(1 + |x|)</div><table class=""><thead><tr><th>x</th><th>L(x)</th><th>Intérêt</th></tr></thead><tbody><tr><td>0,20</td><td>0.1823</td><td>Réduit l’amplitude d’un ratio positif</td></tr><tr><td>−0,20</td><td>-0.1823</td><td>Accepte les valeurs négatives</td></tr><tr><td>2,00</td><td>1.0986</td><td>Évite la croissance non bornée d’un terme linéaire</td></tr></tbody></table>
+<h3>Plafonnement et normalisation</h3><div class="formula-plain">x_plafonné = min(max(x, borne_min), borne_max)
+x_normalisé = (x_plafonné − borne_min) / (borne_max − borne_min)  # principe général</div><p>Plusieurs scores de la source utilisent cependant des dénominateurs <strong>différents</strong> de l’écart entre leurs bornes. Ce guide conserve ces nombres tels quels et les signale.</p>
+<h3>Fonction logistique et sigmoïde</h3><div class="formula-plain">σ(x) = 1 / (1 + exp(−x))</div><p>La logistique utilisée dans les ratios de liquidité est explicitement identifiable. En revanche, les fonctions ultérieures qui « étirent les valeurs autour de 50 % » ne sont pas paramétrées dans l’extrait.</p><div class="warning-box"><strong>Point de vigilance.</strong> Pour les pourcentages, la page précise : <code>20 % = 0,20</code>. Vérifier les entrées avant chaque logarithme, plafonnement et multiplication.</div><h2 id="architecture">2. Architecture des scores et dépendances</h2>
+<p>Les scores ne sont pas indépendants. Pour les reproduire sans recalculs ni références circulaires, traiter d’abord les données fondamentales puis les sous-scores.</p>
+<div class="data-path"><span>Ratios financiers</span><i>→</i><span>Growth / Predictability</span><i>→</i><span>Quality</span><i>→</i><span>Uncle Stock Score</span></div>
+<div class="data-path"><span>Ratios de rendement</span><i>→</i><span>Yield</span><i>→</i><span>Value</span><i>→</i><span>Uncle Stock Score</span></div>
+<div class="data-path"><span>Ratios bilan / défaut</span><i>→</i><span>Financial Health + Balance Value</span><i>→</i><span>Balance / Value</span></div>
+<p>Le Trap Score, la recommandation <i>Advice</i> et les catégories utilisent ensuite des sous-indicateurs et des scores déjà disponibles.</p><h2 id="score-advice">3. Advice</h2><p class="kicker">Advice based on Uncle Stock score and Uncle&#x27;s expected price yield (target price). The combination generates a (Strong) Sell/Hold/Buy advice</p><p><strong>Objectif.</strong> Recommandation de trading dérivée du score global, du rendement attendu et des signaux de retournement court/long terme.</p><p><strong>Logique du calcul.</strong> Les paliers de score sont <b>&gt; 72 %</b>, <b>60–72 %</b>, <b>45–60 %</b>, <b>30–45 %</b> et <b>&lt; 30 %</b>. Les suffixes « Act » et « Wait » combinent rendement attendu et retournements. Les conditions sont séquentielles et parfois contradictoires dans la copie.</p><table class=""><thead><tr><th>Score global</th><th>Conseil de base (lecture du palier)</th><th>Modulations présentes dans la source</th></tr></thead><tbody><tr><td>&gt; 72 %</td><td>Strong Buy</td><td>Act / Wait ; conditions source dupliquées et ordre ambigu</td></tr><tr><td>60 à 72 %</td><td>Buy</td><td>Act / Wait / Hold selon rendement et retournements</td></tr><tr><td>45 à 60 %</td><td>Hold</td><td>Peut basculer vers Sell</td></tr><tr><td>30 à 45 %</td><td>Sell</td><td>Wait / Act selon signaux</td></tr><tr><td>&lt; 30 %</td><td>Strong Sell</td><td>Wait / Act selon rendement et retournements</td></tr></tbody></table><div class="warning-box"><strong>Point de vigilance.</strong> Cette grille décrit les familles d’avis, pas un algorithme exécutable complet : la copie de la documentation ne permet pas de fixer de manière sûre la priorité de toutes les conditions.</div><div class="warning-box"><strong>Point de vigilance.</strong> Ne pas traduire ce bloc directement en <code>if/else</code> : la section source du palier &gt;72 % duplique une condition « Strong Buy – Act » et contient des branches « Buy – Wait » et « Hold » mal ordonnées. Voir le tableau de vérification en fin de guide.</div><details class="source"><summary>Afficher la formule d’origine — Advice</summary><pre>Advice	Advice based on Uncle Stock score and Uncle&#x27;s expected price yield (target price). The combination generates a (Strong) Sell/Hold/Buy advice.
+Expected return and reversal can add a trading recommendation: Wait/Act.	Uncle Stock score &gt; 72%
+(Expected Return &gt; 30%
+and LTM reversal ≥ 0 and STM reversal ≥ 0)
+or STM reversal &gt; 0 → Strong Buy - Act
+(Expected Return &gt; 30%
+and LTM reversal ≥ 0 and STM reversal ≥ 0)
+or STM reversal &gt; 0 → Strong Buy - Act
+other → Strong Buy
+Expected Return &lt; −10%
+or LTM reversal &lt; 0 → Strong Buy - Wait
+Expected Return &lt; −30% → Buy - Wait
+Expected Return &lt; −30% → Hold
+Uncle Stock score [60% - 72%]
+(Expected Return &gt; 40%
+and LTM reversal ≥ 0 and STM reversal ≥ 0)
+or STM reversal &gt; 0 → Buy - Act
+other → Buy
+Expected Return &lt; 15%
+or STM reversal &lt; 0 → Buy - Wait
+Expected Return &lt; −15%
+or LTM reversal &lt; 0 → Hold
+Uncle Stock score [45% - 60%]
+other → Hold
+Expected Return &lt; 0%
+or LTM reversal &lt; 0 or STM reversal &lt; 0 → Sell
+Uncle Stock score [30% - 45%]
+Expected Return &gt; 30%
+or LTM reversal &lt; 0 or STM reversal &lt; 0 → Sell - Wait
+other → Sell
+(Expected Return &lt; 0%
+and LTM reversal ≤ 0 and STM reversal ≤ 0)
+or STM reversal &lt; 0 → Sell - Act
+Uncle Stock score &lt; 30%
+Expected Return &gt; 50%
+or LTM reversal &gt; 0 → Strong Sell - Wait
+other → Strong Sell
+Expected Return &lt; 10%
+or LTM reversal &lt; 0 or STM reversal &lt; 0 → Strong Sell - Act</pre></details><h2 id="score-categories">4. Categories</h2><p class="kicker">Collection of company categories.</p><p><strong>Objectif.</strong> Catégories de titres, combinables : valeur, piège de valeur, croissance, rendement, surévaluation, qualité en détérioration, etc.</p><p><strong>Logique du calcul.</strong> La catégorie <b>Value</b> demande que le titre soit sous-évalué <i>et</i> que son Trap Score soit inférieur à 6. <b>Value trap</b> demande la sous-évaluation <i>et</i> un Trap Score supérieur à 5.</p><table class=""><thead><tr><th>Étiquette</th><th>Règle publiée</th></tr></thead><tbody><tr><td>Value</td><td>Is undervalued et Trap Score &lt; 6</td></tr><tr><td>Value trap</td><td>Is undervalued et Trap Score &gt; 5</td></tr><tr><td>Overvalued</td><td>Price / Intrinsic Value &gt; 2</td></tr><tr><td>Growth</td><td>Revenue.rCAGR &gt; 10 %</td></tr><tr><td>Income</td><td>Net Payout yield (5 ans) &gt; 4 %</td></tr><tr><td>Junk</td><td>Financial Health &lt; 28 % et Predictability &lt; 28 %</td></tr><tr><td>Improving</td><td>Piotroski F-score &gt; 7</td></tr><tr><td>Deteriorating</td><td>Piotroski F-score &lt; 3</td></tr></tbody></table><div class="warning-box"><strong>Point de vigilance.</strong> Pour une application, représenter ces étiquettes comme un ensemble : une société peut être « Growth » et « Income » simultanément.</div><details class="source"><summary>Afficher la formule d’origine — Categories</summary><pre>Categories	Collection of company categories.	Value: Is undervalued and Trap score &lt; 6
+Value trap: Is undervalued and Trap score &gt; 5
+Overvalued: Price / Intrinsic Value &gt; 2
+Growth: Revenue.rCAGR &gt; 10%
+Income: Net Payout yield.5y avg &gt; 4%
+Junk: Financial Health score &lt; 28% and Predictability Score &lt; 28%
+Improving: Piotroski F-score &gt; 7
+Deteriorating: Piotroski F-score &lt; 3</pre></details><h2 id="score-is-undervalued">5. Is undervalued</h2><p class="kicker">Boolean indication whether a stock appears to be trading for less than its intrinsic or book value.</p><p><strong>Objectif.</strong> Indicateur booléen, pas une valorisation en euros.</p><p><strong>Logique du calcul.</strong> L’indicateur est vrai si <b>Price / Book Value &lt; 1</b> <em>ou</em> si <b>Price / Intrinsic Value &lt; 1</b>.</p><div class="formula-plain">undervalued = (Price / Book Value &lt; 1) OR (Price / Intrinsic Value &lt; 1)</div><div class="example-panel"><strong>Exemple illustratif (données fictives).</strong> Si P/B = 1,3 et cours/valeur intrinsèque = 0,82, l’indicateur est <b>vrai</b> car la deuxième condition suffit.</div><div class="warning-box"><strong>Point de vigilance.</strong> Les deux conditions ne signifient pas la même chose : une décote comptable n’est pas automatiquement une opportunité économique.</div><details class="source"><summary>Afficher la formule d’origine — Is undervalued</summary><pre>Is undervalued	Boolean indication whether a stock appears to be trading for less than its intrinsic or book value.	Price to Book Value &lt; 1 or Price / Intrinsic Value &lt; 1</pre></details><h2 id="score-trap-score">6. Trap score</h2><p class="kicker">Score [0-12], to measure the probability of a value trap. Value traps are investments that are trading at low levels and present as buying o</p><p><strong>Objectif.</strong> Compteur de signaux d’alerte pour repérer les « value traps » : entreprises bon marché pour de mauvaises raisons.</p><p><strong>Logique du calcul.</strong> Chaque condition vraie ajoute <b>1 point</b>. Trois règles sont spécifiques aux secteurs industriel, services et financier. Un score élevé signifie davantage de drapeaux rouges.</p><p>Voici les déclencheurs <b>+1</b> de la documentation, dans l’ordre original :</p><table class="factors"><thead><tr><th>N°</th><th>Condition source</th><th>Points</th></tr></thead><tbody><tr><td>1</td><td>Price / EPS.b/on wavg &lt; 10: +1</td><td>+1 si vraie</td></tr><tr><td>2</td><td>Revenue.diff ind 5y rCAGR &lt; -10%: +1</td><td>+1 si vraie</td></tr><tr><td>3</td><td>% held by insiders.1y growth &lt; 0%: +1</td><td>+1 si vraie</td></tr><tr><td>4</td><td>Net Complete Quick ratio &lt; 0.5: +1</td><td>+1 si vraie</td></tr><tr><td>5</td><td>Shareholders&#x27; Equity &lt; 0: +1</td><td>+1 si vraie</td></tr><tr><td>6</td><td>Return on Equity &lt; % &lt; 10: +1</td><td>+1 si vraie</td></tr><tr><td>7</td><td>Absolute Sloan ratio &gt; -25%: +1</td><td>+1 si vraie</td></tr><tr><td>8</td><td>External Financing Ratio &gt; 25%: +1</td><td>+1 si vraie</td></tr><tr><td>9</td><td>Montier score &gt; 5: +1</td><td>+1 si vraie</td></tr><tr><td>10</td><td>Beneish M score &gt; -1.78: +1</td><td>+1 si vraie</td></tr><tr><td>11</td><td>Earnings Power Value/ Assets &lt; 75%: +1</td><td>+1 si vraie</td></tr><tr><td>12</td><td>Industrial goods: Price / EPS &lt; 10 and Price / EPS.5y avg &gt; 15: +1</td><td>+1 si vraie</td></tr><tr><td>13</td><td>Services: Enterprise Value / EBITDA &lt; 8 and Enterprise Value / EBITDA.10y avg &gt; 12: +1</td><td>+1 si vraie</td></tr><tr><td>14</td><td>Financial: Price to Book Value &lt; 0.75 and Price to Book Value.8y gmean &gt; 1.2: +1</td><td>+1 si vraie</td></tr></tbody></table><div class="example-panel"><strong>Exemple illustratif (données fictives).</strong> Avec 5 signaux vrais parmi les critères applicables, <b>Trap Score = 5</b>. Une action sous-évaluée et un Trap Score de 5 entrerait dans la catégorie « Value », pas « Value trap ».</div><div class="warning-box"><strong>Point de vigilance.</strong> Le texte annonce un score de <b>0 à 12</b>, alors que quatorze lignes de conditions sont listées ; les trois derniers critères sont sectoriels et normalement mutuellement exclusifs. La condition « Return on Equity &lt; % &lt; 10 » est mal retranscrite.</div><details class="source"><summary>Afficher la formule d’origine — Trap score</summary><pre>Trap score	Score [0-12], to measure the probability of a value trap. Value traps are investments that are trading at low levels and present as buying opportunities but are actually misleading.	
+Price / EPS.b/on wavg &lt; 10: +1
+Revenue.diff ind 5y rCAGR &lt; -10%: +1
+% held by insiders.1y growth &lt; 0%: +1
+Net Complete Quick ratio &lt; 0.5: +1
+Shareholders&#x27; Equity &lt; 0: +1
+Return on Equity &lt; % &lt; 10: +1
+Absolute Sloan ratio &gt; -25%: +1
+External Financing Ratio &gt; 25%: +1
+Montier score &gt; 5: +1
+Beneish M score &gt; -1.78: +1
+Earnings Power Value/ Assets &lt; 75%: +1
+Industrial goods: Price / EPS &lt; 10 and Price / EPS.5y avg &gt; 15: +1
+Services: Enterprise Value / EBITDA &lt; 8 and Enterprise Value / EBITDA.10y avg &gt; 12: +1
+Financial: Price to Book Value &lt; 0.75 and Price to Book Value.8y gmean &gt; 1.2: +1</pre></details><h2 id="score-uncle-stock-score">7. Uncle Stock score</h2><p class="kicker">Score up to 100, based on a broad selection of financial ratios, combining tenets of both growth investing and value investing, to look for </p><p><strong>Objectif.</strong> Score composite général de style GARP (Growth At a Reasonable Price).</p><p><strong>Logique du calcul.</strong> Il combine qualité, valorisation, santé financière, dynamique de cours, révisions des résultats, participation des initiés et pénalités pour risques comptables.</p><div class="formula-plain">L(x) = signe(x) × ln(1 + |x|)
+
+S_brut = 330×Q + 210×V − 160×L(P/IV)
+        + 330×(1−H)×(1,5×V²−1)
+        + autres termes + pénalités
+
+S_plafonné = clamp(S_brut, −890, 650)
+S_normalisé = (S_plafonné + 890) / 1420</div><div class="example-panel"><strong>Exemple illustratif (données fictives).</strong> Si Q=0,70, V=0,60, H=0,80 et P/IV=0,75, les <b>quatre premiers termes</b> valent respectivement 231, +126, −89.54 et −30,36, soit un sous-total de <b>237.10</b>. Cela ne représente pas le score total : les autres facteurs restent à ajouter.</div><h3>Décomposition des facteurs documentés</h3><table class="factors"><thead><tr><th>Coeff.</th><th>Indicateur / terme fourni</th><th>Note</th></tr></thead><tbody><tr><td>+330</td><td>Quality score</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>+210</td><td>Value score</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>−160</td><td>logarithm(Price / Intrinsic value)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>+330</td><td>(1 − Financial Health score) × (1.5 × Value score2 − 1)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>−10</td><td>Analyst recommendation</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>+50</td><td>logarithm(price.rCAGR)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>+30</td><td>logarithm(expected price growth)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>+75</td><td>logarithm(Total Return.1y change)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>+25</td><td>logarithm(percentage change from 50days moving average),</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>+40</td><td>logarithm(long term reversal),</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>+10</td><td>logarithm(EPS revisions ratio) for forward year,</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>+100</td><td>% held by insiders</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>+20</td><td>% held by insiders.1y growth</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>•</td><td>− Analyst coverage</td><td>Formule source</td></tr><tr><td>•</td><td>if (bad (Ohlson O score) − 120</td><td>Formule source</td></tr><tr><td>•</td><td>if (bad (Beneish M score) − 30</td><td>Formule source</td></tr><tr><td>•</td><td>if (bad (Dechow F score) − 30</td><td>Formule source</td></tr><tr><td>•</td><td>if (bad (Montier C score) − 40</td><td>Formule source</td></tr><tr><td>•</td><td>if (suspicious results) −40</td><td>Formule source</td></tr><tr><td>•</td><td>if (company has never been profitable) −20</td><td>Formule source</td></tr></tbody></table><div class="warning-box"><strong>Point de vigilance.</strong> L’agrégation comprend des <b>termes positifs et négatifs</b> ; le score brut est plafonné puis normalisé. La documentation contient une incohérence arithmétique entre le plafond supérieur et le dénominateur annoncé.</div><details class="source"><summary>Afficher la formule d’origine — Uncle Stock score</summary><pre>Uncle Stock score	Score up to 100, based on a broad selection of financial ratios, combining tenets of both growth investing and value investing, to look for Growth At A Reasonable Price (GARP).	
++ 330 × Quality score
++ 210 × Value score
+− 160 × logarithm(Price / Intrinsic value)
++ 330 × (1 − Financial Health score) × (1.5 × Value score2 − 1)
+− 10 × Analyst recommendation
++ 50 × logarithm(price.rCAGR)
+capped to min −66%, max 200%)
++ 30 × logarithm(expected price growth)
++ 75 × logarithm(Total Return.1y change)
++ 25 × logarithm(percentage change from 50days moving average),
+capped to min −50%, max 150%)
++ 40 × logarithm(long term reversal),
+capped to min −100%, max 100%)
++ 10 × logarithm(EPS revisions ratio) for forward year,
+capped to min 0.1, max 10)
++ 100 × % held by insiders
++ 20 × % held by insiders.1y growth
+− Analyst coverage
+if (bad (Ohlson O score) − 120
+if (bad (Beneish M score) − 30
+if (bad (Dechow F score) − 30
+if (bad (Montier C score) − 40
+if (suspicious results) −40
+if (company has never been profitable) −20
+where suspicious results is based on negative Enterprise Value, very low Price/ NCAV, very high Free Cash Flow yield, no dividend, very high growth rate.% and country being China.
+Then:
+1. cap score to min −890, max 650.
+2. normalized score = (score + 890) ÷ 1420. Now we have a number from 0% to 100%
+Remarks:
+for percentages: represent 20% as 0.2.
+logarithm(value) = signOf(value) × ln(abs(value) + 1)</pre></details><h2 id="score-quality-score">8. Quality score</h2><p class="kicker">Score up to 100, measuring how good the company is in terms of efficiency and potential for continued growth.</p><p><strong>Objectif.</strong> Qualité de l’entreprise et capacité présumée à continuer sa croissance.</p><p><strong>Logique du calcul.</strong> Croissance, prévisibilité, rendement du capital, marges, rotation des actifs et évolution des stocks constituent les facteurs principaux.</p><div class="formula-plain">Q_brut = Σ coefficients × L(facteurs prétraités)
+Q_0 = (clamp(Q_brut, −47, 45) + 47) / 92
+Q_final = sigmoid_stretch(Q_0)     # non spécifié dans la source</div><div class="example-panel"><strong>Exemple illustratif (données fictives).</strong> Pour un brut de 10 : Q₀ = (10 + 47) / 92 = <b>61,96 %</b>, avant la transformation sigmoïde non documentée.</div><h3>Décomposition des facteurs documentés</h3><table class="factors"><thead><tr><th>Coeff.</th><th>Indicateur / terme fourni</th><th>Note</th></tr></thead><tbody><tr><td>+40</td><td>logarithm(Growth rate.%, based on compound average growth rate of a set of income parameters</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>+5</td><td>Predictability Score</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>+2</td><td>logarithm(Cash Flow Return on Invested Capital.%,</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>+2</td><td>logarithm(Cash Flow Return on Invested Capital.3y avg,</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>+4</td><td>logarithm(Cash Flow Return on Invested Capital.% wavg/ya,</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>+1</td><td>logarithm(Return on Capital Employed (Greenblatt).%, capped to min −90%, max 90%)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>+2</td><td>logarithm(Return on Capital Employed (Greenblatt).3y avg, capped to min −90%, max 90%)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>+2</td><td>logarithm(Return on Capital Employed (Greenblatt).5y avg, capped to min −90%, max 90%)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>+3</td><td>logarithm(Gross Profitability Ratio.% wavg/ya, capped to min −90%, max 90%)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>+2</td><td>logarithm(Assets turnover.% wavg/ya, capped to min −90%, max 90%)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>+1</td><td>logarithm(Fixed Assets turnover.% wavg/ya, capped to min −90%, max 90%)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>+3</td><td>logarithm(Gross Margin.b/on wavgs, capped to min −90%, max 90%)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>+5</td><td>logarithm(Operating Margin.b/on wavgs, capped to min −90%, max 90%)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>−2</td><td>logarithm(Inventory.1y growth, capped to min 0%, max 90%)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>−1.3</td><td>logarithm(3 × Total Assets in USD ÷ 1 Billion)</td><td>Prétraitement : selon la ligne originale</td></tr></tbody></table><div class="warning-box"><strong>Point de vigilance.</strong> Les paramètres de la <b>sigmoïde d’étirement</b> ne sont pas spécifiés. Un calcul fidèle du score final reste impossible à partir de cette seule page, même si le score brut est reproductible.</div><details class="source"><summary>Afficher la formule d’origine — Quality score</summary><pre>Quality score	Score up to 100, measuring how good the company is in terms of efficiency and potential for continued growth.	
++ 40 × logarithm(Growth rate.%, based on compound average growth rate of a set of income parameters
+capped to min −60%, max 60%)
++ 5 × Predictability Score
++ 2 × logarithm(Cash Flow Return on Invested Capital.%,
+capped to min −90%, max 90%)
++ 2 × logarithm(Cash Flow Return on Invested Capital.3y avg,
+capped to min −90%, max 90%)
++ 4 × logarithm(Cash Flow Return on Invested Capital.% wavg/ya,
+capped to min −90%, max 90%)
++ 1 × logarithm(Return on Capital Employed (Greenblatt).%, capped to min −90%, max 90%)
++ 2 × logarithm(Return on Capital Employed (Greenblatt).3y avg, capped to min −90%, max 90%)
++ 2 × logarithm(Return on Capital Employed (Greenblatt).5y avg, capped to min −90%, max 90%)
++ 3 × logarithm(Gross Profitability Ratio.% wavg/ya, capped to min −90%, max 90%)
++ 2 × logarithm(Assets turnover.% wavg/ya, capped to min −90%, max 90%)
++ 1 × logarithm(Fixed Assets turnover.% wavg/ya, capped to min −90%, max 90%)
++ 3 × logarithm(Gross Margin.b/on wavgs, capped to min −90%, max 90%)
++ 5 × logarithm(Operating Margin.b/on wavgs, capped to min −90%, max 90%)
+− 2 × logarithm(Inventory.1y growth, capped to min 0%, max 90%)
+− 1.3 × logarithm(3 × Total Assets in USD ÷ 1 Billion)
+Then:
+1. cap score to min −47, max 45.
+2. normalized score = (score + 47) ÷ 92. Now we have a number from 0% to 100%
+3. stretch it using a sigmoid function, making values around 50% move away from the centre.
+Remarks:
+for percentages: represent 20% as 0.2.
+logarithm(value) = signOf(value) × ln(abs(value) + 1)</pre></details><h2 id="score-value-score">9. Value score</h2><p class="kicker">Score up to 100, measuring value by comparing market value to income and balance.</p><p><strong>Objectif.</strong> Niveau de bon marché relatif aux bénéfices et à l’actif.</p><p><strong>Logique du calcul.</strong> Calcul composite de <b>Yield Score</b> (poids 1,9) et <b>Balance Value Score</b> (poids 0,3), avec logarithme signé.</p><div class="formula-plain">V_brut = 1,9 × L(YieldScore) + 0,3 × L(BalanceValueScore)
+V = clamp(V_brut, 0, 2,2) / 2,2</div><div class="example-panel"><strong>Exemple illustratif (données fictives).</strong> Pour YieldScore = 0,65 et BalanceValueScore = 0,40 : score brut = 1.0524 ; score normalisé = <b>47.84 %</b>.</div><div class="warning-box"><strong>Point de vigilance.</strong> Les sous-scores doivent être fournis sous forme de fractions (ex. 0,60), et non de 60, pour respecter les conventions de pourcentage de la source.</div><details class="source"><summary>Afficher la formule d’origine — Value score</summary><pre>Value score	Score up to 100, measuring value by comparing market value to income and balance.	
++ 1.9 × logarithm(Yield score)
++ 0.3 × logarithm(Balance Value score)
+Then:
+1. cap score to min 0 max 2.2.
+2. normalized score = score ÷ 2.2. Now we have a number from 0% to 100%
+Remarks:
+for percentages: represent 20% as 0.2.
+logarithm(value) = signOf(value) × ln(abs(value) + 1)</pre></details><h2 id="score-yield-score">10. Yield score</h2><p class="kicker">Score up to 100, based on a broad selection of financial ratios measuring how cheap a stock is based on its income.</p><p><strong>Objectif.</strong> Attractivité du cours par rapport aux dividendes, revenus, profits et cash-flows.</p><p><strong>Logique du calcul.</strong> Les rendements sont généralement des facteurs favorables ; PEG, payback et payout interviennent avec une pénalité. Le <b>net payout yield</b> a un très fort coefficient (+1100).</p><div class="formula-plain">Y_brut = Σ [coefficient_i × L(clamp(indicateur_i, min_i, max_i))]
+Y_0 = (clamp(Y_brut, −1160, 1010) + 1160) / 1810
+Y_final = sigmoid_stretch(Y_0)  # non spécifié</div><div class="example-panel"><strong>Exemple illustratif (données fictives).</strong> Un Net Payout yield de +4 % donne, pour sa seule ligne, 1100 × ln(1,04) ≈ <b>43,14 points bruts</b> avant les 16 autres termes.</div><h3>Décomposition des facteurs documentés</h3><table class="factors"><thead><tr><th>Coeff.</th><th>Indicateur / terme fourni</th><th>Note</th></tr></thead><tbody><tr><td>+1100</td><td>logarithm(Net Payout yield.% b/on 3y avg, capped to min −100%, max 120%)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>+50</td><td>logarithm(Traditional Gross Dividend.rCAGR 67%, capped to min −66%, max 200%)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>+90</td><td>logarithm(Adjusted Operating income yield.% wavg/val, capped to min −100%, max 120%)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>+120</td><td>logarithm(Operating Income yield.%, capped to min −100%, max 120%)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>+50</td><td>logarithm(Revenue yield on Enterprise Value.% b/on year, capped to min −100%, max 120%)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>+40</td><td>logarithm(EBITDA yield.% b/on year, capped to min −100%, max 120%)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>+20</td><td>logarithm(EBITA yield.% b/on year, capped to min −100%, max 120%)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>+40</td><td>logarithm(EBIT yield.% b/on year, capped to min −100%, max 120%)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>+50</td><td>logarithm(EPS yield.% b/on year, capped to min −100%, max 120%)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>+90</td><td>logarithm(Cash Flow After Taxes yield.% wavg/val, capped to min −100%, max 120%)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>+230</td><td>logarithm(Cash-NOPAT Yield.% wavg/val, capped to min −100%, max 120%)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>+90</td><td>logarithm(Free Cash Flow yield on Price.% wavg/val, capped to min −100%, max 120%)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>−20</td><td>logarithm(PEGY ratio.b/on wavg, capped to min −90%, max 90%)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>−10</td><td>logarithm(PEG ratio.b/on yr, capped to min −90%, max 90%)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>+30</td><td>logarithm(ROE/ PE.b/on yr, capped to max 7)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>−30</td><td>logarithm(Payback ratio.MC/5y est, capped to min 0, max 50)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>−90</td><td>logarithm(Payout ratio.% wavg/val, capped to min 0%, max 90%)</td><td>Prétraitement : selon la ligne originale</td></tr></tbody></table><div class="warning-box"><strong>Point de vigilance.</strong> Le dénominateur de normalisation annoncé ne correspond pas aux deux bornes du score brut : le résultat peut dépasser 100 % avant la sigmoïde.</div><details class="source"><summary>Afficher la formule d’origine — Yield score</summary><pre>Yield score	Score up to 100, based on a broad selection of financial ratios measuring how cheap a stock is based on its income.	
++ 1100 × logarithm(Net Payout yield.% b/on 3y avg, capped to min −100%, max 120%)
++ 50 × logarithm(Traditional Gross Dividend.rCAGR 67%, capped to min −66%, max 200%)
++ 90 × logarithm(Adjusted Operating income yield.% wavg/val, capped to min −100%, max 120%)
++ 120 × logarithm(Operating Income yield.%, capped to min −100%, max 120%)
++ 50 × logarithm(Revenue yield on Enterprise Value.% b/on year, capped to min −100%, max 120%)
++ 40 × logarithm(EBITDA yield.% b/on year, capped to min −100%, max 120%)
++ 20 × logarithm(EBITA yield.% b/on year, capped to min −100%, max 120%)
++ 40 × logarithm(EBIT yield.% b/on year, capped to min −100%, max 120%)
++ 50 × logarithm(EPS yield.% b/on year, capped to min −100%, max 120%)
++ 90 × logarithm(Cash Flow After Taxes yield.% wavg/val, capped to min −100%, max 120%)
++ 230 × logarithm(Cash-NOPAT Yield.% wavg/val, capped to min −100%, max 120%)
++ 90 × logarithm(Free Cash Flow yield on Price.% wavg/val, capped to min −100%, max 120%)
+− 20 × logarithm(PEGY ratio.b/on wavg, capped to min −90%, max 90%)
+− 10 × logarithm(PEG ratio.b/on yr, capped to min −90%, max 90%)
++ 30 × logarithm(ROE/ PE.b/on yr, capped to max 7)
+− 30 × logarithm(Payback ratio.MC/5y est, capped to min 0, max 50)
+− 90 × logarithm(Payout ratio.% wavg/val, capped to min 0%, max 90%)
+Then:
+1. cap score to min −1160, max 1010.
+2. normalized score = (score + 1160) ÷ 1810. Now we have a number from 0% to 100%
+3. stretch it using a sigmoid function, making values around 50% move away from the center.
+Remarks:
+for percentages: represent 20% as 0.2.
+logarithm(value) = signOf(value) × ln(abs(value) + 1)</pre></details><h2 id="score-balance-score">11. Balance score</h2><p class="kicker">Score up to 100, based on a broad selection of financial ratios measuring price versus assets and financial health.</p><p><strong>Objectif.</strong> Score de bilan qui combine solidité financière et valorisation de l’actif.</p><p><strong>Logique du calcul.</strong> Deux sous-scores sont mélangés : Financial Health (coefficient 2,1) et Balance Value (0,9).</p><div class="formula-plain">B_brut = 2,1 × L(FinancialHealth) + 0,9 × L(BalanceValue)
+B = clamp(B_brut, 0, 3) / 3</div><div class="example-panel"><strong>Exemple illustratif (données fictives).</strong> Pour H = 0,80 et BalanceValue = 0,65 : B_brut = 1.6850 ; B ≈ <b>56.17 %</b>.</div><div class="warning-box"><strong>Point de vigilance.</strong> Vérifier si votre calcul utilise bien les scores normalisés, pas les scores bruts de santé et de valeur du bilan.</div><details class="source"><summary>Afficher la formule d’origine — Balance score</summary><pre>Balance score	Score up to 100, based on a broad selection of financial ratios measuring price versus assets and financial health.	
++ 2.1 × logarithm(Financial Health score
++ 0.9 × logarithm(Balance value score)
+Then:
+1. cap score to min 0, max 3
+2. normalized score = score ÷ 3. Now we have a number from 0% to 100%
+Remarks:
+for percentages: represent 20% as 0.2.
+logarithm(value) = signOf(value) × ln(abs(value) + 1)</pre></details><h2 id="score-balance-value-score">12. Balance value score</h2><p class="kicker">Score up to 100, based on a selection of financial ratios measuring market value versus Balance sheet.</p><p><strong>Objectif.</strong> Prix de l’action comparé à la valeur des actifs et des fonds propres.</p><p><strong>Logique du calcul.</strong> Le Book-to-Market apporte une contribution positive ; des ratios prix/actifs élevés sont pénalisés.</p><div class="formula-plain">BV_brut = 150×L(Book/Market) − 40×L(P/TBV)
+          − 10×L(P/NonCashAssets) − 25×L(P/NNWC)
+          − 15×L(P/NCAV) − 5×L(P/FixedAssets)
+BV_0 = (clamp(BV_brut, −450, 620) + 450) / 1080
+BV_final = sigmoid_stretch(BV_0)</div><h3>Décomposition des facteurs documentés</h3><table class="factors"><thead><tr><th>Coeff.</th><th>Indicateur / terme fourni</th><th>Note</th></tr></thead><tbody><tr><td>+150</td><td>logarithm(Book to Market, capped to min 0, max 25)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>−40</td><td>logarithm(Price / Common Tangible Book Value, capped to min 0, max 25)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>−10</td><td>logarithm(Price / Non-cash Assets, capped to min 0, max 75)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>−25</td><td>logarithm(Price on Net-net Working Capital, capped to min 0, max 25)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>−15</td><td>logarithm(Price / Net Current Asset Value, capped to min 0, max 25)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>−5</td><td>logarithm(Price / Fixed Assets, capped to min 0, max 100)</td><td>Prétraitement : selon la ligne originale</td></tr></tbody></table><div class="warning-box"><strong>Point de vigilance.</strong> Avec les bornes et le dénominateur publiés, le maximum normalisé est légèrement inférieur à 100 % avant la sigmoïde.</div><details class="source"><summary>Afficher la formule d’origine — Balance value score</summary><pre>Balance value score	Score up to 100, based on a selection of financial ratios measuring market value versus Balance sheet.	
++ 150 × logarithm(Book to Market, capped to min 0, max 25)
+− 40 × logarithm(Price / Common Tangible Book Value, capped to min 0, max 25)
+− 10 × logarithm(Price / Non-cash Assets, capped to min 0, max 75)
+− 25 × logarithm(Price on Net-net Working Capital, capped to min 0, max 25)
+− 15 × logarithm(Price / Net Current Asset Value, capped to min 0, max 25)
+− 5 × logarithm(Price / Fixed Assets, capped to min 0, max 100)
+Then:
+1. cap score to min −450, max 620.
+2. normalized score = (score + 450) ÷ 1080. Now we have a number from 0% to 100%
+3. stretch it using a sigmoid function, making values around 50% move away from the centre.
+Remarks:
+for percentages: represent 20% as 0.2.
+logarithm(value) = signOf(value) × ln(abs(value) + 1)</pre></details><h2 id="score-financial-health-score">13. Financial Health score</h2><p class="kicker">Score up to 100, based on a broad selection of financial ratios measuring financial health.</p><p><strong>Objectif.</strong> Mesure la liquidité, le levier financier, la couverture des flux et les risques de défaut.</p><p><strong>Logique du calcul.</strong> La partie liquidité contient des fonctions logistiques ; les ratios d’endettement et le risque Ohlson jouent négativement.</p><div class="formula-plain">σ(x) = 1 / (1 + exp(−x))
+H_brut = 700×(σ(7×(Quick−1))−0,5)
+       − 40×(σ(1,5×(Quick−2))−0,5)
+       + 250×(σ(7×(Current−1))−0,5)
+       + 140×(σ(5×(NWC/Assets))−0,5)
+       − 40×(σ(1,5×(Current−2))−0,5)
+       + autres termes log (voir tableau)
+H_0 = (clamp(H_brut, −2200, 840) + 2150) / 2990
+H_final = sigmoid_stretch(H_0)</div><div class="example-panel"><strong>Exemple illustratif (données fictives).</strong> Si Quick Ratio = 1 : la contribution du premier terme est 700 × (σ(0) − 0,5) = <b>0</b>. Si Quick Ratio = 1,5 : elle vaut ≈ <b>+329,5</b> points bruts, avant les autres composantes.</div><h3>Décomposition des facteurs documentés</h3><table class="factors"><thead><tr><th>Coeff.</th><th>Indicateur / terme fourni</th><th>Note</th></tr></thead><tbody><tr><td>+700</td><td>(1/(1 + e (−7 × (Complete Quick ratio.b/on yr − 1))) − 0.5)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>−40</td><td>(1/(1 + e (−1.5 × (Complete Quick ratio.b/on yr − 2))) − 0.5)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>+250</td><td>(1/(1 + e (−7 × (Current ratio.b/on yr − 1))) − 0.5)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>+140</td><td>(1/(1 + e (−5 × (Net Working Capital on Total Assets.b/on yr))) − 0.5)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>−40</td><td>(1/(1 + e (−1.5 × (Current ratio.b/on yr −2))) − 0.5)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>+200</td><td>logarithm(Cash Flow Coverage Ratio, capped to min −100%, max 100%)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>+100</td><td>logarithm(Free Cash Flow / LT Debt.% wavg/ya, capped to min −100%, max 100%)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>−60</td><td>logarithm(Debt ratio, capped to min 0%, max 2000%)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>−40</td><td>logarithm(Liabilities / Equity, capped to min 0%, max 2000%)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>−40</td><td>logarithm(Net Debt / Equity.% wavg/ya, capped to min 0%, max 2000%)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>−30</td><td>logarithm(Net Debt / EBITDA.b/on wavg, capped to min −66%, max 200%)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>−20</td><td>logarithm(Debt / Tangible Book value, capped to min 0%, max 2000%)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>−200</td><td>logarithm(Absolute Sloan ratio)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>−1200</td><td>logarithm(Ohlson O-score.prob %</td><td>Prétraitement : selon la ligne originale</td></tr></tbody></table><div class="warning-box"><strong>Point de vigilance.</strong> Attention à la convention <b>σ(x) = 1/(1+e<sup>−x</sup>)</b>. La documentation fournit un plancher brut de −2200 mais normalise avec +2150 : le résultat initial peut être négatif.</div><details class="source"><summary>Afficher la formule d’origine — Financial Health score</summary><pre>Financial Health score	Score up to 100, based on a broad selection of financial ratios measuring financial health.	
++ 700 × (1/(1 + e (−7 × (Complete Quick ratio.b/on yr − 1))) − 0.5)
+− 40 × (1/(1 + e (−1.5 × (Complete Quick ratio.b/on yr − 2))) − 0.5)
++ 250 × (1/(1 + e (−7 × (Current ratio.b/on yr − 1))) − 0.5)
++ 140 × (1/(1 + e (−5 × (Net Working Capital on Total Assets.b/on yr))) − 0.5)
+− 40 × (1/(1 + e (−1.5 × (Current ratio.b/on yr −2))) − 0.5)
++ 200 × logarithm(Cash Flow Coverage Ratio, capped to min −100%, max 100%)
++ 100 × logarithm(Free Cash Flow / LT Debt.% wavg/ya, capped to min −100%, max 100%)
+− 60 × logarithm(Debt ratio, capped to min 0%, max 2000%)
+− 40 × logarithm(Liabilities / Equity, capped to min 0%, max 2000%)
+− 40 × logarithm(Net Debt / Equity.% wavg/ya, capped to min 0%, max 2000%)
+− 30 × logarithm(Net Debt / EBITDA.b/on wavg, capped to min −66%, max 200%)
+− 20 × logarithm(Debt / Tangible Book value, capped to min 0%, max 2000%)
+−200 × logarithm(Absolute Sloan ratio)
+−1200 × logarithm(Ohlson O-score.prob %
+Then:
+1. cap score to min −2200, max 840.
+2. normalized score = (score + 2150) ÷ 2990. Now we have a number from 0% to 100%
+3. stretch it using a sigmoid function, making values around 50% move away from the centre.
+Remarks:
+for percentages: represent 20% as 0.2.
+logarithm(value) = signOf(value) × ln(abs(value) + 1)</pre></details><h2 id="score-growth-rate">14. Growth rate</h2><p class="kicker">A company&#x27;s annual growth, based on income and balance evolution.</p><p><strong>Objectif.</strong> Indicateur composite de croissance : chiffre d’affaires, rentabilité, cash-flows, bilan et prévisions.</p><p><strong>Logique du calcul.</strong> La documentation mentionne une <b>médiane pondérée</b> obtenue en dupliquant chaque mesure selon son poids, mais ne fournit pas ici les poids précis de chaque dimension.</p><div class="formula-plain">Croissance composite = médiane pondérée
+(multiensemble contenant chaque indicateur autant de fois que son poids)</div><table class=""><thead><tr><th>N°</th><th>Indicateur entrant dans la médiane</th></tr></thead><tbody><tr><td>1</td><td>Revenue.15y rCAGR</td></tr><tr><td>2</td><td>Revenue.15y rCAGR 67%</td></tr><tr><td>3</td><td>Revenue.5y CAGR</td></tr><tr><td>4</td><td>Revenue.3y CAGR</td></tr><tr><td>5</td><td>EBITDA.15y rCAGR</td></tr><tr><td>6</td><td>Operating income.15y rCAGR</td></tr><tr><td>7</td><td>Cash Flow from Operations.15y rCAGR</td></tr><tr><td>8</td><td>Free Cash Flow to the Firm.15y rCAGR</td></tr><tr><td>9</td><td>Net income.5y CAGR</td></tr><tr><td>10</td><td>Revenue.1y growth forward</td></tr><tr><td>11</td><td>EPS.1y growth forward</td></tr><tr><td>12</td><td>EPS.1y growth</td></tr><tr><td>13</td><td>Tangible Book Value.15y rCAGR</td></tr><tr><td>14</td><td>Net Owner Return.5y CAGR</td></tr><tr><td>15</td><td>Revenue.next yr est (src)</td></tr><tr><td>16</td><td>EPS.next yr est (src)</td></tr></tbody></table><div class="warning-box"><strong>Point de vigilance.</strong> La source précise que la dimension <code>Growth rate.%</code> s’emploie comme score comparatif et non comme un taux de croissance prévisionnel absolu.</div><details class="source"><summary>Afficher la formule d’origine — Growth rate</summary><pre>Growth rate	A company&#x27;s annual growth, based on income and balance evolution.	Growth rate.dimension = median(bag(weight(sub-metric, metric) occurrences of metric, over all metrics with existing weight(sub-metric, metric))). The following metrics are used:
+Revenue.15y rCAGR
+Revenue.15y rCAGR 67%
+Revenue.5y CAGR
+Revenue.3y CAGR
+EBITDA.15y rCAGR
+Operating income.15y rCAGR
+Cash Flow from Operations.15y rCAGR
+Free Cash Flow to the Firm.15y rCAGR
+Net income.5y CAGR
+Revenue.1y growth forward
+EPS.1y growth forward
+EPS.1y growth
+Tangible Book Value.15y rCAGR
+Net Owner Return.5y CAGR
+Revenue.next yr est (src)
+EPS.next yr est (src)
+Growth rate.% represents the growth of the business, but to be seen as a score to compare, not an absolute number. Growth rate.b/on CAGR represents the annual growth of the income. An average of income CAGRs.</pre></details><h2 id="score-predictability-score">15. Predictability Score</h2><p class="kicker">Score up to 100, measuring the predictability of the earnings growth.</p><p><strong>Objectif.</strong> Prévisibilité de la croissance mesurée par la qualité des ajustements historiques.</p><p><strong>Logique du calcul.</strong> Les facteurs sont les R² du résultat opérationnel, du chiffre d’affaires et de la marge brute.</p><div class="formula-plain">P_brut = 22×R²(Operating Income) + 12×R²(Revenue)
+       + 4×R²(Gross Margin)
+P = (clamp(P_brut, −13, 48) + 13) / 61</div><div class="example-panel"><strong>Exemple illustratif (données fictives).</strong> Avec R² = 0,85 ; 0,90 ; 0,75 : P_brut = 32.50 puis P = (32.50 + 13) / 61 = <b>74.59 %</b>.</div><div class="warning-box"><strong>Point de vigilance.</strong> Il faut définir à quelle régression correspond chaque R² (période, modèle, gestion des valeurs négatives) via les sous-métriques, sans l’inventer.</div><details class="source"><summary>Afficher la formule d’origine — Predictability Score</summary><pre>Predictability Score	Score up to 100, measuring the predictability of the earnings growth.	
++ 22 × Operating Income.R2
++ 12 × Revenue.R2
++ 4 × Gross margin.R2
+Then:
+1. cap score to min -13, max 48.
+2. normalized score = (score + 13) ÷ 61. Now we have a number from 0% to 100%</pre></details><h2 id="score-piotroski-f-score">16. Piotroski F-score</h2><p class="kicker">F-Score and percentage score based on Priotroski&#x27;s 9 different fundamental components</p><p><strong>Objectif.</strong> Bilan fondamental en neuf signaux binaires : profitabilité, levier/liquidité et efficacité opérationnelle.</p><p><strong>Logique du calcul.</strong> Chaque critère valide ajoute 1 point, de 0 à 9. La documentation ajoute une composante continue « Percentage/100 ».</p><div class="formula-plain">F_entier = Σ 1[critère_i vrai], i = 1…9
+Score_publié = F_entier + (Percentage / 100)</div><table class=""><thead><tr><th>N°</th><th>Critère pour ajouter 1</th></tr></thead><tbody><tr><td>1</td><td>Net income &gt; 0</td></tr><tr><td>2</td><td>Cash Flow from Operations &gt; 0</td></tr><tr><td>3</td><td>Return on assets.1y growth &gt; 0</td></tr><tr><td>4</td><td>Cash Flow from Operations &gt; Net income</td></tr><tr><td>5</td><td>Long-term Debt and lease obligations.1y growth &lt; 0</td></tr><tr><td>6</td><td>Current Ratio.1y growth &gt; 0</td></tr><tr><td>7</td><td>Common stock issued (repurchased) ≤ 0</td></tr><tr><td>8</td><td>Gross margin.1y growth &gt; 0</td></tr><tr><td>9</td><td>Asset turnover.1y growth &gt; 0</td></tr></tbody></table><div class="example-panel"><strong>Exemple illustratif (données fictives).</strong> Si sept des neuf conditions sont remplies, <b>F-score entier = 7</b>. La décimale supplémentaire dépend d’une normalisation des facteurs continus non précisée dans la source.</div><div class="warning-box"><strong>Point de vigilance.</strong> La fonction de normalisation de la partie continue n’est pas fournie ; conservez le <b>F-score entier</b> indépendamment de cette fraction.</div><details class="source"><summary>Afficher la formule d’origine — Piotroski F-score</summary><pre>Piotroski F-score	F-Score and percentage score based on Priotroski&#x27;s 9 different fundamental components	Number [0-10]: F-Score + Percentage ÷ 100
+F-Score [0-9]: (year values)
+if Net income &gt; 0: +1
+if Cash Flow from Operations &gt; 0: +1
+if Return on assets.1y growth &gt; 0: +1
+if Cash Flow from Operations &gt; Net income: +1
+if Long-term Debt and lease obligations.1y growth &lt; 0: +1
+if Current Ratio.1y growth &gt; 0: +1
+if Common stock issued (repurchased) ≤ 0: +1
+if Gross margin.1y growth &gt; 0: +1
+if Asset turnover.1y growth &gt; 0: +1
+Percentage: (year values)
+0.7 × logarithm(EPS yield)
++ 0.7 × logarithm(Cash Flow from Operations yield
++ 0.5 × logarithm(Return on assets.1y growth)
+− 0.3 × logarithm(Long-term Debt and lease obligations.1y growth)
++ 2 × logarithm(Current Ratio.1y growth)
++ 2 × logarithm(Buyback ratio)
++ 0.5 × logarithm(Gross margin.1y growth),
++ 1 × logarithm(Asset turnover.1y growth)
+normalized to 100.
+logarithm(value) = signOf(value) × ln(abs(value) + 1)</pre></details><h2 id="score-mohanram-g-score">17. Mohanram G-score</h2><p class="kicker">Partha Mohanram&#x27;s G-Score seeks to separate out the winning growth/glamour stocks from the fallen stars.</p><p><strong>Objectif.</strong> Cherche les entreprises de croissance solides au sein des actions dites « glamour ».</p><p><strong>Logique du calcul.</strong> Les conditions comparent surtout la rentabilité et les investissements à la moyenne ou à la dispersion sectorielle.</p><div class="formula-plain">G_entier = Σ 1[critère_i vrai]   # 7 conditions visibles
+Score_publié = G_entier + (Percentage / 100)</div><table class=""><thead><tr><th>N°</th><th>Critère pour ajouter 1</th></tr></thead><tbody><tr><td>1</td><td>Return on assets.diff industry &gt; 0</td></tr><tr><td>2</td><td>Cash Return on assets.diff industry &gt; 0</td></tr><tr><td>3</td><td>Accruals to Total Assets &lt; 0</td></tr><tr><td>4</td><td>Return on assets.diff industry SD &lt; 0</td></tr><tr><td>5</td><td>Revenue.diff industry yrly growth GSD &lt; 0</td></tr><tr><td>6</td><td>R&amp;D / Assets.diff industry &gt; 0</td></tr><tr><td>7</td><td>Capex / Assets.diff industry &gt; 0</td></tr></tbody></table><div class="warning-box"><strong>Point de vigilance.</strong> La documentation indique un score de 0 à 8, mais ne liste que <b>sept critères binaires</b>. Ne pas fabriquer le huitième.</div><details class="source"><summary>Afficher la formule d’origine — Mohanram G-score</summary><pre>Mohanram G-score	Partha Mohanram&#x27;s G-Score seeks to separate out the winning growth/glamour stocks from the fallen stars.	Number [0-8]: G-Score + Percentage ÷ 100
+G-Score [0-8]: (year values)
+if Return on assets.diff industry &gt; 0: +1
+if Cash Return on assets.diff industry &gt; 0: +1
+if Accruals to Total Assets &lt; 0: +1
+if Return on assets.diff industry SD &lt; 0: +1
+if Revenue.diff industry yrly growth GSD &lt; 0: +1
+if R&amp;D / Assets.diff industry &gt; 0: +1
+if Capex / Assets.diff industry &gt; 0: +1
+Percentage: (year values)
+1 × logarithm(Return on assets.diff industry)
++ 1 × logarithm(Cash Return on assets.diff industry
++ 1 × logarithm(Accruals to Total Assets)
+− 1 × logarithm(Return on assets.diff industry SD)
+− 1 × logarithm(Revenue.diff industry yrly growth GSD)
++ 1 × logarithm(R&amp;D / Assets.diff industry)
++ 1 × logarithm(Capex / Assets.diff industry),
+normalized to 100.
+logarithm(value) = signOf(value) × ln(abs(value) + 1)</pre></details><h2 id="score-montier-c-score">18. Montier C score</h2><p class="kicker">Score [0..6], James Montier aimed to create a simple scoring system that would highlight companies that may be &#x27;cooking the books&#x27;.</p><p><strong>Objectif.</strong> Six alertes de détérioration de la qualité comptable (« cooking the books »).</p><p><strong>Logique du calcul.</strong> La hausse des délais clients et des stocks ou une croissance des actifs déconnectée sont des signaux de vigilance.</p><div class="formula-plain">C = Σ 1[critère_i vrai], i = 1…6</div><table class=""><thead><tr><th>N°</th><th>Signal (+1 si vrai)</th></tr></thead><tbody><tr><td>1</td><td>CFO/ Net income.1y growth% &lt; 0</td></tr><tr><td>2</td><td>Days Sales Outstanding.1y growth% &gt; 0</td></tr><tr><td>3</td><td>Days Inventory Outstanding.1y growth% &gt; 0</td></tr><tr><td>4</td><td>Other Current Assets/ Revenue.1y growth% &gt; 0</td></tr><tr><td>5</td><td>Depreciation rate.1y growth% &lt; 0</td></tr><tr><td>6</td><td>Total assets.1y growth% &gt; 10%</td></tr></tbody></table><div class="example-panel"><strong>Exemple illustratif (données fictives).</strong> Trois signaux comptables présents donnent un <b>Montier C-score = 3/6</b>.</div><div class="warning-box"><strong>Point de vigilance.</strong> Un score élevé représente plus d’alertes, pas une qualité supérieure.</div><details class="source"><summary>Afficher la formule d’origine — Montier C score</summary><pre>Montier C score	Score [0..6], James Montier aimed to create a simple scoring system that would highlight companies that may be &#x27;cooking the books&#x27;.	
+if CFO/ Net income.1y growth% &lt; 0: +1
+if Days Sales Outstanding.1y growth% &gt; 0: +1
+if Days Inventory Outstanding.1y growth% &gt; 0: +1
+if Other Current Assets/ Revenue.1y growth% &gt; 0: +1
+if Depreciation rate.1y growth% &lt; 0: +1
+if Total assets.1y growth% &gt; 10%: +1</pre></details><h2 id="score-levermann-score">19. Levermann score</h2><p class="kicker">Score based on Susan Levermann&#x27;s Fundamental, Valuation, Psychological and Technical criteria</p><p><strong>Objectif.</strong> Méthode mixte fondamentaux, valorisation, recommandations, révisions et momentum.</p><p><strong>Logique du calcul.</strong> Les facteurs valent généralement +1, 0 ou −1 selon des seuils. Une composante continue est décrite séparément.</p><div class="formula-plain">L_entier = Σ scores_j (−1, 0 ou +1)
+L_publié = L_entier + composante continue (normalisée, méthode absente)</div><h3>Décomposition des facteurs documentés</h3><table class="factors"><thead><tr><th>Coeff.</th><th>Indicateur / terme fourni</th><th>Note</th></tr></thead><tbody><tr><td>•</td><td>logarithm(Return on Equity.%)</td><td>Formule source</td></tr><tr><td>•</td><td>logarithm(EBIT margin.%)</td><td>Formule source</td></tr><tr><td>•</td><td>logarithm(Equity ratio.%)</td><td>Formule source</td></tr><tr><td>•</td><td>− logarithm(Price / EPS.ratio)</td><td>Formule source</td></tr><tr><td>•</td><td>− logarithm(Price / EPS.b/on 5y avg)</td><td>Formule source</td></tr><tr><td>•</td><td>3 × EPS revisions ratio</td><td>Formule source</td></tr><tr><td>−0.25</td><td>logarithm(Price.diff ind 30d change)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>−0.25</td><td>logarithm(Price.diff ind 60d change)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>•</td><td>logarithm(Earnings per share.1y growth (forward))</td><td>Formule source</td></tr></tbody></table><div class="warning-box"><strong>Point de vigilance.</strong> Plusieurs branches de la source sont incomplètes ou ambiguës ; le nombre de critères et la plage annoncée ne correspondent pas clairement à toutes les lignes.</div><details class="source"><summary>Afficher la formule d’origine — Levermann score</summary><pre>Levermann score	Score based on Susan Levermann&#x27;s Fundamental, Valuation, Psychological and Technical criteria	Number score [−12-12]: Levermann number + Percentage
+Levermann number [−11-11]:
+if Return on Equity.% &gt; 20%: +1, &lt; 10%: −1
+if EBIT Margin.% &gt; 12%: +1, &lt; 6%: -1
+if Equity ratio.% &gt; 25%: +1, &lt; 15%: −1
+if Price / EPS.ratio &lt; 12: +1, &gt; 16: −1
+if Price / EPS.b/on 5y avg &lt; 12: +1, &gt; 16: −1
+if analyst recommendation &gt; 2.5: +1, &lt; 1.51: −1
+if EPS revisions ratio &gt; 1.05: +1, &lt; 0.95: −1
+if Price.half yr change &gt; 5%: +1, &lt; -5%: −1
+if Price.1y change &gt; 5%: +1, &lt; -5%: −1
+if Price.half yr change &gt; 5% and Price.1y change +1, &lt; 5%: +1
+if Price.half yr change &lt; −5% and Price.1y change &gt; −5% : −1
+if Price.diff ind 30d change &lt; −3% and Price.diff ind 60d change &lt; −6% : +1
+if Price.diff ind 30d change &gt; 3% and Price.diff ind 60d change &gt; 6% : −1
+if Earnings per share.1y growth (forward) &gt; 5%: +1, &lt; −5%: −1
+Percentage:
+logarithm(Return on Equity.%)
+logarithm(EBIT margin.%)
+logarithm(Equity ratio.%)
+− logarithm(Price / EPS.ratio)
+− logarithm(Price / EPS.b/on 5y avg)
+3 × EPS revisions ratio
+0.5 × logarithm(Price.half yr change)
+0.5 × logarithm(Price.1y change)
+0.5 × logarithm(Price.LTM reversal)
+− 0.25 × logarithm(Price.diff ind 30d change)
+− 0.25 × logarithm(Price.diff ind 60d change)
+logarithm(Earnings per share.1y growth (forward))
+normalized to 100.
+logarithm(value) = signOf(value) × ln(abs(value) + 1)</pre></details><h2 id="score-company-score">20. Company score</h2><p class="kicker">Score based on five key figures for a company.</p><p><strong>Objectif.</strong> Résumé en quelques critères : marge nette, croissance, ROE, solvabilité et couverture des flux.</p><p><strong>Logique du calcul.</strong> Cinq conditions positives sont spécifiées et une composante continue les complète.</p><div class="formula-plain">Company_entier = Σ 1[condition positive], 5 conditions listées
+Company_publié = Company_entier + Percentage / 100</div><table class=""><thead><tr><th>N°</th><th>Condition (+1)</th></tr></thead><tbody><tr><td>1</td><td>Net margin.% &gt; 10%</td></tr><tr><td>2</td><td>Revenue.rCAGR 67% &gt; 10%</td></tr><tr><td>3</td><td>Return on Equity.% &gt; 15%</td></tr><tr><td>4</td><td>Equity ratio.% &gt; 40%</td></tr><tr><td>5</td><td>Cash Flow Coverage ratio.% wavg/ya &gt; 33%</td></tr></tbody></table><div class="warning-box"><strong>Point de vigilance.</strong> Le texte annonce une plage de 0 à 6 bien qu’il n’y ait que cinq conditions binaires explicites ; la fraction additionnelle pourrait expliquer cet écart.</div><details class="source"><summary>Afficher la formule d’origine — Company score</summary><pre>Company score	Score based on five key figures for a company.	Number [0..6] : Number-Score + Percentage ÷ 100(
+Score [0-6]: (year values)
+if Net margin.% &gt; 10%: +1
+if Revenue.rCAGR 67% &gt; 10%: +1
+if Return on Equity.% &gt; 15%: +1
+if Equity ratio.% &gt; 40%: +1
+if Cash Flow Coverage ratio.% wavg/ya &gt; 33%: +1
+Percentage: (year values)
+logarithm(Net margin.%)
+logarithm(Revenue.rCAGR 67%)
+1.5 × logarithm(Return on Equity.%)
+0.75 × logarithm(Equity ratio.%)
+0.75 × logarithm(Cash Flow Coverage ratio.% wavg/ya)
+normalized to 100.
+logarithm(value) = signOf(value) × ln(abs(value) + 1)</pre></details><h2 id="score-o-shaughnessy-value-composites-three">21. O&#x27;Shaughnessy Value Composites Three</h2><p class="kicker">This factor is interesting for investors who&#x27;re looking for stocks with the best value characteristics, but are indifferent to whether these</p><p><strong>Objectif.</strong> Indice « value » composite reposant sur prix/valeur, rendements bénéficiaires, trésorerie et rachats d’actions.</p><p><strong>Logique du calcul.</strong> Les facteurs sont combinés via des logarithmes signés et des coefficients fixes, puis normalisés sur 100.</p><div class="formula-plain">Score_brut = L(Book/Market) + 7×L(EPS yield) + L(Revenue yield)
+            + 3,5×L(EBITDA yield) + 3,5×L(CFO yield)
+            + 20×L(Buyback ratio)
+Score_final = normalisation_sur_100(Score_brut)  # inconnue</div><h3>Décomposition des facteurs documentés</h3><table class="factors"><thead><tr><th>Coeff.</th><th>Indicateur / terme fourni</th><th>Note</th></tr></thead><tbody><tr><td>•</td><td>logarithm(Book to Market)</td><td>Formule source</td></tr><tr><td>•</td><td>7 × logarithm(EPS yield)</td><td>Formule source</td></tr><tr><td>•</td><td>logarithm(Revenue yield on Price)</td><td>Formule source</td></tr><tr><td>•</td><td>20 × logarithm(Buyback ratio)</td><td>Formule source</td></tr></tbody></table><div class="warning-box"><strong>Point de vigilance.</strong> La méthode de normalisation et son univers de référence ne sont pas détaillés dans l’extrait.</div><details class="source"><summary>Afficher la formule d’origine — O&#x27;Shaughnessy Value Composites Three</summary><pre>O&#x27;Shaughnessy Value Composites Three	This factor is interesting for investors who&#x27;re looking for stocks with the best value characteristics, but are indifferent to whether these companies pay a dividend.	
+logarithm(Book to Market)
+7 × logarithm(EPS yield)
+logarithm(Revenue yield on Price)
+3.5f × logarithm(EBITDA yield)
+3.5f × logarithm(Cash Flow from Operations yield on Price)
+20 × logarithm(Buyback ratio)
+normalized to 100.
+logarithm(value) = signOf(value) × ln(abs(value) + 1)</pre></details><h2 id="score-greenblatt-score">22. Greenblatt score</h2><p class="kicker">Score based on Greenblatt&#x27;s Magic Formula parameters.</p><p><strong>Objectif.</strong> Variante de la Magic Formula : rendement des bénéfices d’exploitation et retour sur capital.</p><p><strong>Logique du calcul.</strong> Moyenne de deux termes logarithmiques, puis normalisation.</p><div class="formula-plain">G_brut = [L(7×EBIT_yield) + L(ROCE_Greenblatt)] / 2
+G_final = normalisation_sur_100(G_brut)</div><div class="warning-box"><strong>Point de vigilance.</strong> Le classement/étalonnage sur 100 n’est pas détaillé, contrairement aux deux termes de base.</div><details class="source"><summary>Afficher la formule d’origine — Greenblatt score</summary><pre>Greenblatt score	Score based on Greenblatt&#x27;s Magic Formula parameters.	average of
+logarithm(7 × EBIT yield.%)
+logarithm(Return on Capital Employed (Greenblatt).%)
+normalized to 100.
+logarithm(value) = signOf(value) × ln(abs(value) + 1)</pre></details><h2 id="score-pim-van-vliet-score">23. Pim Van Vliet score</h2><p class="kicker">Score combining price momentum with shareholder yield.</p><p><strong>Objectif.</strong> Associe momentum, distributions aux actionnaires et volatilité.</p><p><strong>Logique du calcul.</strong> La performance annuelle et le net payout yield augmentent le score ; la volatilité le diminue.</p><div class="formula-plain">V_brut = L(Price_1y_change) + 3×L(NetPayoutYield)
+         − 0,25×L(Price_SD_252)
+V_final = normalisation_sur_100(V_brut)</div><div class="warning-box"><strong>Point de vigilance.</strong> La définition exacte de <code>Price.SD 252</code> et les bornes de normalisation ne sont pas explicitées ici.</div><details class="source"><summary>Afficher la formule d’origine — Pim Van Vliet score</summary><pre>Pim Van Vliet score	Score combining price momentum with shareholder yield.	Sum of
+logarithm(Price.1y change)
+3 × logarithm(Net Payout yield)
+−0.25 × logarithm(Price.SD 252)
+normalized to 100.
+logarithm(value) = signOf(value) × ln(abs(value) + 1)</pre></details><h2 id="score-erp5-score">24. ERP5 score</h2><p class="kicker">Score based on the ERP5 score factors as designed by the MFIE Capital team. It combines the Greenblatt Magic formula with ideas developed by</p><p><strong>Objectif.</strong> Quatre facteurs de valorisation et de rentabilité, dans l’esprit Magic Formula et Graham.</p><p><strong>Logique du calcul.</strong> Deux mesures de rentabilité du capital, un EBIT yield et un Book-to-Market ajusté sont combinés.</p><div class="formula-plain">ERP5_brut = [L(7×EBIT_yield) + L(ROCE) + L(ROCE_5y_avg)
+             + L(0,7×BookToMarket/10)] / 4</div><div class="warning-box"><strong>Point de vigilance.</strong> Comme pour Greenblatt, l’extrait ne fournit pas le procédé de conversion du score brut en 0–100.</div><details class="source"><summary>Afficher la formule d’origine — ERP5 score</summary><pre>ERP5 score	Score based on the ERP5 score factors as designed by the MFIE Capital team. It combines the Greenblatt Magic formula with ideas developed by Graham &amp; Dodd.	average of
+logarithm(7 × EBIT yield.%)
+logarithm(Return on Capital Employed (Greenblatt).%)
+logarithm(Return on Capital Employed (Greenblatt).5y avg)
+logarithm(0.7 × Book to Market ÷ 10)
+logarithm(value) = signOf(value) × ln(abs(value) + 1)</pre></details><h2 id="score-slater-score">25. Slater score</h2><p class="kicker">Score up to 100, focussing on finding small growth stocks before they hit the big time.</p><p><strong>Objectif.</strong> Identifie les petites entreprises en croissance prometteuses.</p><p><strong>Logique du calcul.</strong> Prend en compte rendements, croissance des EPS, dividendes, marge, endettement, taille et momentum.</p><div class="formula-plain">Slater_brut = somme des 12 termes pondérés du tableau ci-dessous
+Slater_final = normalisation_sur_100(Slater_brut)</div><h3>Décomposition des facteurs documentés</h3><table class="factors"><thead><tr><th>Coeff.</th><th>Indicateur / terme fourni</th><th>Note</th></tr></thead><tbody><tr><td>+0.75</td><td>logarithm(EPS yield.% b/on yr)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>+15</td><td>EPS.inc</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>+0.75</td><td>logarithm(EPS.rCAGR 67%)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>+2</td><td>logarithm(Return on Capital Employed.%)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>−40</td><td>logarithm(PEG rati(forward))</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>+10</td><td>logarithm(Dividend yield.% wavg/val)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>+10</td><td>Traditional Gross Dividend.inc</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>+0.75</td><td>logarithm(Gross margin.% b/on wavgs)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>−1</td><td>logarithm(Liabilities / Equity)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>+20</td><td>logarithm(Current ratio)</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>+0.5</td><td>logarithm(Price.1y growth))</td><td>Prétraitement : selon la ligne originale</td></tr><tr><td>−7</td><td>logarithm(3 ÷ 109 × Market cap (USD)</td><td>Prétraitement : selon la ligne originale</td></tr></tbody></table><div class="warning-box"><strong>Point de vigilance.</strong> L’extrait comporte des parenthèses manquantes et « 3 ÷ 109 × Market cap » peut être un problème de mise en forme (notation scientifique perdue). Ne pas coder sans confirmation.</div><details class="source"><summary>Afficher la formule d’origine — Slater score</summary><pre>Slater score	Score up to 100, focussing on finding small growth stocks before they hit the big time.	
++ 0.75 × logarithm(EPS yield.% b/on yr)
++ 15 × EPS.inc
++ 0.75 × logarithm(EPS.rCAGR 67%)
++ 2 × logarithm(Return on Capital Employed.%)
+- 40 × logarithm(PEG rati(forward))
++ 10 × logarithm(Dividend yield.% wavg/val)
++ 10 × Traditional Gross Dividend.inc
++ 0.75 × logarithm(Gross margin.% b/on wavgs)
+- 1 × logarithm(Liabilities / Equity)
++ 20 × logarithm(Current ratio)
++ 0.5 × logarithm(Price.1y growth))
+- 7 × logarithm(3 ÷ 109 × Market cap (USD)
+normalized to 100.
+logarithm(value) = signOf(value) × ln(abs(value) + 1)</pre></details><h2 id="score-altman-z-score">26. Altman Z score</h2><p class="kicker">The formula may be used to predict the probability that a firm will go into bankruptcy within two years. Uses multiple corporate income and </p><p><strong>Objectif.</strong> Indicateur historique de risque de difficulté financière.</p><p><strong>Logique du calcul.</strong> Combinaison linéaire de cinq ratios de liquidité, de rentabilité, de structure financière et de rotation des actifs.</p><div class="formula-plain">Z = 1,2×NWC/Assets + 1,4×RetainedEarnings/Assets
+  + 3,3×EBIT/Assets + 0,6×MarketEquity/Liabilities
+  + 0,999×Sales/Assets</div><div class="example-panel"><strong>Exemple illustratif (données fictives).</strong> Pour les ratios fictifs (0,20 ; 0,10 ; 0,08 ; 1,50 ; 1,40) : Z = 0,24 + 0,14 + 0,264 + 0,90 + 1,3986 = <b>2.9426</b>. L’interprétation des seuils dépend du modèle et du secteur ; ce chiffre ne garantit pas l’absence de risque.</div><div class="warning-box"><strong>Point de vigilance.</strong> La ligne « Price / Liabilities » doit être résolue en unités cohérentes, généralement valeur boursière des fonds propres sur passifs ; le texte ne clarifie pas cette convention.</div><details class="source"><summary>Afficher la formule d’origine — Altman Z score</summary><pre>Altman Z score	The formula may be used to predict the probability that a firm will go into bankruptcy within two years. Uses multiple corporate income and balance sheet values to measure the financial health of a company.	
+1.2 × Net Working Capital / Total Assets
++ 1.4 × Retained Earnings / Total Assets
++ 3.3 × EBIT ROA
++ 0.6 × Price / Liabilities
++ 0.999 × Asset turnover</pre></details><h2 id="score-ohlson-o-score">27. Ohlson O-Score</h2><p class="kicker">Probability for predicting bankruptcy based on a multi-factor financial formula postulated in 1980 by Dr. James Ohlson as an alternative to </p><p><strong>Objectif.</strong> Modèle logistique de risque de défaut fondé sur neuf variables financières.</p><p><strong>Logique du calcul.</strong> Calcul d’un score linéaire z, puis application de la logistique σ(z) pour obtenir une probabilité.</p><div class="formula-plain">z = −1,32 − 0,407×log(TotalAssets/500)
+  + 6,03×DebtRatio − 1,43×NWC/Assets
+  + 0,0757/CurrentRatio − 1,72×1[DebtRatio&gt;1]
+  − 2,37×ROA − 1,83×CashFlowCoverage
+  + 0,285×1[NetIncome_2y_positive_percentage=0]
+  − 0,521×NetIncomeRelativeDifference
+Probabilité = 1 / (1 + exp(−z))</div><div class="example-panel"><strong>Exemple illustratif (données fictives).</strong> Pour un score logistique fictif z = 0, la probabilité est <b>50 %</b> ; pour z = −2, elle est ≈ <b>11,9 %</b>. Ces chiffres illustrent uniquement la transformation mathématique.</div><div class="warning-box"><strong>Point de vigilance.</strong> L’échelle monétaire de « Total assets / 500 », les définitions précises des variables et la calibration ne sont pas spécifiées dans cette copie.</div><details class="source"><summary>Afficher la formule d’origine — Ohlson O-Score</summary><pre>Ohlson O-Score	Probability for predicting bankruptcy based on a multi-factor financial formula postulated in 1980 by Dr. James Ohlson as an alternative to the Altman Z-score for predicting financial distress. Any results larger than 50% suggests that the firm will default within two years.	logistic of:
+−1.32
+− 0.407 log(Total assets / 500)
++ 6.03 Debt ratio
+− 1.43 Net Working Capital on Total Assets.b/on yr
++ 0.0757 / Current ratio.b/on yr
+− 1.72 (Debt ratio &gt; 1)
+− 2.37 Return on assets
+− 1.83 Cash Flow Coverage Ratio
++ 0.285 (Net income.2y pos % = 0)
+− 0.521 (Net income.rel diff)</pre></details><h2 id="score-beneish-m-score">28. Beneish M-score</h2><p class="kicker">The Beneish M score was created by Professor Messod Beneish. In many ways it is similar to the Altman Z score, but optimized to detect earni</p><p><strong>Objectif.</strong> Indicateur d’anomalies comptables et de possible manipulation des résultats.</p><p><strong>Logique du calcul.</strong> Somme pondérée de huit indices comptables et d’une constante −4,84.</p><div class="formula-plain">M = −4,84 + 0,920×DSRI + 0,528×GMI + 0,404×AQI
+  + 0,892×SGI + 0,115×DEPI − 0,172×SGAI
+  + 4,679×TATA − 0,327×LVGI</div><div class="example-panel"><strong>Exemple illustratif (données fictives).</strong> Si tous les indices multiplicatifs valent 1 et TATA = 0, alors M = <b>−2,480</b> (simple illustration, sans interprétation d’entreprise).</div><div class="warning-box"><strong>Point de vigilance.</strong> La description mentionne le seuil <b>−2,22</b>, alors que le Trap Score utilise <b>−1,78</b> pour le signal Beneish : les seuils répondent à deux règles distinctes.</div><details class="source"><summary>Afficher la formule d’origine — Beneish M-score</summary><pre>Beneish M-score	The Beneish M score was created by Professor Messod Beneish. In many ways it is similar to the Altman Z score, but optimized to detect earnings manipulation rather than bankruptcy. An M-Score of greater than -2.22 signals that the company is likely to be a manipulator.	
+−4.84
++ 0.920 × Days&#x27; Sales in Receivables index
++ 0.528 × Gross margin index
++ 0.404 × Asset quality index
++ 0.892 × Revenue growth index
++ 0.115 × Depreciation rate index
+− 0.172 × Selling General &amp; Administrative expenses/ Revenue index
++ 4.679 × Accruals to Total Assets
+− 0.327 × Total Debt and Lease/ Assets index</pre></details><h2 id="score-dechow-f-score">29. Dechow F-Score</h2><p class="kicker">Score from Patricia Dechow that can be used as a red flag or signal of the likelihood of earnings management or misstatement.</p><p><strong>Objectif.</strong> Signal statistique de risque d’erreur significative ou de gestion des résultats.</p><p><strong>Logique du calcul.</strong> Une combinaison linéaire de facteurs d’accruals, stocks, créances, actifs souples et financements est convertie en probabilité/score.</p><div class="formula-plain">PV = −7,893 + 0,790×RSST + 2,518×Δ(AR/Assets)
+   + 1,191×Δ(Inventory/Assets) + 1,979×SoftAssets/Assets
+   + 0,171×CashSalesGrowth + 0,932×ΔROA
+   + 1,029×1[CommonStockIssued&gt;0 OR DebtIssued&gt;0]
+
+F_publié = logistic(−PV) / 0,0037</div><div class="warning-box"><strong>Point de vigilance.</strong> Le <b>signe devant PV</b> dans la conversion logistique est reproduit tel que collé. Il mérite un contrôle avant une utilisation en production.</div><div class="warning-box"><strong>Point de vigilance.</strong> La source écrit <code>logistic(−Predicted Value) / 0,0037</code> : le signe négatif est à vérifier lors d’un portage. Ne pas le « corriger » en silence.</div><details class="source"><summary>Afficher la formule d’origine — Dechow F-Score</summary><pre>Dechow F-Score	Score from Patricia Dechow that can be used as a red flag or signal of the likelihood of earnings management or misstatement.	Predicted Value =
+−7.893
++ 0.790 × RSST Accruals to Total Assets
++ 2.518 × Accounts Receivable/ Assets.b/on 1y diff
++ 1.191 × Inventory/ Assets.b/on 1y diff
++ 1.979 × Soft Assets to Total Assets
++ 0.171 × Cash Sales.1y growth
++ 0.932 × Return on Assets (ROA).1y diff
+(if Common stock issued &gt; 0 or Debt issued &gt; 0) + 1.029
+
+F-score = logistic(-Predicted Value) ÷ 0.0037</pre></details><h2 id="score-esg-score">30. ESG score</h2><p class="kicker">A score that evaluates how sustainably a company is conducting business.</p><p><strong>Objectif.</strong> Score relatif à la durabilité et à la conduite responsable de l’entreprise.</p><p><strong>Logique du calcul.</strong> La source décrit le concept de score ESG, sans fournir de calcul chiffré.</p><div class="formula-plain">ESG = agrégation(Environment, Social, Governance)
+# Pondérations et règles : non fournies dans le texte</div><div class="warning-box"><strong>Point de vigilance.</strong> Une reproduction exacte est impossible à partir de cet extrait : il manque les métriques, pondérations et règles d’agrégation.</div><details class="source"><summary>Afficher la formule d’origine — ESG score</summary><pre>ESG score	A score that evaluates how sustainably a company is conducting business.</pre></details><h2 id="score-environment-score">31. Environment score</h2><p class="kicker">A score that evaluates a company by its environmental criteria, like energy use, waste, pollution, natural resource conservation and treatme</p><p><strong>Objectif.</strong> Composante environnementale du score ESG.</p><p><strong>Logique du calcul.</strong> Énergie, déchets, pollution, ressources naturelles et traitement des animaux sont évoqués.</p><div class="formula-plain">Score = non calculable avec les seules informations fournies</div><div class="warning-box"><strong>Point de vigilance.</strong> Aucune formule ni pondération publiée dans le texte fourni.</div><details class="source"><summary>Afficher la formule d’origine — Environment score</summary><pre>Environment score	A score that evaluates a company by its environmental criteria, like energy use, waste, pollution, natural resource conservation and treatment of animals.</pre></details><h2 id="score-social-score">32. Social score</h2><p class="kicker">A score that evaluates a company by its business relationships.</p><p><strong>Objectif.</strong> Composante sociale du score ESG.</p><p><strong>Logique du calcul.</strong> La source mentionne les relations d’affaires et les interactions avec les parties prenantes.</p><div class="formula-plain">Score = non calculable avec les seules informations fournies</div><div class="warning-box"><strong>Point de vigilance.</strong> Aucune formule ni pondération publiée dans le texte fourni.</div><details class="source"><summary>Afficher la formule d’origine — Social score</summary><pre>Social score	A score that evaluates a company by its business relationships.</pre></details><h2 id="score-governance-score">33. Governance score</h2><p class="kicker">A score that measures accuracy and transparency of accounting methods and whether stockholders are allowed to vote on important issues.</p><p><strong>Objectif.</strong> Composante gouvernance du score ESG.</p><p><strong>Logique du calcul.</strong> Précision/transparence des méthodes comptables et droits des actionnaires sont cités.</p><div class="formula-plain">Score = non calculable avec les seules informations fournies</div><div class="warning-box"><strong>Point de vigilance.</strong> Aucune formule ni pondération publiée dans le texte fourni.</div><details class="source"><summary>Afficher la formule d’origine — Governance score</summary><pre>Governance score	A score that measures accuracy and transparency of accounting methods and whether stockholders are allowed to vote on important issues.</pre></details><h2 id="incoherences">34. Incohérences et points à vérifier</h2><p>Cette rubrique est particulièrement utile pour une application : elle évite de transformer une transcription imparfaite en résultat apparemment précis.</p><table class="summary-table"><thead><tr><th>Score</th><th>Formule ou information publiée</th><th>Conséquence</th><th>Action proposée</th></tr></thead><tbody><tr><td>Score global</td><td>Plafond : −890 à +650 ; normalisation (S+890)/1420.</td><td>À +650, résultat = 108,45 %, pas 100 %.</td><td>Conserver les deux valeurs et tracer l’anomalie.</td></tr><tr><td>Yield Score</td><td>Plafond : −1160 à +1010 ; division par 1810.</td><td>À +1010, résultat = 119,89 %.</td><td>Ne pas supposer une sortie 0–100 sans étape supplémentaire.</td></tr><tr><td>Balance Value</td><td>Plafond : −450 à +620 ; division par 1080.</td><td>À +620, résultat = 99,07 %.</td><td>L’écart est faible mais réel.</td></tr><tr><td>Financial Health</td><td>Plafond : −2200 à +840 ; (S+2150)/2990.</td><td>À −2200, résultat = −1,67 %.</td><td>Normalisation à revalider.</td></tr><tr><td>Trap Score</td><td>Quatorze lignes de conditions pour une plage annoncée 0–12.</td><td>Trois lignes sont des alternatives sectorielles.</td><td>Appliquer seulement la règle du secteur pertinent.</td></tr><tr><td>Mohanram</td><td>Plage indiquée 0–8, mais sept critères binaires listés.</td><td>Un critère manque dans l’extrait.</td><td>Ne pas inventer le huitième.</td></tr><tr><td>Sigmoïdes finales</td><td>Étirement autour de 50 % mentionné sans paramètres.</td><td>Impossible de recalculer le résultat final exactement.</td><td>Marquer « méthode incomplète ».</td></tr><tr><td>Advice</td><td>Conditions et priorités dupliquées / contradictoires.</td><td>L’arbre de décision exact n’est pas fiable.</td><td>Validation manuelle indispensable.</td></tr><tr><td>Slater</td><td>Expression « 3 ÷ 109 × Market cap » et parenthèses.</td><td>Puissance potentiellement perdue par conversion texte.</td><td>Contrôler la source avant programmation.</td></tr><tr><td>Dechow</td><td>F-score = logistic(−PV)/0,0037.</td><td>Le signe doit être confirmé avec le modèle de référence.</td><td>Ne pas corriger silencieusement.</td></tr><tr><td>ESG</td><td>Descriptions sans données ni formules.</td><td>Aucun score reproductible.</td><td>Afficher « données indisponibles ».</td></tr></tbody></table><h2 id="implementation">35. Architecture d’implémentation recommandée</h2>
+<h3>Un contrat de résultat explicable</h3>
+<p>Chaque score devrait conserver ses entrées normalisées, les facteurs individuels, le résultat brut, le plafonnement, la normalisation et les anomalies. Ne pas créer artificiellement une valeur numérique lorsqu’un facteur obligatoire n’existe pas.</p><div class="formula-plain">ScoreResult {
+  id: string
+  available: boolean
+  rawScore: number | null
+  clampedScore: number | null
+  normalizedScore: number | null
+  finalScore: number | null
+  components: [{ name, input, transformedInput, weight, contribution }]
+  warnings: string[]
+  sourceVersion: string
+}</div><h3>Pipeline de calcul proposé</h3><table class=""><thead><tr><th>Ordre</th><th>Étape</th><th>Contrôle essentiel</th></tr></thead><tbody><tr><td>1</td><td>Collecter 10–15 ans d’états financiers, cours, consensus et industrie</td><td>Dévises, dates, dénominations, mises à jour</td></tr><tr><td>2</td><td>Calculer les ratios de base et leurs variations</td><td>Divisions par zéro, signes, valeurs manquantes</td></tr><tr><td>3</td><td>Appliquer les bornes et L(x) exactement aux entrées</td><td>Ratios bruts vs pourcentages décimaux</td></tr><tr><td>4</td><td>Construire les sous-scores et facteurs binaires</td><td>Critères applicables par secteur</td></tr><tr><td>5</td><td>Calculer scores bruts, plafonds, normalisations</td><td>Documenter les anomalies source</td></tr><tr><td>6</td><td>Évaluer Advice, Categories et Trap Score</td><td>Priorité des conditions et interprétation du risque</td></tr><tr><td>7</td><td>Publier les scores avec explication et qualité des données</td><td>Aucune fausse précision, traçabilité complète</td></tr></tbody></table>
+<h3>Deux modes pour une implémentation robuste</h3><div class="pane-pair"><div class="pane"><b>Mode « Uncle Stock documenté »</b><p>Reprend littéralement les facteurs et bornes du texte fourni. Les sorties impossible à reconstituer exactement sont marquées comme incomplètes.</p></div><div class="pane"><b>Mode « interprété / vérifié »</b><p>Corrige seulement les règles vérifiées auprès des références originales et conserve une version explicite pour chaque écart.</p></div></div><div class="warning-box"><strong>Point de vigilance.</strong> Ce guide documente des indicateurs statistiques ou heuristiques. Aucun score ne constitue une recommandation d’investissement personnalisée, ni une probabilité certaine de faillite ou de fraude.</div><h2 id="source">36. Source et portée du document</h2><p>Source : texte fourni par l’utilisateur, intitulé <strong>« Uncle Stock scores »</strong>, documentation Uncle Stock. Les équations et intitulés d’origine peuvent être consultés dans chaque section via « Afficher la formule d’origine ».</p>
+<p>Les exemples chiffrés sont fictifs. Les remarques sur les incohérences sont des <strong>contrôles mathématiques ou de qualité de transcription</strong>, et ne prétendent pas décrire le comportement exact du moteur propriétaire Uncle Stock.</p>
+<p><a href="https://www.unclestock.com/documentation/scores.html" target="_blank" rel="noopener noreferrer">Documentation officielle — Scores Uncle Stock</a></p></main><div class="footer">Guide réalisé à partir de la documentation fournie • Formules sources conservées • Exemples illustratifs</div></div></div>
+<a href="#haut" class="top-link" aria-label="Revenir en haut">↑</a>
+<script>(function(){const root=document.documentElement;const btn=document.getElementById('theme-toggle');let saved='light';try{saved=localStorage.getItem('scores-theme')||'light'}catch(e){}function setTheme(t){root.dataset.theme=t;btn.textContent=t==='dark'?'☼  Thème clair':'◐  Thème sombre';try{localStorage.setItem('scores-theme',t)}catch(e){}}setTheme(saved==='dark'?'dark':'light');btn.addEventListener('click',()=>setTheme(root.dataset.theme==='dark'?'light':'dark'));const links=[...document.querySelectorAll('#TOC a')];document.getElementById('mobile-toc').innerHTML=links.map(a=>a.outerHTML).join('');document.querySelectorAll('#mobile-toc a').forEach(a=>a.addEventListener('click',()=>document.querySelector('.mobile-nav details').open=false));if('IntersectionObserver' in window){const obs=new IntersectionObserver(entries=>{const a=entries.filter(e=>e.isIntersecting).sort((x,y)=>x.boundingClientRect.top-y.boundingClientRect.top);if(a.length)links.forEach(link=>link.classList.toggle('active',link.hash==='#'+a[0].target.id))},{rootMargin:'-5% 0px -76% 0px',threshold:0});document.querySelectorAll('.article h2[id]').forEach(el=>obs.observe(el))}})();</script></body></html>

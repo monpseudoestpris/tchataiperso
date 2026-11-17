@@ -12,12 +12,14 @@ import {
   CCI,
   EMA,
   MACD,
+  MFI,
   OBV,
   PSAR,
   ROC,
   RSI,
   SMA,
   Stochastic,
+  WMA,
   WilliamsR,
 } from "technicalindicators";
 
@@ -216,4 +218,238 @@ export function rex(
   const signal: Num[] = new Array(firstValid).fill(null).concat(sigSlice);
 
   return { rex: rexLine, signal };
+}
+
+export function mfi(
+  high: number[],
+  low: number[],
+  close: number[],
+  volume: number[],
+  period = 14,
+): Num[] {
+  return align(close.length, MFI.calculate({ high, low, close, volume, period }), plain);
+}
+
+export type IsoPressureMaType = "RMA" | "KMA" | "EMA" | "WMA" | "DEMA" | "ALMA" | "HMA";
+
+export const ISO_PRESSURE_STRATEGIES = [
+  "Daily best perfo 5 20 - 9",
+  "Best Overall 5 20",
+  "Best Overall 20 50",
+  "Best Overall 5 20 with KMA",
+  "Safety 5 20",
+  "Safety 20 50",
+  "Best overall wo MFI",
+  "Expectancy per period 5 20 - 9",
+  "ratios - 20 50 - 9",
+  "Best ar KMA - 9 - no mfi",
+  "Test",
+] as const;
+
+export type IsoPressureStrategy = (typeof ISO_PRESSURE_STRATEGIES)[number];
+
+/** Applique une moyenne mobile sur la portion valide (sans null en tête) tout en gardant l'alignement. */
+function applyOnValid(series: Num[], fn: (valid: number[]) => Num[]): Num[] {
+  const firstValid = series.findIndex(v => v != null && Number.isFinite(v));
+  if (firstValid === -1) return new Array(series.length).fill(null);
+  // Si des trous apparaissent après firstValid, on les remplace par la dernière valeur valide pour la continuité.
+  const valid: number[] = [];
+  let last = series[firstValid] as number;
+  for (let i = firstValid; i < series.length; i++) {
+    const v = series[i];
+    if (v != null && Number.isFinite(v)) last = v;
+    valid.push(last);
+  }
+  const computed = fn(valid);
+  return new Array<Num>(firstValid).fill(null).concat(computed);
+}
+
+function rmaRaw(values: number[], period: number): Num[] {
+  const n = values.length;
+  const out: Num[] = new Array(n).fill(null);
+  if (period < 1 || n < period) return out;
+  let sum = 0;
+  for (let i = 0; i < period; i++) sum += values[i];
+  let prev = sum / period;
+  out[period - 1] = prev;
+  const alpha = 1 / period;
+  for (let i = period; i < n; i++) {
+    prev = alpha * values[i] + (1 - alpha) * prev;
+    out[i] = prev;
+  }
+  return out;
+}
+
+function kmaRaw(values: number[], period: number): Num[] {
+  const n = values.length;
+  const out: Num[] = new Array(n).fill(null);
+  if (period < 1 || n <= period) return out;
+  const fastSC = 2 / (2 + 1);
+  const slowSC = 2 / (30 + 1);
+  let prev = values[period - 1];
+  out[period - 1] = prev;
+  for (let i = period; i < n; i++) {
+    const change = Math.abs(values[i] - values[i - period]);
+    let volatility = 0;
+    for (let j = i - period + 1; j <= i; j++) {
+      volatility += Math.abs(values[j] - values[j - 1]);
+    }
+    const er = volatility === 0 ? 0 : change / volatility;
+    const sc = Math.pow(er * (fastSC - slowSC) + slowSC, 2);
+    prev = prev + sc * (values[i] - prev);
+    out[i] = prev;
+  }
+  return out;
+}
+
+function wmaRaw(values: number[], period: number): Num[] {
+  if (period <= 1) return values.slice();
+  return align(values.length, WMA.calculate({ period, values }), plain);
+}
+
+function demaRaw(values: number[], period: number): Num[] {
+  const e1 = ema(values, period);
+  const e2 = applyOnValid(e1, valid => ema(valid, period));
+  return e1.map((v1, i) => {
+    const v2 = e2[i];
+    return v1 == null || v2 == null ? null : 2 * v1 - v2;
+  });
+}
+
+function almaRaw(values: number[], period: number, offset = 0.85, sigma = 6): Num[] {
+  const n = values.length;
+  const out: Num[] = new Array(n).fill(null);
+  if (period < 1 || n < period) return out;
+  const m = offset * (period - 1);
+  const s = period / sigma;
+  const weights: number[] = new Array(period);
+  let norm = 0;
+  for (let j = 0; j < period; j++) {
+    const w = Math.exp(-Math.pow(j - m, 2) / (2 * s * s));
+    weights[j] = w;
+    norm += w;
+  }
+  for (let i = period - 1; i < n; i++) {
+    let sum = 0;
+    for (let j = 0; j < period; j++) {
+      sum += values[i - (period - 1 - j)] * weights[j];
+    }
+    out[i] = sum / norm;
+  }
+  return out;
+}
+
+function hmaRaw(values: number[], period: number): Num[] {
+  if (period <= 1) return values.slice();
+  const half = Math.max(1, Math.floor(period / 2));
+  const sqrtP = Math.max(1, Math.floor(Math.sqrt(period)));
+  const wHalf = wmaRaw(values, half);
+  const wFull = wmaRaw(values, period);
+  const diff: Num[] = wFull.map((vf, i) => {
+    const vh = wHalf[i];
+    return vh == null || vf == null ? null : 2 * vh - vf;
+  });
+  return applyOnValid(diff, valid => wmaRaw(valid, sqrtP));
+}
+
+function maSeries(series: Num[], maType: IsoPressureMaType, period: number): Num[] {
+  return applyOnValid(series, valid => {
+    switch (maType) {
+      case "RMA":
+        return rmaRaw(valid, period);
+      case "KMA":
+        return kmaRaw(valid, period);
+      case "EMA":
+        return ema(valid, period);
+      case "WMA":
+        return wmaRaw(valid, period);
+      case "DEMA":
+        return demaRaw(valid, period);
+      case "ALMA":
+        return almaRaw(valid, period);
+      case "HMA":
+        return hmaRaw(valid, period);
+    }
+  });
+}
+
+// [wrsi, wstoch, wcci, wmfi, ematypeCode] (0=RMA, 1=KMA, 2=EMA, 3=WMA, 4=DEMA, 5=ALMA, 6=HMA)
+const STRATEGY_PRESETS: Record<Exclude<IsoPressureStrategy, "Test">, [number, number, number, number, IsoPressureMaType]> = {
+  "Daily best perfo 5 20 - 9": [0.1, 0.1, 0.3, 0.0, "HMA"],
+  "Best Overall 5 20": [0.3, 0.1, 0.1, 0.5, "RMA"],
+  "Best Overall 20 50": [0.5, 0.1, 0.1, 0.1, "RMA"],
+  "Best Overall 5 20 with KMA": [0.3, 0.1, 0.1, 0.5, "KMA"],
+  "Safety 5 20": [0.2, 0.3, 0.2, 0.5, "HMA"],
+  "Safety 20 50": [0.3, 0.2, 0.5, 0.0, "ALMA"],
+  "Best overall wo MFI": [0.5, 0.1, 0.1, 0.0, "RMA"],
+  "Expectancy per period 5 20 - 9": [0.1, 0.1, 0.2, 0.0, "HMA"],
+  "ratios - 20 50 - 9": [0.2, 0.1, 0.5, 0.0, "KMA"],
+  "Best ar KMA - 9 - no mfi": [0.3, 0.2, 0.5, 0.0, "KMA"],
+};
+
+export type IsoPressureOptions = {
+  strategy: IsoPressureStrategy;
+  length: number;
+  wrsiTest: number;
+  wstochTest: number;
+  wcciTest: number;
+  wmfiTest: number;
+  maTypeTest: IsoPressureMaType;
+};
+
+/**
+ * IsoPressure (Isostock pressure backtested) — portage du script Pine v5.
+ * Combine RSI, Stochastique (%D), Close normalisé par EMA(12), CCI et MFI,
+ * puis lisse la pression brute sur 5, 20, 50, 100 et 200 périodes.
+ */
+export function isoPressure(
+  high: number[],
+  low: number[],
+  close: number[],
+  volume: number[],
+  opts: IsoPressureOptions,
+): {
+  raw: Num[];
+  p5: Num[];
+  p20: Num[];
+  p50: Num[];
+  p100: Num[];
+  p200: Num[];
+} {
+  const n = close.length;
+  const [wrsi, wstoch, wcci, wmfi, maType] =
+    opts.strategy === "Test"
+      ? [opts.wrsiTest, opts.wstochTest, opts.wcciTest, opts.wmfiTest, opts.maTypeTest]
+      : STRATEGY_PRESETS[opts.strategy];
+
+  const wclose = 1.0 - wrsi - wcci - wmfi - wstoch;
+  const poidsCci = 0.1;
+
+  const rsiVals = rsi(close, opts.length);
+  const cciVals = cci(high, low, close, opts.length);
+  const hasVolume = volume.some(v => v != null && Number.isFinite(v) && v > 0);
+  const mfiVals = hasVolume ? mfi(high, low, close, volume, opts.length) : null;
+  const ksVals = stochastic(high, low, close, 14, 3).d;
+  const maxVal = ema(close, 12);
+
+  const raw: Num[] = new Array(n).fill(null);
+  for (let i = 0; i < n; i++) {
+    const r = rsiVals[i];
+    const k = ksVals[i];
+    const mv = maxVal[i];
+    const c = cciVals[i];
+    if (r == null || k == null || mv == null || mv === 0 || c == null) continue;
+    const mfiTerm = mfiVals ? (mfiVals[i] == null ? null : (mfiVals[i] as number) * wmfi) : 0;
+    if (mfiTerm == null) continue;
+    raw[i] = r * wrsi + k * wstoch + ((close[i] * wclose) / mv) * 100 + c * poidsCci + mfiTerm;
+  }
+
+  return {
+    raw,
+    p5: maSeries(raw, maType, 5),
+    p20: maSeries(raw, maType, 20),
+    p50: maSeries(raw, maType, 50),
+    p100: maSeries(raw, maType, 100),
+    p200: maSeries(raw, maType, 200),
+  };
 }

@@ -15,6 +15,7 @@ import {
 import { ChevronDown, ChevronUp, Eraser, Minus, MousePointer, Pencil, Plus, RotateCcw, Settings2, Square, Trash2, TrendingUp, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { FinanceHoverTip } from "@/components/finance-info-tip";
 import type { CustomIndicator, EodBar } from "@/lib/api";
 import {
   dateToLogicalIndex,
@@ -42,6 +43,7 @@ import {
   bollinger,
   cci,
   ema,
+  isoPressure,
   macd,
   obv,
   parabolicSar,
@@ -61,7 +63,7 @@ const OVERLAY_KEYS: IndicatorKey[] = [
 ];
 
 const OSCILLATOR_KEYS: IndicatorKey[] = [
-  "rsi", "macd", "rex", "stoch", "willr", "cci", "roc", "atr", "adx", "obv",
+  "rsi", "macd", "rex", "isopressure", "stoch", "willr", "cci", "roc", "atr", "adx", "obv",
 ];
 
 /** "YYYY-MM-DD" reste une date métier ; "YYYY-MM-DD HH:MM" (intraday) devient un timestamp UTC. */
@@ -390,6 +392,15 @@ export function FinanceTvChart({
         const r = rex(opens, highs, lows, closes, params.rex.period, params.rex.signal);
         guides(addLine(r.rex, "#3b82f6", pane, "REX"), [[0, "#94a3b8"]]);
         addLine(r.signal, "#f59e0b", pane, "Signal");
+      } else if (key === "isopressure") {
+        const ipCfg = params.isopressure;
+        const ip = isoPressure(highs, lows, closes, volumes, ipCfg);
+        if (ipCfg.showRaw) addLine(ip.raw, "#94a3b8", pane, "Pression brute");
+        if (ipCfg.show5) addLine(ip.p5, "#a855f7", pane, "Pression 5");
+        if (ipCfg.show20) addLine(ip.p20, "#3b82f6", pane, "Pression 20");
+        if (ipCfg.show50) addLine(ip.p50, "#f97316", pane, "Pression 50");
+        if (ipCfg.show100) addLine(ip.p100, "#ef4444", pane, "Pression 100");
+        if (ipCfg.show200) addLine(ip.p200, dark ? "#e2e8f0" : "#0f172a", pane, "Pression 200");
       } else if (key === "stoch") {
         const st = stochastic(highs, lows, closes, params.stoch.period, params.stoch.signal);
         guides(addLine(st.k, "#3b82f6", pane, "%K"), [[80, "#f43f5e"], [20, "#10b981"]]);
@@ -714,40 +725,42 @@ export function FinanceTvChart({
     const configurable = isConfigurableIndicator(key);
     if (!configurable) {
       return (
-        <button
-          key={key}
-          type="button"
-          className={`finance-tf-btn ${isActive ? "active" : ""}`}
-          onClick={() => toggle(key)}
-        >
-          {label}
-        </button>
+        <FinanceHoverTip key={key} termKey={key} delayMs={220}>
+          <button
+            type="button"
+            className={`finance-tf-btn ${isActive ? "active" : ""}`}
+            onClick={() => toggle(key)}
+          >
+            {label}
+          </button>
+        </FinanceHoverTip>
       );
     }
     const isEditing = editingParamKey === key;
     return (
-      <span
-        key={key}
-        className={`finance-native-ind-pill ${isActive ? "active" : ""} ${isEditing ? "is-editing" : ""}`}
-      >
-        <button type="button" className="finance-native-ind-toggle" onClick={() => toggle(key)}>
-          {label}
-        </button>
-        <button
-          type="button"
-          className="finance-native-ind-gear"
-          onClick={() => setEditingParamKey(prev => (prev === key ? null : key))}
-          title={`Paramétrer ${INDICATOR_PARAM_DEFS[key].title}`}
-          aria-label={`Paramétrer ${label}`}
+      <FinanceHoverTip key={key} termKey={key} delayMs={220}>
+        <span
+          className={`finance-native-ind-pill ${isActive ? "active" : ""} ${isEditing ? "is-editing" : ""}`}
         >
-          <Settings2 size={10} />
-        </button>
-      </span>
+          <button type="button" className="finance-native-ind-toggle" onClick={() => toggle(key)}>
+            {label}
+          </button>
+          <button
+            type="button"
+            className="finance-native-ind-gear"
+            onClick={() => setEditingParamKey(prev => (prev === key ? null : key))}
+            title={`Paramétrer ${INDICATOR_PARAM_DEFS[key].title}`}
+            aria-label={`Paramétrer ${label}`}
+          >
+            <Settings2 size={10} />
+          </button>
+        </span>
+      </FinanceHoverTip>
     );
   }
 
   const editingMeta = editingParamKey ? INDICATOR_PARAM_DEFS[editingParamKey] : null;
-  const editingValues = editingParamKey ? (params[editingParamKey] as Record<string, number>) : null;
+  const editingValues = editingParamKey ? (params[editingParamKey] as Record<string, number | string | boolean>) : null;
 
   return (
     <div className={`finance-tv-wrap${fullscreen ? " is-fullscreen" : ""}`}>
@@ -774,39 +787,48 @@ export function FinanceTvChart({
         <small>Tendance & prix</small>
         {OVERLAY_KEYS.map(renderNativePill)}
         {customOverlays.map(ind => (
-          <span key={ind.id} className={`finance-custom-ind-pill ${activeCustom.has(ind.id) ? "active" : ""}`}>
-            <button
-              type="button"
-              className="finance-custom-ind-toggle"
-              onClick={() => toggleCustom(ind.id)}
-              title={`Formule : ${ind.formula}`}
-            >
-              <span className="finance-custom-dot" style={{ background: ind.color }} />
-              <span>{ind.name}</span>
-            </button>
-            {onOpenIndicatorEditor && (
+          <FinanceHoverTip
+            key={ind.id}
+            delayMs={220}
+            definition={{
+              title: ind.name,
+              summary: "Indicateur technique personnalisé superposé au graphique.",
+              formula: ind.formula,
+            }}
+          >
+            <span className={`finance-custom-ind-pill ${activeCustom.has(ind.id) ? "active" : ""}`}>
               <button
                 type="button"
-                className="finance-custom-ind-action"
-                onClick={() => onOpenIndicatorEditor(ind)}
-                title="Modifier cet indicateur"
-                aria-label={`Modifier ${ind.name}`}
+                className="finance-custom-ind-toggle"
+                onClick={() => toggleCustom(ind.id)}
               >
-                <Pencil size={10} />
+                <span className="finance-custom-dot" style={{ background: ind.color }} />
+                <span>{ind.name}</span>
               </button>
-            )}
-            {onDeleteCustomIndicator && (
-              <button
-                type="button"
-                className="finance-custom-ind-action is-del"
-                onClick={() => onDeleteCustomIndicator(ind.id)}
-                title="Supprimer cet indicateur"
-                aria-label={`Supprimer ${ind.name}`}
-              >
-                <Trash2 size={10} />
-              </button>
-            )}
-          </span>
+              {onOpenIndicatorEditor && (
+                <button
+                  type="button"
+                  className="finance-custom-ind-action"
+                  onClick={() => onOpenIndicatorEditor(ind)}
+                  title="Modifier cet indicateur"
+                  aria-label={`Modifier ${ind.name}`}
+                >
+                  <Pencil size={10} />
+                </button>
+              )}
+              {onDeleteCustomIndicator && (
+                <button
+                  type="button"
+                  className="finance-custom-ind-action is-del"
+                  onClick={() => onDeleteCustomIndicator(ind.id)}
+                  title="Supprimer cet indicateur"
+                  aria-label={`Supprimer ${ind.name}`}
+                >
+                  <Trash2 size={10} />
+                </button>
+              )}
+            </span>
+          </FinanceHoverTip>
         ))}
         {onOpenIndicatorEditor && (
           <button
@@ -825,39 +847,48 @@ export function FinanceTvChart({
         <small>Oscillateurs</small>
         {OSCILLATOR_KEYS.map(renderNativePill)}
         {customOscillators.map(ind => (
-          <span key={ind.id} className={`finance-custom-ind-pill ${activeCustom.has(ind.id) ? "active" : ""}`}>
-            <button
-              type="button"
-              className="finance-custom-ind-toggle"
-              onClick={() => toggleCustom(ind.id)}
-              title={`Formule : ${ind.formula}`}
-            >
-              <span className="finance-custom-dot" style={{ background: ind.color }} />
-              <span>{ind.name}</span>
-            </button>
-            {onOpenIndicatorEditor && (
+          <FinanceHoverTip
+            key={ind.id}
+            delayMs={220}
+            definition={{
+              title: ind.name,
+              summary: "Oscillateur technique personnalisé affiché dans un panneau dédié.",
+              formula: ind.formula,
+            }}
+          >
+            <span className={`finance-custom-ind-pill ${activeCustom.has(ind.id) ? "active" : ""}`}>
               <button
                 type="button"
-                className="finance-custom-ind-action"
-                onClick={() => onOpenIndicatorEditor(ind)}
-                title="Modifier cet indicateur"
-                aria-label={`Modifier ${ind.name}`}
+                className="finance-custom-ind-toggle"
+                onClick={() => toggleCustom(ind.id)}
               >
-                <Pencil size={10} />
+                <span className="finance-custom-dot" style={{ background: ind.color }} />
+                <span>{ind.name}</span>
               </button>
-            )}
-            {onDeleteCustomIndicator && (
-              <button
-                type="button"
-                className="finance-custom-ind-action is-del"
-                onClick={() => onDeleteCustomIndicator(ind.id)}
-                title="Supprimer cet indicateur"
-                aria-label={`Supprimer ${ind.name}`}
-              >
-                <Trash2 size={10} />
-              </button>
-            )}
-          </span>
+              {onOpenIndicatorEditor && (
+                <button
+                  type="button"
+                  className="finance-custom-ind-action"
+                  onClick={() => onOpenIndicatorEditor(ind)}
+                  title="Modifier cet indicateur"
+                  aria-label={`Modifier ${ind.name}`}
+                >
+                  <Pencil size={10} />
+                </button>
+              )}
+              {onDeleteCustomIndicator && (
+                <button
+                  type="button"
+                  className="finance-custom-ind-action is-del"
+                  onClick={() => onDeleteCustomIndicator(ind.id)}
+                  title="Supprimer cet indicateur"
+                  aria-label={`Supprimer ${ind.name}`}
+                >
+                  <Trash2 size={10} />
+                </button>
+              )}
+            </span>
+          </FinanceHoverTip>
         ))}
           </div>
 
@@ -865,30 +896,94 @@ export function FinanceTvChart({
             <div className="finance-ind-params-panel">
               <strong className="finance-ind-params-title">{editingMeta.title}</strong>
               <div className="finance-ind-params-fields">
-                {editingMeta.fields.map(f => (
-                  <label key={f.field} className="finance-ind-param-field">
-                    <span>{f.label}</span>
-                    <input
-                      type="number"
-                      min={f.min}
-                      max={f.max}
-                      step={f.step}
-                      value={editingValues[f.field] ?? f.min}
-                      onChange={e => {
-                        const raw = Number(e.target.value);
-                        if (!Number.isFinite(raw)) return;
-                        const clamped = Math.max(f.min, Math.min(f.max, raw));
-                        setParams(prev => ({
-                          ...prev,
-                          [editingParamKey]: {
-                            ...prev[editingParamKey],
-                            [f.field]: clamped,
-                          },
-                        }));
-                      }}
-                    />
-                  </label>
-                ))}
+                {editingMeta.fields
+                  .filter(f => {
+                    if (
+                      editingParamKey === "isopressure" &&
+                      editingValues.strategy !== "Test" &&
+                      (f.field === "wrsiTest" ||
+                        f.field === "wstochTest" ||
+                        f.field === "wcciTest" ||
+                        f.field === "wmfiTest" ||
+                        f.field === "maTypeTest")
+                    ) {
+                      return false;
+                    }
+                    return true;
+                  })
+                  .map(f => {
+                    if (f.type === "select") {
+                      return (
+                        <label key={f.field} className="finance-ind-param-field">
+                          <span>{f.label}</span>
+                          <select
+                            value={String(editingValues[f.field] ?? f.options[0])}
+                            onChange={e => {
+                              const val = e.target.value;
+                              setParams(prev => ({
+                                ...prev,
+                                [editingParamKey]: {
+                                  ...prev[editingParamKey],
+                                  [f.field]: val,
+                                },
+                              }));
+                            }}
+                          >
+                            {f.options.map(opt => (
+                              <option key={opt} value={opt}>
+                                {opt}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      );
+                    }
+                    if (f.type === "boolean") {
+                      return (
+                        <label key={f.field} className="finance-ind-param-field is-checkbox">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(editingValues[f.field])}
+                            onChange={e => {
+                              const checked = e.target.checked;
+                              setParams(prev => ({
+                                ...prev,
+                                [editingParamKey]: {
+                                  ...prev[editingParamKey],
+                                  [f.field]: checked,
+                                },
+                              }));
+                            }}
+                          />
+                          <span>{f.label}</span>
+                        </label>
+                      );
+                    }
+                    return (
+                      <label key={f.field} className="finance-ind-param-field">
+                        <span>{f.label}</span>
+                        <input
+                          type="number"
+                          min={f.min}
+                          max={f.max}
+                          step={f.step}
+                          value={Number(editingValues[f.field] ?? f.min)}
+                          onChange={e => {
+                            const raw = Number(e.target.value);
+                            if (!Number.isFinite(raw)) return;
+                            const clamped = Math.max(f.min, Math.min(f.max, raw));
+                            setParams(prev => ({
+                              ...prev,
+                              [editingParamKey]: {
+                                ...prev[editingParamKey],
+                                [f.field]: clamped,
+                              },
+                            }));
+                          }}
+                        />
+                      </label>
+                    );
+                  })}
               </div>
               <div className="finance-ind-params-actions">
                 <button

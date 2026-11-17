@@ -391,13 +391,28 @@ class WebPageVersion(Base):
     page: Mapped[WebPage] = relationship(back_populates="versions")
 
 
-class FinanceWatchlistItem(Base):
-    """Action suivie par un utilisateur dans son tableau de bord financier."""
-    __tablename__ = "finance_watchlist_items"
-    __table_args__ = (UniqueConstraint("user_id", "symbol", name="uq_finance_watchlist_user_symbol"),)
+class FinanceWatchlist(Base):
+    """Liste personnalisée de suivi boursier définie par l'utilisateur."""
+    __tablename__ = "finance_watchlists"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(80))
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
+class FinanceWatchlistItem(Base):
+    """Action suivie par un utilisateur dans une liste de son tableau de bord financier."""
+    __tablename__ = "finance_watchlist_items"
+    __table_args__ = (UniqueConstraint("list_id", "symbol", name="uq_finance_watchlist_list_symbol"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    list_id: Mapped[str | None] = mapped_column(
+        ForeignKey("finance_watchlists.id", ondelete="CASCADE"), nullable=True, index=True
+    )
     symbol: Mapped[str] = mapped_column(String(32))
     yahoo_symbol: Mapped[str] = mapped_column(String(32), default="")
     eod_ticker: Mapped[str] = mapped_column(String(32), default="")

@@ -16,6 +16,7 @@ from .models import (
     FinanceQuarterlyReport,
     FinanceStockMoat,
     FinanceStockNews,
+    FinanceWatchlist,
     FinanceWatchlistItem,
     GeneratedImage,
     GeneratedSound,
@@ -450,9 +451,21 @@ def web_page_json(page: WebPage, include_versions: bool = False, include_latest_
     return data
 
 
+def watchlist_json(wl: FinanceWatchlist, items_count: int = 0) -> dict:
+    return {
+        "id": wl.id,
+        "name": wl.name,
+        "position": wl.position,
+        "items_count": int(items_count),
+        "created_at": stamp(wl.created_at),
+        "updated_at": stamp(wl.updated_at),
+    }
+
+
 def watchlist_item_json(item: FinanceWatchlistItem) -> dict:
     return {
         "id": item.id,
+        "list_id": getattr(item, "list_id", None),
         "symbol": item.symbol,
         "yahoo_symbol": item.yahoo_symbol or item.symbol,
         "eod_ticker": item.eod_ticker or item.symbol,

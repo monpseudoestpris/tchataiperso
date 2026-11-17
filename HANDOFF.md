@@ -7,11 +7,52 @@ Application de chat IA multi-fournisseurs (`tchataiperso`) composée d'un backen
 - L'espace **Marchés Financiers** (`FinanceModal`) avec cotations EODHD/Yahoo, indicateurs personnalisés, actualités, rapports trimestriels et onglet **MOAT** (travaux antérieurs non committés conservés).
 
 ## 2. Current Objective
-Dans l'espace **Marchés Financiers** (`FinanceModal`), permettre de basculer la section courbe + indicateurs techniques et la modale de définition d'indicateurs personnalisés en plein écran et de revenir au mode réduit.
+Espace **Marchés Financiers** (`FinanceModal`) : fiche complète institutionnelle (`FinanceDossierPanel`), fondamentaux **EOD Historical Data** prioritaires avec fallback **Yahoo Finance**, couche d'abstraction source-agnostique, entrepôt de données boursières sur volume Docker dédié (`finance_data`), et explorateur complet de l'historique fondamental en tableaux.
 
-**Statut** : Implémentation terminée et vérifiée par `tsc --noEmit`.
+**Statut** : Implémentation terminée et vérifiée (`pytest` 63/63, `eslint` 0 warning sur les fichiers modifiés/créés concernés, `typecheck` & `next build` 0 erreur).
 
 ## 3. Completed Work
+- **31 Scores & Indicateurs Uncle Stock + Guide 36 chapitres (`backend/app/finance_scores.py`, `backend/app/finance_dossier.py`, `backend/tests/test_finance_scores.py`, `frontend/public/guides/uncle-stock-scores-guide.html`, `frontend/components/finance-help-modal.tsx`, `frontend/components/finance-dossier-panel.tsx`, `frontend/components/finance-modal.tsx`, `frontend/lib/finance-glossary.ts`, `frontend/lib/api.ts`, `frontend/app/globals.css`)** :
+  - Moteur complet `compute_uncle_stock_scores` calculant les **31 indicateurs** en double mode (**`verified` — Vérifié / Interprété** alignant les dénominateurs `1540`, `2170`, `1070`, `3040`, l'étirement sigmoïde `k=4`, le signe standard `logistic(+PV)/0.0037` de Dechow, le facteur `3e-9 * MarketCap` de Slater et la branche sectorielle financière exclusive du Trap Score vs **`documented` — Documenté** suivant littéralement les formules/bornes publiées avec alertes explicatives `warnings`).
+  - Couverture complète des 31 scores (`advice`, `categories`, `is_undervalued`, `trap_score`, `uncle_stock_score`, `quality_score`, `value_score`, `yield_score`, `balance_score`, `balance_value_score`, `financial_health_score`, `growth_rate`, `predictability_score`, `piotroski_f_score`, `mohanram_g_score`, `montier_c_score`, `levermann_score`, `company_score`, `oshaughnessy_vc3`, `greenblatt_score`, `pim_van_vliet_score`, `erp5_score`, `slater_score`, `altman_z_score`, `ohlson_o_score`, `beneish_m_score`, `dechow_f_score`, `esg_score`, `environment_score`, `social_score`, `governance_score`), câblée dans `get_financial_dossier` (`uncle_stock_scores` + injection `scores_unclestock_31` dans `facts_context` Gemini Hydrogen) et affichée dans `#dossier-unclestock-scores` avec sélecteur de mode, filtres par catégorie, infobulles glossaire et détail des composantes.
+  - Intégration du guide HTML **« Scores Uncle Stock — Guide détaillé des calculs » (36 chapitres)** (`/guides/uncle-stock-scores-guide.html`, balises `</h>` corrigées en `</h2>`) dans la sous-modale à onglets `FinanceHelpModal` (*Valeurs intrinsèques (20 chapitres)* & *Scores Uncle Stock (36 chapitres)*), synchronisée sur le thème clair/sombre actif, accessible depuis l'en-tête **`Aide · Formules & Scores`** et les boutons **`Guide formules`** / **`Guide scores`** du dossier.
+- **UI Moderne à Onglets, Thèmes Clair / Sombre & Palettes Finance (`frontend/components/finance-theme-switcher.tsx`, `frontend/components/finance-dossier-panel.tsx`, `frontend/components/finance-modal.tsx`, `frontend/components/finance-help-modal.tsx`, `frontend/app/globals.css`)** :
+  - Ajout de `FinanceThemeSwitcher` (`useInterfaceTheme`) dans l'en-tête de `FinanceModal` (bascule instantanée **Clair / Sombre** + menu 12 palettes `Clair`, `Océan`, `Forêt`, `Lavande`, `Sable`, `Rose`, `Sombre`, `Nuit bleue`, `Graphite`, `Émeraude`, `Aubergine`, `Cacao`) avec mise à jour en direct du graphique `FinanceTvChart` et synchronisation des guides HTML dans `FinanceHelpModal`.
+  - Refonte de `FinanceDossierPanel` en **8 sous-onglets collants (sticky glass rail)** (*Synthèse & IA*, *Scores (31)*, *Valeurs Intrinsèques*, *Ratios*, *Parties & Divid.*, *Comptes & BPA*, *Actus & Macro*, *Tout voir* avec sommaire complet) avec badges dynamiques (`% Uncle Stock`, `MoS`, nombre d'actualités), rail d'onglets `finance-tabs-nav` en pilules glassmorphiques et variables adaptatives clair/sombre/palettes.
+- **Fiche Complète Institutionnelle (`backend/app/finance_dossier.py`, `backend/app/routers/finance.py`, `frontend/components/finance-dossier-panel.tsx`, `frontend/components/finance-modal.tsx`, `frontend/lib/api.ts`, `frontend/app/globals.css`)** :
+  - Ajout de `GET /api/finance/dossier` et `POST /api/finance/dossier/analyze` calculant et mémorisant dans `finance_warehouse.db` : en-tête (catégorie Cap, rendement, bêta, IH Score + tendance, dynamique du cours, effectif, siège), analyse fondamentale IA sur demande, capital/flottant/VAD/valorisation/TTM, performances ajustées des dividendes (1M → 10A + courbe SVG), gestion du risque (1A → 5A : volatilité, semi-volatilité, Max Drawdown & durée, VaR/CVaR 95%, Ulcer, Sharpe, Sortino, Calmar, Excess Calmar, Martin), consensus analystes, équipe de direction, opérations d'initiés (+ cumul net), top fonds & institutionnels, tableaux annuels multi-exercices avec variations YoY (Synthèse, Profitabilité, Solvabilité, Distribution, Cycle de conversion/efficacité), scores qualitatifs (IH Score /9, F-Score Piotroski, Z-Score Altman) et matrice mensuelle des dividendes détachés.
+  - Intégration dans `FinanceModal` sous l'onglet **`Fiche Complète`** avec sélecteur de profondeur (`5 ans` / `10 ans` / `Tout`), **sommaire structuré en 5 colonnes avec liens d'ancre (`scrollIntoView` fluide dans la modale)** (*Synthèse boursière* incluant `#dossier-news` et `#dossier-intrinsic` toujours rendue, *Parties prenantes*, *Ratios financiers*, *Scores qualitatifs*, *Comptes détaillés* dont `#dossier-comptes-annuels`, `#dossier-comptes-trimestriels`, `#dossier-bpa`), tableaux simplifiés annuels/trimestriels + `Publications BPA`.
+  - **Actualités récentes & sentiment intégrés à la fiche (`backend/app/finance_news.py`, `backend/app/finance_dossier.py`, `frontend/components/finance-dossier-panel.tsx`)** : `fetch_eodhd_news` (EODHD `/api/news` prioritaire avec tags & polarité de sentiment) + backup Yahoo (`fetch_yahoo_symbol_news`), cache BDD 6h dans `finance_warehouse.db`, affichage en cartes sous `#dossier-news` et injection dans `facts_context["actualites_recentes"]` pour l'analyse IA.
+  - **Flux complémentaires EODHD All-World & Fundamentals (`backend/app/finance_eodhd_extras.py`)** : intégration complète et mise en cache SQLite du logo officiel (`resolve_eodhd_logo_url`), du sentiment agrégé 90j (`/api/sentiments`), de la capitalisation historique (`/api/historical-market-cap`), du calendrier corporate (`/api/calendar/earnings`, `#dossier-calendrier`), des transactions d'initiés SEC Form 4 (`/api/insider-transactions` fusionné dans `#dossier-inities`) et du contexte macro & taux US Treasury (`/api/macro-indicator` + `/api/ust/bill-rates`, `#dossier-macro`), le tout également transmis à Gemini Hydrogen.
+  - **Module de Valeurs Intrinsèques Uncle Stock & Mode Corrigé (`backend/app/finance_intrinsic.py`, `backend/tests/test_finance_intrinsic.py`, `#dossier-intrinsic`)** : calcul complet du coût du capital (`Ke CAPM` borné `[0, 2]`, `Ke DDM`, `Kd après impôts`, `WACC` avec plancher, `Equity Charge`), `rCAGR 67%` (régression log-linéaire ajustée de la dispersion), `Total/Net Owner Return`, `TRI Buffett`, `Forward Return (Yacktman)`, des 13 composantes pondérées (poids 30 en mode fidèle vs poids 29 sans le cours en mode indépendant corrigé — incluant `DCF FCF`, `Buffett`, `Residual Income`, `Graham Formula` littérale vs parenthèses globales, `EPV` pré- vs après impôts, `Value Driver McKinsey` EV vs Equity, `Lynch & Adjusted Lynch`, `Graham Number`, `EBITDA 7,5×`, `Hold 5 Years`, `DCF FCF No Growth`), des méthodes complémentaires (`DCF OE`, régression linéaire/quadratique 100 ans, `O'Malley`, `Payback 5 ans` + solveur d'années), des 3 scénarios (`Prudent` / `Central` / `Optimiste`) et de la matrice de sensibilité `WACC × g`, avec détail des hypothèses/intermédiaires en interface et transmission à Gemini Hydrogen.
+  - **Guide interactif d'aide sur les Valeurs Intrinsèques (`frontend/public/guides/intrinsic-values-guide.html`, `frontend/components/finance-help-modal.tsx`, `frontend/components/finance-modal.tsx`, `frontend/components/finance-dossier-panel.tsx`, `frontend/app/globals.css`)** : intégration complète du guide HTML en 20 chapitres (MathML, sommaire latéral interactif, exemples chiffrés, sélecteur clair/sombre, impression PDF) dans une sous-modale dédiée `FinanceHelpModal` (avec `iframe` isolé + lien *« Ouvrir dans un onglet »* et fermeture `Échap`), accessible depuis le bouton **« Aide · Valeurs intrinsèques »** dans l'en-tête de `FinanceModal` ainsi que depuis le bouton **« Guide formules »** de la section `#dossier-intrinsic` (y compris en état repli/fallback).
+  - **Infobulles & définitions interactives sur les indicateurs Finance (`frontend/lib/finance-glossary.ts`, `frontend/components/finance-info-tip.tsx`, `frontend/components/finance-dossier-panel.tsx`, `frontend/components/finance-statements.tsx`, `frontend/components/finance-modal.tsx`, `frontend/components/finance-tv-chart.tsx`, `frontend/components/finance-moat-panel.tsx`, `frontend/components/finance-watchlist-table.tsx`, `frontend/app/globals.css`)** : dictionnaire centralisé (`FINANCE_GLOSSARY` + `findFinanceTerm`) et composants portail `FinanceMetricLabel` (libellé + badge `?` ouvrant au survol, focus clavier ou clic/tap) et `FinanceHoverTip` (infobulle au repos du survol sur les boutons d'indicateurs techniques et colonnes de suivi), couvrant valeurs intrinsèques, coût du capital, risques, ratios, scores (IH, Piotroski, Altman), états financiers, MOAT et graphiques sans coupure par les conteneurs `overflow`.
+  - **Grands Indices Boursiers, Compositions Sélectionnables & Montée en Charge (`backend/app/finance_indices.py`, `backend/app/finance_warehouse.py`, `backend/app/finance_watchlist.py`, `backend/app/routers/finance.py`, `backend/tests/test_finance_indices.py`, `frontend/components/finance-indices-panel.tsx`, `frontend/components/finance-modal.tsx`, `frontend/lib/api.ts`)** :
+    - Optimisation de `finance_warehouse.db` pour un grand nombre d'actions chargées (`cache_size = -32768` soit 32 Mo, `mmap_size = 256 Mo`, table indexée `finance_index_constituents` et index sur `short_name`/`long_name`, recherche SQL `search_warehouse_catalog` + `get_warehouse_overview`, et réutilisation du cache entrepôt + client HTTP mutualisé dans `finance_watchlist.py`).
+    - Catalogue de **31 indices** répartis en **9 principaux** (**CAC 40**, **S&P 500**, **NASDAQ 100**, **Dow Jones 30**, **EURO STOXX 50**, **DAX 40**, **FTSE 100**, **SMI 20**, **Nikkei 225**) et **22 secondaires / Mid & Small / régionaux** (**SBF 120**, **CAC Next 20**, **CAC Mid 60**, **Russell 2000**, **S&P MidCap 400**, **S&P SmallCap 600**, **NASDAQ Composite**, **MDAX**, **TecDAX**, **FTSE 250**, **STOXX Europe 600**, **AEX 25**, **BEL 20**, **IBEX 35**, **FTSE MIB**, **PSI 20**, **OMX Stockholm 30**, **S&P/TSX Composite**, **S&P/ASX 200**, **Hang Seng**, **KOSPI**, **Nifty 50**) + navigateur du catalogue complet EODHD `GET /api/finance/indices/eodhd-catalog` (`/api/exchange-symbol-list/INDX`) permettant d'ouvrir n'importe quel `.INDX` via `GET /api/finance/indices/{index_code}` (`Components` + cache SQLite 24h + repli structuré) et `GET /api/finance/catalog/search`.
+    - Intégration directe dans la barre de recherche de `FinanceModal` (`FinanceIndicesStrip` avec onglets *Principaux* / *Secondaires & Mid/Small* / *Tous* + bouton *Catalogue EODHD (.INDX)*, `FinanceEodhdIndxBrowser`, `FinanceIndexCompositionDrawer` avec filtre texte/secteur, filtre *« En entrepôt »*, pagination progressive par lots de 60, sélection directe ou ajout au suivi, et autocomplétion instantanée dans la barre de recherche), avec scroll auto en haut lors de l'ouverture d'un indice.
+  - **Listes de suivi personnalisées & Bouton `+ Suivre` sur l'action courante (`backend/app/models.py`, `backend/migrations/versions/0024_add_finance_watchlists.py`, `backend/app/main.py`, `backend/app/schemas.py`, `backend/app/serializers.py`, `backend/app/routers/finance.py`, `frontend/components/finance-watchlist-table.tsx`, `frontend/components/finance-modal.tsx`, `frontend/lib/api.ts`)** :
+    - Nouvelle table `finance_watchlists` et colonne `list_id` sur `finance_watchlist_items` (contrainte unique `(list_id, symbol)` permettant de classer une même action dans plusieurs listes), endpoints CRUD `GET/POST /api/finance/watchlists`, `PATCH/DELETE /api/finance/watchlists/{id}` et filtrage `list_id` sur `/api/finance/watchlist`.
+    - Barre d'onglets personnalisables dans `FinanceWatchlistTable` (*créer*, *renommer*, *supprimer*, *basculer*), bouton **`+ Suivre`** (et sélecteur de liste cible) directement dans le bandeau héros de l'action affichée (avec indication `✓ Suivie`), plus correction de l'espacement du titre graphique `.finance-chart-title > div`.
+  - **Analyse IA complète via Gemini Hydrogen** (`_resolve_gemini_hydrogen_model` résolvant dynamiquement le slug Gemini Hydrogen dans `settings.models` / `settings.configured_models` avec repli sur `"google/gemini-4-hydrogen"` puis `settings.default_model`, `max_tokens=16384`, `timeout=90.0`) utilisant le prompt structuré `# PROMPT — ANALYSTE FINANCIER D'ÉLITE` (sections **A** à **I** : Buffett, Munger, Lynch, Graham, Marks, Damodaran, Red Flags) alimenté par l'ensemble des données du dossier (`_compact_statement_period` sur 6 exercices annuels et 5 trimestres, direction, initiés, fonds, valorisation, perf/risque, 5 tableaux annuels, scores IH/Piotroski/Altman, dividendes et surprises BPA) ; rendu Markdown avec tableaux stylés (`.finance-dossier-ai-text table`, `ReactMarkdown` + `remarkGfm`), correction des appels `_key`/`_check_response`/`_json` et capture `ProviderError`/`httpx.HTTPError` en HTTP 502 dans `routers/finance.py`.
+  - Correctifs scores & exercices 52 semaines (type NVIDIA) : déduplication/fusion des dates annuelles par année civile `YYYY` (évitant la séparation `Earnings.Annual` `-01-31` vs clôture fiscale `-01-25`), repli `NOPAT`/`TotalDebt`/couverture EBITDA & coût de la dette sans charge d'intérêt, découpage par lots des requêtes Yahoo `fundamentals-timeseries` et lignes récapitulatives `IH SCORE` / `TENDANCE` dans la table.
+  - **Cours et OHLC ajustés pour graphiques & indicateurs (`backend/app/finance.py`, `backend/app/finance_watchlist.py`, `frontend/components/finance-modal.tsx`, `frontend/lib/api.ts`)** : ajout de `_to_adjusted_ohlc_bar` mettant à l'échelle `open`, `high`, `low`, `close` via `adjusted_close / raw_close` (dividendes + splits) pour EODHD et le backup Yahoo quotidien tout en conservant les valeurs brutes + `adjusted_close` dans `finance_warehouse.db` ; calcul des indicateurs techniques natifs/personnalisés, de l'agrégation multi-unités, des performances watchlist et de l'historique EOD sur ces valeurs ajustées.
+  - Priorité stricte **EODHD uniquement lorsque disponible** (`get_financial_dashboard_data`, `fetch_and_parse_yahoo_finance`, `get_financial_dossier`) : aucun appel Yahoo `quoteSummary` ou `chart` (hors intraday 1J/1Sem ou échec/absence de données EODHD), avec distinction `[]` (action sans dividende, HTTP 200) vs `None` (erreur HTTP déclenchant le backup Yahoo).
+- **Fondamentaux EODHD complets + repli vide Yahoo (`backend/app/finance_statements.py`, `backend/app/finance_provider.py`, `frontend/components/finance-statements.tsx`, `backend/tests/test_finance_statements.py`)** :
+  - Extension du schéma normalisé aux postes EODHD complets (`EXTRA_EOD_INCOME_FIELDS`, `EXTRA_EOD_BALANCE_FIELDS`, `EXTRA_EOD_CASHFLOW_FIELDS`) + ingestion dynamique automatique de **tous** les champs numériques reçus dans `Income_Statement`, `Balance_Sheet` et `Cash_Flow` (y compris alias secondaires distincts et `outstandingShares` EODHD pour le nombre d'actions), avec stockage typé en entrepôt SQLite (`build_statement_type_map`).
+  - Rétro-remplissage transparent depuis `finance_raw_snapshots` sans rappel réseau pour les actions déjà en cache ; dans `FinanceStatements`, bouton **`Masquer vides (N)` / `+ Lignes vides (N)`** masquant par défaut les lignes entièrement `null` sous EODHD (pour n'afficher que les postes réellement publiés par l'émetteur) tout en laissant les lignes du modèle visibles avec `—` sous Yahoo Finance.
+- **Fondamentaux EODHD, Couche d'Abstraction & Entrepôt BDD sur Volume Dédié (`compose.yaml`, `backend/app/config.py`, `backend/app/finance_warehouse.py`, `backend/app/finance_provider.py`, `backend/app/finance_statements.py`, `backend/app/finance.py`, `backend/app/routers/finance.py`)** :
+  - Ajout du volume Docker dédié `finance_data` monté sur `/app/finance_data` (`FINANCE_DATA_DIR`, ou `data/finance` en local).
+  - Création de `finance_warehouse.py` (SQLite WAL haute densité + tables `WITHOUT ROWID` + payloads bruts compressés `zlib`) stockant les instruments, les barres EOD journalières, tout l'historique des faits fondamentaux et les snapshots.
+  - Création de `finance_provider.py` masquant l'origine des données (EODHD `/api/fundamentals` prioritaire + fallback/complément Yahoo Finance champ par champ) derrière un schéma canonique unique (`FinancialStats`, `INCOME_FIELDS`, `BALANCE_FIELDS`, `CASHFLOW_FIELDS`, `RATIO_DEFS`, `Earnings`).
+  - Suppression de la limite `[-6:]` dans `finance_statements.py` pour exposer tout l'historique téléchargé, avec support `refresh=true` sur `/api/finance/details` et `/api/finance/statements`.
+- **Explorateur Frontend des Fondamentaux Historiques (`frontend/lib/api.ts`, `frontend/components/finance-statements.tsx`, `frontend/components/finance-modal.tsx`, `frontend/app/globals.css`)** :
+  - Ajout de l'onglet **`Fondamentaux (Historique)`** dans `FinanceModal` et refonte de `FinanceStatements` : sélecteur Annuel/Trimestriel, profondeur `5 pér.` / `10 pér.` / `Tout l'historique`, filtres par section + recherche par poste, colonne Poste figée (`sticky`), mini-sparkline SVG, évolution globale, variations `% YoY` et tableau historique des surprises BPA (`Earnings`).
+- **Sélecteur d'unité des barres (`frontend/lib/bar-aggregation.ts`, `frontend/components/finance-modal.tsx`)** :
+  - Ajout de `aggregateBars` (OHLCV) et du sélecteur **Jour / Semaine / Mois / 3 Mois** dans l'en-tête du graphique boursier (s'applique à la courbe SVG, aux chandeliers `FinanceTvChart` et au calcul de tous les indicateurs).
+- **Indicateur IsoPressure (`frontend/lib/indicators.ts`, `frontend/lib/indicator-params.ts`, `frontend/components/finance-tv-chart.tsx`, `frontend/app/globals.css`)** :
+  - Portage du script TradingView Pine v5 `IsoPressure` (*Isostock pressure backtested*) dans `isoPressure` avec `mfi`, les moyennes mobiles `RMA`, `KMA`, `EMA`, `WMA`, `DEMA`, `ALMA`, `HMA`, les 11 stratégies préconfigurées (`Best Overall 5 20` par défaut, `Test`, etc.) et repli automatique sans MFI en l'absence de volume.
+  - Ajout de la pastille `isopressure` dans la barre d'oscillateurs de `FinanceTvChart` et extension du panneau de paramétrage (sélecteur de stratégie, période, cases d'affichage `Brute` / `5` / `20` / `50` / `100` / `200`, et poids/MA personnalisés en mode `Test`).
 - **Outils de dessin & nouveaux indicateurs techniques (`frontend/lib/chart-drawings.ts`, `frontend/lib/indicators.ts`, `frontend/components/finance-tv-chart.tsx`, `frontend/components/finance-modal.tsx`, `frontend/app/globals.css`)** :
   - Ajout d'une barre de dessin (*Curseur*, *Ligne*, *Horizontale*, *Rectangle*, palette de 5 couleurs, *Supprimer* / *Effacer*, déplacement par glisser-déposer, poignées de redimensionnement, pastille **×** et clic droit pour supprimer) avec superposition SVG synchronisée sur les coordonnées `(date, prix)` de `lightweight-charts` v5 et persistance `localStorage` par symbole (`clair_finance_drawings_<SYMBOL>`).
   - Ajout des indicateurs **Supertrend** (ATR 10, mult. 3, courbe vert/rouge sur le prix) et **REX** (Rex Oscillator 14 + Signal 14 + ligne zéro dans son panneau dédié).
@@ -62,8 +103,18 @@ Dans l'espace **Marchés Financiers** (`FinanceModal`), permettre de basculer la
 
 ## 5. Modified Files
 - Créés (backend) :
+  - `backend/app/finance_dossier.py`
+  - `backend/app/finance_eodhd_extras.py`
+  - `backend/app/finance_indices.py`
+  - `backend/app/finance_intrinsic.py`
+  - `backend/app/finance_scores.py`
+  - `backend/app/finance_warehouse.py`
+  - `backend/app/finance_provider.py`
   - `backend/migrations/versions/0022_add_webpage_apps_and_bricks.py`
+  - `backend/migrations/versions/0024_add_finance_watchlists.py`
   - `backend/app/page_bricks.py`
+  - `backend/tests/test_finance_indices.py`
+  - `backend/tests/test_finance_scores.py`
 - Modifiés (backend) :
   - `backend/app/cli.py`
   - `backend/app/models.py`
@@ -75,11 +126,25 @@ Dans l'espace **Marchés Financiers** (`FinanceModal`), permettre de basculer la
   - `backend/app/routers/pages.py`
   - `backend/app/context.py`
   - `backend/app/config.py`
+  - `backend/app/finance.py`
+  - `backend/app/finance_ranges.py`
+  - `backend/app/finance_statements.py`
+  - `backend/app/finance_news.py`
+  - `backend/app/routers/finance.py`
+  - `backend/tests/test_finance_statements.py`
+  - `compose.yaml`
   - `backend/app/providers.py`
   - `backend/tests/test_pages.py`
   - `backend/tests/test_providers.py`
   - `.env.example`
 - Créés (frontend) :
+  - `frontend/public/guides/intrinsic-values-guide.html`
+  - `frontend/public/guides/uncle-stock-scores-guide.html`
+  - `frontend/components/finance-help-modal.tsx`
+  - `frontend/components/finance-theme-switcher.tsx`
+  - `frontend/components/finance-indices-panel.tsx`
+  - `frontend/lib/finance-glossary.ts`
+  - `frontend/components/finance-info-tip.tsx`
   - `frontend/lib/canvas-bricks.ts`
   - `frontend/lib/canvas-diagram.ts`
   - `frontend/components/canvas-bricks-modal.tsx`
@@ -87,6 +152,7 @@ Dans l'espace **Marchés Financiers** (`FinanceModal`), permettre de basculer la
   - `frontend/components/canvas-diagram-editor.tsx`
   - `frontend/components/canvas-diagram-editor.module.css`
 - Modifiés (frontend) :
+  - `frontend/components/finance-dossier-panel.tsx` (créé)
   - `frontend/lib/code-canvas.ts`
   - `frontend/lib/api.ts`
   - `frontend/components/code-canvas.tsx`
@@ -94,6 +160,7 @@ Dans l'espace **Marchés Financiers** (`FinanceModal`), permettre de basculer la
   - `frontend/components/web-page-modal.module.css`
   - `frontend/components/chat-app.tsx`
   - `frontend/components/finance-modal.tsx`
+  - `frontend/components/finance-statements.tsx`
   - `frontend/components/finance-tv-chart.tsx`
   - `frontend/components/finance-custom-indicator-modal.tsx`
   - `frontend/lib/chart-drawings.ts`
@@ -105,7 +172,18 @@ Dans l'espace **Marchés Financiers** (`FinanceModal`), permettre de basculer la
   - `scripts/start.sh` : point d'entrée unifié (`prod`, `dev`, `local`, `stop`, `logs`, `status`, `--lan`) partageant la même BDD PostgreSQL et les mêmes uploads entre `dev` et `prod`.
 
 ## 6. Verification
-- `npm --prefix frontend run typecheck` : **RÉUSSI** (0 erreur TypeScript après ajout du paramétrage des indicateurs).
+- `PYTHONPATH=backend backend/.venv/bin/pytest backend/tests/test_finance_statements.py backend/tests/test_finance_scores.py backend/tests/test_finance_indices.py backend/tests/test_finance_intrinsic.py backend/tests/test_finance.py -v` : **RÉUSSI — 63 passed, 1 warning**.
+- `npx --prefix frontend eslint --config frontend/eslint.config.mjs --max-warnings 0 frontend/components/finance-theme-switcher.tsx frontend/components/finance-help-modal.tsx frontend/components/finance-dossier-panel.tsx frontend/lib/finance-glossary.ts frontend/components/finance-info-tip.tsx frontend/components/finance-watchlist-table.tsx frontend/components/finance-indices-panel.tsx` : **RÉUSSI** (exit code 0, 0 erreur / 0 warning).
+- `npm --prefix frontend run typecheck && npm --prefix frontend run build` : **RÉUSSI** (exit code 0, `tsc --noEmit` + Next.js 16.4.6 Turbopack + TypeScript 9.0s + static pages 3/3 après ajout de `FinanceThemeSwitcher`, sous-onglets de `FinanceDossierPanel` et styles glassmorphiques).
+- `PYTHONPATH=backend backend/.venv/bin/python -m py_compile backend/app/finance_warehouse.py backend/app/finance_provider.py backend/app/finance_statements.py backend/app/finance.py backend/app/routers/finance.py backend/app/config.py` : **RÉUSSI**.
+- `docker compose config -q` : **RÉUSSI** (`compose valid`).
+- `npm --prefix frontend run typecheck` : **RÉUSSI** (0 erreur TypeScript).
+- `npx --prefix frontend eslint --config frontend/eslint.config.mjs --max-warnings 0 frontend/components/finance-statements.tsx` : **RÉUSSI** (0 erreur, 0 warning).
+- `npx --prefix frontend eslint --config frontend/eslint.config.mjs --max-warnings 0 frontend/lib/api.ts` : **3 erreurs `no-explicit-any` préexistantes** (lignes 51, 455, 1588), 0 problème sur les lignes ajoutées.
+- `npm --prefix frontend run typecheck` : **RÉUSSI** (0 erreur TypeScript après ajout d'`IsoPressure` et du sélecteur d'unité des barres).
+- `npx --prefix frontend eslint --config frontend/eslint.config.mjs --max-warnings 0 frontend/lib/bar-aggregation.ts` : **RÉUSSI** (0 erreur, 0 warning).
+- `npx --prefix frontend eslint --config frontend/eslint.config.mjs --max-warnings 0 frontend/lib/indicators.ts frontend/lib/indicator-params.ts` : **RÉUSSI** (0 erreur, 0 warning).
+- `npm --prefix frontend run typecheck` : **RÉUSSI** (0 erreur TypeScript après ajout du paramétrage des indicateurs et retrait du lecteur média).
 - `npx --prefix frontend eslint --config frontend/eslint.config.mjs --max-warnings 0 frontend/lib/chart-drawings.ts frontend/lib/indicators.ts frontend/lib/indicator-params.ts` : **RÉUSSI** (0 erreur, 0 warning).
 - `npx --prefix frontend eslint --config frontend/eslint.config.mjs --max-warnings 0 frontend/components/finance-modal.tsx frontend/components/finance-tv-chart.tsx frontend/components/finance-custom-indicator-modal.tsx` : **27 problèmes préexistants** (22 erreurs, 5 warnings) sur du code antérieur, 0 problème sur les lignes ajoutées.
 - `PYTHONPATH=backend backend/.venv/bin/pytest backend/tests/test_multi_agent.py -v` : **RÉUSSI — 6 passed, 1 warning**.
