@@ -675,18 +675,41 @@ def _safe_float(val: Any) -> float | None:
         return None
 
 
+def _parse_explicit_eod_ticker(raw: str) -> tuple[str, str] | None:
+    """Reconnaît un ticker EODHD explicite `CODE.EXCHANGE` (y compris ISINs `.EUFUND`)."""
+    clean_q = (raw or "").strip().strip("$")
+    if "." not in clean_q:
+        return None
+    parts = clean_q.split(".")
+    if len(parts) != 2:
+        return None
+    code_part, exch_part = parts[0].strip(), parts[1].strip()
+    if (
+        1 <= len(code_part) <= 24
+        and 2 <= len(exch_part) <= 10
+        and re.fullmatch(r"[A-Za-z0-9\-^_]+", code_part)
+        and re.fullmatch(r"[A-Za-z0-9]+", exch_part)
+    ):
+        return code_part.upper(), exch_part.upper()
+    return None
+
+
 def score_eodhd_search_item(query: str, item: dict[str, Any]) -> int:
     q_clean = query.strip().lower()
     code = str(item.get("Code", "")).lower()
     name = str(item.get("Name", "")).lower()
     exch = str(item.get("Exchange", "")).upper()
     itype = str(item.get("Type", ""))
+    itype_low = itype.lower()
     country = str(item.get("Country", "")).lower()
+    isin = str(item.get("ISIN") or item.get("Isin") or "").strip().lower()
 
     score = 0
     full_ticker = f"{code}.{exch.lower()}"
     if q_clean == full_ticker or q_clean == code:
         score += 100
+    if isin and q_clean == isin:
+        score += 150
     if name.startswith(q_clean):
         score += 60
     elif q_clean in name:
@@ -694,10 +717,12 @@ def score_eodhd_search_item(query: str, item: dict[str, Any]) -> int:
 
     if itype == "Common Stock":
         score += 40
-    elif itype in ("ETF", "Index", "INDEX"):
-        score += 20
+    elif "fund" in itype_low or itype in ("ETF", "Index", "INDEX"):
+        score += 25
 
-    if exch == "PA" or country == "france":
+    if exch == "EUFUND":
+        score += 15
+    elif exch == "PA" or country == "france":
         score += 25
     elif exch == "US" or country in ("usa", "united states"):
         score += 15
@@ -709,34 +734,90 @@ def score_eodhd_search_item(query: str, item: dict[str, Any]) -> int:
     return score
 
 
+async def lookup_eodhd_search_metadata(
+    client: httpx.AsyncClient,
+    ticker_or_query: str,
+    api_key: str,
+) -> dict[str, Any] | None:
+    """Interroge `/api/search/{code}` sans raccourci `CODE.EXCHANGE` afin d'obtenir le vrai nom, l'ISIN et la devise."""
+    clean_q = (ticker_or_query or "").strip().strip("$")
+    if not clean_q or not api_key:
+        return None
+    parsed = _parse_explicit_eod_ticker(clean_q)
+    search_term = parsed[0] if parsed else clean_q
+    target_exch = parsed[1] if parsed else None
+    url = (
+        f"https://eodhd.com/api/search/{urllib.parse.quote(search_term)}"
+        f"?api_token={urllib.parse.quote(api_key)}&fmt=json"
+    )
+    try:
+        resp = await client.get(url, timeout=10.0)
+        if resp.status_code != 200:
+            return None
+        items = resp.json()
+        if not isinstance(items, list) or not items:
+            return None
+
+        def _match_score(it: dict[str, Any]) -> tuple[int, int]:
+            c = str(it.get("Code") or "").strip().upper()
+            e = str(it.get("Exchange") or "").strip().upper()
+            isin = str(it.get("ISIN") or it.get("Isin") or "").strip().upper()
+            exact_exch = 1 if (target_exch and e == target_exch) else 0
+            exact_code = 1 if (c == search_term.upper() or isin == search_term.upper()) else 0
+            return (exact_exch * 10 + exact_code * 5, score_eodhd_search_item(clean_q, it))
+
+        top = max(items, key=_match_score)
+        code = str(top.get("Code") or "").upper()
+        exch = str(top.get("Exchange") or "").upper()
+        if not code:
+            return None
+        return {
+            "Code": code,
+            "Exchange": exch,
+            "Name": top.get("Name") or code,
+            "ticker": f"{code}.{exch}" if exch else code,
+            "Type": top.get("Type", "Common Stock"),
+            "Country": top.get("Country", ""),
+            "Currency": top.get("Currency", "EUR" if exch in ("PA", "EUFUND") else "USD"),
+            "ISIN": top.get("ISIN") or top.get("Isin"),
+            "previousClose": top.get("previousClose"),
+        }
+    except Exception as exc:
+        _logger.debug("Erreur lookup_eodhd_search_metadata (%s): %s", clean_q, exc)
+        return None
+
+
 async def search_eodhd_ticker(
     client: httpx.AsyncClient,
     query: str,
     api_key: str,
+    asset_type: str | None = None,
 ) -> dict[str, Any] | None:
     """
-    Searches EOD Historical Data for a ticker or company name.
+    Searches EOD Historical Data for a ticker, ISIN, fund or company name.
     Returns the top matching quote/item or None.
     """
     clean_q = query.strip().strip("$")
     if not clean_q:
         return None
 
-    # If query already looks like CODE.EXCHANGE (e.g. STLA.US, MC.PA)
-    if "." in clean_q and len(clean_q.split(".")) == 2:
-        code_part, exch_part = clean_q.split(".")
-        if 1 <= len(code_part) <= 8 and 2 <= len(exch_part) <= 6:
-            return {
-                "Code": code_part.upper(),
-                "Exchange": exch_part.upper(),
-                "Name": clean_q.upper(),
-                "ticker": f"{code_part.upper()}.{exch_part.upper()}",
-                "Type": "Common Stock",
-                "Country": "Marché",
-                "Currency": "USD" if exch_part.upper() == "US" else "EUR",
-            }
+    # If query already looks like CODE.EXCHANGE (e.g. STLA.US, MC.PA, FR0013202132.EUFUND)
+    parsed = _parse_explicit_eod_ticker(clean_q)
+    if parsed:
+        code_u, exch_u = parsed
+        return {
+            "Code": code_u,
+            "Exchange": exch_u,
+            "Name": f"{code_u}.{exch_u}",
+            "ticker": f"{code_u}.{exch_u}",
+            "Type": "Mutual Fund" if exch_u == "EUFUND" else "Common Stock",
+            "Country": "Europe" if exch_u == "EUFUND" else "Marché",
+            "Currency": "USD" if exch_u == "US" else "EUR",
+        }
 
     url = f"https://eodhd.com/api/search/{urllib.parse.quote(clean_q)}?api_token={urllib.parse.quote(api_key)}&fmt=json"
+    if asset_type:
+        url += f"&type={urllib.parse.quote(asset_type)}"
     try:
         resp = await client.get(url, timeout=10.0)
         if resp.status_code != 200:
@@ -758,8 +839,8 @@ async def search_eodhd_ticker(
             "ticker": f"{code}.{exch}" if exch else code,
             "Type": top.get("Type", "Common Stock"),
             "Country": top.get("Country", ""),
-            "Currency": top.get("Currency", "EUR" if exch == "PA" else "USD"),
-            "ISIN": top.get("ISIN"),
+            "Currency": top.get("Currency", "EUR" if exch in ("PA", "EUFUND") else "USD"),
+            "ISIN": top.get("ISIN") or top.get("Isin"),
             "previousClose": top.get("previousClose"),
         }
     except Exception as exc:
@@ -850,7 +931,7 @@ async def fetch_eodhd_fundamentals(
         if resp.status_code == 200:
             data = resp.json()
             if isinstance(data, dict) and any(
-                k in data for k in ("General", "Highlights", "Valuation", "Financials")
+                k in data for k in ("General", "Highlights", "Valuation", "Financials", "Mutual_Fund", "ETF_Data")
             ):
                 return data
     except Exception as exc:
@@ -1233,10 +1314,10 @@ async def fetch_eodhd_quote_data(
         ticker_candidate = None
         if is_eodhd_url(clean_target):
             ticker_candidate = extract_ticker_from_url(clean_target)
-        elif "." in clean_target and len(clean_target.split(".")) == 2:
-            code_p, exch_p = clean_target.split(".")
-            if 1 <= len(code_p) <= 8 and 2 <= len(exch_p) <= 6:
-                ticker_candidate = clean_target.upper().strip("$")
+        else:
+            parsed = _parse_explicit_eod_ticker(clean_target)
+            if parsed:
+                ticker_candidate = f"{parsed[0]}.{parsed[1]}"
 
         if not ticker_candidate:
             for variant in query_variants(clean_target):
@@ -1480,6 +1561,7 @@ async def get_financial_dashboard_data(
     with Yahoo Finance as automatic fallback/enrichment, and persisting all
     downloaded data into the dedicated finance warehouse database.
     """
+    from .finance_funds import looks_like_isin
     from .finance_provider import (
         extract_eodhd_financial_stats,
         merge_financial_stats,
@@ -1488,6 +1570,7 @@ async def get_financial_dashboard_data(
     from .finance_warehouse import (
         get_snapshot,
         get_warehouse_stats,
+        lookup_exchange_symbol,
         save_snapshot,
         upsert_eod_bars,
         upsert_instrument,
@@ -1509,6 +1592,23 @@ async def get_financial_dashboard_data(
     db_path = warehouse_db_path(settings)
     fund_ttl = max(60, int(settings.finance_fundamentals_ttl_hours) * 3600)
 
+    def _catalog_item_from_warehouse(lookup_str: str) -> dict[str, Any] | None:
+        if not use_warehouse:
+            return None
+        hit = lookup_exchange_symbol(db_path, lookup_str, "EUFUND")
+        if not hit:
+            return None
+        return {
+            "Code": hit["symbol"],
+            "Exchange": hit["exchange"],
+            "Name": hit["name"],
+            "ticker": hit["eod_ticker"],
+            "Type": hit["type"],
+            "Country": hit["country"],
+            "Currency": hit["currency"] or "EUR",
+            "ISIN": hit["isin"],
+        }
+
     async def _get_eod():
         if not eod_key or is_yahoo_finance_url(clean_target):
             return None, None, [], None
@@ -1522,10 +1622,18 @@ async def get_financial_dashboard_data(
                 ticker_candidate = None
                 if is_eodhd_url(clean_target):
                     ticker_candidate = extract_ticker_from_url(clean_target)
-                elif "." in clean_target and len(clean_target.split(".")) == 2:
-                    code_p, exch_p = clean_target.split(".")
-                    if 1 <= len(code_p) <= 8 and 2 <= len(exch_p) <= 6:
-                        ticker_candidate = clean_target.upper().strip("$")
+                else:
+                    parsed = _parse_explicit_eod_ticker(clean_target)
+                    if parsed:
+                        ticker_candidate = f"{parsed[0]}.{parsed[1]}"
+                        if parsed[1] == "EUFUND":
+                            eod_item = _catalog_item_from_warehouse(ticker_candidate)
+
+                if not ticker_candidate and looks_like_isin(clean_target):
+                    cat_hit = _catalog_item_from_warehouse(clean_target)
+                    if cat_hit:
+                        eod_item = cat_hit
+                        ticker_candidate = cat_hit["ticker"]
 
                 if not ticker_candidate:
                     for variant in query_variants(clean_target):
@@ -1536,6 +1644,9 @@ async def get_financial_dashboard_data(
 
                 if not ticker_candidate:
                     return None, None, [], None
+
+                if eod_item is None and ticker_candidate.upper().endswith(".EUFUND"):
+                    eod_item = _catalog_item_from_warehouse(ticker_candidate)
 
                 cached_eod_fund = None
                 if use_warehouse and not refresh:
@@ -1562,6 +1673,21 @@ async def get_financial_dashboard_data(
                         fetch_eodhd_historical_eod(client, ticker_candidate, eod_key, limit=eod_limit),
                         fetch_eodhd_fundamentals(client, ticker_candidate, eod_key),
                     )
+                has_real_name = bool(
+                    (eod_fund or {}).get("General", {}).get("Name")
+                    or (eod_item and eod_item.get("Name") and str(eod_item["Name"]).upper() != ticker_candidate.upper())
+                )
+                if not has_real_name:
+                    search_meta = await lookup_eodhd_search_metadata(client, ticker_candidate, eod_key)
+                    if search_meta and search_meta.get("Name"):
+                        eod_item = {**(eod_item or {}), **search_meta}
+                if eod_item is None and (rt_data or bars or eod_fund):
+                    code_p, _, exch_p = ticker_candidate.partition(".")
+                    eod_item = {
+                        "Code": code_p.upper(),
+                        "Exchange": exch_p.upper(),
+                        "ticker": ticker_candidate.upper(),
+                    }
                 return eod_item, rt_data, bars, eod_fund
         except Exception as e_exc:
             _logger.warning("Échec EODHD dashboard pour « %s »: %s", clean_target, e_exc)
@@ -1605,18 +1731,21 @@ async def get_financial_dashboard_data(
     # EODHD prioritaire ; Yahoo Finance uniquement en backup (ou pour les barres intraday 1J/1Sem).
     eod_item, eod_rt, eod_bars, eod_fund = await _get_eod()
     eod_resolved_sym = (eod_item.get("ticker") if eod_item else None) or (eod_rt.get("code") if eod_rt else None)
+    is_eufund = str(eod_resolved_sym or clean_target).upper().endswith(".EUFUND") or (
+        str((eod_item or {}).get("Exchange") or "").upper() == "EUFUND"
+    )
 
-    need_yahoo_summary = eod_fund is None or (eod_rt is None and eod_fund is None)
-    need_yahoo_chart = intraday or not eod_bars
+    need_yahoo_summary = (not is_eufund) and (eod_fund is None or (eod_rt is None and eod_fund is None))
+    need_yahoo_chart = (not is_eufund and intraday) or not eod_bars
     yahoo_top, yahoo_sum, yahoo_chart, yahoo_sym = (None, None, None, None)
-    if need_yahoo_summary or need_yahoo_chart:
+    if (need_yahoo_summary or need_yahoo_chart) and not (is_eufund and (eod_bars or eod_fund)):
         yahoo_top, yahoo_sum, yahoo_chart, yahoo_sym = await _get_yahoo(
             eod_resolved_sym,
             fetch_summary=need_yahoo_summary,
             fetch_chart=need_yahoo_chart,
         )
 
-    if not eod_rt and not eod_fund and not yahoo_sum and not yahoo_chart:
+    if not eod_rt and not eod_bars and not eod_fund and not yahoo_sum and not yahoo_chart:
         raise HTTPException(404, f"Impossible d'identifier l'actif financier pour « {query} ».")
 
     eod_gen = (eod_fund or {}).get("General") or {}
@@ -1764,6 +1893,24 @@ async def get_financial_dashboard_data(
                         })
 
     warehouse_stats: dict[str, Any] = {}
+    if curr_price is None and chronological_bars:
+        last_bar = chronological_bars[-1]
+        curr_price = _safe_float(last_bar.get("raw_close") or last_bar.get("close"))
+        if open_price is None:
+            open_price = _safe_float(last_bar.get("open"))
+        if high_price is None:
+            high_price = _safe_float(last_bar.get("high"))
+        if low_price is None:
+            low_price = _safe_float(last_bar.get("low"))
+        if volume is None:
+            volume = _safe_float(last_bar.get("volume"))
+        if prev_close is None and len(chronological_bars) >= 2:
+            prev_bar = chronological_bars[-2]
+            prev_close = _safe_float(prev_bar.get("raw_close") or prev_bar.get("close"))
+        if curr_price is not None and prev_close is not None and prev_close > 0:
+            change = round(curr_price - prev_close, 4)
+            change_pct = round((change / prev_close) * 100, 2)
+
     if use_warehouse:
         try:
             upsert_instrument(

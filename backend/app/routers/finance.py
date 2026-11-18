@@ -15,6 +15,7 @@ from ..deps import current_user, get_sessions, get_settings, get_upload_dir
 from ..finance import get_financial_dashboard_data
 from ..finance_dossier import generate_dossier_ai_analysis, get_financial_dossier
 from ..finance_experts import generate_finance_expert_opinion, list_finance_experts_and_cached
+from ..finance_funds import list_eufund_catalog, search_eodhd_funds_live
 from ..finance_indices import (
     get_index_composition,
     list_eodhd_indx_catalog,
@@ -37,7 +38,12 @@ from ..finance_warehouse import (
     sync_user_watchlists_to_warehouse,
     warehouse_db_path,
 )
-from ..finance_watchlist import DEFAULT_WATCHLIST_SEEDS, fetch_watchlist_quotes, resolve_watchlist_instrument
+from ..finance_watchlist import (
+    DEFAULT_WATCHLIST_SEEDS,
+    fetch_watchlist_quotes,
+    repair_watchlist_item_names,
+    resolve_watchlist_instrument,
+)
 from ..models import (
     FinanceCustomIndicator,
     FinanceQuarterlyReport,
@@ -54,6 +60,7 @@ from ..schemas import (
     CreateWatchlistRequest,
     SearchStockNewsRequest,
     UpdateCustomIndicatorRequest,
+    UpdateWatchlistItemNoteRequest,
     UpdateWatchlistRequest,
 )
 from ..serializers import (
@@ -104,7 +111,7 @@ async def get_finance_details(
 
 @router.get("/statements")
 async def get_finance_statements(
-    symbol: str = Query(..., min_length=1, max_length=20, description="Ticker (ex. 'AI.PA', 'AAPL.US')"),
+    symbol: str = Query(..., min_length=1, max_length=32, description="Ticker (ex. 'AI.PA', 'AAPL.US', 'FR0013202132.EUFUND')"),
     refresh: bool = Query(False, description="Forcer le re-téléchargement depuis EODHD / Yahoo Finance"),
     settings: Settings = Depends(get_settings),
     user: User = Depends(current_user),
@@ -118,7 +125,7 @@ async def get_finance_statements(
 
 @router.get("/dossier")
 async def get_finance_dossier(
-    symbol: str = Query(..., min_length=1, max_length=20, description="Ticker (ex. 'AAPL.US', 'AI.PA')"),
+    symbol: str = Query(..., min_length=1, max_length=32, description="Ticker (ex. 'AAPL.US', 'AI.PA', 'FR0013202132.EUFUND')"),
     refresh: bool = Query(False, description="Forcer le rafraîchissement des données et historiques"),
     settings: Settings = Depends(get_settings),
     user: User = Depends(current_user),
@@ -153,7 +160,7 @@ async def analyze_finance_dossier(
 
 @router.get("/experts")
 def get_finance_experts_endpoint(
-    symbol: str | None = Query(None, max_length=24, description="Ticker pour charger les avis déjà mémorisés"),
+    symbol: str | None = Query(None, max_length=32, description="Ticker pour charger les avis déjà mémorisés"),
     settings: Settings = Depends(get_settings),
     user: User = Depends(current_user),
 ) -> dict[str, Any]:
@@ -206,7 +213,7 @@ def _dt_to_utc_iso(dt_val: datetime.datetime | None) -> str:
 @router.get("/ai-history")
 def list_finance_ai_history(
     request: Request,
-    symbol: str | None = Query(None, max_length=24, description="Filtrer par ticker (optionnel)"),
+    symbol: str | None = Query(None, max_length=32, description="Filtrer par ticker (optionnel)"),
     kind: str | None = Query(None, max_length=24, description="expert | dossier | moat | news | report"),
     expert_id: str | None = Query(None, max_length=64),
     limit: int = Query(120, ge=1, le=300),
@@ -481,8 +488,42 @@ async def search_finance_catalog_endpoint(
     settings: Settings = Depends(get_settings),
     user: User = Depends(current_user),
 ) -> dict[str, Any]:
-    """Recherche rapide dans les actions déjà chargées en entrepôt et les compositions d'indices."""
+    """Recherche rapide dans les actions déjà chargées en entrepôt, compositions d'indices et fonds EUFUND."""
     return {"items": search_finance_catalog(settings, q, limit=limit)}
+
+
+@router.get("/funds/eufund")
+async def get_eufund_catalog_endpoint(
+    q: str = Query("", max_length=100, description="Filtre par nom, ISIN ou code ticker"),
+    currency: str = Query("", max_length=12, description="Filtre par devise (EUR, USD, CHF...)"),
+    country: str = Query("", max_length=60, description="Filtre par pays"),
+    limit: int = Query(60, ge=1, le=300),
+    offset: int = Query(0, ge=0),
+    refresh: bool = Query(False, description="Forcer la re-synchronisation depuis EODHD"),
+    settings: Settings = Depends(get_settings),
+    user: User = Depends(current_user),
+) -> dict[str, Any]:
+    """Catalogue complet et filtrable des fonds européens EODHD (`/api/exchange-symbol-list/EUFUND`)."""
+    return await list_eufund_catalog(
+        settings,
+        query=q,
+        currency=currency,
+        country=country,
+        limit=limit,
+        offset=offset,
+        refresh=refresh,
+    )
+
+
+@router.get("/funds/search")
+async def search_eodhd_funds_endpoint(
+    q: str = Query(..., min_length=1, max_length=100, description="Nom du fonds ou code ISIN"),
+    limit: int = Query(25, ge=1, le=60),
+    settings: Settings = Depends(get_settings),
+    user: User = Depends(current_user),
+) -> dict[str, Any]:
+    """Recherche directe de fonds par nom ou ISIN (entrepôt EUFUND + EODHD `/api/search/?type=fund`)."""
+    return await search_eodhd_funds_live(settings, q, limit=limit)
 
 
 # ---------------------------------------------------------------------------
@@ -532,6 +573,7 @@ def _backup_user_watchlists_to_warehouse(settings: Settings | None, db: Any, use
                     "name": it.name,
                     "exchange": it.exchange,
                     "currency": it.currency,
+                    "note": getattr(it, "note", "") or "",
                     "position": it.position,
                     "created_at": it.created_at.isoformat() if it.created_at else None,
                 }
@@ -582,6 +624,7 @@ def _ensure_user_watchlists(db: Any, user_id: str, settings: Settings | None = N
                         name=str(bit.get("name") or bit["symbol"]),
                         exchange=str(bit.get("exchange") or ""),
                         currency=str(bit.get("currency") or "EUR"),
+                        note=str(bit.get("note") or "")[:240],
                         position=int(bit.get("position") or 0),
                     )
                 )
@@ -758,6 +801,11 @@ async def get_watchlist(
                     .order_by(FinanceWatchlistItem.position.asc(), FinanceWatchlistItem.created_at.asc())
                 )
             )
+        if items and await repair_watchlist_item_names(settings, items):
+            db.commit()
+            for it in items:
+                db.refresh(it)
+            _backup_user_watchlists_to_warehouse(settings, db, user.id)
         counts = _watchlist_counts(db, user.id)
         lists_payload = [watchlist_json(wl, counts.get(wl.id, 0)) for wl in lists]
 
@@ -794,6 +842,20 @@ async def add_watchlist_item(
         )
         if existing:
             item = existing
+            changed_existing = False
+            if resolved.get("name") and str(existing.name or "").strip().upper() in {
+                str(existing.symbol or "").upper(),
+                str(existing.eod_ticker or "").upper(),
+            } and str(resolved["name"]).upper() != str(existing.symbol or "").upper():
+                existing.name = resolved["name"]
+                changed_existing = True
+            if body.note and body.note != (existing.note or ""):
+                existing.note = body.note
+                changed_existing = True
+            if changed_existing:
+                db.commit()
+                db.refresh(existing)
+                _backup_user_watchlists_to_warehouse(settings, db, user.id)
         else:
             max_pos = db.scalar(
                 select(func.max(FinanceWatchlistItem.position)).where(
@@ -810,6 +872,7 @@ async def add_watchlist_item(
                 name=resolved["name"],
                 exchange=resolved["exchange"],
                 currency=resolved["currency"],
+                note=body.note,
                 position=(max_pos if max_pos is not None else -1) + 1,
             )
             db.add(item)
@@ -876,6 +939,31 @@ async def seed_default_watchlist(
         )
     enriched = await fetch_watchlist_quotes(settings, items)
     return {"active_list_id": target.id, "items": enriched}
+
+
+@router.patch("/watchlist/{item_id}")
+def update_watchlist_item_note(
+    item_id: str,
+    body: UpdateWatchlistItemNoteRequest,
+    settings: Settings = Depends(get_settings),
+    user: User = Depends(current_user),
+    sessions: sessionmaker = Depends(get_sessions),
+) -> dict[str, Any]:
+    """Met à jour la note personnelle associée à une valeur dans une liste de suivi."""
+    with sessions() as db:
+        item = db.scalar(
+            select(FinanceWatchlistItem).where(
+                FinanceWatchlistItem.id == item_id,
+                FinanceWatchlistItem.user_id == user.id,
+            )
+        )
+        if not item:
+            raise HTTPException(404, "Action suivie introuvable.")
+        item.note = body.note
+        db.commit()
+        db.refresh(item)
+        _backup_user_watchlists_to_warehouse(settings, db, user.id)
+        return watchlist_item_json(item)
 
 
 @router.delete("/watchlist/{item_id}", status_code=204)

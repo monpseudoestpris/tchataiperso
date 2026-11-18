@@ -1505,6 +1505,31 @@ def search_finance_catalog(
 
     seen = {str(r.get("eod_ticker") or r.get("symbol")).upper() for r in results}
     cached_syms = get_cached_symbols_set(db_path)
+
+    if len(results) < limit:
+        from .finance_warehouse import search_exchange_symbols
+
+        eufund_hits = search_exchange_symbols(db_path, "EUFUND", query=clean, limit=limit - len(results))
+        for r in eufund_hits.get("items") or []:
+            sym = str(r.get("eod_ticker") or "").upper()
+            if not sym or sym in seen:
+                continue
+            seen.add(sym)
+            results.append(
+                {
+                    "symbol": str(r.get("symbol") or sym),
+                    "eod_ticker": sym,
+                    "yahoo_symbol": sym,
+                    "name": str(r.get("name") or sym),
+                    "exchange": "EUFUND",
+                    "sector": str(r.get("type") or "Fonds"),
+                    "index_code": "EUFUND",
+                    "cached": bool(r.get("cached_in_warehouse")),
+                }
+            )
+            if len(results) >= limit:
+                return results
+
     needle = clean.upper()
     for idx_code, rows in _FALLBACK_CONSTITUENTS.items():
         for r in rows:

@@ -11,18 +11,25 @@ import httpx
 from fastapi import HTTPException
 
 from .config import Settings
+from .finance_funds import looks_like_isin
 from .finance_warehouse import (
+    get_instrument_meta,
+    get_snapshot,
     get_stored_eod_bars,
+    lookup_exchange_symbol,
     resolve_canonical_symbol,
+    upsert_eod_bars,
     warehouse_db_path,
 )
 from .finance import (
     DEFAULT_USER_AGENT,
     _safe_float,
+    fetch_eodhd_fundamentals,
     fetch_eodhd_historical_eod,
     fetch_eodhd_realtime,
     fetch_yahoo_chart,
     get_yahoo_crumb_and_client,
+    lookup_eodhd_search_metadata,
     query_variants,
     search_eodhd_ticker,
     search_yahoo_ticker,
@@ -147,25 +154,82 @@ async def resolve_watchlist_instrument(settings: Settings, query: str) -> dict[s
         if settings.enabled(settings.eod_historical_data_key)
         else ""
     )
+    db_path = warehouse_db_path(settings)
 
     eod_item: dict[str, Any] | None = None
-    if eod_key and not settings.demo_mode:
+    if (clean_q.upper().endswith(".EUFUND") or looks_like_isin(clean_q)) and not settings.demo_mode:
+        cat_hit = lookup_exchange_symbol(db_path, clean_q, "EUFUND")
+        if cat_hit:
+            eod_item = {
+                "Code": cat_hit["symbol"],
+                "Exchange": cat_hit["exchange"],
+                "Name": cat_hit["name"],
+                "ticker": cat_hit["eod_ticker"],
+                "Type": cat_hit["type"],
+                "Country": cat_hit["country"],
+                "Currency": cat_hit["currency"] or "EUR",
+                "ISIN": cat_hit["isin"],
+            }
+
+    if eod_item is None and eod_key and not settings.demo_mode:
         try:
             async with httpx.AsyncClient(
                 headers={"User-Agent": DEFAULT_USER_AGENT},
                 follow_redirects=True,
-                timeout=10.0,
+                timeout=12.0,
             ) as client:
                 for variant in query_variants(clean_q):
                     eod_item = await search_eodhd_ticker(client, variant, eod_key)
                     if eod_item:
                         break
+                if not eod_item:
+                    eod_item = await search_eodhd_ticker(client, clean_q, eod_key, asset_type="fund")
+
+                # Enrichir le nom réel et la devise si le ticker est explicite (ex. FR0013202132.EUFUND)
+                if eod_item and str(eod_item.get("Name") or "").upper() == str(eod_item.get("ticker") or "").upper():
+                    t_code = str(eod_item["ticker"])
+                    inst_meta = get_instrument_meta(db_path, t_code)
+                    if inst_meta and (inst_meta.get("long_name") or inst_meta.get("short_name")):
+                        raw_nm = str(inst_meta.get("long_name") or inst_meta.get("short_name") or "").strip()
+                        if raw_nm and raw_nm.upper() != t_code.upper():
+                            eod_item["Name"] = raw_nm
+                        if inst_meta.get("currency"):
+                            eod_item["Currency"] = str(inst_meta["currency"]).strip().upper()
+                    if str(eod_item.get("Name") or "").upper() == t_code.upper():
+                        search_meta = await lookup_eodhd_search_metadata(client, t_code, eod_key)
+                        if search_meta and search_meta.get("Name") and str(search_meta["Name"]).upper() != t_code.upper():
+                            eod_item["Name"] = str(search_meta["Name"]).strip()
+                            if search_meta.get("Currency"):
+                                eod_item["Currency"] = str(search_meta["Currency"]).strip().upper()
+                            if search_meta.get("Exchange"):
+                                eod_item["Exchange"] = str(search_meta["Exchange"]).strip().upper()
+                    if str(eod_item.get("Name") or "").upper() == t_code.upper():
+                        snap = get_snapshot(db_path, t_code, "fundamentals", provider="eodhd", include_raw=True)
+                        fund_raw = snap.get("raw") if (snap and isinstance(snap.get("raw"), dict)) else None
+                        if fund_raw is None:
+                            fund_raw = await fetch_eodhd_fundamentals(client, t_code, eod_key)
+                        if isinstance(fund_raw, dict):
+                            gen = fund_raw.get("General") or {}
+                            if gen.get("Name"):
+                                eod_item["Name"] = str(gen["Name"]).strip()
+                            if gen.get("CurrencyCode"):
+                                eod_item["Currency"] = str(gen["CurrencyCode"]).strip().upper()
+                            if gen.get("Exchange"):
+                                eod_item["Exchange"] = str(gen["Exchange"]).strip().upper()
         except Exception as exc:
             _logger.debug("Résolution EODHD watchlist ignorée (%s): %s", clean_q, exc)
 
+    is_eufund = bool(
+        eod_item
+        and (
+            str(eod_item.get("Exchange") or "").upper() == "EUFUND"
+            or str(eod_item.get("ticker") or "").upper().endswith(".EUFUND")
+        )
+    )
+
     yahoo_quote: dict[str, Any] | None = None
     yahoo_chart: dict[str, Any] | None = None
-    if not settings.demo_mode:
+    if not settings.demo_mode and not is_eufund:
         try:
             client, _ = await get_yahoo_crumb_and_client()
             try:
@@ -214,7 +278,7 @@ async def resolve_watchlist_instrument(settings: Settings, query: str) -> dict[s
         or (eod_item.get("Name") if eod_item else None)
         or symbol
     )
-    name = str(name).split(" - ")[0].split(" (")[0].strip()
+    name = str(name).strip() if is_eufund else str(name).split(" - ")[0].split(" (")[0].strip()
     exchange = (
         (eod_item.get("Exchange") if eod_item else None)
         or (yahoo_quote.get("exchDisp") if yahoo_quote else None)
@@ -268,6 +332,7 @@ async def _fetch_single_watchlist_quote(
         "name": item.name,
         "exchange": item.exchange or "",
         "currency": item.currency or "EUR",
+        "note": getattr(item, "note", "") or "",
         "position": item.position,
         "price": None,
         "change_1d_pct": None,
@@ -297,21 +362,27 @@ async def _fetch_single_watchlist_quote(
         currency = item.currency or "EUR"
 
         try:
+            is_eufund = str(item.eod_ticker or "").upper().endswith(".EUFUND") or str(item.exchange or "").upper() == "EUFUND"
             if eod_key and item.eod_ticker:
-                rt_data = await fetch_eodhd_realtime(client, item.eod_ticker, eod_key)
-                if rt_data:
-                    rt_p = _safe_float(rt_data.get("close"))
-                    rt_chg = _safe_float(rt_data.get("change_p"))
-                    if rt_p is not None and rt_p > 0:
-                        current_price = rt_p
-                    if rt_chg is not None:
-                        rt_change_pct = rt_chg
+                if not is_eufund:
+                    rt_data = await fetch_eodhd_realtime(client, item.eod_ticker, eod_key)
+                    if rt_data:
+                        rt_p = _safe_float(rt_data.get("close"))
+                        rt_chg = _safe_float(rt_data.get("change_p"))
+                        if rt_p is not None and rt_p > 0:
+                            current_price = rt_p
+                        if rt_chg is not None:
+                            rt_change_pct = rt_chg
                 if not bars:
                     eod_bars = await fetch_eodhd_historical_eod(client, item.eod_ticker, eod_key, limit=270)
                     if eod_bars:
                         bars = list(reversed(eod_bars))
+                        try:
+                            upsert_eod_bars(db_path, canonical, bars, "eodhd")
+                        except Exception:
+                            pass
 
-            if not bars:
+            if not bars and not is_eufund:
                 chart = await fetch_yahoo_chart(client, yahoo_sym, range_period="1y", interval="1d")
                 if chart:
                     meta = chart.get("meta") or {}
@@ -330,6 +401,77 @@ async def _fetch_single_watchlist_quote(
         base_payload.update(metrics)
         base_payload["currency"] = currency
         return base_payload
+
+
+async def repair_watchlist_item_names(settings: Settings, items: list[Any]) -> bool:
+    """Enrichit les items dont le nom vaut encore le ticker brut (ex. `FR0013202132.EUFUND`)."""
+    if not items or settings.demo_mode:
+        return False
+    db_path = warehouse_db_path(settings)
+    eod_key = (
+        settings.eod_historical_data_key.get_secret_value()
+        if settings.enabled(settings.eod_historical_data_key)
+        else ""
+    )
+    candidates: list[tuple[Any, str]] = []
+    for item in items:
+        cur_name = str(getattr(item, "name", "") or "").strip().upper()
+        sym_u = str(getattr(item, "symbol", "") or "").strip().upper()
+        eod_u = str(getattr(item, "eod_ticker", "") or "").strip().upper()
+        if not cur_name or cur_name in {sym_u, eod_u} or cur_name.endswith(".EUFUND"):
+            candidates.append((item, eod_u or sym_u))
+    if not candidates:
+        return False
+
+    changed = False
+    unresolved: list[tuple[Any, str]] = []
+    for item, lookup_sym in candidates:
+        resolved_name: str | None = None
+        resolved_curr: str | None = None
+        if lookup_sym.endswith(".EUFUND") or str(getattr(item, "exchange", "") or "").upper() == "EUFUND":
+            cat = lookup_exchange_symbol(db_path, lookup_sym, "EUFUND")
+            if cat and cat.get("name") and str(cat["name"]).upper() != lookup_sym:
+                resolved_name = str(cat["name"]).strip()
+                resolved_curr = str(cat.get("currency") or "").strip().upper() or None
+        if not resolved_name:
+            inst = get_instrument_meta(db_path, lookup_sym)
+            if inst:
+                cand_name = str(inst.get("long_name") or inst.get("short_name") or "").strip()
+                if cand_name and cand_name.upper() != lookup_sym:
+                    resolved_name = cand_name
+                    resolved_curr = str(inst.get("currency") or "").strip().upper() or None
+        if resolved_name:
+            item.name = resolved_name[:200]
+            if resolved_curr and not item.currency:
+                item.currency = resolved_curr[:16]
+            changed = True
+        elif eod_key:
+            unresolved.append((item, lookup_sym))
+
+    if unresolved and eod_key:
+        async with httpx.AsyncClient(
+            headers={"User-Agent": DEFAULT_USER_AGENT},
+            follow_redirects=True,
+            timeout=10.0,
+        ) as client:
+            for item, lookup_sym in unresolved:
+                meta = await lookup_eodhd_search_metadata(client, lookup_sym, eod_key)
+                if meta and meta.get("Name") and str(meta["Name"]).upper() != lookup_sym:
+                    item.name = str(meta["Name"]).strip()[:200]
+                    if meta.get("Currency"):
+                        item.currency = str(meta["Currency"]).strip().upper()[:16]
+                    changed = True
+                    continue
+                fund_raw = await fetch_eodhd_fundamentals(client, lookup_sym, eod_key)
+                if isinstance(fund_raw, dict):
+                    gen = fund_raw.get("General") or {}
+                    if gen.get("Name") and str(gen["Name"]).upper() != lookup_sym:
+                        item.name = str(gen["Name"]).strip()[:200]
+                        if gen.get("CurrencyCode"):
+                            item.currency = str(gen["CurrencyCode"]).strip().upper()[:16]
+                        changed = True
+
+    return changed
 
 
 async def fetch_watchlist_quotes(settings: Settings, items: list[Any]) -> list[dict[str, Any]]:

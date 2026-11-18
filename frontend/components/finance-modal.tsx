@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { FinanceAiHistoryPanel } from "@/components/finance-ai-history-panel";
 import { FinanceCustomIndicatorModal } from "@/components/finance-custom-indicator-modal";
 import { FinanceDossierPanel } from "@/components/finance-dossier-panel";
+import { FinanceEufundBrowser } from "@/components/finance-eufund-browser";
 import { FinanceExpertsPanel } from "@/components/finance-experts-panel";
 import { FinanceHelpGuideId, FinanceHelpModal } from "@/components/finance-help-modal";
 import { FinanceThemeSwitcher, useInterfaceTheme } from "@/components/finance-theme-switcher";
@@ -46,6 +47,8 @@ import {
   MessageSquarePlus,
   Minimize2,
   Newspaper,
+  PanelRightClose,
+  PanelRightOpen,
   Plus,
   RefreshCw,
   Search,
@@ -74,12 +77,14 @@ import {
   searchFinanceCatalog,
   seedDefaultWatchlist,
   updateCustomIndicator,
+  updateWatchlistItemNote,
   type CatalogSearchItem,
   type Config,
   type CustomIndicator,
   type CustomIndicatorGuideLine,
-  type FinanceRange,
   type EodBar,
+  type EodhdEufundItem,
+  type FinanceRange,
   type FinanceWatchlistMeta,
   type FinancialDashboardData,
   type FinancialStats,
@@ -119,6 +124,8 @@ type ActiveTab =
 
 const WATCHLIST_SEED_STORAGE_KEY = "clair_watchlist_seeded_v1";
 const WATCHLIST_ACTIVE_LIST_KEY = "clair_active_watchlist_id_v1";
+const WATCHLIST_SIDEBAR_OPEN_KEY = "clair_finance_wl_sidebar_open_v1";
+const WATCHLIST_SIDEBAR_WIDE_KEY = "clair_finance_wl_sidebar_wide_v1";
 
 const QUICK_SUGGESTIONS = [
   "Air Liquide",
@@ -210,6 +217,35 @@ export function FinanceModal({
   const [indexLoading, setIndexLoading] = useState(false);
   const [indexError, setIndexError] = useState<string | null>(null);
   const [indxCatalogOpen, setIndxCatalogOpen] = useState(false);
+  const [eufundCatalogOpen, setEufundCatalogOpen] = useState(false);
+  const [watchlistSidebarOpen, setWatchlistSidebarOpen] = useState<boolean>(() => {
+    if (typeof window === "undefined") return true;
+    return window.localStorage.getItem(WATCHLIST_SIDEBAR_OPEN_KEY) !== "0";
+  });
+  const [watchlistSidebarWide, setWatchlistSidebarWide] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    return window.localStorage.getItem(WATCHLIST_SIDEBAR_WIDE_KEY) === "1";
+  });
+
+  function toggleWatchlistSidebar(force?: boolean) {
+    setWatchlistSidebarOpen(prev => {
+      const next = force ?? !prev;
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(WATCHLIST_SIDEBAR_OPEN_KEY, next ? "1" : "0");
+      }
+      return next;
+    });
+  }
+
+  function toggleWatchlistSidebarWide() {
+    setWatchlistSidebarWide(prev => {
+      const next = !prev;
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(WATCHLIST_SIDEBAR_WIDE_KEY, next ? "1" : "0");
+      }
+      return next;
+    });
+  }
   const [minorQuotesLoaded, setMinorQuotesLoaded] = useState(false);
   const [catalogMatches, setCatalogMatches] = useState<CatalogSearchItem[]>([]);
   const [searchFocused, setSearchFocused] = useState(false);
@@ -427,6 +463,7 @@ export function FinanceModal({
       return;
     }
     setIndxCatalogOpen(false);
+    setEufundCatalogOpen(false);
     setActiveIndexCode(code);
     setIndexLoading(true);
     setIndexError(null);
@@ -472,6 +509,18 @@ export function FinanceModal({
     await handleAddWatchlistStock(target);
   }
 
+  async function handleSelectEufund(item: EodhdEufundItem) {
+    const target = item.eod_ticker || item.symbol;
+    setQuery(item.name || target);
+    setSearchFocused(false);
+    await loadDetails(target);
+  }
+
+  async function handleAddEufundToWatchlist(item: EodhdEufundItem, targetListId?: string | null) {
+    const target = item.eod_ticker || item.symbol;
+    await handleAddWatchlistStock(target, targetListId);
+  }
+
   async function loadDetails(searchTarget: string) {
     const q = searchTarget.trim();
     if (!q) return;
@@ -488,7 +537,7 @@ export function FinanceModal({
   }
 
   async function handleSelectWatchlistStock(item: WatchlistItem) {
-    const target = item.yahoo_symbol || item.symbol;
+    const target = item.eod_ticker || item.yahoo_symbol || item.symbol;
     setQuery(item.name || item.symbol);
     setChartView("advanced");
     await loadDetails(target);
@@ -540,6 +589,13 @@ export function FinanceModal({
     setWatchlist(prev => prev.filter(entry => entry.id !== itemId));
     setWatchlists(prev =>
       prev.map(l => (l.id === activeListId ? { ...l, items_count: Math.max(0, l.items_count - 1) } : l)),
+    );
+  }
+
+  async function handleUpdateWatchlistItemNote(itemId: string, note: string) {
+    const updated = await updateWatchlistItemNote(itemId, note);
+    setWatchlist(prev =>
+      prev.map(entry => (entry.id === itemId ? { ...entry, note: updated.note ?? note } : entry)),
     );
   }
 
@@ -725,6 +781,20 @@ export function FinanceModal({
           </div>
 
           <div className="finance-modal-header-actions">
+            <button
+              type="button"
+              className={`finance-help-btn finance-wl-toggle-btn ${watchlistSidebarOpen ? "active" : ""}`}
+              onClick={() => toggleWatchlistSidebar()}
+              aria-expanded={watchlistSidebarOpen}
+              title={
+                watchlistSidebarOpen
+                  ? "Rétracter la barre des listes de suivi à droite"
+                  : "Déplier la barre des listes de suivi à droite"
+              }
+            >
+              {watchlistSidebarOpen ? <PanelRightClose size={15} /> : <PanelRightOpen size={15} />}
+              <span>Listes ({watchlist.length})</span>
+            </button>
             <FinanceThemeSwitcher />
             <button
               type="button"
@@ -756,7 +826,7 @@ export function FinanceModal({
               <input
                 type="text"
                 className="finance-search-input"
-                placeholder="Rechercher une action ou ticker (ex. Air Liquide, LVMH, AAPL, Tesla, NVDA)..."
+                placeholder="Rechercher une action, un fonds EUFUND, un ISIN ou ticker (ex. Air Liquide, NVDA, FR0013202132.EUFUND)..."
                 value={query}
                 onChange={e => setQuery(e.target.value)}
                 onFocus={() => setSearchFocused(true)}
@@ -783,10 +853,12 @@ export function FinanceModal({
                       void loadDetails(m.eod_ticker || m.yahoo_symbol || m.symbol);
                     }}
                   >
-                    <span className="finance-symbol-tag">{m.yahoo_symbol || m.symbol}</span>
+                    <span className="finance-symbol-tag">{m.eod_ticker || m.yahoo_symbol || m.symbol}</span>
                     <strong className="finance-search-dropdown-name">{m.name}</strong>
                     {m.sector && <small className="finance-search-dropdown-meta">{m.sector}</small>}
-                    {m.index_code && <span className="finance-search-dropdown-idx">{m.index_code}</span>}
+                    {(m.index_code || m.exchange) && (
+                      <span className="finance-search-dropdown-idx">{m.index_code || m.exchange}</span>
+                    )}
                     {m.cached && <span className="finance-cached-dot" title="Déjà en entrepôt local" />}
                   </button>
                 ))}
@@ -818,8 +890,10 @@ export function FinanceModal({
             activeCode={activeIndexCode}
             loadingIndex={indexLoading}
             catalogOpen={indxCatalogOpen}
+            eufundCatalogOpen={eufundCatalogOpen}
             onToggleIndex={code => void handleToggleIndex(code)}
             onToggleCatalog={() => {
+              setEufundCatalogOpen(false);
               setIndxCatalogOpen(prev => {
                 const next = !prev;
                 if (next) {
@@ -831,62 +905,70 @@ export function FinanceModal({
               });
               setActiveIndexCode(null);
             }}
+            onToggleEufundCatalog={() => {
+              setIndxCatalogOpen(false);
+              setActiveIndexCode(null);
+              setEufundCatalogOpen(prev => {
+                const next = !prev;
+                if (next) {
+                  window.requestAnimationFrame(() => {
+                    modalBodyRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+                  });
+                }
+                return next;
+              });
+            }}
             onOpenMinorTier={handleOpenMinorTier}
           />
         </div>
 
-        {/* Modal Body */}
-        <div className="finance-modal-body" ref={modalBodyRef}>
-          {indxCatalogOpen && (
-            <FinanceEodhdIndxBrowser
-              activeCode={activeIndexCode}
-              onSelectIndexCode={eodTicker => void handleToggleIndex(eodTicker)}
-              onClose={() => setIndxCatalogOpen(false)}
-            />
-          )}
+        {/* Workspace : contenu principal à gauche + barre rétractable des listes à droite */}
+        <div className="finance-modal-workspace">
+          <div className="finance-modal-body" ref={modalBodyRef}>
+            {indxCatalogOpen && (
+              <FinanceEodhdIndxBrowser
+                activeCode={activeIndexCode}
+                onSelectIndexCode={eodTicker => void handleToggleIndex(eodTicker)}
+                onClose={() => setIndxCatalogOpen(false)}
+              />
+            )}
 
-          {activeIndexCode && (
-            <FinanceIndexCompositionDrawer
-              key={activeIndexCode}
-              composition={
-                indexComposition &&
-                (indexComposition.index.code === activeIndexCode ||
-                  indexComposition.index.eod_ticker === activeIndexCode)
-                  ? indexComposition
-                  : null
-              }
-              loading={indexLoading}
-              error={indexError}
-              selectedSymbol={data?.eod_ticker || data?.yahoo_symbol || data?.symbol || null}
-              onSelectStock={item => void handleSelectIndexStock(item)}
-              onAddWatchlist={handleAddIndexStockToWatchlist}
-              onRefresh={() => void handleToggleIndex(activeIndexCode, true)}
-              onClose={() => {
-                setActiveIndexCode(null);
-                setIndexComposition(null);
-                setIndexError(null);
-              }}
-            />
-          )}
+            {eufundCatalogOpen && (
+              <FinanceEufundBrowser
+                selectedSymbol={data?.eod_ticker || data?.yahoo_symbol || data?.symbol || null}
+                watchlists={watchlists}
+                activeListId={activeListId}
+                onSelectFund={item => void handleSelectEufund(item)}
+                onAddWatchlist={handleAddEufundToWatchlist}
+                onClose={() => setEufundCatalogOpen(false)}
+              />
+            )}
 
-          <FinanceWatchlistTable
-            lists={watchlists}
-            activeListId={activeListId}
-            items={watchlist}
-            loading={watchlistLoading}
-            selectedSymbol={data?.yahoo_symbol || data?.symbol || null}
-            onSelectList={listId => void handleSelectWatchlistTab(listId)}
-            onCreateList={handleCreateWatchlist}
-            onRenameList={handleRenameWatchlist}
-            onDeleteList={handleDeleteWatchlist}
-            onSelectStock={item => void handleSelectWatchlistStock(item)}
-            onAddStock={handleAddWatchlistStock}
-            onRemoveStock={handleRemoveWatchlistStock}
-            onRefresh={() => void loadWorkspaceData(true)}
-            onSeedDefaults={handleSeedDefaults}
-          />
+            {activeIndexCode && (
+              <FinanceIndexCompositionDrawer
+                key={activeIndexCode}
+                composition={
+                  indexComposition &&
+                  (indexComposition.index.code === activeIndexCode ||
+                    indexComposition.index.eod_ticker === activeIndexCode)
+                    ? indexComposition
+                    : null
+                }
+                loading={indexLoading}
+                error={indexError}
+                selectedSymbol={data?.eod_ticker || data?.yahoo_symbol || data?.symbol || null}
+                onSelectStock={item => void handleSelectIndexStock(item)}
+                onAddWatchlist={handleAddIndexStockToWatchlist}
+                onRefresh={() => void handleToggleIndex(activeIndexCode, true)}
+                onClose={() => {
+                  setActiveIndexCode(null);
+                  setIndexComposition(null);
+                  setIndexError(null);
+                }}
+              />
+            )}
 
-          {error && (
+            {error && (
             <div className="finance-modal-error" role="alert">
               <span>⚠️ {error}</span>
               <button type="button" onClick={() => void loadDetails(query)}>
@@ -1804,6 +1886,51 @@ export function FinanceModal({
               </div>
             </>
           )}
+          </div>
+
+          {/* Barre latérale rétractable sur la droite : Listes de suivi */}
+          <aside
+            className={`finance-watchlist-sidebar ${watchlistSidebarOpen ? "is-open" : "is-collapsed"} ${watchlistSidebarWide ? "is-wide" : ""}`}
+            aria-label="Barre latérale des listes de suivi"
+          >
+            {watchlistSidebarOpen ? (
+              <div className="finance-watchlist-sidebar-scroll">
+                <FinanceWatchlistTable
+                  lists={watchlists}
+                  activeListId={activeListId}
+                  items={watchlist}
+                  loading={watchlistLoading}
+                  selectedSymbol={data?.eod_ticker || data?.yahoo_symbol || data?.symbol || null}
+                  inSidebar
+                  sidebarWide={watchlistSidebarWide}
+                  onToggleSidebarWide={toggleWatchlistSidebarWide}
+                  onCollapseSidebar={() => toggleWatchlistSidebar(false)}
+                  onSelectList={listId => void handleSelectWatchlistTab(listId)}
+                  onCreateList={handleCreateWatchlist}
+                  onRenameList={handleRenameWatchlist}
+                  onDeleteList={handleDeleteWatchlist}
+                  onSelectStock={item => void handleSelectWatchlistStock(item)}
+                  onAddStock={handleAddWatchlistStock}
+                  onUpdateItemNote={handleUpdateWatchlistItemNote}
+                  onRemoveStock={handleRemoveWatchlistStock}
+                  onRefresh={() => void loadWorkspaceData(true)}
+                  onSeedDefaults={handleSeedDefaults}
+                />
+              </div>
+            ) : (
+              <button
+                type="button"
+                className="finance-watchlist-rail-btn"
+                onClick={() => toggleWatchlistSidebar(true)}
+                title="Déplier les listes de suivi"
+                aria-label="Déplier les listes de suivi"
+              >
+                <PanelRightOpen size={16} />
+                <span className="finance-watchlist-rail-count">{watchlist.length}</span>
+                <span className="finance-watchlist-rail-label">Listes de suivi</span>
+              </button>
+            )}
+          </aside>
         </div>
 
         {/* Footer actions */}

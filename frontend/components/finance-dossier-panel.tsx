@@ -597,6 +597,113 @@ export function FinanceDossierPanel({
         ))}
       </div>
 
+      {/* Profil & Composition dédiés aux fonds / OPCVM (EUFUND) */}
+      {show("synthese") && dossier.fund_profile && (
+        <section id="dossier-fund-profile" className="finance-dossier-section">
+          <div className="finance-dossier-sec-head">
+            <h4>Profil &amp; Composition du fonds ({dossier.fund_profile.exchange})</h4>
+            {dossier.fund_profile.isin && (
+              <small className="finance-dossier-unit">ISIN : {dossier.fund_profile.isin}</small>
+            )}
+          </div>
+          <div className="finance-fund-profile-grid">
+            <div className="finance-dossier-kpi-chip">
+              <span>Société de gestion</span>
+              <strong>{dossier.fund_profile.fund_family || "—"}</strong>
+            </div>
+            <div className="finance-dossier-kpi-chip">
+              <span>Catégorie</span>
+              <strong>{dossier.fund_profile.category || dossier.fund_profile.fund_type || "—"}</strong>
+            </div>
+            <div className="finance-dossier-kpi-chip">
+              <span>Frais de gestion</span>
+              <strong>
+                {dossier.fund_profile.expense_ratio_pct != null
+                  ? `${dossier.fund_profile.expense_ratio_pct.toFixed(2)}%`
+                  : "—"}
+              </strong>
+            </div>
+            <div className="finance-dossier-kpi-chip">
+              <span>Encours / Actif net</span>
+              <strong>
+                {fmtBigCap(dossier.fund_profile.net_assets, dossier.fund_profile.currency || dossier.currency)}
+              </strong>
+            </div>
+            <div className="finance-dossier-kpi-chip">
+              <span>Création / Pays</span>
+              <strong>
+                {[dossier.fund_profile.inception_date, dossier.fund_profile.country].filter(Boolean).join(" · ") || "—"}
+              </strong>
+            </div>
+            {dossier.fund_profile.morningstar_rating != null && (
+              <div className="finance-dossier-kpi-chip">
+                <span>Note Morningstar</span>
+                <strong>{"★".repeat(Math.max(1, Math.min(5, Math.round(dossier.fund_profile.morningstar_rating))))}</strong>
+              </div>
+            )}
+          </div>
+          {(dossier.fund_profile.asset_allocation.length > 0 ||
+            dossier.fund_profile.sector_weights.length > 0 ||
+            dossier.fund_profile.world_regions.length > 0 ||
+            dossier.fund_profile.top_holdings.length > 0) && (
+            <div className="finance-fund-breakdowns">
+              {dossier.fund_profile.asset_allocation.length > 0 && (
+                <div className="finance-fund-breakdown-card">
+                  <strong>Allocation d&apos;actifs</strong>
+                  <ul>
+                    {dossier.fund_profile.asset_allocation.map(a => (
+                      <li key={a.name}>
+                        <span>{a.name}</span>
+                        <strong>{a.weight_pct != null ? `${a.weight_pct.toFixed(2)}%` : "—"}</strong>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {dossier.fund_profile.sector_weights.length > 0 && (
+                <div className="finance-fund-breakdown-card">
+                  <strong>Répartition sectorielle</strong>
+                  <ul>
+                    {dossier.fund_profile.sector_weights.map(s => (
+                      <li key={s.name}>
+                        <span>{s.name}</span>
+                        <strong>{s.weight_pct != null ? `${s.weight_pct.toFixed(2)}%` : "—"}</strong>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {dossier.fund_profile.world_regions.length > 0 && (
+                <div className="finance-fund-breakdown-card">
+                  <strong>Zones géographiques</strong>
+                  <ul>
+                    {dossier.fund_profile.world_regions.map(w => (
+                      <li key={w.name}>
+                        <span>{w.name}</span>
+                        <strong>{w.weight_pct != null ? `${w.weight_pct.toFixed(2)}%` : "—"}</strong>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {dossier.fund_profile.top_holdings.length > 0 && (
+                <div className="finance-fund-breakdown-card">
+                  <strong>Principales lignes</strong>
+                  <ul>
+                    {dossier.fund_profile.top_holdings.map(h => (
+                      <li key={`${h.code || ""}-${h.name}`}>
+                        <span>{h.name}</span>
+                        <strong>{h.weight_pct != null ? `${h.weight_pct.toFixed(2)}%` : "—"}</strong>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+      )}
+
       {/* Analyse fondamentale narrative (tous résultats via Gemini Hydrogen) */}
       {show("synthese") && (() => {
         const aiHistoryList: FinanceAiAnalysisRecord[] =

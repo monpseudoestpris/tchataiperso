@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 _logger = logging.getLogger("uvicorn.error")
 
 _TIMESERIES_URL = "https://query2.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/"
-_SYMBOL_RE = re.compile(r"^[A-Za-z0-9.\-=^]{1,20}$")
+_SYMBOL_RE = re.compile(r"^[A-Za-z0-9.\-=^]{1,32}$")
 _USER_AGENT = "Mozilla/5.0"
 
 # (clé canonique, libellé français)

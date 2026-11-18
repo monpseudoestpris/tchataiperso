@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ArrowDown, ArrowUp, Check, FolderPlus, LineChart, LoaderCircle, Pencil, Plus, RefreshCw, Sparkles, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowLeftRight, ArrowUp, Check, FolderPlus, LineChart, LoaderCircle, PanelRightClose, Pencil, Plus, RefreshCw, Sparkles, StickyNote, Trash2, X } from "lucide-react";
 
 import { FinanceHoverTip } from "@/components/finance-info-tip";
 import type { FinanceWatchlistMeta, WatchlistItem } from "@/lib/api";
@@ -14,12 +14,17 @@ type FinanceWatchlistTableProps = {
   items: WatchlistItem[];
   loading: boolean;
   selectedSymbol?: string | null;
+  inSidebar?: boolean;
+  sidebarWide?: boolean;
+  onToggleSidebarWide?: () => void;
+  onCollapseSidebar?: () => void;
   onSelectList: (listId: string) => void;
   onCreateList: (name: string) => Promise<void>;
   onRenameList: (listId: string, name: string) => Promise<void>;
   onDeleteList: (listId: string) => Promise<void>;
   onSelectStock: (item: WatchlistItem) => void;
   onAddStock: (query: string) => Promise<void>;
+  onUpdateItemNote?: (itemId: string, note: string) => Promise<void>;
   onRemoveStock: (id: string) => Promise<void>;
   onRefresh: () => void;
   onSeedDefaults: () => Promise<void>;
@@ -44,12 +49,17 @@ export function FinanceWatchlistTable({
   items,
   loading,
   selectedSymbol,
+  inSidebar = false,
+  sidebarWide = false,
+  onToggleSidebarWide,
+  onCollapseSidebar,
   onSelectList,
   onCreateList,
   onRenameList,
   onDeleteList,
   onSelectStock,
   onAddStock,
+  onUpdateItemNote,
   onRemoveStock,
   onRefresh,
   onSeedDefaults,
@@ -65,6 +75,9 @@ export function FinanceWatchlistTable({
   const [renamingListId, setRenamingListId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [listBusy, setListBusy] = useState(false);
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
+  const [noteDraft, setNoteDraft] = useState("");
+  const [savingNoteId, setSavingNoteId] = useState<string | null>(null);
 
   const activeList = useMemo(
     () => lists.find(l => l.id === activeListId) || lists[0] || null,
@@ -126,6 +139,28 @@ export function FinanceWatchlistTable({
     }
   }
 
+  function startEditNote(e: React.MouseEvent, item: WatchlistItem) {
+    e.stopPropagation();
+    setEditingNoteId(item.id);
+    setNoteDraft(item.note || "");
+  }
+
+  async function handleSaveNote(e: React.FormEvent, itemId: string) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!onUpdateItemNote || savingNoteId === itemId) return;
+    setSavingNoteId(itemId);
+    setAddError(null);
+    try {
+      await onUpdateItemNote(itemId, noteDraft.trim());
+      setEditingNoteId(null);
+    } catch (err: unknown) {
+      setAddError(err instanceof Error ? err.message : "Impossible d'enregistrer la note.");
+    } finally {
+      setSavingNoteId(null);
+    }
+  }
+
   function renderSortIcon(key: SortKey) {
     if (sortKey !== key) return null;
     return sortDir === "asc" ? <ArrowUp size={11} /> : <ArrowDown size={11} />;
@@ -178,7 +213,10 @@ export function FinanceWatchlistTable({
   }
 
   return (
-    <section className="finance-watchlist-section" aria-label="Tableau de suivi des actions">
+    <section
+      className={`finance-watchlist-section ${inSidebar ? "is-sidebar" : ""}`}
+      aria-label="Tableau de suivi des actions et fonds"
+    >
       <div className="finance-watchlist-header">
         <div className="finance-watchlist-title">
           <span className="chart-icon-wrap">
@@ -186,11 +224,38 @@ export function FinanceWatchlistTable({
           </span>
           <div>
             <strong>
-              {activeList ? `${activeList.name} (${items.length})` : `Mon suivi d'actions (${items.length})`}
+              {activeList ? `${activeList.name} (${items.length})` : `Mon suivi (${items.length})`}
             </strong>
-            <small>Cliquez sur une ligne pour ouvrir la courbe du cours et les indicateurs</small>
+            <small>Cliquez sur une ligne pour charger la courbe et les indicateurs</small>
           </div>
         </div>
+
+        {inSidebar && (
+          <div className="finance-wl-sidebar-head-btns">
+            {onToggleSidebarWide && (
+              <button
+                type="button"
+                className={`finance-wl-sidebar-icon-btn ${sidebarWide ? "active" : ""}`}
+                onClick={onToggleSidebarWide}
+                title={sidebarWide ? "Réduire la largeur de la barre" : "Élargir la barre pour voir toutes les colonnes"}
+                aria-label={sidebarWide ? "Réduire la largeur" : "Élargir la largeur"}
+              >
+                <ArrowLeftRight size={13} />
+              </button>
+            )}
+            {onCollapseSidebar && (
+              <button
+                type="button"
+                className="finance-wl-sidebar-icon-btn"
+                onClick={onCollapseSidebar}
+                title="Rétracter les listes sur la droite"
+                aria-label="Rétracter les listes de suivi"
+              >
+                <PanelRightClose size={14} />
+              </button>
+            )}
+          </div>
+        )}
 
         <div className="finance-watchlist-controls">
           <form className="finance-watchlist-add-form" onSubmit={handleAddSubmit}>
@@ -198,7 +263,7 @@ export function FinanceWatchlistTable({
               type="text"
               value={newQuery}
               onChange={e => setNewQuery(e.target.value)}
-              placeholder={`Ajouter à « ${activeList?.name || "Suivi"} » (ex. SAN.PA, TSLA)...`}
+              placeholder={`Ajouter à « ${activeList?.name || "Suivi"} » (ex. SAN.PA, TSLA, FR0013202132.EUFUND)...`}
               disabled={adding}
             />
             <button type="submit" disabled={adding || !newQuery.trim()}>
@@ -401,7 +466,11 @@ export function FinanceWatchlistTable({
                 const isSelected =
                   !!selectedSymbol &&
                   (selectedSymbol.toUpperCase() === item.symbol.toUpperCase() ||
+                    selectedSymbol.toUpperCase() === item.eod_ticker.toUpperCase() ||
                     selectedSymbol.toUpperCase() === item.yahoo_symbol.toUpperCase());
+                const isEufund =
+                  item.exchange.toUpperCase() === "EUFUND" ||
+                  item.eod_ticker.toUpperCase().endsWith(".EUFUND");
                 return (
                   <tr
                     key={item.id}
@@ -411,11 +480,86 @@ export function FinanceWatchlistTable({
                   >
                     <td>
                       <div className="finance-wl-identity">
-                        <strong>{item.name}</strong>
+                        <strong title={item.name}>{item.name}</strong>
                         <div className="finance-wl-meta">
                           <span className="finance-symbol-tag">{item.symbol}</span>
-                          {item.exchange && <span className="finance-wl-exch">{item.exchange}</span>}
+                          {isEufund ? (
+                            <span className="finance-wl-exch is-eufund">Fonds · EUFUND</span>
+                          ) : (
+                            item.exchange && <span className="finance-wl-exch">{item.exchange}</span>
+                          )}
                         </div>
+                        {editingNoteId === item.id ? (
+                          <form
+                            className="finance-wl-note-form"
+                            onSubmit={e => void handleSaveNote(e, item.id)}
+                            onClick={e => e.stopPropagation()}
+                          >
+                            <input
+                              type="text"
+                              value={noteDraft}
+                              onChange={e => setNoteDraft(e.target.value)}
+                              onKeyDown={e => {
+                                if (e.key === "Escape") {
+                                  e.stopPropagation();
+                                  setEditingNoteId(null);
+                                }
+                              }}
+                              placeholder="Note (nom du fonds, stratégie…)"
+                              maxLength={240}
+                              autoFocus
+                              disabled={savingNoteId === item.id}
+                            />
+                            <button
+                              type="submit"
+                              className="finance-wl-inline-ok"
+                              disabled={savingNoteId === item.id}
+                              title="Enregistrer la note"
+                              aria-label="Enregistrer la note"
+                            >
+                              {savingNoteId === item.id ? <LoaderCircle size={11} className="spin" /> : <Check size={11} />}
+                            </button>
+                            <button
+                              type="button"
+                              className="finance-wl-inline-cancel"
+                              onClick={e => {
+                                e.stopPropagation();
+                                setEditingNoteId(null);
+                              }}
+                              title="Annuler"
+                              aria-label="Annuler l'édition de note"
+                            >
+                              <X size={11} />
+                            </button>
+                          </form>
+                        ) : (
+                          <div className="finance-wl-note-row">
+                            {item.note ? (
+                              <button
+                                type="button"
+                                className="finance-wl-note-pill"
+                                onClick={e => startEditNote(e, item)}
+                                title={`${item.note} (cliquer pour modifier)`}
+                              >
+                                <StickyNote size={10} />
+                                <span>{item.note}</span>
+                              </button>
+                            ) : (
+                              onUpdateItemNote && (
+                                <button
+                                  type="button"
+                                  className="finance-wl-note-add-btn"
+                                  onClick={e => startEditNote(e, item)}
+                                  title="Ajouter une note personnelle"
+                                  aria-label={`Ajouter une note à ${item.name}`}
+                                >
+                                  <StickyNote size={10} />
+                                  <span>+ Note</span>
+                                </button>
+                              )
+                            )}
+                          </div>
+                        )}
                       </div>
                     </td>
                     <td className="is-num">

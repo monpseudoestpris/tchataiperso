@@ -60,6 +60,7 @@ def prepare_schema(settings: Settings) -> None:
         "0022_add_webpage_apps_and_bricks",
         "0023_add_agent_personas",
         "0024_add_finance_watchlists",
+        "0025_add_watchlist_item_note",
     }:
         raise SystemExit(f"Révision de base non reconnue : {current}")
 

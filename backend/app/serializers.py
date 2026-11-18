@@ -472,6 +472,7 @@ def watchlist_item_json(item: FinanceWatchlistItem) -> dict:
         "name": item.name,
         "exchange": item.exchange or "",
         "currency": item.currency or "EUR",
+        "note": getattr(item, "note", "") or "",
         "position": item.position,
         "created_at": stamp(item.created_at),
     }

@@ -1466,8 +1466,42 @@ export type FinancialDossier = {
   } | null;
   intrinsic_valuation?: IntrinsicValuationPayload | null;
   uncle_stock_scores?: UncleStockScoresPayload | null;
+  fund_profile?: FundProfileData | null;
   ai_analysis: FinanceAiAnalysisRecord | null;
   ai_history?: FinanceAiAnalysisRecord[];
+};
+
+export type FundWeightedEntry = {
+  name: string;
+  code?: string;
+  weight_pct: number | null;
+  sector?: string;
+  country?: string;
+};
+
+export type FundProfileData = {
+  is_fund: boolean;
+  name: string;
+  isin: string | null;
+  exchange: string;
+  fund_type: string;
+  category: string | null;
+  fund_family: string | null;
+  currency: string | null;
+  country: string | null;
+  inception_date: string | null;
+  expense_ratio_pct: number | null;
+  net_assets: number | null;
+  yield_pct: number | null;
+  morningstar_rating: number | null;
+  morningstar_category: string | null;
+  beta: number | null;
+  description: string | null;
+  website: string | null;
+  asset_allocation: FundWeightedEntry[];
+  sector_weights: FundWeightedEntry[];
+  world_regions: FundWeightedEntry[];
+  top_holdings: FundWeightedEntry[];
 };
 
 export interface UncleStockScoreComponent {
@@ -1823,6 +1857,65 @@ export async function searchFinanceCatalog(
   return res.items || [];
 }
 
+export type EodhdEufundItem = {
+  symbol: string;
+  eod_ticker: string;
+  name: string;
+  isin: string | null;
+  country: string;
+  currency: string;
+  type: string;
+  exchange: string;
+  previous_close?: number | null;
+  cached_in_warehouse: boolean;
+};
+
+export type EodhdEufundCatalogResponse = {
+  exchange: string;
+  total: number;
+  matched: number;
+  offset: number;
+  limit: number;
+  source: string;
+  synced_at: string | null;
+  currencies: string[];
+  countries: string[];
+  items: EodhdEufundItem[];
+};
+
+export type EodhdFundSearchResponse = {
+  query: string;
+  source: string;
+  items: EodhdEufundItem[];
+};
+
+export async function fetchEodhdEufundCatalog(params?: {
+  q?: string;
+  currency?: string;
+  country?: string;
+  limit?: number;
+  offset?: number;
+  refresh?: boolean;
+}): Promise<EodhdEufundCatalogResponse> {
+  const qs = new URLSearchParams();
+  if (params?.q?.trim()) qs.set("q", params.q.trim());
+  if (params?.currency?.trim()) qs.set("currency", params.currency.trim());
+  if (params?.country?.trim()) qs.set("country", params.country.trim());
+  if (params?.limit != null) qs.set("limit", String(params.limit));
+  if (params?.offset != null && params.offset > 0) qs.set("offset", String(params.offset));
+  if (params?.refresh) qs.set("refresh", "true");
+  const suffix = qs.toString();
+  return api<EodhdEufundCatalogResponse>(`/finance/funds/eufund${suffix ? `?${suffix}` : ""}`);
+}
+
+export async function searchEodhdFundsLive(
+  query: string,
+  limit = 25,
+): Promise<EodhdFundSearchResponse> {
+  const qs = new URLSearchParams({ q: query.trim(), limit: String(limit) });
+  return api<EodhdFundSearchResponse>(`/finance/funds/search?${qs.toString()}`);
+}
+
 export type FinanceWatchlistMeta = {
   id: string;
   name: string;
@@ -1841,6 +1934,7 @@ export type WatchlistItem = {
   name: string;
   exchange: string;
   currency: string;
+  note?: string;
   position: number;
   price: number | null;
   change_1d_pct: number | null;
@@ -1909,6 +2003,13 @@ export async function seedDefaultWatchlist(listId?: string | null): Promise<Watc
 
 export async function deleteWatchlistItem(itemId: string): Promise<void> {
   return api<void>(`/finance/watchlist/${itemId}`, { method: "DELETE" });
+}
+
+export async function updateWatchlistItemNote(itemId: string, note: string): Promise<WatchlistItem> {
+  return api<WatchlistItem>(`/finance/watchlist/${encodeURIComponent(itemId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ note }),
+  });
 }
 
 export type CustomIndicatorGuideLine = {

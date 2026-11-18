@@ -1128,6 +1128,7 @@ _HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{3,8}$")
 class AddWatchlistItemRequest(BaseModel):
     query: str = Field(min_length=1, max_length=120)
     list_id: str | None = Field(default=None, max_length=36)
+    note: str = Field(default="", max_length=240)
 
     @field_validator("query")
     @classmethod
@@ -1136,6 +1137,20 @@ class AddWatchlistItemRequest(BaseModel):
         if not cleaned:
             raise ValueError("Veuillez saisir un nom d'action ou un ticker.")
         return cleaned
+
+    @field_validator("note")
+    @classmethod
+    def trim_note(cls, value: str) -> str:
+        return (value or "").strip()[:240]
+
+
+class UpdateWatchlistItemNoteRequest(BaseModel):
+    note: str = Field(default="", max_length=240)
+
+    @field_validator("note")
+    @classmethod
+    def trim_note(cls, value: str) -> str:
+        return (value or "").strip()[:240]
 
 
 class CreateWatchlistRequest(BaseModel):

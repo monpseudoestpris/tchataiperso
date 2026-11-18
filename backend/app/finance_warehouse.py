@@ -65,6 +65,23 @@ CREATE INDEX IF NOT EXISTS idx_fin_idx_const_sym ON finance_index_constituents (
 CREATE INDEX IF NOT EXISTS idx_fin_idx_const_eod ON finance_index_constituents (eod_ticker);
 CREATE INDEX IF NOT EXISTS idx_fin_idx_const_name ON finance_index_constituents (index_code, name);
 
+CREATE TABLE IF NOT EXISTS finance_exchange_symbols (
+    exchange_code TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    eod_ticker TEXT NOT NULL,
+    name TEXT NOT NULL,
+    isin TEXT,
+    country TEXT,
+    currency TEXT,
+    type TEXT,
+    fetched_at REAL NOT NULL,
+    PRIMARY KEY (exchange_code, symbol)
+) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS idx_fin_exch_sym_name ON finance_exchange_symbols (exchange_code, name);
+CREATE INDEX IF NOT EXISTS idx_fin_exch_sym_isin ON finance_exchange_symbols (exchange_code, isin);
+CREATE INDEX IF NOT EXISTS idx_fin_exch_sym_curr ON finance_exchange_symbols (exchange_code, currency);
+
 CREATE TABLE IF NOT EXISTS finance_eod_bars (
     symbol TEXT NOT NULL,
     bar_date TEXT NOT NULL,
@@ -124,6 +141,7 @@ CREATE TABLE IF NOT EXISTS finance_user_watchlist_items (
     name TEXT NOT NULL,
     exchange TEXT NOT NULL DEFAULT '',
     currency TEXT NOT NULL DEFAULT 'EUR',
+    note TEXT NOT NULL DEFAULT '',
     position INTEGER NOT NULL DEFAULT 0,
     created_at TEXT,
     UNIQUE (list_id, symbol)
@@ -178,6 +196,12 @@ def init_warehouse(db_path: Path) -> None:
         conn.execute("PRAGMA cache_size=-32768;")
         conn.execute("PRAGMA mmap_size=268435456;")
         conn.executescript(_SCHEMA_SQL)
+        wl_cols = {
+            str(r[1])
+            for r in conn.execute("PRAGMA table_info(finance_user_watchlist_items)").fetchall()
+        }
+        if "note" not in wl_cols:
+            conn.execute("ALTER TABLE finance_user_watchlist_items ADD COLUMN note TEXT NOT NULL DEFAULT ''")
         conn.commit()
     _INITIALIZED_PATHS.add(key)
 
@@ -226,6 +250,24 @@ def resolve_canonical_symbol(db_path: Path, symbol: str) -> str:
     except Exception as exc:
         _logger.debug("resolve_canonical_symbol fallback (%s): %s", clean, exc)
     return clean
+
+
+def get_instrument_meta(db_path: Path, symbol: str) -> dict[str, Any] | None:
+    """Retourne les métadonnées stockées d'un instrument depuis `finance_instruments`."""
+    clean = _norm_sym(symbol)
+    if not clean or not db_path.exists():
+        return None
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT symbol, eod_ticker, yahoo_symbol, isin, short_name, long_name, exchange, currency, country, sector, industry
+            FROM finance_instruments
+            WHERE symbol = ? OR eod_ticker = ? OR yahoo_symbol = ?
+            LIMIT 1
+            """,
+            (clean, clean, clean),
+        ).fetchone()
+    return dict(row) if row else None
 
 
 def upsert_instrument(db_path: Path, meta: dict[str, Any]) -> None:
@@ -877,8 +919,8 @@ def sync_user_watchlists_to_warehouse(
             conn.executemany(
                 """
                 INSERT OR REPLACE INTO finance_user_watchlist_items
-                    (id, user_id, list_id, symbol, yahoo_symbol, eod_ticker, name, exchange, currency, position, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (id, user_id, list_id, symbol, yahoo_symbol, eod_ticker, name, exchange, currency, note, position, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
@@ -891,6 +933,7 @@ def sync_user_watchlists_to_warehouse(
                         str(it.get("name") or it["symbol"]),
                         str(it.get("exchange") or ""),
                         str(it.get("currency") or "EUR"),
+                        str(it.get("note") or "")[:240],
                         int(it.get("position") or 0),
                         str(it.get("created_at") or _utc_iso()),
                     )
@@ -917,7 +960,7 @@ def load_user_watchlists_from_warehouse(db_path: Path, user_id: str) -> dict[str
         ).fetchall()
         item_rows = conn.execute(
             """
-            SELECT id, user_id, list_id, symbol, yahoo_symbol, eod_ticker, name, exchange, currency, position, created_at
+            SELECT id, user_id, list_id, symbol, yahoo_symbol, eod_ticker, name, exchange, currency, note, position, created_at
             FROM finance_user_watchlist_items
             WHERE user_id = ?
             ORDER BY position ASC, created_at ASC
@@ -1121,3 +1164,217 @@ def has_ai_analysis_for(
             (sym, kind.strip().lower(), expert_id.strip()),
         ).fetchone()
     return bool(row)
+
+
+def replace_exchange_symbols(
+    db_path: Path,
+    exchange_code: str,
+    rows: list[dict[str, Any]],
+) -> int:
+    """Remplace atomiquement le catalogue des symboles d'un marché EODHD (ex. EUFUND)."""
+    exch = _norm_sym(exchange_code)
+    if not exch or not rows:
+        return 0
+    now_ts = time.time()
+    payload: list[tuple[Any, ...]] = []
+    seen: set[str] = set()
+    for row in rows:
+        sym = _norm_sym(str(row.get("symbol") or row.get("code") or ""))
+        if not sym or sym in seen:
+            continue
+        seen.add(sym)
+        eod_t = _norm_sym(str(row.get("eod_ticker") or f"{sym}.{exch}"))
+        name = str(row.get("name") or sym).strip() or sym
+        isin = _norm_sym(str(row.get("isin") or "")) or None
+        country = str(row.get("country") or "").strip() or None
+        currency = _norm_sym(str(row.get("currency") or "")) or None
+        itype = str(row.get("type") or "").strip() or None
+        payload.append((exch, sym, eod_t, name, isin, country, currency, itype, now_ts))
+
+    if not payload:
+        return 0
+
+    with _connect(db_path) as conn:
+        conn.execute("DELETE FROM finance_exchange_symbols WHERE exchange_code = ?", (exch,))
+        conn.executemany(
+            """
+            INSERT OR REPLACE INTO finance_exchange_symbols (
+                exchange_code, symbol, eod_ticker, name, isin, country, currency, type, fetched_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            payload,
+        )
+    return len(payload)
+
+
+def get_exchange_catalog_meta(db_path: Path, exchange_code: str) -> dict[str, Any]:
+    """Retourne les métadonnées (total, fraîcheur, devises, pays) d'un catalogue de marché."""
+    exch = _norm_sym(exchange_code)
+    if not exch or not db_path.exists():
+        return {"total": 0, "fetched_at": None, "currencies": [], "countries": []}
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS cnt, MAX(fetched_at) AS max_ts FROM finance_exchange_symbols WHERE exchange_code = ?",
+            (exch,),
+        ).fetchone()
+        total = int((row["cnt"] if row else 0) or 0)
+        fetched_at = float(row["max_ts"]) if (row and row["max_ts"] is not None) else None
+        if total == 0:
+            return {"total": 0, "fetched_at": None, "currencies": [], "countries": []}
+        curr_rows = conn.execute(
+            """
+            SELECT currency, COUNT(*) AS c
+            FROM finance_exchange_symbols
+            WHERE exchange_code = ? AND currency IS NOT NULL AND currency != ''
+            GROUP BY currency
+            ORDER BY c DESC, currency ASC
+            LIMIT 40
+            """,
+            (exch,),
+        ).fetchall()
+        country_rows = conn.execute(
+            """
+            SELECT country, COUNT(*) AS c
+            FROM finance_exchange_symbols
+            WHERE exchange_code = ? AND country IS NOT NULL AND country != ''
+            GROUP BY country
+            ORDER BY c DESC, country ASC
+            LIMIT 60
+            """,
+            (exch,),
+        ).fetchall()
+    return {
+        "total": total,
+        "fetched_at": fetched_at,
+        "currencies": [str(r["currency"]) for r in curr_rows],
+        "countries": [str(r["country"]) for r in country_rows],
+    }
+
+
+def search_exchange_symbols(
+    db_path: Path,
+    exchange_code: str,
+    *,
+    query: str = "",
+    currency: str = "",
+    country: str = "",
+    limit: int = 60,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """Recherche et pagine les instruments d'un catalogue EODHD stocké (ex. EUFUND)."""
+    exch = _norm_sym(exchange_code)
+    if not exch or not db_path.exists():
+        return {"matched": 0, "items": []}
+
+    clauses = ["exchange_code = ?"]
+    params: list[Any] = [exch]
+
+    clean_curr = _norm_sym(currency)
+    if clean_curr:
+        clauses.append("currency = ?")
+        params.append(clean_curr)
+
+    clean_country = (country or "").strip()
+    if clean_country:
+        clauses.append("LOWER(COALESCE(country, '')) = ?")
+        params.append(clean_country.lower())
+
+    clean_q = (query or "").strip()
+    if clean_q:
+        terms = [t for t in clean_q.upper().split() if t][:5]
+        for term in terms:
+            like = f"%{term}%"
+            clauses.append(
+                "(UPPER(name) LIKE ? OR UPPER(symbol) LIKE ? OR UPPER(eod_ticker) LIKE ? OR UPPER(COALESCE(isin, '')) LIKE ?)"
+            )
+            params.extend([like, like, like, like])
+
+    where_sql = " AND ".join(clauses)
+    safe_limit = max(1, min(300, int(limit or 60)))
+    safe_offset = max(0, int(offset or 0))
+    cached_syms = get_cached_symbols_set(db_path)
+
+    with _connect(db_path) as conn:
+        matched_row = conn.execute(
+            f"SELECT COUNT(*) AS cnt FROM finance_exchange_symbols WHERE {where_sql}",
+            params,
+        ).fetchone()
+        matched = int((matched_row["cnt"] if matched_row else 0) or 0)
+
+        order_sql = "ORDER BY name ASC, symbol ASC"
+        order_params: list[Any] = []
+        if clean_q:
+            q_up = clean_q.upper()
+            order_sql = (
+                "ORDER BY CASE "
+                "WHEN UPPER(symbol) = ? OR UPPER(eod_ticker) = ? OR UPPER(COALESCE(isin, '')) = ? THEN 0 "
+                "WHEN UPPER(name) LIKE ? THEN 1 "
+                "ELSE 2 END, name ASC, symbol ASC"
+            )
+            order_params = [q_up, q_up, q_up, f"{q_up}%"]
+
+        rows = conn.execute(
+            f"""
+            SELECT exchange_code, symbol, eod_ticker, name, isin, country, currency, type
+            FROM finance_exchange_symbols
+            WHERE {where_sql}
+            {order_sql}
+            LIMIT ? OFFSET ?
+            """,
+            [*params, *order_params, safe_limit, safe_offset],
+        ).fetchall()
+
+    items: list[dict[str, Any]] = []
+    for r in rows:
+        sym = str(r["symbol"]).upper()
+        eod_t = str(r["eod_ticker"]).upper()
+        items.append(
+            {
+                "symbol": sym,
+                "eod_ticker": eod_t,
+                "name": str(r["name"] or sym),
+                "isin": r["isin"] or None,
+                "country": str(r["country"] or ""),
+                "currency": str(r["currency"] or ""),
+                "type": str(r["type"] or "Fund"),
+                "exchange": str(r["exchange_code"] or exch),
+                "cached_in_warehouse": sym in cached_syms or eod_t in cached_syms,
+            }
+        )
+    return {"matched": matched, "items": items}
+
+
+def lookup_exchange_symbol(
+    db_path: Path,
+    ticker_or_isin: str,
+    exchange_code: str = "EUFUND",
+) -> dict[str, Any] | None:
+    """Résout un code, ticker EOD ou ISIN depuis `finance_exchange_symbols`."""
+    clean = _norm_sym(ticker_or_isin)
+    exch = _norm_sym(exchange_code)
+    if not clean or not exch or not db_path.exists():
+        return None
+    bare = clean.split(".", 1)[0]
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT exchange_code, symbol, eod_ticker, name, isin, country, currency, type
+            FROM finance_exchange_symbols
+            WHERE exchange_code = ?
+              AND (UPPER(eod_ticker) = ? OR UPPER(symbol) = ? OR UPPER(COALESCE(isin, '')) = ?)
+            LIMIT 1
+            """,
+            (exch, clean, bare, bare),
+        ).fetchone()
+    if not row:
+        return None
+    return {
+        "symbol": str(row["symbol"]).upper(),
+        "eod_ticker": str(row["eod_ticker"]).upper(),
+        "name": str(row["name"] or row["symbol"]),
+        "isin": row["isin"] or None,
+        "country": str(row["country"] or ""),
+        "currency": str(row["currency"] or ""),
+        "type": str(row["type"] or "Fund"),
+        "exchange": str(row["exchange_code"] or exch),
+    }

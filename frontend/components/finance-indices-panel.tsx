@@ -26,8 +26,10 @@ export function FinanceIndicesStrip({
   activeCode,
   loadingIndex,
   catalogOpen,
+  eufundCatalogOpen,
   onToggleIndex,
   onToggleCatalog,
+  onToggleEufundCatalog,
   onOpenMinorTier,
 }: {
   indices: PrincipalIndexInfo[];
@@ -35,8 +37,10 @@ export function FinanceIndicesStrip({
   activeCode: string | null;
   loadingIndex: boolean;
   catalogOpen: boolean;
+  eufundCatalogOpen?: boolean;
   onToggleIndex: (code: string) => void;
   onToggleCatalog: () => void;
+  onToggleEufundCatalog?: () => void;
   onOpenMinorTier?: () => void;
 }) {
   const [tierView, setTierView] = useState<"major" | "minor" | "all">("major");
@@ -97,6 +101,17 @@ export function FinanceIndicesStrip({
           <Search size={11} />
           <span>Catalogue EODHD (.INDX)</span>
         </button>
+        {onToggleEufundCatalog && (
+          <button
+            type="button"
+            className={`finance-tf-btn finance-indx-catalog-btn ${eufundCatalogOpen ? "active" : ""}`}
+            onClick={onToggleEufundCatalog}
+            title="Parcourir les fonds européens EODHD (/exchange-symbol-list/EUFUND) et rechercher par ISIN"
+          >
+            <Search size={11} />
+            <span>Fonds (.EUFUND)</span>
+          </button>
+        )}
         {warehouse && warehouse.instruments_count > 0 && (
           <span
             className="finance-warehouse-pill"

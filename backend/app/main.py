@@ -177,6 +177,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 if "list_id" not in wl_columns:
                     conn.execute(text("ALTER TABLE finance_watchlist_items ADD COLUMN list_id VARCHAR(36)"))
                     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_finance_watchlist_items_list_id ON finance_watchlist_items (list_id)"))
+                if "note" not in wl_columns:
+                    conn.execute(text("ALTER TABLE finance_watchlist_items ADD COLUMN note VARCHAR(240) NOT NULL DEFAULT ''"))
                 if has_old_user_sym_uq:
                     if settings.db_url.startswith("sqlite"):
                         # SQLite ne permet pas DROP CONSTRAINT : reconstruire la table proprement en gardant les lignes
@@ -192,6 +194,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                 name VARCHAR(200) NOT NULL,
                                 exchange VARCHAR(80) NOT NULL DEFAULT '',
                                 currency VARCHAR(16) NOT NULL DEFAULT 'EUR',
+                                note VARCHAR(240) NOT NULL DEFAULT '',
                                 position INTEGER NOT NULL DEFAULT 0,
                                 created_at DATETIME NOT NULL,
                                 CONSTRAINT uq_finance_watchlist_list_symbol UNIQUE (list_id, symbol)
@@ -201,8 +204,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         conn.execute(text(
                             """
                             INSERT INTO finance_watchlist_items_new
-                                (id, user_id, list_id, symbol, yahoo_symbol, eod_ticker, name, exchange, currency, position, created_at)
-                            SELECT id, user_id, list_id, symbol, yahoo_symbol, eod_ticker, name, exchange, currency, position, created_at
+                                (id, user_id, list_id, symbol, yahoo_symbol, eod_ticker, name, exchange, currency, note, position, created_at)
+                            SELECT id, user_id, list_id, symbol, yahoo_symbol, eod_ticker, name, exchange, currency, COALESCE(note, ''), position, created_at
                             FROM finance_watchlist_items
                             """
                         ))

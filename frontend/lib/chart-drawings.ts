@@ -6,6 +6,8 @@ export type ChartDrawing = {
   id: string;
   type: "line" | "hline" | "rect";
   color: string;
+  /** Panneau cible ("price", "rsi", "macd", "custom:<id>"...) ; défaut "price" */
+  target?: string;
   /** Date ISO ("YYYY-MM-DD" ou "YYYY-MM-DD HH:MM") du 1er point */
   t1: string;
   p1: number;

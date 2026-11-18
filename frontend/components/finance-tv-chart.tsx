@@ -9,6 +9,7 @@ import {
   type IChartApi,
   type ISeriesApi,
   type Logical,
+  type SeriesType,
   type Time,
   type UTCTimestamp,
 } from "lightweight-charts";
@@ -107,12 +108,26 @@ type FinanceTvChartProps = {
 type ProjectedDrawing = {
   id: string;
   type: "line" | "hline" | "rect";
+  target: string;
+  paneTop: number;
+  paneHeight: number;
   color: string;
   x1: number;
   y1: number;
   x2: number;
   y2: number;
   priceLabel?: string;
+};
+
+type PaneBinding = {
+  target: string;
+  paneIndex: number;
+  series: ISeriesApi<SeriesType>;
+};
+
+type MeasuredPane = PaneBinding & {
+  top: number;
+  height: number;
 };
 
 /** Graphique en chandeliers (TradingView lightweight-charts) avec indicateurs natifs, personnalisés et outils de dessin. */
@@ -129,6 +144,7 @@ export function FinanceTvChart({
   const svgRef = useRef<SVGSVGElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candlesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const paneBindingsRef = useRef<PaneBinding[]>([]);
   const rowsRef = useRef<EodBar[]>([]);
   const [active, setActive] = useState<Set<IndicatorKey>>(new Set(["sma20", "volume", "rsi"]));
   const [activeCustom, setActiveCustom] = useState<Set<string>>(new Set());
@@ -262,11 +278,11 @@ export function FinanceTvChart({
       return s;
     };
 
-    const plotCustomSeries = (ind: CustomIndicator, values: Num[], paneIndex: number) => {
+    const plotCustomSeries = (ind: CustomIndicator, values: Num[], paneIndex: number): ISeriesApi<SeriesType> | null => {
       const pts = pick(times, values);
-      if (pts.length === 0) return;
+      if (pts.length === 0) return null;
 
-      let primarySeries: ReturnType<typeof addLine> | null = null;
+      let primarySeries: ISeriesApi<SeriesType> | null = null;
       if (ind.series_type === "histogram") {
         const hist = chart.addSeries(
           HistogramSeries,
@@ -280,7 +296,7 @@ export function FinanceTvChart({
             color: ind.pane === "oscillator" ? (p.value >= 0 ? `${ind.color}cc` : "#f43f5ecc") : ind.color,
           })),
         );
-        primarySeries = hist as unknown as ReturnType<typeof addLine>;
+        primarySeries = hist;
       } else if (ind.series_type === "dots") {
         const dots = chart.addSeries(
           LineSeries,
@@ -317,7 +333,7 @@ export function FinanceTvChart({
                   customFill,
                   (ind.guide_lines || []).map(g => g.value),
                 );
-          attachZoneFill(primarySeries, times, specs, customFill);
+          attachZoneFill(primarySeries as ReturnType<typeof addLine>, times, specs, customFill);
         }
       }
 
@@ -335,6 +351,7 @@ export function FinanceTvChart({
           }
         }
       }
+      return primarySeries;
     };
 
     if (active.has("sma20")) {
@@ -445,6 +462,7 @@ export function FinanceTvChart({
       }
     }
 
+    const bindings: PaneBinding[] = [{ target: "price", paneIndex: 0, series: candles }];
     let pane = 1;
     const guides = (line: ReturnType<typeof addLine>, levels: [number, string][]) =>
       levels.forEach(([price, color]) =>
@@ -466,6 +484,7 @@ export function FinanceTvChart({
           buildOscillatorBandFillSpecs(rsiVals, params.rsi.fill, params.rsi.overbought, params.rsi.oversold),
           params.rsi.fill,
         );
+        bindings.push({ target: "rsi", paneIndex: pane, series: s });
       } else if (key === "macd") {
         const m = macd(closes, params.macd.fast, params.macd.slow, params.macd.signal);
         const hist = chart.addSeries(HistogramSeries, { priceLineVisible: false, lastValueVisible: false }, pane);
@@ -477,12 +496,14 @@ export function FinanceTvChart({
         const macdSeries = addLine(m.line, "#3b82f6", pane, "MACD");
         addLine(m.signal, "#f59e0b", pane, "Signal");
         attachZoneFill(macdSeries, times, buildDualCurveFillSpecs(m.line, m.signal, params.macd.fill, 0), params.macd.fill);
+        bindings.push({ target: "macd", paneIndex: pane, series: macdSeries });
       } else if (key === "rex") {
         const r = rex(opens, highs, lows, closes, params.rex.period, params.rex.signal);
         const rexSeries = addLine(r.rex, "#3b82f6", pane, "REX");
         guides(rexSeries, [[0, "#94a3b8"]]);
         addLine(r.signal, "#f59e0b", pane, "Signal");
         attachZoneFill(rexSeries, times, buildDualCurveFillSpecs(r.rex, r.signal, params.rex.fill, 0), params.rex.fill);
+        bindings.push({ target: "rex", paneIndex: pane, series: rexSeries });
       } else if (key === "isopressure") {
         const ipCfg = params.isopressure;
         const ip = isoPressure(highs, lows, closes, volumes, ipCfg);
@@ -523,6 +544,11 @@ export function FinanceTvChart({
               ? buildDualCurveFillSpecs(visibleCurves[0], visibleCurves[1], ipCfg.fill, 0)
               : buildThresholdSplitFillSpecs(visibleCurves[0], ipCfg.fill, 0);
           attachZoneFill(firstIpSeries, times, specs, ipCfg.fill);
+          bindings.push({ target: "isopressure", paneIndex: pane, series: firstIpSeries });
+        } else {
+          // Si toutes les courbes sont masquées, éviter de décaler l'index des panneaux suivants
+          const placeholder = addLine(ip.raw, "transparent", pane);
+          bindings.push({ target: "isopressure", paneIndex: pane, series: placeholder });
         }
       } else if (key === "stoch") {
         const st = stochastic(highs, lows, closes, params.stoch.period, params.stoch.signal);
@@ -534,25 +560,30 @@ export function FinanceTvChart({
             ? buildOscillatorBandFillSpecs(st.k, params.stoch.fill, 80, 20)
             : buildDualCurveFillSpecs(st.k, st.d, params.stoch.fill, 50);
         attachZoneFill(kSeries, times, stochSpecs, params.stoch.fill);
+        bindings.push({ target: "stoch", paneIndex: pane, series: kSeries });
       } else if (key === "willr") {
         const wrVals = williamsR(highs, lows, closes, params.willr.period);
         const s = addLine(wrVals, "#14b8a6", pane, "%R");
         guides(s, [[-20, "#f43f5e"], [-80, "#10b981"]]);
         attachZoneFill(s, times, buildOscillatorBandFillSpecs(wrVals, params.willr.fill, -20, -80), params.willr.fill);
+        bindings.push({ target: "willr", paneIndex: pane, series: s });
       } else if (key === "cci") {
         const cciVals = cci(highs, lows, closes, params.cci.period);
         const s = addLine(cciVals, "#6366f1", pane, "CCI");
         guides(s, [[100, "#f43f5e"], [-100, "#10b981"]]);
         attachZoneFill(s, times, buildOscillatorBandFillSpecs(cciVals, params.cci.fill, 100, -100), params.cci.fill);
+        bindings.push({ target: "cci", paneIndex: pane, series: s });
       } else if (key === "roc") {
         const rocVals = roc(closes, params.roc.period);
         const s = addLine(rocVals, "#0ea5e9", pane, "ROC");
         guides(s, [[0, "#94a3b8"]]);
         attachZoneFill(s, times, buildThresholdSplitFillSpecs(rocVals, params.roc.fill, 0), params.roc.fill);
+        bindings.push({ target: "roc", paneIndex: pane, series: s });
       } else if (key === "atr") {
         const atrVals = atr(highs, lows, closes, params.atr.period);
         const s = addLine(atrVals, "#f97316", pane, "ATR");
         attachZoneFill(s, times, buildThresholdSplitFillSpecs(atrVals, params.atr.fill, 0), params.atr.fill);
+        bindings.push({ target: "atr", paneIndex: pane, series: s });
       } else if (key === "adx") {
         const a = adx(highs, lows, closes, params.adx.period);
         const adxSeries = addLine(a.adx, "#0f172a", pane, "ADX");
@@ -564,6 +595,7 @@ export function FinanceTvChart({
             ? buildThresholdSplitFillSpecs(a.adx, params.adx.fill, 25)
             : buildDualCurveFillSpecs(a.plusDi, a.minusDi, params.adx.fill, 25);
         attachZoneFill(adxSeries, times, adxSpecs, params.adx.fill);
+        bindings.push({ target: "adx", paneIndex: pane, series: adxSeries });
       } else if (key === "obv") {
         const obvVals = obv(closes, volumes);
         const obvSeries = addLine(obvVals, "#a855f7", pane, "OBV");
@@ -572,6 +604,7 @@ export function FinanceTvChart({
           20,
         );
         attachZoneFill(obvSeries, times, buildDualCurveFillSpecs(obvVals, obvSignal, params.obv.fill, 0), params.obv.fill);
+        bindings.push({ target: "obv", paneIndex: pane, series: obvSeries });
       }
       pane++;
     }
@@ -581,92 +614,155 @@ export function FinanceTvChart({
       if (ind.pane !== "oscillator" || !activeCustom.has(ind.id)) continue;
       const res = customResults[ind.id];
       if (res?.values) {
-        plotCustomSeries(ind, res.values, pane);
-        pane++;
+        const primary = plotCustomSeries(ind, res.values, pane);
+        if (primary) {
+          bindings.push({ target: `custom:${ind.id}`, paneIndex: pane, series: primary });
+          pane++;
+        }
       }
     }
 
+    paneBindingsRef.current = bindings;
     chart.timeScale().fitContent();
 
-    const updateSizeAndProjections = () => {
-      const size = chart.paneSize(0);
-      setOverlaySize({ width: size.width, height: size.height });
-    };
-    updateSizeAndProjections();
-
-    const ro = new ResizeObserver(updateSizeAndProjections);
-    ro.observe(el);
-
     return () => {
-      ro.disconnect();
       chart.remove();
       chartRef.current = null;
       candlesRef.current = null;
+      paneBindingsRef.current = [];
     };
   }, [bars, active, activeCustom, customIndicators, customResults, dark, params, customFills]);
 
-  const projectDrawing = useCallback((d: ChartDrawing, paneWidth: number): ProjectedDrawing | null => {
+  const measurePanes = useCallback((): MeasuredPane[] => {
     const chart = chartRef.current;
-    const candles = candlesRef.current;
-    const rows = rowsRef.current;
-    if (!chart || !candles || rows.length === 0) return null;
+    const containerEl = containerRef.current;
+    const bindings = paneBindingsRef.current;
+    if (!chart || !containerEl || bindings.length === 0) return [];
+    const containerTop = containerEl.getBoundingClientRect().top;
+    const panes = chart.panes();
+    const out: MeasuredPane[] = [];
+    for (const b of bindings) {
+      const paneEl = panes[b.paneIndex]?.getHTMLElement();
+      if (!paneEl) continue;
+      const rect = paneEl.getBoundingClientRect();
+      if (rect.height <= 0) continue;
+      out.push({ ...b, top: rect.top - containerTop, height: rect.height });
+    }
+    return out;
+  }, []);
 
-    const y1 = candles.priceToCoordinate(d.p1);
-    if (y1 == null) return null;
+  const projectDrawing = useCallback(
+    (d: ChartDrawing, paneWidth: number, measured: MeasuredPane[]): ProjectedDrawing | null => {
+      const chart = chartRef.current;
+      const rows = rowsRef.current;
+      if (!chart || rows.length === 0) return null;
+      const targetKey = d.target || "price";
+      const mp = measured.find(p => p.target === targetKey);
+      if (!mp || mp.height <= 0) return null;
 
-    if (d.type === "hline") {
+      const y1Local = mp.series.priceToCoordinate(d.p1);
+      if (y1Local == null) return null;
+      const y1 = mp.top + y1Local;
+
+      if (d.type === "hline") {
+        return {
+          id: d.id,
+          type: "hline",
+          target: targetKey,
+          paneTop: mp.top,
+          paneHeight: mp.height,
+          color: d.color,
+          x1: 0,
+          y1,
+          x2: paneWidth,
+          y2: y1,
+          priceLabel: d.p1.toFixed(2),
+        };
+      }
+
+      const idx1 = dateToLogicalIndex(rows, d.t1);
+      const idx2 = dateToLogicalIndex(rows, d.t2);
+      if (idx1 == null || idx2 == null) return null;
+      const x1 = chart.timeScale().logicalToCoordinate(idx1 as Logical);
+      const x2 = chart.timeScale().logicalToCoordinate(idx2 as Logical);
+      const y2Local = mp.series.priceToCoordinate(d.p2);
+      if (x1 == null || x2 == null || y2Local == null) return null;
+
       return {
         id: d.id,
-        type: "hline",
+        type: d.type,
+        target: targetKey,
+        paneTop: mp.top,
+        paneHeight: mp.height,
         color: d.color,
-        x1: 0,
+        x1,
         y1,
-        x2: paneWidth,
-        y2: y1,
-        priceLabel: d.p1.toFixed(2),
+        x2,
+        y2: mp.top + y2Local,
       };
-    }
-
-    const idx1 = dateToLogicalIndex(rows, d.t1);
-    const idx2 = dateToLogicalIndex(rows, d.t2);
-    if (idx1 == null || idx2 == null) return null;
-    const x1 = chart.timeScale().logicalToCoordinate(idx1 as Logical);
-    const x2 = chart.timeScale().logicalToCoordinate(idx2 as Logical);
-    const y2 = candles.priceToCoordinate(d.p2);
-    if (x1 == null || x2 == null || y2 == null) return null;
-
-    return {
-      id: d.id,
-      type: d.type,
-      color: d.color,
-      x1,
-      y1,
-      x2,
-      y2,
-    };
-  }, []);
+    },
+    [],
+  );
 
   const recomputeOverlay = useCallback(() => {
     const chart = chartRef.current;
     if (!chart) return;
-    const size = chart.paneSize(0);
-    setOverlaySize({ width: size.width, height: size.height });
+    const panes = chart.panes();
+    if (panes.length === 0 || !panes[0]?.getHTMLElement()) return;
+    let width = 0;
+    let pane0Height = 0;
+    try {
+      const sz0 = chart.paneSize(0);
+      width = sz0.width;
+      pane0Height = sz0.height;
+    } catch {
+      return;
+    }
+    if (width <= 0) return;
+    const measured = measurePanes();
+    const totalHeight =
+      measured.length > 0
+        ? Math.max(...measured.map(p => p.top + p.height))
+        : pane0Height;
+    setOverlaySize({ width, height: totalHeight });
     setProjectedDrawings(
       drawings.flatMap(d => {
-        const p = projectDrawing(d, size.width);
+        const p = projectDrawing(d, width, measured);
         return p ? [p] : [];
       }),
     );
-    setProjectedDraft(draft ? projectDrawing(draft, size.width) : null);
-  }, [drawings, draft, projectDrawing]);
+    setProjectedDraft(draft ? projectDrawing(draft, width, measured) : null);
+  }, [drawings, draft, measurePanes, projectDrawing]);
 
   useEffect(() => {
-    recomputeOverlay();
     const chart = chartRef.current;
+    const el = containerRef.current;
     if (!chart) return;
-    const handler = () => recomputeOverlay();
+    const observedEls = new Set<Element>();
+    const ro = new ResizeObserver(() => recomputeOverlay());
+    const observeAll = () => {
+      if (el && !observedEls.has(el)) {
+        observedEls.add(el);
+        ro.observe(el);
+      }
+      for (const p of chart.panes()) {
+        const pEl = p.getHTMLElement();
+        if (pEl && !observedEls.has(pEl)) {
+          observedEls.add(pEl);
+          ro.observe(pEl);
+        }
+      }
+    };
+    const handler = () => {
+      observeAll();
+      recomputeOverlay();
+    };
+    handler();
+    const rafId = window.requestAnimationFrame(handler);
     chart.timeScale().subscribeVisibleLogicalRangeChange(handler);
     return () => {
+      window.cancelAnimationFrame(rafId);
+      ro.disconnect();
       chart.timeScale().unsubscribeVisibleLogicalRangeChange(handler);
     };
   }, [recomputeOverlay, bars, active, activeCustom, fullscreen]);
@@ -687,19 +783,44 @@ export function FinanceTvChart({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [selectedId]);
 
-  function pointFromEvent(e: React.MouseEvent<SVGSVGElement>): { date: string; price: number; px: { x: number; y: number } } | null {
+  function pickPaneForY(measured: MeasuredPane[], globalY: number, lockedTarget?: string): MeasuredPane | null {
+    if (measured.length === 0) return null;
+    if (lockedTarget) {
+      return measured.find(p => p.target === lockedTarget) ?? null;
+    }
+    const exact = measured.find(p => globalY >= p.top && globalY <= p.top + p.height);
+    if (exact) return exact;
+    let best = measured[0];
+    let bestDist = Infinity;
+    for (const p of measured) {
+      const dist = globalY < p.top ? p.top - globalY : globalY - (p.top + p.height);
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = p;
+      }
+    }
+    return best;
+  }
+
+  function pointFromEvent(
+    e: React.MouseEvent<SVGSVGElement>,
+    lockedTarget?: string,
+  ): { target: string; date: string; price: number; px: { x: number; y: number } } | null {
     const chart = chartRef.current;
-    const candles = candlesRef.current;
     const rows = rowsRef.current;
-    if (!chart || !candles || rows.length === 0) return null;
+    if (!chart || rows.length === 0) return null;
+    const measured = measurePanes();
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    const price = candles.coordinateToPrice(y);
+    const globalY = e.clientY - rect.top;
+    const mp = pickPaneForY(measured, globalY, lockedTarget);
+    if (!mp || mp.height <= 0) return null;
+    const localY = Math.max(0, Math.min(mp.height, globalY - mp.top));
+    const price = mp.series.coordinateToPrice(localY);
     const logical = chart.timeScale().coordinateToLogical(x);
     if (price == null || logical == null) return null;
     const clampedIdx = Math.max(0, Math.min(rows.length - 1, Math.round(logical)));
-    return { date: rows[clampedIdx].date, price: Number(price), px: { x, y } };
+    return { target: mp.target, date: rows[clampedIdx].date, price: Number(price), px: { x, y: mp.top + localY } };
   }
 
   function commitDraft(nextDraft: ChartDrawing) {
@@ -726,10 +847,11 @@ export function FinanceTvChart({
 
     const svgEl = svgRef.current;
     const chart = chartRef.current;
-    const candles = candlesRef.current;
     const rows = rowsRef.current;
     const orig = drawings.find(d => d.id === projected.id);
-    if (!svgEl || !chart || !candles || rows.length === 0 || !orig) return;
+    const measured = measurePanes();
+    const mp = measured.find(p => p.target === (orig?.target || "price"));
+    if (!svgEl || !chart || rows.length === 0 || !orig || !mp) return;
 
     const rect = svgEl.getBoundingClientRect();
     const startX = e.clientX - rect.left;
@@ -754,18 +876,21 @@ export function FinanceTvChart({
         prev.map(d => {
           if (d.id !== orig.id) return d;
           if (mode === "move") {
-            const p1 = candles.coordinateToPrice(projected.y1 + dy);
+            const p1Local = Math.max(0, Math.min(mp.height, (projected.y1 - mp.top) + dy));
+            const p1 = mp.series.coordinateToPrice(p1Local);
             if (p1 == null) return d;
             if (orig.type === "hline") {
               return { ...d, p1: Number(p1), p2: Number(p1) };
             }
-            const p2 = candles.coordinateToPrice(projected.y2 + dy);
+            const p2Local = Math.max(0, Math.min(mp.height, (projected.y2 - mp.top) + dy));
+            const p2 = mp.series.coordinateToPrice(p2Local);
             const t1 = pxToDate(projected.x1 + dx);
             const t2 = pxToDate(projected.x2 + dx);
             if (p2 == null || !t1 || !t2) return d;
             return { ...d, t1, p1: Number(p1), t2, p2: Number(p2) };
           }
-          const price = candles.coordinateToPrice(curY);
+          const localY = Math.max(0, Math.min(mp.height, curY - mp.top));
+          const price = mp.series.coordinateToPrice(localY);
           const date = pxToDate(curX);
           if (price == null || !date) return d;
           if (mode === "p1") return { ...d, t1: date, p1: Number(price) };
@@ -789,7 +914,7 @@ export function FinanceTvChart({
       setSelectedId(null);
       return;
     }
-    const pt = pointFromEvent(e);
+    const pt = pointFromEvent(e, draft?.target);
     if (!pt) return;
 
     if (tool === "hline") {
@@ -797,6 +922,7 @@ export function FinanceTvChart({
       commitDraft({
         id,
         type: "hline",
+        target: pt.target,
         color: drawColor,
         t1: pt.date,
         p1: pt.price,
@@ -812,6 +938,7 @@ export function FinanceTvChart({
       setDraft({
         id,
         type: tool,
+        target: pt.target,
         color: drawColor,
         t1: pt.date,
         p1: pt.price,
@@ -825,14 +952,14 @@ export function FinanceTvChart({
 
   function handleOverlayMouseMove(e: React.MouseEvent<SVGSVGElement>) {
     if (!draft) return;
-    const pt = pointFromEvent(e);
+    const pt = pointFromEvent(e, draft.target || "price");
     if (!pt) return;
     setDraft(prev => (prev ? { ...prev, t2: pt.date, p2: pt.price } : null));
   }
 
   function handleOverlayMouseUp(e: React.MouseEvent<SVGSVGElement>) {
     if (!draft || !dragStartPxRef.current) return;
-    const pt = pointFromEvent(e);
+    const pt = pointFromEvent(e, draft.target || "price");
     if (!pt) return;
     const dx = pt.px.x - dragStartPxRef.current.x;
     const dy = pt.px.y - dragStartPxRef.current.y;
@@ -1449,16 +1576,31 @@ export function FinanceTvChart({
               onMouseMove={handleOverlayMouseMove}
               onMouseUp={handleOverlayMouseUp}
             >
+              <defs>
+                {Array.from(
+                  new Map(
+                    [...projectedDrawings, ...(projectedDraft ? [projectedDraft] : [])].map(it => [
+                      it.target,
+                      { top: it.paneTop, height: it.paneHeight },
+                    ]),
+                  ).entries(),
+                ).map(([targetKey, box]) => (
+                  <clipPath key={targetKey} id={`finance-pane-clip-${targetKey.replace(/[^a-zA-Z0-9_-]/g, "_")}`}>
+                    <rect x={0} y={box.top} width={overlaySize.width} height={box.height} />
+                  </clipPath>
+                ))}
+              </defs>
               {[...projectedDrawings, ...(projectedDraft ? [projectedDraft] : [])].map(item => {
                 const isSelected = item.id === selectedId && !projectedDraft;
                 const isDraft = projectedDraft?.id === item.id;
+                const clipUrl = `url(#finance-pane-clip-${item.target.replace(/[^a-zA-Z0-9_-]/g, "_")})`;
                 if (item.type === "rect") {
                   const rx = Math.min(item.x1, item.x2);
                   const ry = Math.min(item.y1, item.y2);
                   const rw = Math.max(1, Math.abs(item.x2 - item.x1));
                   const rh = Math.max(1, Math.abs(item.y2 - item.y1));
                   return (
-                    <g key={item.id}>
+                    <g key={item.id} clipPath={clipUrl}>
                       <rect
                         x={rx}
                         y={ry}
@@ -1501,7 +1643,7 @@ export function FinanceTvChart({
                             onMouseDown={e => startShapeDrag(e, item, "p2")}
                           />
                           <g
-                            transform={`translate(${rx + rw - 10}, ${Math.max(10, ry - 10)})`}
+                            transform={`translate(${rx + rw - 10}, ${Math.max(item.paneTop + 10, ry - 10)})`}
                             className="finance-draw-delete-badge"
                             onMouseDown={e => e.stopPropagation()}
                             onClick={e => {
@@ -1523,6 +1665,7 @@ export function FinanceTvChart({
                 return (
                   <g
                     key={item.id}
+                    clipPath={clipUrl}
                     className="finance-draw-shape"
                     onMouseDown={e => startShapeDrag(e, item, "move")}
                     onContextMenu={e => {
@@ -1550,7 +1693,11 @@ export function FinanceTvChart({
                       strokeDasharray={item.type === "hline" ? "6 4" : isDraft ? "5 4" : undefined}
                     />
                     {item.priceLabel && (
-                      <g transform={`translate(${Math.max(8, item.x2 - 58)}, ${item.y1 - 18})`}>
+                      <g
+                        transform={`translate(${Math.max(8, item.x2 - 58)}, ${
+                          item.y1 - item.paneTop < 20 ? item.y1 + 4 : item.y1 - 18
+                        })`}
+                      >
                         <rect width={54} height={16} rx={4} fill={item.color} />
                         <text x={27} y={11.5} textAnchor="middle" fill="#ffffff" fontSize={10} fontWeight={700}>
                           {item.priceLabel}
@@ -1585,7 +1732,7 @@ export function FinanceTvChart({
                       <g
                         transform={`translate(${
                           item.type === "hline" ? Math.max(24, item.x2 - 74) : (item.x1 + item.x2) / 2
-                        }, ${Math.max(12, (item.y1 + item.y2) / 2 - 14)})`}
+                        }, ${Math.max(item.paneTop + 12, (item.y1 + item.y2) / 2 - 14)})`}
                         className="finance-draw-delete-badge"
                         onMouseDown={e => e.stopPropagation()}
                         onClick={e => {

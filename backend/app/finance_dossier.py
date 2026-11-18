@@ -1396,6 +1396,7 @@ async def get_financial_dossier(
         if settings.enabled(settings.eod_historical_data_key)
         else ""
     )
+    is_eufund = canonical.upper().endswith(".EUFUND")
 
     if eod_fund is None and eod_key:
         for cand in _candidate_eod_tickers(canonical):
@@ -1406,7 +1407,7 @@ async def get_financial_dossier(
                 break
 
     yahoo_lookup = canonical[:-3] if canonical.endswith(".US") else canonical
-    if yahoo_sum is None and eod_fund is None:
+    if not is_eufund and yahoo_sum is None and eod_fund is None:
         yahoo_sum = await _fetch_yahoo_extended_summary(yahoo_lookup)
         if yahoo_sum:
             save_snapshot(db_path, canonical, "yahoo_finance", "quote_summary_ext", yahoo_sum, None)
@@ -1446,8 +1447,8 @@ async def get_financial_dossier(
                 tasks.append(asyncio.sleep(0, result=None))
             new_bars, new_divs = await asyncio.gather(*tasks)
 
-        # Yahoo Finance uniquement en backup si EODHD n'a pas fourni les données
-        if (need_bars_sync and not new_bars) or (need_divs_sync and new_divs is None):
+        # Yahoo Finance uniquement en backup si EODHD n'a pas fourni les données (hors fonds EUFUND)
+        if not is_eufund and ((need_bars_sync and not new_bars) or (need_divs_sync and new_divs is None)):
             y_bars, y_divs = await _fetch_yahoo_chart_10y(yahoo_lookup)
             if not new_bars:
                 new_bars = y_bars
@@ -1686,14 +1687,23 @@ async def get_financial_dossier(
         bars=stored_bars,
     )
 
+    from .finance_funds import extract_fund_profile
+    from .finance_warehouse import lookup_exchange_symbol
+
+    cat_hit = lookup_exchange_symbol(db_path, canonical, "EUFUND") if is_eufund else None
+    fund_profile = extract_fund_profile(eod_fund, cat_hit, symbol=canonical)
+    if (not currency or currency == "USD") and cat_hit and cat_hit.get("currency"):
+        currency = str(cat_hit["currency"]).upper()
+    display_name = gen.get("Name") or (cat_hit.get("name") if cat_hit else None) or y_price.get("longName") or canonical
+
     return {
         "symbol": canonical,
         "currency": currency,
-        "source_provider": statements.get("source_provider") or ("eodhd" if eod_fund else "yahoo_finance"),
-        "source_label": statements.get("source_label") or ("EOD Historical Data" if eod_fund else "Yahoo Finance"),
+        "source_provider": statements.get("source_provider") or ("eodhd" if (eod_fund or is_eufund) else "yahoo_finance"),
+        "source_label": statements.get("source_label") or ("EOD Historical Data" if (eod_fund or is_eufund) else "Yahoo Finance"),
         "warehouse_stats": get_warehouse_stats(db_path, canonical),
         "header": {
-            "name": gen.get("Name") or y_price.get("longName") or canonical,
+            "name": display_name,
             "logo_url": resolve_eodhd_logo_url(eod_fund, canonical),
             "cap_category": _cap_category(market_cap),
             "market_cap": market_cap,
@@ -1703,14 +1713,15 @@ async def get_financial_dossier(
             "ih_quality": ih_info.get("quality_label"),
             "ih_trend": ih_info.get("trend"),
             "price_dynamics": price_dynamics,
-            "sector": gen.get("Sector") or y_prof.get("sector"),
-            "industry": gen.get("Industry") or y_prof.get("industry"),
+            "sector": gen.get("Sector") or (fund_profile.get("category") if fund_profile else None) or y_prof.get("sector"),
+            "industry": gen.get("Industry") or (fund_profile.get("fund_family") if fund_profile else None) or y_prof.get("industry"),
             "employees": _num(gen.get("FullTimeEmployees")) or _num(y_prof.get("fullTimeEmployees")),
-            "website": gen.get("WebURL") or y_prof.get("website") or "",
+            "website": gen.get("WebURL") or (fund_profile.get("website") if fund_profile else "") or y_prof.get("website") or "",
             "address": address,
-            "isin": gen.get("ISIN"),
-            "description": gen.get("Description") or y_prof.get("longBusinessSummary") or "",
+            "isin": gen.get("ISIN") or (cat_hit.get("isin") if cat_hit else None),
+            "description": gen.get("Description") or (fund_profile.get("description") if fund_profile else "") or y_prof.get("longBusinessSummary") or "",
         },
+        "fund_profile": fund_profile,
         "capital_valuation": cap_val_dict,
         "performance": perf_payload,
         "performance_chart": monthly_chart,

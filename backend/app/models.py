@@ -419,6 +419,7 @@ class FinanceWatchlistItem(Base):
     name: Mapped[str] = mapped_column(String(200))
     exchange: Mapped[str] = mapped_column(String(80), default="")
     currency: Mapped[str] = mapped_column(String(16), default="EUR")
+    note: Mapped[str] = mapped_column(String(240), default="")
     position: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 

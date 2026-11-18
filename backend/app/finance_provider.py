@@ -184,24 +184,43 @@ def extract_eodhd_financial_stats(
     div_rate = _num(hl.get("DividendShare")) or _num(div.get("ForwardAnnualDividendRate"))
     payout = _num(div.get("PayoutRatio"))
 
+    mf = fundamentals.get("Mutual_Fund") or fundamentals.get("ETF_Data") or {}
+    fund_summary = mf.get("Fund_Summary") if isinstance(mf.get("Fund_Summary"), dict) else {}
+    net_assets = _num(mf.get("TotalAssets") or mf.get("NetAssets") or hl.get("NetAssets"))
+    expense_ratio = _num(
+        mf.get("Ongoing_Charge")
+        or mf.get("ExpenseRatio")
+        or mf.get("NetExpenseRatio")
+        or hl.get("ExpenseRatio")
+        or fund_summary.get("Ongoing_Charge")
+        or fund_summary.get("NetExpenseRatio")
+    )
+    if expense_ratio is not None and 0 < abs(expense_ratio) < 0.35:
+        expense_ratio_fmt = f"{expense_ratio * 100:.2f}%"
+    elif expense_ratio is not None:
+        expense_ratio_fmt = f"{expense_ratio:.2f}%"
+    else:
+        expense_ratio_fmt = None
+
     return {
         "valuation": {
-            "market_cap": _fmt_num(hl.get("MarketCapitalization")),
-            "market_cap_raw": _num(hl.get("MarketCapitalization")),
+            "market_cap": _fmt_num(hl.get("MarketCapitalization") or net_assets),
+            "market_cap_raw": _num(hl.get("MarketCapitalization") or net_assets),
             "pe_trailing": _fmt_num(val.get("TrailingPE") or hl.get("PERatio")),
             "pe_forward": _fmt_num(val.get("ForwardPE")),
             "peg_ratio": _fmt_num(hl.get("PEGRatio")),
             "price_to_book": _fmt_num(val.get("PriceBookMRQ")),
             "enterprise_value": _fmt_num(val.get("EnterpriseValue")),
             "ev_to_ebitda": _fmt_num(val.get("EnterpriseValueEbitda")),
-            "beta": _fmt_num(tech.get("Beta")),
+            "beta": _fmt_num(tech.get("Beta") or mf.get("Beta")),
             "trailing_eps": _fmt_num(hl.get("DilutedEpsTTM") or hl.get("EarningsShare")),
             "forward_eps": _fmt_num(hl.get("EPSEstimateNextYear") or hl.get("EPSEstimateCurrentYear")),
             "dividend_rate": _fmt_num(div_rate),
-            "dividend_yield": _fmt_pct(div_yield),
+            "dividend_yield": _fmt_pct(div_yield or mf.get("Yield")),
             "payout_ratio": _fmt_pct(payout),
             "w52_high": _fmt_num(tech.get("52WeekHigh")),
             "w52_low": _fmt_num(tech.get("52WeekLow")),
+            **({"expense_ratio": expense_ratio_fmt} if expense_ratio_fmt else {}),
         },
         "profitability": {
             "total_revenue": _fmt_num(rev_ttm),
@@ -235,12 +254,12 @@ def extract_eodhd_financial_stats(
             "upside_potential_pct": upside_pct,
         },
         "profile": {
-            "sector": gen.get("Sector") or "N/A",
-            "industry": gen.get("Industry") or "N/A",
+            "sector": gen.get("Sector") or gen.get("Category") or mf.get("Fund_Category") or "N/A",
+            "industry": gen.get("Industry") or gen.get("Fund_Family") or mf.get("Company_Name") or "N/A",
             "country": gen.get("CountryName") or "N/A",
             "employees": _fmt_num(gen.get("FullTimeEmployees"), default="Non communiqué"),
-            "website": gen.get("WebURL") or "",
-            "summary": (gen.get("Description") or "")[:1200],
+            "website": gen.get("WebURL") or mf.get("Company_URL") or "",
+            "summary": (gen.get("Description") or fund_summary.get("Summary") or "")[:1200],
         },
     }
 
@@ -341,7 +360,7 @@ async def fetch_eodhd_fundamentals_json(ticker: str, api_key: str) -> dict[str, 
             if resp.status_code == 200:
                 data = resp.json()
                 if isinstance(data, dict) and any(
-                    k in data for k in ("General", "Highlights", "Valuation", "Financials")
+                    k in data for k in ("General", "Highlights", "Valuation", "Financials", "Mutual_Fund", "ETF_Data")
                 ):
                     return data
     except Exception as exc:
@@ -511,10 +530,10 @@ async def get_unified_financial_statements(
         highlights = extract_eodhd_highlights_summary(eod_fundamentals)
         currency = str((eod_fundamentals.get("General") or {}).get("CurrencyCode") or "").strip().upper()
 
-    # 2. Backup Yahoo Finance si EODHD indisponible ou sans séries d'états financiers
+    # 2. Backup Yahoo Finance si EODHD indisponible ou sans séries d'états financiers (sauf fonds EUFUND)
     ann_yah: dict[str, dict[str, float | None]] = {}
     qtr_yah: dict[str, dict[str, float | None]] = {}
-    if not ann_eod and not qtr_eod:
+    if not ann_eod and not qtr_eod and not canonical.upper().endswith(".EUFUND"):
         yahoo_lookup = clean_sym[:-3] if clean_sym.upper().endswith(".US") else clean_sym
         y_annual_raw, y_quarterly_raw = await fetch_yahoo_timeseries_bundle(yahoo_lookup)
         ann_yah = parse_timeseries(y_annual_raw, "annual")
