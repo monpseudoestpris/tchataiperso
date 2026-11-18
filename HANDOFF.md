@@ -7,11 +7,15 @@ Application de chat IA multi-fournisseurs (`tchataiperso`) composée d'un backen
 - L'espace **Marchés Financiers** (`FinanceModal`) avec cotations EODHD/Yahoo, indicateurs personnalisés, actualités, rapports trimestriels et onglet **MOAT** (travaux antérieurs non committés conservés).
 
 ## 2. Current Objective
-Espace **Marchés Financiers** (`FinanceModal`) : **synchronisation quotidienne sélective configurable dans l'interface** (indices boursiers activés de base uniquement ; choix des constituants complets d'indices, listes de suivi et marchés `EUFUND, PA, US, XETRA, LSE, CC`), **indexation SQLite FTS5 + `fund_family`**, **cache journalier par action (`eod_synced_date`)** (Option A) et **TTL fondamentaux à 15 jours (`360h`)**.
+Espace **Marchés Financiers** (`FinanceModal`) : **vues institutionnelles complètes dans le dossier** (5 graphiques SVG analytiques interactifs : barres de perf 1–10 ans, Profits & Résultats, Rentabilité & Marges, Dividendes, Cycle de conversion DSI/DSO/DPO ; tableaux structurés avec colonnes Δ%, sous-lignes `dont …`, Direction 2 colonnes, IH Score avec colonnes de variation, encadrés jaunes et en-têtes bleus dans l'ordre exact de référence), en plus de la synchro quotidienne sélective (`Synchro auto`), du cache journalier Option A (`eod_synced_date`) et du TTL fondamentaux 15 jours.
 
-**Statut** : Implémentation terminée et vérifiée (`pytest` 78/78 sur la suite Finance, `py_compile` 0 erreur, `eslint --max-warnings 0` sur `finance-sync-panel.tsx`, `finance-eufund-browser.tsx` et `finance-indices-panel.tsx`, `tsc --noEmit` et `next build` Turbopack 0 erreur).
+**Statut** : Implémentation terminée et vérifiée (`eslint --max-warnings 0` sur `finance-dossier-charts.tsx`, `dossier-simplified-statements.ts` et `finance-dossier-panel.tsx`, `tsc --noEmit` et `next build` Turbopack 0 erreur ; backend inchangé déjà vérifié 79/79).
 
 ## 3. Completed Work
+- **Graphiques & Tableaux institutionnels ordonnés (`frontend/components/finance-dossier-charts.tsx`, `frontend/lib/dossier-simplified-statements.ts`, `frontend/components/finance-dossier-panel.tsx`, `frontend/app/globals.css`)** :
+  - Ajout de 5 graphiques SVG interactifs (légendes cliquables, étiquettes de valeurs, réticule et infobulle au survol) : `DividendPerfBarChart` (`1 an`..`10 ans` avec bascule vers la courbe base 100), `ProfitsResultsChart`, `ProfitabilityMarginsChart`, `DividendsHistoryChart` et `CashConversionChart` (`DSI / DSO / DPO`).
+  - Structuration exacte des **Comptes annuels & trimestriels simplifiés** (`buildStructuredStatements` & `buildStatementDeltaHeaders` : Compte de résultat avec NOPAT/taux d'imposition/par action, Bilan, Flux de trésorerie, hiérarchie `dont …` en retrait italique, séparateurs, colonnes `Δ%` `22-23` / `07-10/25`, et bascule optionnelle vers `Tous postes bruts`).
+  - Refonte des tableaux **Performance** (2 lignes × 7 colonnes), **Gestion du risque** (2 sous-bandes + note de bas de tableau sur les taux sans risque), **Direction** (2 colonnes appariées), **Ratios** (séparateur avant `Δ%` et surlignage des lignes clés), et **Scores qualitatifs** (bandeaux jaunes explicatifs + colonnes de variation `23-24…` sur `IH Score`) dans l'ordre vertical exact de référence.
 - **Zone « Synchro auto » configurable dans l'interface (indices activés de base) (`backend/app/finance_warehouse.py`, `backend/app/finance_funds.py`, `backend/app/routers/finance.py`, `backend/app/config.py`, `.env.example`, `backend/tests/test_finance_funds.py`, `frontend/lib/api.ts`, `frontend/components/finance-sync-panel.tsx`, `frontend/components/finance-indices-panel.tsx`, `frontend/components/finance-modal.tsx`, `frontend/app/globals.css`)** :
   - **Réglages persistants (`finance_sync_preferences` dans `finance_warehouse.db`)** : `DEFAULT_SYNC_PREFERENCES` active par défaut **uniquement les indices** (`principal_indices: true`, `indx_catalog: true`), sans imposer de téléchargement quotidien massif des gros catalogues (`exchanges: []`, `index_codes: []`, `watchlists: false`). `finance_exchange_auto_sync_codes` est vide par défaut dans `config.py` / `.env.example`.
   - **API & exécuteur sélectif** : `GET /api/finance/sync-preferences`, `PUT /api/finance/sync-preferences` et `POST /api/finance/sync-preferences/run` (`get_daily_sync_state`, `update_daily_sync_preferences`, `run_daily_sync_now`), également utilisés par la boucle quotidienne `run_daily_exchange_catalog_sync_loop` sans re-télécharger si la synchro a déjà tourné aujourd'hui.
@@ -202,6 +206,8 @@ Espace **Marchés Financiers** (`FinanceModal`) : **synchronisation quotidienne 
   - `frontend/components/finance-experts-panel.tsx`
   - `frontend/components/finance-eufund-browser.tsx`
   - `frontend/components/finance-sync-panel.tsx`
+  - `frontend/components/finance-dossier-charts.tsx`
+  - `frontend/lib/dossier-simplified-statements.ts`
   - `frontend/components/finance-help-modal.tsx`
   - `frontend/components/finance-theme-switcher.tsx`
   - `frontend/components/finance-indices-panel.tsx`
@@ -234,6 +240,7 @@ Espace **Marchés Financiers** (`FinanceModal`) : **synchronisation quotidienne 
   - `scripts/start.sh` : point d'entrée unifié (`prod`, `dev`, `local`, `stop`, `logs`, `status`, `--lan`) partageant la même BDD PostgreSQL et les mêmes uploads entre `dev` et `prod`.
 
 ## 6. Verification
+- `cd frontend && npx eslint --max-warnings 0 components/finance-dossier-charts.tsx lib/dossier-simplified-statements.ts components/finance-dossier-panel.tsx && npm run typecheck && npm run build` : **RÉUSSI** (exit code 0, 0 erreur / 0 warning ESLint sur ces 3 fichiers, `tsc --noEmit` et `next build` Next.js 16.4.6 Turbopack).
 - `PYTHONPATH=backend backend/.venv/bin/pytest backend/tests/test_finance_funds.py backend/tests/test_finance_indices.py backend/tests/test_finance.py backend/tests/test_finance_statements.py backend/tests/test_finance_experts.py backend/tests/test_finance_scores.py backend/tests/test_finance_intrinsic.py -v` : **RÉUSSI — 79 passed, 1 warning** (incluant `test_warehouse_migration_from_legacy_schema_without_fund_family` et `test_configurable_daily_sync_preferences_defaults_indices_and_selective_run`).
 - `PYTHONPATH=backend backend/.venv/bin/python -m py_compile backend/app/config.py backend/app/main.py backend/app/finance_warehouse.py backend/app/finance_provider.py backend/app/finance_funds.py backend/app/routers/finance.py` : **RÉUSSI** (exit code 0).
 - `cd frontend && npx eslint --max-warnings 0 components/finance-sync-panel.tsx components/finance-eufund-browser.tsx components/finance-indices-panel.tsx && npm run typecheck && npm run build` : **RÉUSSI** (exit code 0, 0 erreur / 0 warning ESLint sur ces 3 composants, `tsc --noEmit` et `next build` Next.js 16.4.6 Turbopack).

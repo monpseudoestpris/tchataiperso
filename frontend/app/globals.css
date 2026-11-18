@@ -24261,3 +24261,324 @@ thead .finance-stmt-sticky-col {
   font-size: 11.5px;
   flex-shrink: 0;
 }
+
+/* =========================================================================
+   FINANCE DOSSIER — GRAPHIQUES & TABLEAUX INSTITUTIONNELS (.finance-ih-*)
+   ========================================================================= */
+
+.finance-ih-card,
+.finance-ih-chart-card {
+  border: 1px solid #93c5fd;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.05);
+}
+
+:root[data-theme="dark"] .finance-ih-card,
+:root[data-theme="dark"] .finance-ih-chart-card {
+  border-color: #1e3a5f;
+  background: #0f172a;
+}
+
+.finance-ih-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 12px;
+  background: linear-gradient(90deg, #0b67b2 0%, #1277c9 100%);
+  color: #ffffff;
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.finance-ih-card-head h4,
+.finance-ih-card-head strong {
+  margin: 0;
+  color: #ffffff;
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.finance-ih-card-head small {
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+:root[data-theme="dark"] .finance-ih-card-head {
+  background: linear-gradient(90deg, #134e84 0%, #1a63a6 100%);
+}
+
+.finance-ih-table-wrap {
+  border: none !important;
+  border-radius: 0 !important;
+}
+
+.finance-ih-table th {
+  background: #d8dee6;
+  color: #1e293b;
+  font-size: 11.5px;
+  font-weight: 700;
+}
+
+:root[data-theme="dark"] .finance-ih-table th {
+  background: #1e293b;
+  color: #cbd5e1;
+}
+
+.finance-ih-spacer-col {
+  width: 14px !important;
+  min-width: 14px !important;
+  max-width: 14px !important;
+  padding: 0 !important;
+  background: transparent !important;
+  border-left: none !important;
+  border-right: none !important;
+}
+
+.finance-ih-key-row td {
+  background: #e9edf2;
+  font-weight: 700;
+}
+
+:root[data-theme="dark"] .finance-ih-key-row td {
+  background: rgba(51, 65, 85, 0.55);
+}
+
+.finance-ih-sub-label {
+  display: inline-block;
+  padding-left: 16px;
+  font-style: italic;
+  font-weight: 400;
+  color: #475569;
+}
+
+:root[data-theme="dark"] .finance-ih-sub-label {
+  color: #94a3b8;
+}
+
+.finance-ih-key-label {
+  font-weight: 700;
+}
+
+.finance-ih-group-start td {
+  border-top: 2px solid #cbd5e1 !important;
+}
+
+:root[data-theme="dark"] .finance-ih-group-start td {
+  border-top-color: #334155 !important;
+}
+
+.finance-ih-perf-table th,
+.finance-ih-perf-table td {
+  text-align: center !important;
+  font-size: 12px;
+  padding: 7px 8px;
+}
+
+.finance-ih-perf-subhead th {
+  background: #d8dee6;
+  color: #334155;
+  font-weight: 700;
+}
+
+:root[data-theme="dark"] .finance-ih-perf-subhead th {
+  background: #1e293b;
+  color: #cbd5e1;
+}
+
+.finance-ih-group-subhead th {
+  background: #cbd5e1 !important;
+  color: #0f172a !important;
+  font-size: 11.5px;
+  font-weight: 700;
+}
+
+:root[data-theme="dark"] .finance-ih-group-subhead th {
+  background: #1e293b !important;
+  color: #e2e8f0 !important;
+}
+
+.finance-ih-risk-footnote {
+  margin: 0;
+  padding: 8px 12px 10px;
+  font-size: 11.5px;
+  font-style: italic;
+  color: #475569;
+  border-top: 1px solid #e2e8f0;
+  background: #f8fafc;
+}
+
+:root[data-theme="dark"] .finance-ih-risk-footnote {
+  color: #94a3b8;
+  border-top-color: #1e293b;
+  background: #0b1220;
+}
+
+.finance-ih-callout {
+  padding: 10px 14px;
+  border-radius: 6px;
+  background: #facc15;
+  color: #1e293b;
+  font-size: 12px;
+  line-height: 1.45;
+  margin-bottom: 10px;
+}
+
+:root[data-theme="dark"] .finance-ih-callout {
+  background: rgba(250, 204, 21, 0.16);
+  border: 1px solid rgba(250, 204, 21, 0.4);
+  color: #fef08a;
+}
+
+.finance-ih-chart-body {
+  padding: 10px 12px 8px;
+}
+
+.finance-ih-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+  overflow: visible;
+}
+
+.finance-ih-gridline {
+  stroke: #e2e8f0;
+  stroke-width: 1;
+}
+
+:root[data-theme="dark"] .finance-ih-gridline {
+  stroke: #1e293b;
+}
+
+.finance-ih-zeroline {
+  stroke: #94a3b8;
+  stroke-width: 1.1;
+}
+
+.finance-ih-axis-text {
+  fill: #475569;
+  font-size: 10.5px;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+}
+
+.finance-ih-axis-text.is-active {
+  font-weight: 800;
+  fill: #0f172a;
+}
+
+:root[data-theme="dark"] .finance-ih-axis-text {
+  fill: #94a3b8;
+}
+
+:root[data-theme="dark"] .finance-ih-axis-text.is-active {
+  fill: #f8fafc;
+}
+
+.finance-ih-point-label {
+  fill: #334155;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.finance-ih-point-label.is-pos {
+  fill: #3f6212;
+}
+
+.finance-ih-point-label.is-neg {
+  fill: #be123c;
+}
+
+:root[data-theme="dark"] .finance-ih-point-label {
+  fill: #cbd5e1;
+}
+
+:root[data-theme="dark"] .finance-ih-point-label.is-pos {
+  fill: #a3e635;
+}
+
+:root[data-theme="dark"] .finance-ih-point-label.is-neg {
+  fill: #fda4af;
+}
+
+.finance-ih-crosshair {
+  stroke: #334155;
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+
+:root[data-theme="dark"] .finance-ih-crosshair {
+  stroke: #94a3b8;
+}
+
+.finance-ih-crosshair-badge {
+  fill: #0f172a;
+}
+
+.finance-ih-crosshair-badge-text {
+  fill: #ffffff;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.finance-ih-tooltip-box {
+  fill: rgba(255, 255, 255, 0.96);
+  stroke: #2563eb;
+  stroke-width: 1;
+}
+
+.finance-ih-tooltip-title {
+  fill: #0f172a;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.finance-ih-tooltip-row {
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+:root[data-theme="dark"] .finance-ih-tooltip-box {
+  fill: rgba(15, 23, 42, 0.96);
+  stroke: #60a5fa;
+}
+
+:root[data-theme="dark"] .finance-ih-tooltip-title {
+  fill: #f8fafc;
+}
+
+.finance-ih-legend {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
+  padding-top: 6px;
+}
+
+.finance-ih-legend-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: inherit;
+  cursor: pointer;
+}
+
+.finance-ih-legend-btn.is-muted {
+  opacity: 0.4;
+  text-decoration: line-through;
+}
+
+.finance-ih-legend-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  display: inline-block;
+}

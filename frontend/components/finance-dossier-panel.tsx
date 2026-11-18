@@ -19,9 +19,21 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
+import {
+  CashConversionChart,
+  DividendPerfBarChart,
+  DividendsHistoryChart,
+  ProfitabilityMarginsChart,
+  ProfitsResultsChart,
+} from "@/components/finance-dossier-charts";
 import { type FinanceHelpGuideId } from "@/components/finance-help-modal";
 import { FinanceMetricLabel } from "@/components/finance-info-tip";
 import { FinanceRichReport } from "@/components/finance-rich-report";
+import {
+  buildStatementDeltaHeaders,
+  buildStructuredStatements,
+  type StructuredStatementRow,
+} from "@/lib/dossier-simplified-statements";
 import {
   buildAnnualRatioCalc,
   buildCapitalMetricCalc,
@@ -145,6 +157,26 @@ function PerformanceSvgChart({
   );
 }
 
+const KEY_RATIO_ROWS = new Set([
+  "rev",
+  "ni",
+  "fcf",
+  "roic",
+  "croic",
+  "shares",
+  "ebitda_ps",
+  "per",
+  "mcap",
+  "ebitda_m",
+  "fcf_m",
+  "nd_ebitda",
+  "cov_ebitda",
+  "div_paid",
+  "payout_fcf",
+  "ccc",
+  "sga_rev",
+]);
+
 function AnnualMatrixTable({
   id,
   title,
@@ -165,19 +197,20 @@ function AnnualMatrixTable({
   if (visibleRows.length === 0) return null;
 
   return (
-    <section id={id} className="finance-dossier-section">
-      <div className="finance-dossier-sec-head">
+    <section id={id} className="finance-dossier-section finance-ih-card">
+      <div className="finance-ih-card-head">
         <h4>{title}</h4>
-        {unitNote && <small className="finance-dossier-unit">{unitNote}</small>}
+        {unitNote && <small>{unitNote}</small>}
       </div>
-      <div className="finance-table-wrapper finance-stmt-scroll">
-        <table className="finance-data-table finance-stmt-table">
+      <div className="finance-table-wrapper finance-stmt-scroll finance-ih-table-wrap">
+        <table className="finance-data-table finance-stmt-table finance-ih-table">
           <thead>
             <tr>
               <th className="finance-stmt-sticky-col">Indicateur</th>
               {years.map((y, idx) => (
                 <th key={`v-${idx}-${y}`}>{y}</th>
               ))}
+              {years.length > 1 && <th className="finance-ih-spacer-col" aria-hidden="true" />}
               {years.slice(1).map((y, idx) => (
                 <th key={`yoy-${idx}-${y}`} className="finance-dossier-yoy-head">
                   {years[idx].slice(-2)}-{y.slice(-2)}
@@ -187,13 +220,13 @@ function AnnualMatrixTable({
           </thead>
           <tbody>
             {visibleRows.map(row => (
-              <tr key={row.key}>
+              <tr key={row.key} className={KEY_RATIO_ROWS.has(row.key) ? "finance-ih-key-row" : undefined}>
                 <td className="finance-stmt-sticky-col">
                   <FinanceMetricLabel
                     termKey={row.key}
                     label={row.label}
                     calcDetail={dossier ? buildAnnualRatioCalc(row, dossier) : undefined}
-                    strong
+                    strong={KEY_RATIO_ROWS.has(row.key)}
                   />
                 </td>
                 {row.values.map((v, i) => (
@@ -201,6 +234,7 @@ function AnnualMatrixTable({
                     {fmtCell(v, row.format)}
                   </td>
                 ))}
+                {years.length > 1 && <td className="finance-ih-spacer-col" aria-hidden="true" />}
                 {row.yoy.slice(1).map((pct, i) => (
                   <td
                     key={`${row.key}-y-${i}-${years[i + 1]}`}
@@ -246,6 +280,7 @@ export function FinanceDossierPanel({
   const [depth, setDepth] = useState<DepthMode>("5");
   const [subTab, setSubTab] = useState<DossierSubTab>("synthese");
   const [holdersTab, setHoldersTab] = useState<"funds" | "institutions">("funds");
+  const [perfChartMode, setPerfChartMode] = useState<"bars" | "curve">("bars");
 
   useEffect(() => {
     let cancelled = false;
@@ -1076,49 +1111,94 @@ export function FinanceDossierPanel({
       <section id="dossier-perf" className="finance-dossier-section">
         <div className="finance-dossier-sec-head">
           <h4>Performance boursière ajustée des dividendes</h4>
+          <div className="finance-timeframe-selector">
+            <button
+              type="button"
+              className={`finance-tf-btn ${perfChartMode === "bars" ? "active" : ""}`}
+              onClick={() => setPerfChartMode("bars")}
+            >
+              Barres (1–10 ans)
+            </button>
+            <button
+              type="button"
+              className={`finance-tf-btn ${perfChartMode === "curve" ? "active" : ""}`}
+              onClick={() => setPerfChartMode("curve")}
+            >
+              Courbe base 100
+            </button>
+          </div>
         </div>
-        <PerformanceSvgChart series={dossier.performance_chart} />
-        <div className="finance-dossier-perf-grid">
-          {dossier.performance.horizons.map(h => (
-            <div key={h.key} className="finance-dossier-perf-cell">
-              <span>{h.label}</span>
-              <strong className={h.pct == null ? undefined : h.pct >= 0 ? "text-emerald" : "text-rose"}>
-                {h.pct == null ? "—" : `${h.pct >= 0 ? "+" : ""}${h.pct.toFixed(1)}%`}
-              </strong>
-            </div>
-          ))}
+        {perfChartMode === "bars" ? (
+          <DividendPerfBarChart
+            title={`Graphique des performances boursières ajustées des dividendes de ${hdr.name || dossier.symbol}`}
+            horizons={dossier.performance.horizons}
+          />
+        ) : (
+          <PerformanceSvgChart series={dossier.performance_chart} />
+        )}
+        <div className="finance-ih-card">
+          <div className="finance-ih-card-head">
+            <strong>Performance boursière ajustée des dividendes de {hdr.name || dossier.symbol}</strong>
+          </div>
+          <div className="finance-table-wrapper finance-ih-table-wrap">
+            <table className="finance-data-table finance-ih-perf-table">
+              <tbody>
+                <tr className="finance-ih-perf-subhead">
+                  {dossier.performance.horizons.slice(0, 7).map(h => (
+                    <th key={`ph1-${h.key}`}>{h.label}</th>
+                  ))}
+                </tr>
+                <tr>
+                  {dossier.performance.horizons.slice(0, 7).map(h => (
+                    <td key={`pv1-${h.key}`} className={h.pct == null ? undefined : h.pct >= 0 ? "text-emerald" : "text-rose"}>
+                      <strong>{h.pct == null ? "—" : `${h.pct >= 0 ? "+" : ""}${h.pct.toFixed(1)}%`}</strong>
+                    </td>
+                  ))}
+                </tr>
+                {dossier.performance.horizons.length > 7 && (
+                  <>
+                    <tr className="finance-ih-perf-subhead">
+                      {dossier.performance.horizons.slice(7, 14).map(h => (
+                        <th key={`ph2-${h.key}`}>{h.label}</th>
+                      ))}
+                    </tr>
+                    <tr>
+                      {dossier.performance.horizons.slice(7, 14).map(h => (
+                        <td key={`pv2-${h.key}`} className={h.pct == null ? undefined : h.pct >= 0 ? "text-emerald" : "text-rose"}>
+                          <strong>{h.pct == null ? "—" : `${h.pct >= 0 ? "+" : ""}${h.pct.toFixed(1)}%`}</strong>
+                        </td>
+                      ))}
+                    </tr>
+                  </>
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       </section>
 
       {/* Gestion du risque */}
-      <section id="dossier-risque" className="finance-dossier-section">
-        <div className="finance-dossier-sec-head">
-          <h4>Gestion du risque et performance ajustée du risque</h4>
-          {dossier.risk.rf_rates_pct && (
-            <small className="finance-dossier-unit">
-              Taux sans risque ({dossier.currency}) : {dossier.risk.rf_rates_pct.map(r => `${r}%`).join(" / ")}
-            </small>
-          )}
+      <section id="dossier-risque" className="finance-dossier-section finance-ih-card">
+        <div className="finance-ih-card-head">
+          <h4>Gestion du risque et performance boursière ajustée de {hdr.name || dossier.symbol}</h4>
         </div>
-        <div className="finance-table-wrapper finance-stmt-scroll">
-          <table className="finance-data-table finance-stmt-table">
-            <thead>
-              <tr>
-                <th className="finance-stmt-sticky-col">Indicateur de risque</th>
+        <div className="finance-table-wrapper finance-stmt-scroll finance-ih-table-wrap">
+          <table className="finance-data-table finance-stmt-table finance-ih-table">
+            <tbody>
+              <tr className="finance-ih-group-subhead">
+                <th className="finance-stmt-sticky-col">Volatilité historique et risque baissier statistique</th>
                 {dossier.risk.horizons.map(h => (
-                  <th key={h}>{h}</th>
+                  <th key={`r1-${h}`}>{h}</th>
                 ))}
               </tr>
-            </thead>
-            <tbody>
-              {dossier.risk.metrics.map(m => (
+              {dossier.risk.metrics.slice(0, 7).map(m => (
                 <tr key={m.key}>
                   <td className="finance-stmt-sticky-col">
                     <FinanceMetricLabel
                       termKey={m.key}
                       label={m.label}
                       calcDetail={buildRiskMetricCalc(m, dossier)}
-                      strong
+                      strong={m.key === "max_dd"}
                     />
                   </td>
                   {m.values.map((v, idx) => (
@@ -1134,9 +1214,49 @@ export function FinanceDossierPanel({
                   ))}
                 </tr>
               ))}
+              {dossier.risk.metrics.length > 7 && (
+                <>
+                  <tr className="finance-ih-group-subhead">
+                    <th className="finance-stmt-sticky-col">Performances boursières historiques ajustées du risque</th>
+                    {dossier.risk.horizons.map(h => (
+                      <th key={`r2-${h}`}>{h}</th>
+                    ))}
+                  </tr>
+                  {dossier.risk.metrics.slice(7).map(m => (
+                    <tr key={m.key}>
+                      <td className="finance-stmt-sticky-col">
+                        <FinanceMetricLabel
+                          termKey={m.key}
+                          label={m.label}
+                          calcDetail={buildRiskMetricCalc(m, dossier)}
+                        />
+                      </td>
+                      {m.values.map((v, idx) => (
+                        <td key={`${m.key}-${idx}`}>
+                          {v == null
+                            ? "—"
+                            : m.format === "pct"
+                              ? `${v.toFixed(1)}%`
+                              : m.format === "days"
+                                ? `${Math.round(v)} j`
+                                : v.toFixed(2)}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </>
+              )}
             </tbody>
           </table>
         </div>
+        {dossier.risk.rf_rates_pct && (
+          <p className="finance-ih-risk-footnote">
+            — Les ratios de <strong>Sharpe</strong>, de <strong>Sortino</strong>, d&apos;<strong>Excess Calmar</strong> et de{" "}
+            <strong>Martin</strong> sont calculés sur la base de la performance boursière nette des taux sans risque
+            annualisés moyens en {dossier.currency} sur 1, 2, 3, 4 et 5 ans, soit respectivement{" "}
+            <strong>{dossier.risk.rf_rates_pct.map(r => `${r}%`).join(", ")}</strong>.
+          </p>
+        )}
       </section>
       </>
       )}
@@ -1167,28 +1287,43 @@ export function FinanceDossierPanel({
           </div>
         )}
 
-        {stk.officers.length > 0 && (
-          <div id="dossier-direction" className="finance-table-wrapper finance-dossier-subtable">
-            <table className="finance-data-table">
-              <thead>
-                <tr>
-                  <th>Dirigeant</th>
-                  <th>Fonction</th>
-                  <th>Âge</th>
-                </tr>
-              </thead>
-              <tbody>
-                {stk.officers.map((o, idx) => (
-                  <tr key={`${o.name}-${idx}`}>
-                    <td><strong>{o.name}</strong></td>
-                    <td>{o.title || "—"}</td>
-                    <td>{o.age ?? "—"}</td>
+        {stk.officers.length > 0 && (() => {
+          const half = Math.ceil(stk.officers.length / 2);
+          return (
+            <div id="dossier-direction" className="finance-table-wrapper finance-dossier-subtable">
+              <table className="finance-data-table">
+                <thead>
+                  <tr>
+                    <th>Dirigeant</th>
+                    <th>Fonction</th>
+                    <th>Âge</th>
+                    <th className="finance-ih-spacer-col" aria-hidden="true" />
+                    <th>Dirigeant</th>
+                    <th>Fonction</th>
+                    <th>Âge</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+                </thead>
+                <tbody>
+                  {Array.from({ length: half }).map((_, idx) => {
+                    const left = stk.officers[idx];
+                    const right = stk.officers[idx + half];
+                    return (
+                      <tr key={`off-pair-${idx}`}>
+                        <td><strong>{left?.name || "—"}</strong></td>
+                        <td>{left?.title || "—"}</td>
+                        <td>{left?.age ?? "—"}</td>
+                        <td className="finance-ih-spacer-col" aria-hidden="true" />
+                        <td>{right ? <strong>{right.name}</strong> : ""}</td>
+                        <td>{right?.title || ""}</td>
+                        <td>{right ? (right.age ?? "—") : ""}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          );
+        })()}
       </section>
 
       {/* Opérations d'initiés & Top fonds */}
@@ -1289,12 +1424,13 @@ export function FinanceDossierPanel({
       </>
       )}
 
-      {/* Fondamentaux synthèse & Ratios */}
+      {/* Fondamentaux synthèse & Ratios (avec les 4 graphiques analytiques) */}
       {show("ratios") && (
       <>
+      <ProfitsResultsChart dossier={dossier} />
       <AnnualMatrixTable
         id="dossier-fondamentaux"
-        title="Fondamentaux synthèse"
+        title={`Synthèse financière de ${hdr.name || dossier.symbol}`}
         unitNote={unitLabel}
         years={slicedAnnual.years}
         rows={slicedAnnual.summary}
@@ -1303,19 +1439,34 @@ export function FinanceDossierPanel({
 
       {/* Ratios */}
       <div id="dossier-ratios" className="finance-dossier-ratios-stack">
-        <AnnualMatrixTable id="dossier-profitabilite" title="Ratios de profitabilité" years={slicedAnnual.years} rows={slicedAnnual.profitability} dossier={dossier} />
-        <AnnualMatrixTable id="dossier-solvabilite" title="Ratios de solvabilité" years={slicedAnnual.years} rows={slicedAnnual.solvency} dossier={dossier} />
+        <ProfitabilityMarginsChart dossier={dossier} />
+        <AnnualMatrixTable
+          id="dossier-profitabilite"
+          title={`Ratios de profitabilité de ${hdr.name || dossier.symbol}`}
+          years={slicedAnnual.years}
+          rows={slicedAnnual.profitability}
+          dossier={dossier}
+        />
+        <AnnualMatrixTable
+          id="dossier-solvabilite"
+          title={`Ratios de solvabilité de ${hdr.name || dossier.symbol}`}
+          years={slicedAnnual.years}
+          rows={slicedAnnual.solvency}
+          dossier={dossier}
+        />
+        <DividendsHistoryChart dossier={dossier} />
         <AnnualMatrixTable
           id="dossier-distribution"
-          title="Ratios de distribution"
+          title={`Ratios de distribution de ${hdr.name || dossier.symbol}`}
           unitNote={unitLabel}
           years={slicedAnnual.years}
           rows={slicedAnnual.distribution}
           dossier={dossier}
         />
+        <CashConversionChart dossier={dossier} />
         <AnnualMatrixTable
           id="dossier-efficacite"
-          title="Ratios du cycle de conversion et d'efficacité"
+          title={`Ratios du cycle de conversion et d'efficacité de ${hdr.name || dossier.symbol}`}
           years={slicedAnnual.years}
           rows={slicedAnnual.efficiency}
           dossier={dossier}
@@ -1352,6 +1503,11 @@ export function FinanceDossierPanel({
 
         {slicedAnnual.ih_score.years.length > 0 && (
           <div id="dossier-ihscore" className="finance-dossier-score-block">
+            <div className="finance-ih-callout">
+              L&apos;<strong>IH Score</strong> analyse neuf critères liés à la croissance, à la rentabilité, et à la
+              solidité financière d&apos;une entreprise cotée, d&apos;après ses derniers exercices comptables. Un score
+              élevé, proche ou égal à 9, présage de la qualité et de la solidité de la société.
+            </div>
             <div className="finance-dossier-score-banner">
               <strong>
                 <FinanceMetricLabel
@@ -1368,54 +1524,120 @@ export function FinanceDossierPanel({
                 Tendance {slicedAnnual.ih_score.trend}
               </span>
             </div>
-            <div className="finance-table-wrapper finance-stmt-scroll">
-              <table className="finance-data-table finance-stmt-table">
-                <thead>
-                  <tr>
-                    <th className="finance-stmt-sticky-col">Critère IH Score</th>
-                    {slicedAnnual.ih_score.years.map((y, idx) => (
-                      <th key={`ih-${idx}-${y}`}>{y}</th>
+            <div className="finance-ih-card">
+              <div className="finance-ih-card-head">
+                <strong>IH Score de {hdr.name || dossier.symbol}</strong>
+              </div>
+              <div className="finance-table-wrapper finance-stmt-scroll finance-ih-table-wrap">
+                <table className="finance-data-table finance-stmt-table finance-ih-table">
+                  <thead>
+                    <tr>
+                      <th className="finance-stmt-sticky-col">Critère IH Score</th>
+                      {slicedAnnual.ih_score.years.map((y, idx) => (
+                        <th key={`ih-${idx}-${y}`}>{y}</th>
+                      ))}
+                      {slicedAnnual.ih_score.years.length > 1 && (
+                        <>
+                          <th className="finance-ih-spacer-col" aria-hidden="true" />
+                          {slicedAnnual.ih_score.years.slice(1).map((y, idx) => (
+                            <th key={`ih-d-${idx}-${y}`} className="finance-dossier-yoy-head">
+                              {slicedAnnual.ih_score.years[idx].slice(-2)}-{y.slice(-2)}
+                            </th>
+                          ))}
+                        </>
+                      )}
+                      <th>Moy.</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {slicedAnnual.ih_score.criteria.map(c => (
+                      <tr key={c.key}>
+                        <td className="finance-stmt-sticky-col">{c.label}</td>
+                        {c.values.map((v, i) => (
+                          <td key={`${c.key}-${i}`}>{v != null ? v : "—"}</td>
+                        ))}
+                        {slicedAnnual.ih_score.years.length > 1 && (
+                          <>
+                            <td className="finance-ih-spacer-col" aria-hidden="true" />
+                            {c.values.slice(1).map((v, i) => {
+                              const prev = c.values[i];
+                              if (v == null || prev == null) return <td key={`${c.key}-d-${i}`}>—</td>;
+                              const diff = Number((v - prev).toFixed(2));
+                              return (
+                                <td
+                                  key={`${c.key}-d-${i}`}
+                                  className={diff > 0 ? "text-emerald" : diff < 0 ? "text-rose" : "finance-stmt-muted"}
+                                >
+                                  {diff === 0 ? "=" : `${diff > 0 ? "+" : ""}${diff}`}
+                                </td>
+                              );
+                            })}
+                          </>
+                        )}
+                        <td><strong>{c.avg?.toFixed(2) ?? "—"}</strong></td>
+                      </tr>
                     ))}
-                    <th>Moy.</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {slicedAnnual.ih_score.criteria.map(c => (
-                    <tr key={c.key}>
-                      <td className="finance-stmt-sticky-col">{c.label}</td>
-                      {c.values.map((v, i) => (
-                        <td key={`${c.key}-${i}`}>{v != null ? v : "—"}</td>
-                      ))}
-                      <td><strong>{c.avg?.toFixed(2) ?? "—"}</strong></td>
+                    <tr className="finance-dossier-total-row finance-ih-key-row">
+                      <td className="finance-stmt-sticky-col"><strong>IH SCORE</strong></td>
+                      <td
+                        colSpan={
+                          slicedAnnual.ih_score.years.length +
+                          (slicedAnnual.ih_score.years.length > 1 ? slicedAnnual.ih_score.years.length : 0)
+                        }
+                      />
+                      <td><strong>{slicedAnnual.ih_score.latest_score?.toFixed(1) ?? "—"}</strong></td>
                     </tr>
-                  ))}
-                  <tr className="finance-dossier-total-row">
-                    <td className="finance-stmt-sticky-col"><strong>IH SCORE</strong></td>
-                    <td colSpan={slicedAnnual.ih_score.years.length} />
-                    <td><strong>{slicedAnnual.ih_score.latest_score?.toFixed(1) ?? "—"}</strong></td>
-                  </tr>
-                  {slicedAnnual.ih_score.trend_criteria.map(c => (
-                    <tr key={c.key} className="finance-dossier-trend-row">
-                      <td className="finance-stmt-sticky-col">{c.label}</td>
-                      {c.values.map((v, i) => (
-                        <td key={`${c.key}-${i}`}>{v != null ? v : "—"}</td>
-                      ))}
-                      <td><strong>{c.avg?.toFixed(2) ?? "—"}</strong></td>
+                    {slicedAnnual.ih_score.trend_criteria.map(c => (
+                      <tr key={c.key} className="finance-dossier-trend-row">
+                        <td className="finance-stmt-sticky-col">{c.label}</td>
+                        {c.values.map((v, i) => (
+                          <td key={`${c.key}-${i}`}>{v != null ? v : "—"}</td>
+                        ))}
+                        {slicedAnnual.ih_score.years.length > 1 && (
+                          <>
+                            <td className="finance-ih-spacer-col" aria-hidden="true" />
+                            {c.values.slice(1).map((v, i) => {
+                              const prev = c.values[i];
+                              if (v == null || prev == null) return <td key={`${c.key}-d-${i}`}>—</td>;
+                              const diff = Number((v - prev).toFixed(2));
+                              return (
+                                <td
+                                  key={`${c.key}-d-${i}`}
+                                  className={diff > 0 ? "text-emerald" : diff < 0 ? "text-rose" : "finance-stmt-muted"}
+                                >
+                                  {diff === 0 ? "=" : `${diff > 0 ? "+" : ""}${diff}`}
+                                </td>
+                              );
+                            })}
+                          </>
+                        )}
+                        <td><strong>{c.avg?.toFixed(2) ?? "—"}</strong></td>
+                      </tr>
+                    ))}
+                    <tr className="finance-dossier-total-row finance-ih-key-row">
+                      <td className="finance-stmt-sticky-col"><strong>TENDANCE</strong></td>
+                      <td
+                        colSpan={
+                          slicedAnnual.ih_score.years.length +
+                          (slicedAnnual.ih_score.years.length > 1 ? slicedAnnual.ih_score.years.length : 0)
+                        }
+                      />
+                      <td><strong>{slicedAnnual.ih_score.trend}</strong></td>
                     </tr>
-                  ))}
-                  <tr className="finance-dossier-total-row">
-                    <td className="finance-stmt-sticky-col"><strong>TENDANCE</strong></td>
-                    <td colSpan={slicedAnnual.ih_score.years.length} />
-                    <td><strong>{slicedAnnual.ih_score.trend}</strong></td>
-                  </tr>
-                </tbody>
-              </table>
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         )}
 
         {slicedAnnual.piotroski.years.length > 0 && (
           <div id="dossier-piotroski" className="finance-dossier-score-block">
+            <div className="finance-ih-callout">
+              Le <strong>F-Score</strong>, créé par Joseph Piotroski en 2000, analyse neuf critères liés à la rentabilité
+              et à la solidité financière d&apos;une entreprise cotée. Un score élevé, proche ou égal à 9, présage de la
+              solidité de la société.
+            </div>
             <h5>
               <FinanceMetricLabel
                 termKey="piotroski"
@@ -1425,39 +1647,48 @@ export function FinanceDossierPanel({
               />{" "}
               — Dernier exercice : <strong>{slicedAnnual.piotroski.latest_score ?? "—"}/9</strong>
             </h5>
-            <div className="finance-table-wrapper finance-stmt-scroll">
-              <table className="finance-data-table finance-stmt-table">
-                <thead>
-                  <tr>
-                    <th className="finance-stmt-sticky-col">Critère Piotroski</th>
-                    {slicedAnnual.piotroski.years.map((y, idx) => (
-                      <th key={`pio-${idx}-${y}`}>{y}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {slicedAnnual.piotroski.criteria.map(c => (
-                    <tr key={c.key}>
-                      <td className="finance-stmt-sticky-col">{c.label}</td>
-                      {c.values.map((v, i) => (
-                        <td key={`${c.key}-${i}`}>{v ?? "—"}</td>
+            <div className="finance-ih-card">
+              <div className="finance-ih-card-head">
+                <strong>F-Score Piotroski de {hdr.name || dossier.symbol}</strong>
+              </div>
+              <div className="finance-table-wrapper finance-stmt-scroll finance-ih-table-wrap">
+                <table className="finance-data-table finance-stmt-table finance-ih-table">
+                  <thead>
+                    <tr>
+                      <th className="finance-stmt-sticky-col">Critère Piotroski</th>
+                      {slicedAnnual.piotroski.years.map((y, idx) => (
+                        <th key={`pio-${idx}-${y}`}>{y}</th>
                       ))}
                     </tr>
-                  ))}
-                  <tr className="finance-dossier-total-row">
-                    <td className="finance-stmt-sticky-col"><strong>F_SCORE</strong></td>
-                    {slicedAnnual.piotroski.scores.map((s, i) => (
-                      <td key={`f-${i}`}><strong>{s}</strong></td>
+                  </thead>
+                  <tbody>
+                    {slicedAnnual.piotroski.criteria.map(c => (
+                      <tr key={c.key}>
+                        <td className="finance-stmt-sticky-col">{c.label}</td>
+                        {c.values.map((v, i) => (
+                          <td key={`${c.key}-${i}`}>{v ?? "—"}</td>
+                        ))}
+                      </tr>
                     ))}
-                  </tr>
-                </tbody>
-              </table>
+                    <tr className="finance-dossier-total-row finance-ih-key-row">
+                      <td className="finance-stmt-sticky-col"><strong>F_SCORE</strong></td>
+                      {slicedAnnual.piotroski.scores.map((s, i) => (
+                        <td key={`f-${i}`}><strong>{s}</strong></td>
+                      ))}
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         )}
 
         {slicedAnnual.altman.years.length > 0 && (
           <div id="dossier-altman" className="finance-dossier-score-block">
+            <div className="finance-ih-callout">
+              Le <strong>Z-Score</strong>, créé par Edward Altman, combine cinq ratios comptables et boursiers pour
+              évaluer le risque de défaillance financière (&gt; 3,0 : zone saine · 1,8–3,0 : zone grise · &lt; 1,8 : vigilance).
+            </div>
             <h5>
               <FinanceMetricLabel
                 termKey="altman"
@@ -1467,35 +1698,40 @@ export function FinanceDossierPanel({
               />{" "}
               — Dernier exercice : <strong>{slicedAnnual.altman.latest_score?.toFixed(1) ?? "—"}</strong>
             </h5>
-            <div className="finance-table-wrapper finance-stmt-scroll">
-              <table className="finance-data-table finance-stmt-table">
-                <thead>
-                  <tr>
-                    <th className="finance-stmt-sticky-col">Critère Altman</th>
-                    {slicedAnnual.altman.years.map((y, idx) => (
-                      <th key={`alt-${idx}-${y}`}>{y}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {slicedAnnual.altman.criteria.map(c => (
-                    <tr key={c.key}>
-                      <td className="finance-stmt-sticky-col">
-                        <FinanceMetricLabel termKey={`altman_${c.key}`} label={c.label} />
-                      </td>
-                      {c.values.map((v, i) => (
-                        <td key={`${c.key}-${i}`}>{v != null ? v.toFixed(1) : "—"}</td>
+            <div className="finance-ih-card">
+              <div className="finance-ih-card-head">
+                <strong>Z-Score Altman de {hdr.name || dossier.symbol}</strong>
+              </div>
+              <div className="finance-table-wrapper finance-stmt-scroll finance-ih-table-wrap">
+                <table className="finance-data-table finance-stmt-table finance-ih-table">
+                  <thead>
+                    <tr>
+                      <th className="finance-stmt-sticky-col">Critère Altman</th>
+                      {slicedAnnual.altman.years.map((y, idx) => (
+                        <th key={`alt-${idx}-${y}`}>{y}</th>
                       ))}
                     </tr>
-                  ))}
-                  <tr className="finance-dossier-total-row">
-                    <td className="finance-stmt-sticky-col"><strong>Z_SCORE</strong></td>
-                    {slicedAnnual.altman.scores.map((s, i) => (
-                      <td key={`z-${i}`}><strong>{s != null ? s.toFixed(1) : "—"}</strong></td>
+                  </thead>
+                  <tbody>
+                    {slicedAnnual.altman.criteria.map(c => (
+                      <tr key={c.key}>
+                        <td className="finance-stmt-sticky-col">
+                          <FinanceMetricLabel termKey={`altman_${c.key}`} label={c.label} />
+                        </td>
+                        {c.values.map((v, i) => (
+                          <td key={`${c.key}-${i}`}>{v != null ? v.toFixed(1) : "—"}</td>
+                        ))}
+                      </tr>
                     ))}
-                  </tr>
-                </tbody>
-              </table>
+                    <tr className="finance-dossier-total-row finance-ih-key-row">
+                      <td className="finance-stmt-sticky-col"><strong>Z_SCORE</strong></td>
+                      {slicedAnnual.altman.scores.map((s, i) => (
+                        <td key={`z-${i}`}><strong>{s != null ? s.toFixed(1) : "—"}</strong></td>
+                      ))}
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         )}
@@ -2261,6 +2497,14 @@ function UncleStockScoresSection({
   );
 }
 
+function fmtStmtCell(row: StructuredStatementRow, v: number | null): string {
+  if (v == null || !Number.isFinite(v)) return "-";
+  if (row.format === "pct") return `${Math.round(v)}%`;
+  if (row.format === "per_share") return v.toLocaleString("fr-FR", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+  if (row.format === "shares") return (v / 1e6).toLocaleString("fr-FR", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+  return fmtMln(v);
+}
+
 function SimplifiedPeriodSection({
   id,
   title,
@@ -2276,56 +2520,152 @@ function SimplifiedPeriodSection({
   limit: number | null;
   annual: boolean;
 }) {
+  const [rawMode, setRawMode] = useState(false);
+
   if (!period || period.dates.length === 0) return null;
   const start = limit != null && period.dates.length > limit ? period.dates.length - limit : 0;
   const dates = period.dates.slice(start);
-  const subTables: [string, StatementRow[]][] = [
-    ["Compte de résultat", period.income],
-    ["Bilan", period.balance],
-    ["Flux de trésorerie", period.cashflow],
+  const deltaHeaders = buildStatementDeltaHeaders(dates, annual);
+  const structured = buildStructuredStatements(period, start);
+  const structuredSubTables: [string, StructuredStatementRow[]][] = [
+    [`${title} — Compte de résultat`, structured.income],
+    [`${title} — Bilan`, structured.balance],
+    [`${title} — Flux de trésorerie`, structured.cashflow],
+  ];
+  const rawSubTables: [string, StatementRow[]][] = [
+    ["Compte de résultat (brut)", period.income],
+    ["Bilan (brut)", period.balance],
+    ["Flux de trésorerie (brut)", period.cashflow],
   ];
 
   return (
     <section id={id} className="finance-dossier-section">
       <div className="finance-dossier-sec-head">
         <h4>{title}</h4>
-        <small className="finance-dossier-unit">{unitNote}</small>
+        <div className="finance-timeframe-selector">
+          <small className="finance-dossier-unit">{unitNote}</small>
+          <button
+            type="button"
+            className={`finance-tf-btn ${rawMode ? "active" : ""}`}
+            onClick={() => setRawMode(prev => !prev)}
+            title="Basculer entre la vue simplifiée structurée et l'ensemble des postes bruts EODHD"
+          >
+            {rawMode ? "Vue simplifiée" : "Tous postes bruts"}
+          </button>
+        </div>
       </div>
-      {subTables.map(([subTitle, rawRows]) => {
-        const rows = rawRows.map(r => ({ ...r, values: r.values.slice(start) })).filter(r => r.values.some(v => v != null));
-        if (rows.length === 0) return null;
-        return (
-          <div key={`${id}-${subTitle}`} className="finance-dossier-score-block">
-            <h5>{subTitle}</h5>
-            <div className="finance-table-wrapper finance-stmt-scroll">
-              <table className="finance-data-table finance-stmt-table">
-                <thead>
-                  <tr>
-                    <th className="finance-stmt-sticky-col">Poste</th>
-                    {dates.map((d, i) => (
-                      <th key={`${id}-d-${i}-${d}`}>{annual ? d.slice(0, 4) : d.slice(0, 7)}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map(r => (
-                    <tr key={r.key}>
-                      <td className="finance-stmt-sticky-col"><strong>{r.label}</strong></td>
-                      {r.values.map((v, i) => (
-                        <td key={`${r.key}-${i}`} className={v != null && v < 0 ? "text-rose" : undefined}>
-                          {r.key === "DilutedEPS" || r.key === "BasicEPS"
-                            ? (v != null ? v.toFixed(2) : "—")
-                            : fmtMln(v)}
-                        </td>
+
+      {!rawMode ? (
+        structuredSubTables.map(([subTitle, rows]) => {
+          const visible = rows.filter(r => r.values.some(v => v != null));
+          if (visible.length === 0) return null;
+          return (
+            <div key={`${id}-st-${subTitle}`} className="finance-dossier-score-block finance-ih-card">
+              <div className="finance-ih-card-head">
+                <strong>
+                  {subTitle} ({unitNote})
+                </strong>
+              </div>
+              <div className="finance-table-wrapper finance-stmt-scroll finance-ih-table-wrap">
+                <table className="finance-data-table finance-stmt-table finance-ih-table">
+                  <thead>
+                    <tr>
+                      <th className="finance-stmt-sticky-col">Poste</th>
+                      {dates.map((d, i) => (
+                        <th key={`${id}-sd-${i}-${d}`}>{annual ? d.slice(0, 4) : `${d.slice(5, 7)}/${d.slice(0, 4)}`}</th>
+                      ))}
+                      {deltaHeaders.length > 0 && <th className="finance-ih-spacer-col" aria-hidden="true" />}
+                      {deltaHeaders.map((dh, i) => (
+                        <th key={`${id}-dh-${i}-${dh}`} className="finance-dossier-yoy-head">
+                          {dh}
+                        </th>
                       ))}
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {visible.map(r => (
+                      <tr
+                        key={r.key}
+                        className={[
+                          r.isKey ? "finance-ih-key-row" : "",
+                          r.isSub ? "finance-ih-sub-row" : "",
+                          r.groupStart ? "finance-ih-group-start" : "",
+                        ]
+                          .filter(Boolean)
+                          .join(" ")}
+                      >
+                        <td className="finance-stmt-sticky-col">
+                          <span className={r.isSub ? "finance-ih-sub-label" : r.isKey ? "finance-ih-key-label" : undefined}>
+                            {r.label}
+                          </span>
+                        </td>
+                        {r.values.map((v, i) => (
+                          <td key={`${r.key}-v-${i}`} className={v != null && v < 0 ? "text-rose" : undefined}>
+                            {fmtStmtCell(r, v)}
+                          </td>
+                        ))}
+                        {deltaHeaders.length > 0 && <td className="finance-ih-spacer-col" aria-hidden="true" />}
+                        {r.deltas.slice(1).map((pct, i) => (
+                          <td
+                            key={`${r.key}-d-${i}`}
+                            className={
+                              pct == null
+                                ? "finance-stmt-muted"
+                                : pct >= 0
+                                  ? "text-emerald finance-dossier-yoy-cell"
+                                  : "text-rose finance-dossier-yoy-cell"
+                            }
+                          >
+                            {pct == null ? "-" : `${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%`}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
-          </div>
-        );
-      })}
+          );
+        })
+      ) : (
+        rawSubTables.map(([subTitle, rawRows]) => {
+          const rows = rawRows
+            .map(r => ({ ...r, values: r.values.slice(start) }))
+            .filter(r => r.values.some(v => v != null));
+          if (rows.length === 0) return null;
+          return (
+            <div key={`${id}-${subTitle}`} className="finance-dossier-score-block">
+              <h5>{subTitle}</h5>
+              <div className="finance-table-wrapper finance-stmt-scroll">
+                <table className="finance-data-table finance-stmt-table">
+                  <thead>
+                    <tr>
+                      <th className="finance-stmt-sticky-col">Poste</th>
+                      {dates.map((d, i) => (
+                        <th key={`${id}-d-${i}-${d}`}>{annual ? d.slice(0, 4) : d.slice(0, 7)}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map(r => (
+                      <tr key={r.key}>
+                        <td className="finance-stmt-sticky-col"><strong>{r.label}</strong></td>
+                        {r.values.map((v, i) => (
+                          <td key={`${r.key}-${i}`} className={v != null && v < 0 ? "text-rose" : undefined}>
+                            {r.key === "DilutedEPS" || r.key === "BasicEPS"
+                              ? (v != null ? v.toFixed(2) : "—")
+                              : fmtMln(v)}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          );
+        })
+      )}
     </section>
   );
 }
