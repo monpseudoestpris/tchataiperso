@@ -38,6 +38,7 @@ from .finance_eodhd_extras import (
 )
 from .finance_intrinsic import compute_intrinsic_valuations
 from .finance_scores import compute_uncle_stock_scores
+from .finance_uncle_stock_catalog import compute_uncle_stock_catalog
 from .finance_news import _deduplicate_articles, fetch_eodhd_news, fetch_yahoo_symbol_news
 from .finance_provider import (
     fetch_eodhd_fundamentals_json,
@@ -579,8 +580,10 @@ def _compute_annual_dossier_tables(
     # Extraction des vecteurs annuels en unités brutes (puis formatage côté UI)
     rev_l, gp_l, ebitda_l, ebit_l, opinc_l, pretax_l, tax_l, ni_l = [], [], [], [], [], [], [], []
     ocf_l, capex_l, fcf_l, div_paid_l, shares_l = [], [], [], [], []
-    assets_l, ca_l, cash_st_l, rec_l, inv_l = [], [], [], [], []
-    cl_l, ap_l, st_debt_l, lt_debt_l, tot_debt_l, net_debt_l, liab_l, eq_l, ret_earn_l, wc_l = [], [], [], [], [], [], [], [], [], []
+    assets_l, ca_l, cash_st_l, cash_pure_l, rec_l, inv_l = [], [], [], [], [], []
+    cl_l, ap_l, def_rev_cur_l, st_debt_l, lt_debt_l, tot_debt_l, net_debt_l, liab_l, eq_l, ret_earn_l, wc_l = (
+        [], [], [], [], [], [], [], [], [], [], []
+    )
     sga_l, int_exp_l, cost_rev_l = [], [], []
 
     for i in range(len(dates)):
@@ -605,12 +608,16 @@ def _compute_annual_dossier_tables(
 
         assets = at("TotalAssets", i)
         ca = at("CurrentAssets", i)
-        cash_st = at("CashCashEquivalentsAndShortTermInvestments", i) or at("CashAndCashEquivalents", i)
+        cash_pure = at("CashAndCashEquivalents", i)
+        cash_st = at("CashCashEquivalentsAndShortTermInvestments", i)
+        if cash_st is None:
+            cash_st = cash_pure
         rec = at("AccountsReceivable", i)
         inv = at("Inventory", i)
         cl = at("CurrentLiabilities", i)
         ap = at("AccountsPayable", i)
-        st_d = at("ShortTermDebt", i)
+        def_rev_cur = at("CurrentDeferredRevenue", i)
+        st_d = at("ShortTermDebt", i) or at("CurrentDebt", i)
         lt_d = at("LongTermDebt", i)
         tot_d = at("TotalDebt", i)
         if tot_d is None and (st_d is not None or lt_d is not None):
@@ -630,8 +637,8 @@ def _compute_annual_dossier_tables(
         rev_l.append(rev); gp_l.append(gp); ebitda_l.append(ebitda); ebit_l.append(ebit); opinc_l.append(opinc)
         pretax_l.append(pretax); tax_l.append(tax); ni_l.append(ni)
         ocf_l.append(ocf); capex_l.append(capex); fcf_l.append(fcf); div_paid_l.append(div_paid); shares_l.append(shares)
-        assets_l.append(assets); ca_l.append(ca); cash_st_l.append(cash_st); rec_l.append(rec); inv_l.append(inv)
-        cl_l.append(cl); ap_l.append(ap); st_debt_l.append(st_d); lt_debt_l.append(lt_d)
+        assets_l.append(assets); ca_l.append(ca); cash_st_l.append(cash_st); cash_pure_l.append(cash_pure); rec_l.append(rec); inv_l.append(inv)
+        cl_l.append(cl); ap_l.append(ap); def_rev_cur_l.append(def_rev_cur); st_debt_l.append(st_d); lt_debt_l.append(lt_d)
         tot_debt_l.append(tot_d); net_debt_l.append(net_d); liab_l.append(liab); eq_l.append(eq); ret_earn_l.append(ret_e); wc_l.append(wc)
         sga_l.append(at("SellingGeneralAndAdministration", i))
         int_exp_l.append(at("InterestExpense", i))
@@ -744,11 +751,19 @@ def _compute_annual_dossier_tables(
     cost_debt_l: list[float | None] = []
 
     for i in range(len(dates)):
-        inv_v = inv_l[i] or 0.0
-        cl_ex_std = (cl_l[i] - (st_debt_l[i] or 0.0)) if cl_l[i] is not None else None
-        quick_ratio_l.append(
-            _div((ca_l[i] - inv_v) if ca_l[i] is not None else None, cl_ex_std or cl_l[i], digits=2)
-        )
+        # Uncle Stock Quick ratio = (Total cash and equivalents + Total receivables) / Current liabilities
+        # (repli sur (CurrentAssets - Inventory) / CurrentLiabilities si détail créances absent)
+        cash_q = cash_pure_l[i] if cash_pure_l[i] is not None else cash_st_l[i]
+        if cl_l[i] and cl_l[i] > 0:
+            if cash_q is not None and rec_l[i] is not None:
+                quick_num = cash_q + rec_l[i]
+            elif ca_l[i] is not None:
+                quick_num = ca_l[i] - (inv_l[i] or 0.0)
+            else:
+                quick_num = None
+            quick_ratio_l.append(_div(quick_num, cl_l[i], digits=2))
+        else:
+            quick_ratio_l.append(None)
         curr_ratio_l.append(_div(ca_l[i], cl_l[i], digits=2))
         nd_ebitda_l.append(_div(net_debt_l[i], ebitda_l[i], digits=2))
         debt_assets_l.append(_div(tot_debt_l[i], assets_l[i], 100.0, 1))
@@ -788,18 +803,33 @@ def _compute_annual_dossier_tables(
         mk_row("payout_fcf", "Distribution sur FCF (Cash Payout)", "pct", payout_fcf_l),
     ]
 
-    # Cycle de conversion & efficacité
+    # Cycle de conversion & efficacité (conformément au référentiel Uncle Stock : moyennes .yr avg)
+    def avg_or_cur(vec: list[float | None], idx: int) -> float | None:
+        cur = vec[idx]
+        if cur is None:
+            return None
+        prev = vec[idx - 1] if idx > 0 else None
+        return (cur + prev) / 2.0 if prev is not None else cur
+
     dsi_l, dso_l, dpo_l, ccc_l, asset_turn_l, sga_eq_l, sga_rev_l = [], [], [], [], [], [], []
     for i in range(len(dates)):
         cost_abs = abs(cost_rev_l[i]) if cost_rev_l[i] is not None else None
-        dsi = _div(inv_l[i], cost_abs, 365.0, 0) if (inv_l[i] is not None and cost_abs) else None
-        dso = _div(rec_l[i], rev_l[i], 365.0, 0) if (rec_l[i] is not None and rev_l[i]) else None
-        d_inv = (inv_l[i] - inv_l[i - 1]) if (i > 0 and inv_l[i] is not None and inv_l[i - 1] is not None) else 0.0
-        cogs_adj = (cost_abs + d_inv) if cost_abs is not None else None
-        dpo = _div(ap_l[i], cogs_adj, 365.0, 0) if (ap_l[i] is not None and cogs_adj and cogs_adj > 0) else None
-        ccc = round(dsi + dso - dpo, 0) if (dsi is not None and dso is not None and dpo is not None) else None
+        avg_inv = avg_or_cur(inv_l, i)
+        avg_rec = avg_or_cur(rec_l, i)
+        avg_ap = avg_or_cur(ap_l, i)
+        avg_def_rev = avg_or_cur(def_rev_cur_l, i)
+        avg_assets = avg_or_cur(assets_l, i)
+        dsi = _div(avg_inv, cost_abs, 365.0, 0) if (avg_inv is not None and cost_abs and cost_abs > 0) else None
+        dso = _div(avg_rec, rev_l[i], 365.0, 0) if (avg_rec is not None and rev_l[i] and rev_l[i] > 0) else None
+        dpo = _div(avg_ap, cost_abs, 365.0, 0) if (avg_ap is not None and cost_abs and cost_abs > 0) else None
+        d_def_rev = (
+            _div(avg_def_rev, rev_l[i], 365.0, 0)
+            if (avg_def_rev is not None and avg_def_rev > 0 and rev_l[i] and rev_l[i] > 0)
+            else 0.0
+        )
+        ccc = round(dsi + dso - dpo - (d_def_rev or 0.0), 0) if (dsi is not None and dso is not None and dpo is not None) else None
         dsi_l.append(dsi); dso_l.append(dso); dpo_l.append(dpo); ccc_l.append(ccc)
-        asset_turn_l.append(_div(rev_l[i], assets_l[i], digits=2))
+        asset_turn_l.append(_div(rev_l[i], avg_assets, digits=2))
         sga_abs = abs(sga_l[i]) if sga_l[i] is not None else None
         sga_eq_l.append(_div(sga_abs, eq_l[i], 100.0, 1))
         sga_rev_l.append(_div(sga_abs, rev_l[i], 100.0, 1))
@@ -1515,6 +1545,7 @@ async def get_financial_dossier(
     high_52w = _num(tech.get("52WeekHigh")) or _num(y_det.get("fiftyTwoWeekHigh"))
 
     ann_series, _, _, _ = load_fundamental_series(db_path, canonical, "annual")
+    qtr_series, _, _, _ = load_fundamental_series(db_path, canonical, "quarterly")
     perf_payload, risk_payload, monthly_chart = compute_price_performance_and_risk(stored_bars, currency=currency)
     annual_tables = _compute_annual_dossier_tables(ann_series, stored_bars, beta_val)
     stakeholders = _extract_stakeholders(eod_fund, yahoo_sum)
@@ -1701,6 +1732,30 @@ async def get_financial_dossier(
         bars=stored_bars,
     )
 
+    deduped_qtr_dates = sorted({d for v in qtr_series.values() for d in v.keys()})
+    employees_val = _num(gen.get("FullTimeEmployees")) or _num(y_prof.get("fullTimeEmployees"))
+    uncle_stock_catalog = compute_uncle_stock_catalog(
+        ann_series=deduped_ann_series,
+        qtr_series=qtr_series,
+        dates=deduped_ann_dates,
+        qtr_dates=deduped_qtr_dates,
+        current_price=price,
+        currency=currency,
+        shares_override=effective_shares,
+        eod_fund=eod_fund,
+        capital_valuation=cap_val_dict,
+        intrinsic_valuation=intrinsic_valuation,
+        uncle_stock_scores=uncle_stock_scores,
+        risk=risk_payload,
+        performance=perf_payload,
+        bars=stored_bars,
+        macro_context=eod_extras.get("macro_context"),
+        stakeholders=stakeholders,
+        preferred_stock=preferred_stock,
+        minority_interest=minority_interest,
+        employees=employees_val,
+    )
+
     from .finance_funds import extract_fund_profile
     from .finance_warehouse import lookup_exchange_symbol
 
@@ -1754,6 +1809,7 @@ async def get_financial_dossier(
         "macro_context": eod_extras.get("macro_context"),
         "intrinsic_valuation": intrinsic_valuation,
         "uncle_stock_scores": uncle_stock_scores,
+        "uncle_stock_catalog": uncle_stock_catalog,
         "ai_analysis": ai_history[0] if ai_history else None,
         "ai_history": ai_history,
     }

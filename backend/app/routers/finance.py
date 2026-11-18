@@ -34,7 +34,7 @@ from ..finance_indices import (
 )
 from ..providers import ProviderError
 from ..finance_moat import analyze_and_build_stock_moat
-from ..finance_news import search_and_summarize_stock_news
+from ..finance_news import get_cached_or_fetch_eodhd_news_feed, search_and_summarize_stock_news
 from ..finance_ranges import ChartRange, DEFAULT_CHART_RANGE
 from ..finance_reports import MAX_REPORT_EXTRACTED_CHARS, analyze_quarterly_report, extract_report_text
 from ..finance_report_html import build_classy_report_html
@@ -1315,17 +1315,40 @@ def delete_custom_indicator(
 
 
 @router.get("/news")
-def list_stock_news(
+async def list_stock_news(
     symbol: str | None = Query(None, max_length=32),
+    include_feed: bool = Query(True, description="Inclure les dépêches EODHD / Yahoo en cache (ou en direct)"),
+    refresh: bool = Query(False, description="Forcer le re-téléchargement des dépêches EODHD/Yahoo"),
+    settings: Settings = Depends(get_settings),
     user: User = Depends(current_user),
     sessions: sessionmaker = Depends(get_sessions),
 ) -> dict[str, Any]:
+    clean_sym = (symbol or "").strip().upper()
+    sym_aliases: list[str] = []
+    if clean_sym:
+        db_path = warehouse_db_path(settings)
+        canonical = resolve_canonical_symbol(db_path, clean_sym)
+        sym_aliases = sorted(
+            {
+                s
+                for s in (
+                    clean_sym,
+                    canonical,
+                    canonical.split(".", 1)[0],
+                    f"{clean_sym}.US" if "." not in clean_sym else "",
+                )
+                if s
+            }
+        )
     with sessions() as db:
         stmt = select(FinanceStockNews).where(FinanceStockNews.user_id == user.id)
-        if symbol and symbol.strip():
-            stmt = stmt.where(FinanceStockNews.symbol == symbol.strip().upper())
+        if sym_aliases:
+            stmt = stmt.where(FinanceStockNews.symbol.in_(sym_aliases))
         rows = list(db.scalars(stmt.order_by(FinanceStockNews.created_at.desc()).limit(30)))
-    return {"items": [stock_news_json(row) for row in rows]}
+    feed: dict[str, Any] | None = None
+    if clean_sym and include_feed:
+        feed = await get_cached_or_fetch_eodhd_news_feed(settings, clean_sym, refresh=refresh, limit=20)
+    return {"items": [stock_news_json(row) for row in rows], "feed": feed}
 
 
 @router.post("/news/search", status_code=201)

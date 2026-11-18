@@ -1466,6 +1466,7 @@ export type FinancialDossier = {
   } | null;
   intrinsic_valuation?: IntrinsicValuationPayload | null;
   uncle_stock_scores?: UncleStockScoresPayload | null;
+  uncle_stock_catalog?: UncleStockCatalogPayload | null;
   fund_profile?: FundProfileData | null;
   ai_analysis: FinanceAiAnalysisRecord | null;
   ai_history?: FinanceAiAnalysisRecord[];
@@ -1615,6 +1616,49 @@ export interface IntrinsicValuationPayload {
       cells: { growth_pct: number; wacc_pct: number; value: number | null; undervalued: boolean }[];
     }[];
   } | null;
+}
+
+export interface UncleStockCatalogSubmetrics {
+  yr_avg?: string | null;
+  avg_5y?: string | null;
+  wavg_5y?: string | null;
+  growth_1y?: string | null;
+  rcagr_67?: string | null;
+  sd_5y?: string | null;
+  cv_5y?: string | null;
+}
+
+export interface UncleStockCatalogItem {
+  id: string;
+  category: string;
+  section: string;
+  name: string;
+  formula: string;
+  description: string;
+  method?: string;
+  notes?: string;
+  example?: string;
+  unit: string;
+  available: boolean;
+  latest_value: number | null;
+  formatted_value: string;
+  values_by_year: (number | null)[];
+  submetrics?: UncleStockCatalogSubmetrics | null;
+  substitution?: string | null;
+}
+
+export interface UncleStockCatalogCategory {
+  name: string;
+  total: number;
+  computed: number;
+}
+
+export interface UncleStockCatalogPayload {
+  total_count: number;
+  computed_count: number;
+  years: string[];
+  categories: UncleStockCatalogCategory[];
+  items: UncleStockCatalogItem[];
 }
 
 export interface DossierNewsItem {
@@ -2285,6 +2329,20 @@ export type StockNewsArticle = {
   source: string;
   published_at: string;
   snippet?: string;
+  tags?: string[];
+  sentiment?: {
+    polarity?: number;
+    pos?: number;
+    neu?: number;
+    neg?: number;
+  } | null;
+};
+
+export type StockNewsFeed = {
+  source: string;
+  provider: string;
+  updated_at: string | null;
+  items: StockNewsArticle[];
 };
 
 export type StockNewsEntry = {
@@ -2297,10 +2355,24 @@ export type StockNewsEntry = {
   created_at: string;
 };
 
+export async function fetchStockNewsWithFeed(
+  symbol?: string,
+  refresh = false,
+): Promise<{ items: StockNewsEntry[]; feed: StockNewsFeed | null }> {
+  const qs = new URLSearchParams();
+  if (symbol) qs.set("symbol", symbol);
+  if (refresh) qs.set("refresh", "true");
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  const res = await api<{ items: StockNewsEntry[]; feed?: StockNewsFeed | null }>(`/finance/news${suffix}`);
+  return {
+    items: res.items || [],
+    feed: res.feed ?? null,
+  };
+}
+
 export async function fetchStockNews(symbol?: string): Promise<StockNewsEntry[]> {
-  const q = symbol ? `?symbol=${encodeURIComponent(symbol)}` : "";
-  const res = await api<{ items: StockNewsEntry[] }>(`/finance/news${q}`);
-  return res.items || [];
+  const res = await fetchStockNewsWithFeed(symbol, false);
+  return res.items;
 }
 
 export async function searchStockNews(payload: {

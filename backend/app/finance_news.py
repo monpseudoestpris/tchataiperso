@@ -264,19 +264,35 @@ async def collect_latest_stock_news(
     clean_name = company_name.strip()
     clean_focus = focus_query.strip()
 
+    from .finance_warehouse import get_instrument_meta, resolve_canonical_symbol, warehouse_db_path
+
     primary_articles: list[dict[str, Any]] = []
     web_articles: list[dict[str, Any]] = []
     sources_used: list[str] = []
 
     if not settings.demo_mode:
         async def _get_primary_news() -> tuple[list[dict[str, Any]], str | None]:
+            db_path = warehouse_db_path(settings)
+            canonical = resolve_canonical_symbol(db_path, clean_sym)
+            meta = get_instrument_meta(db_path, canonical)
+            eod_candidates: list[str] = []
+            for cand in [
+                meta.get("eod_ticker") if meta else None,
+                canonical,
+                clean_sym,
+                f"{clean_sym}.US" if "." not in clean_sym else None,
+            ]:
+                c = str(cand or "").strip().upper()
+                if c and c not in eod_candidates:
+                    eod_candidates.append(c)
+
             if settings.enabled(settings.eod_historical_data_key):
                 eod_key = settings.eod_historical_data_key.get_secret_value()
-                eod_sym = clean_sym if "." in clean_sym else f"{clean_sym}.US"
-                eod_items = await fetch_eodhd_news(eod_sym, eod_key, limit=max(limit, 12))
-                if eod_items:
-                    return eod_items, "EODHD News"
-            yahoo_lookup = clean_sym[:-3] if clean_sym.endswith(".US") else clean_sym
+                for eod_sym in eod_candidates:
+                    eod_items = await fetch_eodhd_news(eod_sym, eod_key, limit=max(limit, 15))
+                    if eod_items:
+                        return eod_items, "EODHD News"
+            yahoo_lookup = (meta.get("yahoo_symbol") if meta else None) or (clean_sym[:-3] if clean_sym.endswith(".US") else clean_sym)
             async with httpx.AsyncClient(
                 headers={"User-Agent": _YAHOO_UA},
                 follow_redirects=True,
@@ -371,4 +387,122 @@ async def search_and_summarize_stock_news(
         "search_query": clean_focus,
         "summary_markdown": summary,
         "articles": articles,
+    }
+
+
+async def get_cached_or_fetch_eodhd_news_feed(
+    settings: Settings,
+    symbol: str,
+    *,
+    refresh: bool = False,
+    limit: int = 20,
+) -> dict[str, Any]:
+    """Retourne le fil brut des actualités EODHD (`/api/news`, avec sentiment & tags) mis en cache 6 h (repli Yahoo)."""
+    from .finance_warehouse import (
+        get_instrument_meta,
+        get_snapshot,
+        resolve_canonical_symbol,
+        save_snapshot,
+        warehouse_db_path,
+    )
+
+    clean_sym = (symbol or "").strip().upper()
+    if not clean_sym:
+        return {"source": "", "provider": "", "updated_at": None, "items": []}
+
+    db_path = warehouse_db_path(settings)
+    canonical = resolve_canonical_symbol(db_path, clean_sym)
+    meta = get_instrument_meta(db_path, canonical)
+    news_ttl = min(max(300, int(settings.finance_fundamentals_ttl_hours) * 3600), 6 * 3600)
+
+    if not refresh:
+        for snap_sym in (canonical, clean_sym):
+            cached = get_snapshot(db_path, snap_sym, "news", max_age_seconds=news_ttl, include_raw=False)
+            if cached and isinstance(cached.get("normalized"), dict):
+                norm = cached["normalized"]
+                cached_items = norm.get("items") or []
+                if cached_items:
+                    return {
+                        "source": norm.get("source") or "EOD Historical Data",
+                        "provider": norm.get("provider") or "eodhd",
+                        "updated_at": cached.get("updated_at"),
+                        "items": cached_items[:limit],
+                    }
+
+    items: list[dict[str, Any]] = []
+    provider = "yahoo_finance"
+    source_label = "Yahoo Finance"
+
+    if not settings.demo_mode:
+        eod_key = (
+            settings.eod_historical_data_key.get_secret_value()
+            if settings.enabled(settings.eod_historical_data_key)
+            else ""
+        )
+        candidates: list[str] = []
+        for cand in [
+            meta.get("eod_ticker") if meta else None,
+            canonical,
+            clean_sym,
+            f"{clean_sym}.US" if "." not in clean_sym else None,
+        ]:
+            c = str(cand or "").strip().upper()
+            if c and c not in candidates:
+                candidates.append(c)
+
+        if eod_key:
+            for cand in candidates[:3]:
+                eod_items = await fetch_eodhd_news(cand, eod_key, limit=limit)
+                if eod_items:
+                    items = eod_items
+                    provider = "eodhd"
+                    source_label = "EOD Historical Data"
+                    break
+
+        if not items:
+            yahoo_lookup = (
+                (meta.get("yahoo_symbol") if meta else None)
+                or (clean_sym[:-3] if clean_sym.endswith(".US") else clean_sym)
+            )
+            async with httpx.AsyncClient(
+                headers={"User-Agent": _YAHOO_UA},
+                follow_redirects=True,
+                timeout=10.0,
+            ) as client:
+                y_items = await fetch_yahoo_symbol_news(client, yahoo_lookup, limit=min(15, limit))
+            if y_items:
+                items = y_items
+                provider = "yahoo_finance"
+                source_label = "Yahoo Finance"
+    else:
+        items = [
+            {
+                "title": f"{clean_sym} : dépêche de démonstration EODHD",
+                "url": f"https://eodhd.com/financial-summary/{urllib.parse.quote(clean_sym)}",
+                "source": "Démo EODHD",
+                "published_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M"),
+                "snippet": f"Flux d'actualités de démonstration pour {clean_sym}.",
+                "tags": ["EARNINGS"],
+                "sentiment": {"polarity": 0.45, "pos": 0.6, "neu": 0.35, "neg": 0.05},
+            }
+        ]
+        provider = "eodhd"
+        source_label = "Démo EODHD"
+
+    items = _deduplicate_articles(items, limit=limit)
+    now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    if items:
+        save_snapshot(
+            db_path,
+            canonical,
+            provider,
+            "news",
+            items,
+            {"source": source_label, "provider": provider, "items": items},
+        )
+    return {
+        "source": source_label if items else "",
+        "provider": provider if items else "",
+        "updated_at": now_iso if items else None,
+        "items": items,
     }

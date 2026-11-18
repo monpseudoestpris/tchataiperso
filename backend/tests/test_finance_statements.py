@@ -724,3 +724,54 @@ def test_eodhd_extras_sync_and_logo_resolution():
             cached_extras = asyncio.run(_sync_eodhd_extras(s, db_path, "NVDA.US", fund_sample, "fake-key", 3600, refresh=False))
         assert cached_extras["sentiments"]["article_count"] == 38
         assert cached_extras["macro_context"]["us_treasury"]["rate_52w_pct"] == 4.25
+
+
+def test_news_endpoint_includes_eodhd_feed_and_cache(tmp_path: Path):
+    from tests.test_api import authenticated_client
+
+    s = Settings(
+        _env_file=None,
+        app_data_dir=tmp_path,
+        finance_data_dir=tmp_path / "finance",
+        demo_mode=False,
+        eod_historical_data_key="fake-eod-key",
+        openrouter_api_key="",
+        brave_api_key="",
+        duckduckgo_instant_answers_enabled=False,
+    )
+    eod_sample = [
+        {
+            "title": "Air Liquide signe un contrat majeur hydrogène",
+            "url": "https://example.com/news/ai-h2",
+            "source": "example.com",
+            "date": "2026-11-18 10:00",
+            "published_at": "2026-11-18 10:00",
+            "snippet": "Nouveau contrat de long terme en Europe.",
+            "tags": ["HYDROGEN", "EARNINGS"],
+            "sentiment": {"polarity": 0.62, "pos": 0.7, "neu": 0.25, "neg": 0.05},
+        }
+    ]
+    with authenticated_client(s) as client:
+        with patch("app.finance_news.fetch_eodhd_news", new=AsyncMock(return_value=eod_sample)) as mock_eod:
+            res1 = client.get("/api/finance/news?symbol=AI.PA")
+        assert res1.status_code == 200
+        body1 = res1.json()
+        assert body1["items"] == []
+        assert body1["feed"] is not None
+        assert body1["feed"]["provider"] == "eodhd"
+        assert body1["feed"]["items"][0]["title"] == "Air Liquide signe un contrat majeur hydrogène"
+        assert body1["feed"]["items"][0]["tags"] == ["HYDROGEN", "EARNINGS"]
+        assert body1["feed"]["items"][0]["sentiment"]["polarity"] == 0.62
+        assert mock_eod.await_count == 1
+
+        # 2e appel sans refresh -> 0 appel réseau grâce au cache entrepôt 6h
+        with patch("app.finance_news.fetch_eodhd_news", side_effect=AssertionError("Doit utiliser le cache")):
+            res2 = client.get("/api/finance/news?symbol=AI.PA")
+        assert res2.status_code == 200
+        assert res2.json()["feed"]["items"][0]["title"] == "Air Liquide signe un contrat majeur hydrogène"
+
+        # refresh=true -> re-télécharge
+        with patch("app.finance_news.fetch_eodhd_news", new=AsyncMock(return_value=eod_sample)) as mock_ref:
+            res3 = client.get("/api/finance/news?symbol=AI.PA&refresh=true")
+        assert res3.status_code == 200
+        assert mock_ref.await_count == 1

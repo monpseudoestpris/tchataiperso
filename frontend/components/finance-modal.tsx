@@ -2004,7 +2004,7 @@ export function FinanceModal({
                 {activeTab === "news" && (
                   <div className="finance-tab-content">
                     <FinanceNewsPanel
-                      symbol={data.yahoo_symbol || data.symbol}
+                      symbol={data.eod_ticker || data.yahoo_symbol || data.symbol}
                       companyName={data.long_name || data.short_name || data.symbol}
                       onInsertIntoChat={onInsertIntoChat}
                     />

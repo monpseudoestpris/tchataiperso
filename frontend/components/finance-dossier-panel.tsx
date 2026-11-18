@@ -28,6 +28,7 @@ import {
 } from "@/components/finance-dossier-charts";
 import { type FinanceHelpGuideId } from "@/components/finance-help-modal";
 import { FinanceMetricLabel } from "@/components/finance-info-tip";
+import { FinanceRatiosCatalogPanel } from "@/components/finance-ratios-catalog-panel";
 import { FinanceRichReport } from "@/components/finance-rich-report";
 import {
   buildStatementDeltaHeaders,
@@ -281,6 +282,7 @@ export function FinanceDossierPanel({
   const [subTab, setSubTab] = useState<DossierSubTab>("synthese");
   const [holdersTab, setHoldersTab] = useState<"funds" | "institutions">("funds");
   const [perfChartMode, setPerfChartMode] = useState<"bars" | "curve">("bars");
+  const [catalogExpanded, setCatalogExpanded] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -478,6 +480,25 @@ export function FinanceDossierPanel({
               </button>
             ))}
           </div>
+          {dossier.uncle_stock_catalog && (
+            <button
+              type="button"
+              className="finance-tf-btn finance-help-inline-btn"
+              onClick={() => {
+                if (subTab !== "ratios" && subTab !== "all") {
+                  setSubTab("ratios");
+                }
+                setCatalogExpanded(true);
+                window.setTimeout(() => {
+                  document.getElementById("dossier-unclestock-catalog")?.scrollIntoView({ behavior: "smooth", block: "start" });
+                }, 60);
+              }}
+              title="Accéder au référentiel complet des 508 calculs et valeurs (hors onglets principaux)"
+            >
+              <Layers size={12} />
+              <span>Référentiel ({dossier.uncle_stock_catalog.computed_count}/{dossier.uncle_stock_catalog.total_count})</span>
+            </button>
+          )}
           <button
             type="button"
             className="finance-tf-btn finance-stmt-refresh-btn"
@@ -531,6 +552,7 @@ export function FinanceDossierPanel({
             <a href="#dossier-solvabilite">Ratios de solvabilité</a>
             <a href="#dossier-distribution">Ratios de distribution</a>
             <a href="#dossier-efficacite">Ratios d’efficacité</a>
+            <a href="#dossier-unclestock-catalog">Référentiel complet (508)</a>
           </div>
           <div className="finance-dossier-toc-col">
             <strong>Scores qualitatifs</strong>
@@ -1470,6 +1492,13 @@ export function FinanceDossierPanel({
           years={slicedAnnual.years}
           rows={slicedAnnual.efficiency}
           dossier={dossier}
+        />
+        <FinanceRatiosCatalogPanel
+          catalog={dossier.uncle_stock_catalog}
+          currency={dossier.currency}
+          onOpenHelp={onOpenHelp}
+          expanded={catalogExpanded}
+          onToggleExpanded={() => setCatalogExpanded(prev => !prev)}
         />
       </div>
       </>

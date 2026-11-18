@@ -305,3 +305,81 @@ def test_get_financial_dossier_embeds_uncle_stock_scores():
     assert scores["available"] is True
     assert len(scores["items"]) == 31
     assert scores["summary"]["uncle_stock_score_verified"] is not None
+
+    catalog = dossier.get("uncle_stock_catalog")
+    assert catalog is not None
+    assert catalog["total_count"] == 508
+    assert catalog["computed_count"] >= 180
+    assert len(catalog["categories"]) == 8
+    by_name = {it["name"]: it for it in catalog["items"]}
+    # Banque uniquement -> doit rester absent (jamais converti en 0)
+    assert by_name["Loan-deposit ratio"]["available"] is False
+    assert by_name["Loan-deposit ratio"]["latest_value"] is None
+    assert by_name["Quick ratio"]["available"] is True
+    assert by_name["Return on Invested Capital (ROIC)"]["available"] is True
+
+
+def test_uncle_stock_formula_fixes_and_no_zero_fallback():
+    from app.finance_dossier import _compute_annual_dossier_tables
+    from app.finance_scores import _extract_fundamental_bundle
+    from app.finance_uncle_stock_catalog import compute_uncle_stock_catalog
+
+    dates = ["2024-12-31", "2025-12-31"]
+    ann_series = {
+        "TotalRevenue": {"2024-12-31": 1000.0, "2025-12-31": 1200.0},
+        "CostOfRevenue": {"2024-12-31": 600.0, "2025-12-31": 730.0},
+        "GrossProfit": {"2024-12-31": 400.0, "2025-12-31": 470.0},
+        "OperatingIncome": {"2024-12-31": 150.0, "2025-12-31": 200.0},
+        "EBIT": {"2024-12-31": 150.0, "2025-12-31": 200.0},
+        "NetIncome": {"2024-12-31": 100.0, "2025-12-31": 140.0},
+        "OperatingCashFlow": {"2024-12-31": 130.0, "2025-12-31": 180.0},
+        "InvestingCashFlow": {"2024-12-31": -30.0, "2025-12-31": -60.0},
+        "CapitalExpenditure": {"2024-12-31": -30.0, "2025-12-31": -40.0},
+        "TotalAssets": {"2024-12-31": 800.0, "2025-12-31": 1200.0},
+        "CurrentAssets": {"2024-12-31": 300.0, "2025-12-31": 360.0},
+        "CashAndCashEquivalents": {"2024-12-31": 40.0, "2025-12-31": 50.0},
+        "CashCashEquivalentsAndShortTermInvestments": {"2024-12-31": 50.0, "2025-12-31": 60.0},
+        "AccountsReceivable": {"2024-12-31": 80.0, "2025-12-31": 120.0},
+        "Inventory": {"2024-12-31": 60.0, "2025-12-31": 140.0},
+        "NetPPE": {"2024-12-31": 200.0, "2025-12-31": 240.0},
+        "CurrentLiabilities": {"2024-12-31": 180.0, "2025-12-31": 200.0},
+        "ShortTermDebt": {"2024-12-31": 50.0, "2025-12-31": 60.0},
+        "AccountsPayable": {"2024-12-31": 50.0, "2025-12-31": 90.0},
+        "TotalLiabilitiesNetMinorityInterest": {"2024-12-31": 400.0, "2025-12-31": 600.0},
+        "TotalDebt": {"2024-12-31": 150.0, "2025-12-31": 160.0},
+        "StockholdersEquity": {"2024-12-31": 400.0, "2025-12-31": 600.0},
+        "DepreciationAndAmortization": {"2024-12-31": 20.0, "2025-12-31": 25.0},
+    }
+
+    tables = _compute_annual_dossier_tables(ann_series, bars=[], beta_val=1.0)
+    solv = {r["key"]: r["values"][-1] for r in tables["solvency"]}
+    eff = {r["key"]: r["values"][-1] for r in tables["efficiency"]}
+
+    # Quick ratio 2025 : (Cash 50 + Receivables 120) / CurrentLiabilities 200 = 0.85 (et NON / (200 - 60) = 1.21)
+    assert solv["quick_r"] == 0.85
+    # DSI 2025 : avg_inv = (60 + 140)/2 = 100 ; 100 / 730 * 365 = 50 j
+    assert eff["dsi"] == 50.0
+    # DSO 2025 : avg_rec = (80 + 120)/2 = 100 ; 100 / 1200 * 365 = 30 j
+    assert eff["dso"] == 30.0
+    # DPO 2025 : avg_ap = (50 + 90)/2 = 70 ; 70 / 730 * 365 = 35 j
+    assert eff["dpo"] == 35.0
+    assert eff["ccc"] == 45.0
+    # Asset turnover 2025 : Rev 1200 / avg_assets 1000 = 1.20
+    assert eff["asset_turn"] == 1.2
+
+    # Bundle des 31 scores Uncle Stock
+    as_lists = {k: [ann_series[k].get(d) for d in dates] for k in ann_series}
+    bundle = _extract_fundamental_bundle(as_lists, dates, 20.0, 100.0, {}, {}, {}, 6, [])
+    # Debt ratio = TotalLiabilities 600 / TotalAssets 1200 = 0.50 (non TotalDebt/TotalAssets)
+    assert round(bundle["debt_ratio"], 4) == 0.5
+    # External Financing Ratio = ((1200 - 800) - CFO 180) / TotalAssets 1200 = 220 / 1200 = 0.1833
+    assert round(bundle["ext_fin_ratio"], 4) == round(220.0 / 1200.0, 4)
+    # Sloan ratio = |140 - (180 - 60)| / 1000 = 0.02 (avec CFI)
+    assert round(bundle["abs_sloan"], 4) == 0.02
+
+    # Catalogue sans données -> aucune donnée manquante remplacée par 0
+    sparse = compute_uncle_stock_catalog(ann_series={}, dates=["2025-12-31"], currency="EUR")
+    assert sparse["total_count"] == 508
+    assert sparse["computed_count"] == 0
+    assert all(not it["available"] and it["latest_value"] is None for it in sparse["items"])
+

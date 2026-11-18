@@ -24582,3 +24582,132 @@ thead .finance-stmt-sticky-col {
   border-radius: 999px;
   display: inline-block;
 }
+
+/* Explorateur secondaire du référentiel Uncle Stock (508 métriques) */
+.finance-catalog-drawer {
+  border: 1px dashed rgba(37, 99, 235, 0.35);
+  border-radius: 12px;
+  padding: 14px 16px;
+  background: rgba(248, 250, 252, 0.72);
+}
+
+:root[data-theme="dark"] .finance-catalog-drawer {
+  border-color: rgba(96, 165, 250, 0.35);
+  background: rgba(15, 23, 42, 0.6);
+}
+
+.finance-catalog-drawer-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.finance-catalog-drawer-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.finance-catalog-drawer-title h4 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.finance-catalog-body {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(148, 163, 184, 0.25);
+}
+
+.finance-catalog-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.finance-catalog-search {
+  flex: 1 1 260px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: #ffffff;
+}
+
+:root[data-theme="dark"] .finance-catalog-search {
+  background: #0f172a;
+  border-color: rgba(148, 163, 184, 0.25);
+}
+
+.finance-catalog-search input {
+  flex: 1;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: inherit;
+  font-size: 13px;
+}
+
+.finance-catalog-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.finance-catalog-count {
+  font-size: 11.5px;
+  color: #64748b;
+  margin: 4px 0 8px;
+}
+
+:root[data-theme="dark"] .finance-catalog-count {
+  color: #94a3b8;
+}
+
+.finance-catalog-table-wrap {
+  max-height: 540px;
+  overflow: auto;
+}
+
+.finance-catalog-name-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.finance-catalog-cat-tag {
+  font-size: 10.5px;
+  color: #64748b;
+}
+
+:root[data-theme="dark"] .finance-catalog-cat-tag {
+  color: #94a3b8;
+}
+
+.finance-catalog-subm {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.finance-catalog-formula {
+  display: inline-block;
+  font-size: 11px;
+  max-width: 340px;
+  white-space: normal;
+  word-break: break-word;
+  padding: 3px 6px;
+  border-radius: 5px;
+  background: rgba(148, 163, 184, 0.14);
+}

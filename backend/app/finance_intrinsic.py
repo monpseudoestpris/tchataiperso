@@ -370,10 +370,13 @@ def compute_intrinsic_valuations(
         return [_num(src.get(d)) for d in dates]
 
     rev_v = _series_vec("TotalRevenue")
+    cost_rev_v = _series_vec("CostOfRevenue")
     gp_v = _series_vec("GrossProfit")
+    opex_v = _series_vec("OperatingExpense")
     opinc_v = _series_vec("OperatingIncome")
     ebit_v = _series_vec("EBIT")
     ebitda_v = _series_vec("EBITDA")
+    da_v = _series_vec("DepreciationAndAmortization")
     int_exp_v = _series_vec("InterestExpense")
     pretax_v = _series_vec("PretaxIncome")
     tax_v = _series_vec("TaxProvision")
@@ -427,6 +430,8 @@ def compute_intrinsic_valuations(
     cbv_v: list[float | None] = []
     tcbv_v: list[float | None] = []
     adj_oiai_v: list[float | None] = []
+    adj_op_margin_v: list[float | None] = []
+    eff_tax_v: list[float | None] = []
     croic_v: list[float | None] = []
     reinvest_v: list[float | None] = []
     div_ps_v: list[float | None] = []
@@ -448,6 +453,7 @@ def compute_intrinsic_valuations(
             if (tax_i is not None and pretax_i is not None and pretax_i > 0)
             else marginal_tax
         )
+        eff_tax_v.append(eff_tax)
         fcff_i = (fcf_i + int_i * (1.0 - eff_tax)) if fcf_i is not None else None
         fcff_v.append(fcff_i)
 
@@ -470,15 +476,32 @@ def compute_intrinsic_valuations(
         gw_i = abs(gw_int_v[i]) if gw_int_v[i] is not None else 0.0
         tcbv_v.append((cbv_i - gw_i) if cbv_i is not None else None)
 
-        # Adjusted Operating Income After Interest (Carlisle: GP - min(SG&A + DA, OpEx) - Int)
+        # Adjusted Operating Income = Gross Profit − min(SG&A + D&A, OpEx)
+        # Adjusted Operating Income After Interest = Adjusted Operating Income − Interest Expense
         gp_i = gp_v[i]
+        rev_i = rev_v[i]
+        adj_oi_i: float | None = None
         if gp_i is not None and sga_v[i] is not None:
-            adj_oi = max(gp_i - abs(sga_v[i]), opinc_i if opinc_i is not None else gp_i - abs(sga_v[i]))
-            adj_oiai_v.append(adj_oi - int_i)
+            sga_da_i = abs(sga_v[i]) + (abs(da_v[i]) if da_v[i] is not None else 0.0)
+            opex_raw = opex_v[i]
+            if opex_raw is not None:
+                if opex_raw > gp_i and cost_rev_v[i] is not None:
+                    opex_i = max(0.0, opex_raw - abs(cost_rev_v[i]))
+                else:
+                    opex_i = abs(opex_raw)
+            elif opinc_i is not None:
+                opex_i = max(0.0, gp_i - opinc_i)
+            else:
+                opex_i = sga_da_i
+            adj_oi_i = gp_i - min(sga_da_i, opex_i)
+            adj_oiai_v.append(adj_oi_i - int_i)
         elif opinc_i is not None:
+            adj_oi_i = opinc_i
             adj_oiai_v.append(opinc_i - int_i)
         else:
             adj_oiai_v.append(None)
+
+        adj_op_margin_v.append((adj_oi_i / rev_i) if (adj_oi_i is not None and rev_i and rev_i > 0) else None)
 
         td_i = tot_debt_v[i] if tot_debt_v[i] is not None else 0.0
         ci_i = (eq_i + td_i) if (eq_i is not None and (eq_i + td_i) > 0) else None
@@ -528,6 +551,8 @@ def compute_intrinsic_valuations(
     beta_clamped = max(0.0, min(2.0, beta)) if beta is not None else None
     ke_capm = (rf_curr + beta_clamped * _ERP_DAMODARAN) if beta_clamped is not None else 0.085
 
+    # Uncle Stock After-Tax Cost of Debt =
+    # (riskFreeRate(company currency) + (bondRate20Y - riskFreeRate(USD)) + 0.25% × (4 − FH_score)) × (1 − Marginal tax rate)
     fh_score = max(0, min(4, round((piotroski_score or 5) * 4 / 9)))
     kd_pretax = rf_curr + (bond_rate_20y - rf_usd) + 0.0025 * (4 - fh_score)
     kd_after_tax = max(0.01, kd_pretax * (1.0 - marginal_tax))
@@ -587,13 +612,24 @@ def compute_intrinsic_valuations(
             eq_chg_t1 = ke_capm * cbv1
             net_owner_return_pct = round(((cbv2 + div_t2 - eq_chg_t1 - cbv1) / cbv1) * 100.0, 2)
 
-    # Normalisations 5 ans & 10 ans
+    # Normalisations 5 ans & 10 ans (Uncle Stock : Normalised Operating Income = Revenue × Adjusted Operating Margin.10y avg)
     def _avg_last(vec: list[float | None], k: int) -> float | None:
         pts = [v for v in vec[-k:] if v is not None]
         return (sum(pts) / len(pts)) if pts else None
 
-    norm_opinc = _avg_last(opinc_v, 5) or latest_opinc
-    norm_nopat = _avg_last(nopat_v, 5) or latest_nopat
+    latest_rev = _last(rev_v)
+    latest_eff_tax = _last(eff_tax_v)
+    adj_m_10y = _avg_last(adj_op_margin_v, 10)
+    adj_m_count = sum(1 for v in adj_op_margin_v[-10:] if v is not None)
+    used_us_norm_oi = False
+    if adj_m_count >= 3 and adj_m_10y is not None and latest_rev is not None and latest_rev > 0:
+        norm_opinc = latest_rev * adj_m_10y
+        eff_t = latest_eff_tax if latest_eff_tax is not None else marginal_tax
+        norm_nopat = norm_opinc * (1.0 - eff_t)
+        used_us_norm_oi = True
+    else:
+        norm_opinc = _avg_last(opinc_v, 5) or latest_opinc
+        norm_nopat = _avg_last(nopat_v, 5) or latest_nopat
     croic_5y = _avg_last(croic_v, 5)
     reinvest_5y = _avg_last(reinvest_v, 5)
 
@@ -763,7 +799,11 @@ def compute_intrinsic_valuations(
             warnings=["La formule littérale Uncle Stock utilise l'Operating Income avant impôts ; le mode corrigé utilise le NOPAT normalisé après impôts."],
             exclusion_reason="EPV des fonds propres négative après dette nette" if st_c == "excluded" else None,
             assumptions=[
-                f"OI normalisé (5A) = {norm_opinc / 1e6:,.1f} M · NOPAT normalisé = {nopat_ref / 1e6:,.1f} M",
+                (
+                    f"OI normalisé (CA × Marge opé. ajustée moy. 10A) = {norm_opinc / 1e6:,.1f} M · NOPAT normalisé = {nopat_ref / 1e6:,.1f} M"
+                    if used_us_norm_oi
+                    else f"OI normalisé (moy. 5A) = {norm_opinc / 1e6:,.1f} M · NOPAT normalisé = {nopat_ref / 1e6:,.1f} M"
+                ),
                 f"WACC = {wacc * 100:.2f}%",
             ],
             intermediates={

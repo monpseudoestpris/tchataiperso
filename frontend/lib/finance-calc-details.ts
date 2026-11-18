@@ -108,6 +108,7 @@ function extractFundamentalSnapshot(dossier: FinancialDossier) {
 
   const assets = stmt("TotalAssets");
   const ca = stmt("CurrentAssets");
+  const cashPure = stmt("CashAndCashEquivalents");
   const cash = stmt("CashCashEquivalentsAndShortTermInvestments", "CashAndCashEquivalents");
   const rec = stmt("AccountsReceivable");
   const inv = stmt("Inventory");
@@ -181,6 +182,7 @@ function extractFundamentalSnapshot(dossier: FinancialDossier) {
     eps,
     assets,
     ca,
+    cashPure,
     cash,
     rec,
     inv,
@@ -511,61 +513,63 @@ const FULL_SCORE_FORMULAS: Record<string, { verified: string; documented?: strin
   },
   balance_score: {
     verified:
-      "Score = (5 × BalanceValueScore + ValueScore + QualityScore + FinancialHealthScore) / 8 (si données bilan complètes)",
+      "S = 2,1 × ln±(FinancialHealthScore) + 0,9 × ln±(BalanceValueScore) ; Score = clamp(S ; 0 ; 3,0) / 3,0 × 100",
   },
   financial_health_score: {
     verified:
-      "S = clamp(700·(σ(7·(Quick−1))−0,5) − 40·(σ(1,5·(Quick−2))−0,5) + 250·(σ(7·(Curr−1))−0,5) + 140·(σ(5·(BFR/Act))−0,5) − 40·(σ(1,5·(Curr−2))−0,5) + 200·ln±(CFO/Dette) + 100·ln±(FCF/DetteLT) − 60·ln±(DebtRatio) − 40·ln±(Passifs/FP) − 40·ln±(DN/FP) − 30·ln±(DN/EBITDA) − 20·ln±(Dette/TBV) − 200·ln±(|Sloan|) − 1200·ln±(Ohlson) ; −2200 ; 840) ; Norm = (S + 2200) / 3040 ; Final = σ_4(Norm) × 100",
+      "S = clamp(700·(σ(7·(Quick−1))−0,5) − 40·(σ(1,5·(Quick−2))−0,5) + 250·(σ(7·(Curr−1))−0,5) + 140·(σ(5·(BFR/Act))−0,5) − 40·(σ(1,5·(Curr−2))−0,5) + 200·ln±(CFO/Passifs) + 100·ln±(FCFF/DetteLT) − 60·ln±(Passifs/Actifs) − 40·ln±(Passifs/FP) − 40·ln±(DN/FP) − 30·ln±(DN/EBITDA) − 20·ln±(Passifs/TBV) − 200·ln±(|Sloan|) − 1200·ln±(Ohlson) ; −2200 ; 840) ; Norm = (S + 2200) / 3040 ; Final = σ_4(Norm) × 100",
     documented:
       "Norm = (clamp(S ; −2200 ; 840) + 2150) / 2990 × 100",
   },
   growth_rate: {
-    verified: "g = Moyenne des rCAGR 67% disponibles (CA, EBITDA, EBIT, Résultat net, FCF, BPA, Capitaux propres)",
+    verified: "g = Médiane des 16 taux de croissance disponibles (CA rCAGR 15A/67%/CAGR 5A-3A, EBITDA, OI, CFO, FCFF, RN 5A, Fwd CA/BPA, BPA 1A, TBV rCAGR, NOR 5A)",
   },
   predictability_score: {
-    verified: "Predictability = R² × 100 de la régression log-linéaire annuelle du Chiffre d'affaires et de l'EBITDA sur l'historique",
+    verified: "S = 22×R²(OperatingIncome) + 12×R²(Revenue) + 4×R²(GrossMargin) ; Score = (clamp(S ; −13 ; 48) + 13) / 61 × 100",
   },
   piotroski_f_score: {
     verified:
-      "F = F_entier + F_fraction ; F_entier = I(ROA>0) + I(ΔROA>0) + I(CFO>0) + I(CFO>RN) + I(ΔMargeOp/Brute>0) + I(ΔRotationActifs>0) + I(ΔDette≤0) + I(ΔLiquiditéGén>0) + I(ΔActions≤0) ∈ [0 ; 9] ; F_fraction = σ_0,35(∑ w_i·ln±(x_i)) ∈ [0 ; 1]",
+      "F = F_entier + F_fraction ; F_entier = I(ROA>0) + I(ΔROA>0) + I(CFO>0) + I(CFO>RN) + I(ΔMargeOp>0) + I(ΔRotationActifs>0) + I(ΔDette≤0) + I(ΔLiquiditéGén>0) + I(ΔActions≤0) ∈ [0 ; 9] ; F_fraction = σ_0,35(∑ w_i·ln±(x_i)) ∈ [0 ; 1]",
   },
   mohanram_g_score: {
     verified:
-      "G = I(ROA>méd) + I(CFO/Act>méd) + I(CFO>RN) + I(Stab_ROA) + I(Stab_CroissCA) + I(R&D/Act) + I(CapEx/Act) + I(Pub/Act) ∈ [0 ; 8]",
+      "G = I(ROA>8%) + I(CFO/Act>10%) + I(Accruals/Act<0) + I(σ_ROA<5%) + I(σ_CA<15%) + I(R&D/Act>2%) + I(CapEx/Act>3%) ∈ [0 ; 7]",
   },
   montier_c_score: {
     verified:
-      "C = I(RN>CFO) + I(DSO↗) + I(DSI↗) + I(AutresActCour/Act↗) + I(Amort/Immob↘) + I(CroissActifsTot>10%) ∈ [0 ; 6]",
+      "C = I(CFO/RN↘) + I(DSO↗) + I(DIO↗) + I(AutresActCour/CA↗) + I(TauxAmort↘) + I(CroissActifs>10%) ∈ [0 ; 6]",
   },
   levermann_score: {
     verified:
-      "Somme algébrique (+1 / 0 / −1) sur 13 critères [ROE, Marge EBIT, Capitaux propres/Actifs, PER 5A, PER actuel, Réactions analystes/BPA, Momentum 6M & 12M, Reversal, Croissance BPA] ∈ [−13 ; +13]",
+      "Somme algébrique (+1 / 0 / −1) sur critères [ROE, Marge EBIT, Capitaux propres/Actifs, PER actuel, Croissance BPA fwd, Perf 6M, Perf 12M]",
   },
   company_score: {
-    verified: "Score synthétique pondéré : (Quality + Value + FinancialHealth + Predictability) / 4",
+    verified:
+      "F_int ∈ [0 ; 5] (MargeNette>10%, CA rCAGR67>10%, ROE>15%, EquityRatio>40%, CFO/Passifs>33%) + σ_0,5(1·ln±(NM) + 1·ln±(gCA) + 1,5·ln±(ROE) + 0,75·ln±(EqR) + 0,75·ln±(CFCov))",
   },
   oshaughnessy_vc3: {
     verified:
-      "VC3 = Moyenne percentile / classement composite sur [P/B, P/E, P/S, EV/EBITDA, P/CF, Shareholder Yield] (plus proche de 100 = plus Value)",
+      "S = 1·ln±(B/M) + 7·ln±(BPA/Cours) + 1·ln±(CA/Capi) + 3,5·ln±(EBITDA/VE) + 3,5·ln±(CFO/Capi) + 20·ln±(BuybackRatio) ; Score = σ_0,35(S) × 100",
   },
   greenblatt_score: {
     verified:
-      "Magic Formula = Moyenne normalisée de Earnings Yield (EBIT / EV) et Return on Capital (EBIT / (BFR net + Immobilisations nettes))",
+      "S = Moyenne( ln±(7 × EBIT/VE ; ±5) , ln±(EBIT / CE_Greenblatt.moy ; −1..2) ) ; Score = σ_1,2(S) × 100",
   },
   pim_van_vliet_score: {
     verified:
-      "Conservative Formula = Combinaison faible Volatilité + Dividend/Buyback Yield + Momentum 12M",
+      "S = 1·ln±(Perf_1A ; −0,9..3) + 3·ln±(NetPayoutYield ; −0,5..1) − 0,25·ln±(Volatilité_252j ; 0..2) ; Score = σ_1,1(S) × 100",
   },
   erp5_score: {
     verified:
-      "ERP5 = Moyenne des rangs sur 4 piliers : Earnings Yield (EBIT/EV), ROIC (EBIT/Capital investi), Price-to-Book et ROE sur 5 ans",
+      "S = Moyenne( ln±(7·EBIT/VE) , ln±(ROCE_Greenblatt) , ln±(ROCE_5A) , ln±(0,07·B/M) ) ; Score = σ_1,3(S) × 100",
   },
   slater_score: {
     verified:
-      "Zulu Score = Force du PEG (PER / Croissance BPA) + Qualité (ROCE > 15%, FCF/RN > 1, Faible levier) × facteur taille Cap.",
+      "S = ∑ w_i·ln±(x_i) [0,75·BPA/Cours, 0,75·BPA_rCAGR67, 2·ROCE, −40·PEG, 10·DivYield, 0,75·MargeBrute, −1·Passifs/FP, 20·CurrentRatio, 0,5·Perf1A, −7·(3·Capi/10⁹)] ; Score = σ_0,05(S) × 100",
+    documented: "Expression littérale source « 3 ÷ 109 × MarketCap » sans facteur 10⁹",
   },
   altman_z_score: {
-    verified: "Z = 1,2×(BFR/Actifs) + 1,4×(RésNonDist/Actifs) + 3,3×(EBIT/Actifs) + 0,6×(Capi/Passifs) + 1,0×(CA/Actifs)",
+    verified: "Z = 1,2×(BFR/Actifs) + 1,4×(RésNonDist/Actifs) + 3,3×(EBIT/Actifs) + 0,6×(Capi/Passifs) + 0,999×(CA/Actifs moy.)",
   },
   ohlson_o_score: {
     verified:
@@ -577,26 +581,27 @@ const FULL_SCORE_FORMULAS: Record<string, { verified: string; documented?: strin
   },
   dechow_f_score: {
     verified:
-      "PV = −7,893 + 0,790·RSST_acc + 2,518·ΔRec + 1,191·ΔInv + 1,979·SoftAssets + 0,171·ΔCashSales − 0,932·ΔROA + 1,029·Issue ; F = Prob(PV) / 0,0037",
+      "PV = −7,893 + 0,790·RSST_acc + 2,518·ΔRec + 1,191·ΔInv + 1,979·SoftAssets + 0,171·ΔCashSales + 0,932·ΔROA + 1,029·Issue ; F = σ(PV) / 0,0037",
+    documented: "Utilise σ(−PV) / 0,0037 selon l'expression brute publiée",
   },
   esg_score: {
-    verified: "ESG = Moyenne pondérée (Environnement + Social + Gouvernance) normalisée sur 100",
+    verified: "ESG = Score TotalEsg issu du fournisseur fondamental (non estimé si absent) / 100",
   },
   environment_score: {
-    verified: "Score pilier Environnement (émissions, énergie, intensité carbone relative au secteur) / 100",
+    verified: "Score pilier Environnement issu du fournisseur fondamental / 100",
   },
   social_score: {
-    verified: "Score pilier Social (conditions de travail, effectifs, sécurité, parité) / 100",
+    verified: "Score pilier Social issu du fournisseur fondamental / 100",
   },
   governance_score: {
-    verified: "Score pilier Gouvernance (indépendance du conseil, rémunération, droits actionnaires, audit) / 100",
+    verified: "Score pilier Gouvernance issu du fournisseur fondamental / 100",
   },
   trap_score: {
     verified:
-      "Trap Score = Somme pondérée des risques [Ohlson O-Score, Beneish M-Score, Dechow F-Score, Montier C-Score, Altman Z-Score, Levier net, Accruals Sloan, Chute marges] (plus bas = plus sain)",
+      "Trap Score = ∑ indicateurs d'alerte [PER<10, CA↘, Quick<0,5, FP<0, ROE<10%, |Sloan|>25%, ExtFin>25%, C-Score>5, M-Score>−1,78, EPV/Actifs<75%, + règle sectorielle Ind./Serv./Fin.] ∈ [0 ; 12]",
   },
   is_undervalued: {
-    verified: "Sous-évalué = Vrai si Marge de sécurité VI > 0% (Cours actuel < Valeur Intrinsèque globale)",
+    verified: "Sous-évalué = Vrai si Price / Book < 1 ou Cours / Valeur Intrinsèque < 1",
   },
   categories: {
     verified: "Classification croisant Qualité (Quality > 60%), Valeur (Value > 60%), Croissance (rCAGR) et Risque (Trap < 40%)",
@@ -616,7 +621,7 @@ const FULL_INTRINSIC_FORMULAS: Record<string, string> = {
   graham_formula:
     "Corrigée : VI = BPA × (7,0 + 100·ln(1 + g_cap)) × (4,4 / Y_corp20A)  |  Uncle Stock littérale : BPA × (7,0 + 100·ln(1 + g_cap) × 4,4 / Y)",
   epv:
-    "Corrigée : VI = (NOPAT_moy5A / WACC − Dette nette) / Actions  |  Uncle Stock : (OI_moy5A / WACC − Dette nette) / Actions",
+    "Corrigée : VI = (NOPAT_norm / WACC − Dette nette) / Actions  |  Uncle Stock : ((CA × Marge_Opé_Aj_10A) / WACC − Dette nette) / Actions",
   value_driver:
     "VE = Cash_NOPAT × (1 + g_vd) × (1 − g_vd / CROIC_5A) / (WACC − g_vd) ; VI_corrigée = (VE − Dette nette) / Actions",
   lynch:
@@ -1469,6 +1474,9 @@ export function buildAnnualRatioCalc(row: DossierMetricRow, dossier: FinancialDo
           f.stepM("Résultat net", ni),
           f.stepPairM("Actifs totaux", f.assets),
         ]),
+        notes: [
+          "Convention tableau IH : Résultat net / Actifs totaux moyens. Le référentiel Uncle Stock calcule également ROA = NOPAT / Actifs totaux moyens (visible dans l'explorateur complet ci-dessous).",
+        ],
       };
     case "roe":
       return {
@@ -1481,6 +1489,9 @@ export function buildAnnualRatioCalc(row: DossierMetricRow, dossier: FinancialDo
           f.stepPairM("Capitaux propres", eq),
           prevYr ? { label: `Actifs totaux (${lastYr})`, value: fmtM(f.assets.latest, ` M ${cur}`) } : null,
         ]),
+        notes: [
+          "Le référentiel Uncle Stock précise ROE = (Résultat net − Dividende préférentiel) / Common Book Value moyen (Capitaux propres − Actions préférentielles).",
+        ],
       };
     case "roic": {
       const tr = f.tbl("tax_rate").latest;
@@ -1498,6 +1509,9 @@ export function buildAnnualRatioCalc(row: DossierMetricRow, dossier: FinancialDo
           f.stepM("Capitaux propres", eq.latest),
           f.stepM("Dette totale", f.totDebt.latest),
         ]),
+        notes: [
+          "Convention IH : Capital investi = FP + Dette. La variante Uncle Stock (Actifs − NIBCL − Excess Cash') est calculée dans le référentiel complet ci-dessous.",
+        ],
       };
     }
     case "croic":
@@ -1512,6 +1526,9 @@ export function buildAnnualRatioCalc(row: DossierMetricRow, dossier: FinancialDo
           f.stepM("Investissements (CapEx)", capex != null ? Math.abs(capex) : null),
           f.stepPairM("Capital investi (FP + Dette)", capInv),
         ]),
+        notes: [
+          "Convention IH : FCF / Capital investi moyen. La définition stricte Uncle Stock (Cash-NOPAT / Invested Capital moy.) est disponible dans l'explorateur complet ci-dessous.",
+        ],
       };
     case "tax_rate":
       return {
@@ -1536,6 +1553,9 @@ export function buildAnnualRatioCalc(row: DossierMetricRow, dossier: FinancialDo
           f.stepM("Dette financière totale", f.totDebt.latest),
           f.stepM("Trésorerie", f.cash.latest),
         ]),
+        notes: [
+          "Convention IH : Capitaux propres + Dette. Le Capital Investi Uncle Stock (Actifs − NIBCL − Excess Cash') figure dans le référentiel complet ci-dessous.",
+        ],
       };
     case "ebitda_ps":
       return {
@@ -1595,20 +1615,28 @@ export function buildAnnualRatioCalc(row: DossierMetricRow, dossier: FinancialDo
           f.stepM("Capitaux propres", eq.latest),
         ]),
       };
-    case "quick_r":
+    case "quick_r": {
+      const cashQ = f.cashPure.latest ?? f.cash.latest;
+      const usesReceivables = cashQ != null && f.rec.latest != null;
       return {
         title: `Liquidité restreinte (${lastYr})`,
-        formula: "(Actifs courants − Stocks) / Passifs courants (hors dette CT)",
-        substitution: `(${fmtM(f.ca.latest)} − ${fmtM(f.inv.latest ?? 0)}) / ${fmtM(f.cl.latest)} = ${fmtN(val, 2, "×")}`,
+        formula: usesReceivables
+          ? "(Trésorerie & équivalents + Créances clients) / Passifs courants"
+          : "(Actifs courants − Stocks) / Passifs courants",
+        substitution: usesReceivables
+          ? `(${fmtM(cashQ)} + ${fmtM(f.rec.latest)}) / ${fmtM(f.cl.latest)} = ${fmtN(val, 2, "×")}`
+          : `(${fmtM(f.ca.latest)} − ${fmtM(f.inv.latest ?? 0)}) / ${fmtM(f.cl.latest)} = ${fmtN(val, 2, "×")}`,
         result: fmtN(val, 2, "×"),
         fundamentals: compactFundamentals([
-          f.stepM("Actifs courants", f.ca.latest),
-          f.stepM("Stocks", f.inv.latest),
+          f.stepM("Trésorerie & équivalents", f.cashPure.latest),
           f.stepM("Trésorerie & placements CT", f.cash.latest),
           f.stepM("Créances clients", f.rec.latest),
+          f.stepM("Actifs courants", f.ca.latest),
+          f.stepM("Stocks", f.inv.latest),
           f.stepM("Passifs courants", f.cl.latest),
         ]),
       };
+    }
     case "curr_r":
       return {
         title: `Liquidité générale (${lastYr})`,
@@ -1724,8 +1752,8 @@ export function buildAnnualRatioCalc(row: DossierMetricRow, dossier: FinancialDo
     case "dsi":
       return {
         title: `Jours de stock — DSI (${lastYr})`,
-        formula: "(Stocks / Coût des ventes) × 365",
-        substitution: `(${fmtM(f.inv.latest)} / ${fmtM(f.costRev.latest != null ? Math.abs(f.costRev.latest) : null)}) × 365 = ${fmtInt(val)} j`,
+        formula: "(Stocks moyens / Coût des ventes) × 365",
+        substitution: `(${fmtM(f.avg(f.inv))} / ${fmtM(f.costRev.latest != null ? Math.abs(f.costRev.latest) : null)}) × 365 = ${fmtInt(val)} j`,
         result: val != null ? `${Math.round(val)} j` : "—",
         fundamentals: compactFundamentals([
           f.stepPairM("Stocks", f.inv),
@@ -1735,8 +1763,8 @@ export function buildAnnualRatioCalc(row: DossierMetricRow, dossier: FinancialDo
     case "dso":
       return {
         title: `Délai clients — DSO (${lastYr})`,
-        formula: "(Créances clients / Chiffre d'affaires) × 365",
-        substitution: `(${fmtM(f.rec.latest)} / ${fmtM(rev)}) × 365 = ${fmtInt(val)} j`,
+        formula: "(Créances clients moyennes / Chiffre d'affaires) × 365",
+        substitution: `(${fmtM(f.avg(f.rec))} / ${fmtM(rev)}) × 365 = ${fmtInt(val)} j`,
         result: val != null ? `${Math.round(val)} j` : "—",
         fundamentals: compactFundamentals([
           f.stepPairM("Créances clients", f.rec),
@@ -1744,30 +1772,28 @@ export function buildAnnualRatioCalc(row: DossierMetricRow, dossier: FinancialDo
         ]),
       };
     case "dpo": {
-      const dInv = f.inv.latest != null && f.inv.prev != null ? f.inv.latest - f.inv.prev : 0;
-      const cogsAdj = f.costRev.latest != null ? Math.abs(f.costRev.latest) + dInv : null;
+      const costAbs = f.costRev.latest != null ? Math.abs(f.costRev.latest) : null;
       return {
         title: `Délai fournisseurs — DPO (${lastYr})`,
-        formula: "(Dettes fournisseurs / (Coût des ventes + ΔStocks)) × 365",
-        substitution: `(${fmtM(f.ap.latest)} / ${fmtM(cogsAdj)}) × 365 = ${fmtInt(val)} j`,
+        formula: "(Dettes fournisseurs moyennes / Coût des ventes) × 365",
+        substitution: `(${fmtM(f.avg(f.ap))} / ${fmtM(costAbs)}) × 365 = ${fmtInt(val)} j`,
         result: val != null ? `${Math.round(val)} j` : "—",
         fundamentals: compactFundamentals([
-          f.stepM("Dettes fournisseurs", f.ap.latest),
-          f.stepM("Coût des ventes", f.costRev.latest != null ? Math.abs(f.costRev.latest) : null),
-          f.stepPairM("Stocks", f.inv),
+          f.stepPairM("Dettes fournisseurs", f.ap),
+          f.stepM("Coût des ventes", costAbs),
         ]),
       };
     }
     case "ccc":
       return {
         title: `Cycle de conversion de l'encaisse — CCC (${lastYr})`,
-        formula: "CCC = DSI + DSO − DPO",
+        formula: "CCC = DSI + DSO − DPO (− Jours de produits constatés d'avance si applicable)",
         substitution: `${fmtInt(f.tbl("dsi").latest)} + ${fmtInt(f.tbl("dso").latest)} − ${fmtInt(f.tbl("dpo").latest)} = ${fmtInt(val)} j`,
         result: val != null ? `${Math.round(val)} j` : "—",
         fundamentals: compactFundamentals([
-          f.stepM("Stocks", f.inv.latest),
-          f.stepM("Créances clients", f.rec.latest),
-          f.stepM("Dettes fournisseurs", f.ap.latest),
+          f.stepPairM("Stocks", f.inv),
+          f.stepPairM("Créances clients", f.rec),
+          f.stepPairM("Dettes fournisseurs", f.ap),
           f.stepM("Chiffre d'affaires", rev),
           f.stepM("Coût des ventes", f.costRev.latest != null ? Math.abs(f.costRev.latest) : null),
         ]),
@@ -1775,12 +1801,12 @@ export function buildAnnualRatioCalc(row: DossierMetricRow, dossier: FinancialDo
     case "asset_turn":
       return {
         title: `Rotation des actifs (${lastYr})`,
-        formula: "Chiffre d'affaires / Actifs totaux",
-        substitution: `${fmtM(rev)} / ${fmtM(f.assets.latest)} = ${fmtN(val, 2, "×")}`,
+        formula: "Chiffre d'affaires / Actifs totaux moyens",
+        substitution: `${fmtM(rev)} / ${fmtM(f.avg(f.assets))} = ${fmtN(val, 2, "×")}`,
         result: fmtN(val, 2, "×"),
         fundamentals: compactFundamentals([
           f.stepM("Chiffre d'affaires", rev),
-          f.stepM("Total actifs", f.assets.latest),
+          f.stepPairM("Total actifs", f.assets),
         ]),
       };
     case "sga_eq":

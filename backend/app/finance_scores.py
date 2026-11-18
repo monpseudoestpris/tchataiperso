@@ -356,12 +356,91 @@ def _extract_fundamental_bundle(
     da = pad("DepreciationAndAmortization")
     tax = pad("TaxProvision")
     pretax = pad("PretaxIncome")
+    st_debt_a = pad("ShortTermDebt")
+    st_debt_b = pad("CurrentDebt")
+    cost_rev = pad("CostOfRevenue")
+    ap = pad("AccountsPayable")
+    cfi = pad("InvestingCashFlow")
+    int_exp = pad("InterestExpense")
+    dwc = pad("ChangeInWorkingCapital")
+    nci_inc = pad("eod_income_minorityInterest")
+    pref_stock_l = pad("eod_balance_preferredStockTotalEquity")
 
-    # Séries dérivées multi-exercices
+    def _yr_avg(vec: list[float | None], idx: int) -> float | None:
+        cur = vec[idx]
+        if cur is None:
+            return None
+        prev = vec[idx - 1] if idx > 0 else None
+        return (cur + prev) / 2.0 if prev is not None else cur
+
+    # Passe 1 : agrégats Uncle Stock annuels (NIBCL, Excess Cash', Invested Capital, CE Greenblatt, Cash-NOPAT, TBV)
     fcf_l: list[float | None] = []
     cash_l: list[float | None] = []
     cap_inv_l: list[float | None] = []
+    ce_gb_l: list[float | None] = []
     tbv_l: list[float | None] = []
+    tax_r_l: list[float | None] = []
+    nopat_l: list[float | None] = []
+    cash_nopat_l: list[float | None] = []
+    fcff_l: list[float | None] = []
+    st_debt_l: list[float | None] = []
+
+    for i in range(n):
+        c_val = cash[i] if cash[i] is not None else cash_pure[i]
+        cash_l.append(c_val)
+        f_val = fcf[i]
+        if f_val is None and cfo[i] is not None and capex[i] is not None:
+            f_val = cfo[i] - abs(capex[i])
+        fcf_l.append(f_val)
+
+        st_d = st_debt_a[i] if st_debt_a[i] is not None else st_debt_b[i]
+        st_debt_l.append(st_d)
+
+        eb = ebit[i] if ebit[i] is not None else opinc[i]
+        tr = _div(tax[i], pretax[i]) if (tax[i] is not None and pretax[i] and pretax[i] > 0) else 0.25
+        tr = _clamp(tr if tr is not None else 0.25, 0.0, 0.50)
+        tax_r_l.append(tr)
+        nopat_l.append(eb * (1.0 - tr) if eb is not None else None)
+
+        int_i = abs(int_exp[i]) if int_exp[i] is not None else 0.0
+        fcff_l.append((f_val + int_i * (1.0 - tr)) if f_val is not None else None)
+
+        # Uncle Stock Cash-NOPAT = Firm Earnings' - Change in Working Capital
+        # avec Owner Earnings' = CFO - NCI - Depreciation ; repli propre sur CFO + Int*(1-T) ou FCF
+        if cfo[i] is not None and da[i] is not None:
+            nci_v = nci_inc[i] or 0.0
+            oe_p = cfo[i] - nci_v - abs(da[i])
+            firm_e = oe_p + nci_v + int_i * (1.0 - tr)
+            cn_val = firm_e - (dwc[i] or 0.0)
+        elif cfo[i] is not None:
+            cn_val = cfo[i] + int_i * (1.0 - tr)
+        else:
+            cn_val = f_val
+        cash_nopat_l.append(cn_val)
+
+        d_val = tot_debt[i] if tot_debt[i] is not None else 0.0
+        eq_val = eq[i]
+        tbv_l.append((eq_val - (gw[i] or 0.0) - max(0.0, pref_stock_l[i] or 0.0)) if eq_val is not None else None)
+
+        # NIBCL, Excess Cash', Invested Capital, Capital Employed (Greenblatt)
+        if cl[i] is not None and assets[i] is not None:
+            nibcl = max(0.0, cl[i] - max(0.0, st_d or 0.0))
+            if ca[i] is not None and c_val is not None:
+                non_cash_ca = ca[i] - c_val
+                excess_cash_p = max(0.0, c_val - max(0.0, cl[i] - non_cash_ca))
+                ncwc = non_cash_ca - nibcl
+            else:
+                excess_cash_p = 0.0
+                ncwc = 0.0
+            ci = assets[i] - nibcl - excess_cash_p
+            ce_gb = (max(0.0, ncwc) + ppe[i]) if ppe[i] is not None else (assets[i] - cl[i])
+        else:
+            ci = (eq_val + d_val - (c_val or 0.0)) if eq_val is not None else None
+            ce_gb = (assets[i] - (cl[i] or 0.0)) if assets[i] is not None else None
+        cap_inv_l.append(ci)
+        ce_gb_l.append(ce_gb)
+
+    # Passe 2 : ratios Uncle Stock utilisant les dénominateurs en moyenne annuelle (.yr avg)
     roe_l: list[float | None] = []
     roa_l: list[float | None] = []
     roce_l: list[float | None] = []
@@ -376,64 +455,71 @@ def _extract_fundamental_bundle(
     eq_ratio_l: list[float | None] = []
     curr_r_l: list[float | None] = []
     quick_r_l: list[float | None] = []
-    tax_r_l: list[float | None] = []
-    nopat_l: list[float | None] = []
     dso_l: list[float | None] = []
     dio_l: list[float | None] = []
     depr_rate_l: list[float | None] = []
     other_ca_rev_l: list[float | None] = []
     cfo_ni_l: list[float | None] = []
     accruals_assets_l: list[float | None] = []
+    sloan_l: list[float | None] = []
     nor_l: list[float | None] = []
 
     for i in range(n):
-        c_val = cash[i] if cash[i] is not None else cash_pure[i]
-        cash_l.append(c_val)
-        f_val = fcf[i]
-        if f_val is None and cfo[i] is not None and capex[i] is not None:
-            f_val = cfo[i] - abs(capex[i])
-        fcf_l.append(f_val)
-
+        c_val = cash_l[i]
+        c_q = cash_pure[i] if cash_pure[i] is not None else c_val
         eb = ebit[i] if ebit[i] is not None else opinc[i]
-        tr = _div(tax[i], pretax[i]) if (tax[i] is not None and pretax[i] and pretax[i] > 0) else 0.25
-        tr = _clamp(tr if tr is not None else 0.25, 0.0, 0.50)
-        tax_r_l.append(tr)
-        nopat_l.append(eb * (1.0 - tr) if eb is not None else None)
-
-        d_val = tot_debt[i] if tot_debt[i] is not None else 0.0
         eq_val = eq[i]
-        ci = (eq_val + d_val - (c_val or 0.0)) if eq_val is not None else None
-        cap_inv_l.append(ci)
-        tbv_l.append((eq_val - (gw[i] or 0.0)) if eq_val is not None else None)
+        avg_eq = _yr_avg(eq, i)
+        avg_assets = _yr_avg(assets, i)
+        avg_ppe = _yr_avg(ppe, i)
+        avg_ci = _yr_avg(cap_inv_l, i)
+        avg_ce_gb = _yr_avg(ce_gb_l, i)
+        avg_ar = _yr_avg(ar, i)
+        avg_inv = _yr_avg(inv, i)
 
-        roe_l.append(_div(ni[i], eq_val) if (eq_val and eq_val > 0) else None)
-        roa_l.append(_div(ni[i], assets[i]) if (assets[i] and assets[i] > 0) else None)
-        ce = (assets[i] - (cl[i] or 0.0)) if assets[i] is not None else None
-        roce_l.append(_div(eb, ce) if (ce and ce > 0) else None)
-        croic_l.append(_div(f_val, ci) if (ci and ci > 0) else None)
+        roe_l.append(_div(ni[i], avg_eq) if (avg_eq and avg_eq > 0) else None)
+        roa_l.append(_div(ni[i], avg_assets) if (avg_assets and avg_assets > 0) else None)
+        roce_l.append(_div(eb, avg_ce_gb) if (avg_ce_gb and avg_ce_gb > 0) else None)
+        croic_l.append(_div(cash_nopat_l[i], avg_ci) if (avg_ci and avg_ci > 0) else None)
 
         gm_l.append(_div(gp[i], rev[i]) if (rev[i] and rev[i] > 0) else None)
         om_l.append(_div(opinc[i], rev[i]) if (rev[i] and rev[i] > 0) else None)
         nm_l.append(_div(ni[i], rev[i]) if (rev[i] and rev[i] > 0) else None)
-        at_l.append(_div(rev[i], assets[i]) if (assets[i] and assets[i] > 0) else None)
-        fat_l.append(_div(rev[i], ppe[i]) if (ppe[i] and ppe[i] > 0) else None)
-        gp_assets_l.append(_div(gp[i], assets[i]) if (assets[i] and assets[i] > 0) else None)
+        at_l.append(_div(rev[i], avg_assets) if (avg_assets and avg_assets > 0) else None)
+        fat_l.append(_div(rev[i], avg_ppe) if (avg_ppe and avg_ppe > 0) else None)
+        gp_assets_l.append(_div(gp[i], avg_assets) if (avg_assets and avg_assets > 0) else None)
 
         nwc = wc[i] if wc[i] is not None else ((ca[i] - cl[i]) if (ca[i] is not None and cl[i] is not None) else None)
         nwc_assets_l.append(_div(nwc, assets[i]) if (assets[i] and assets[i] > 0) else None)
         eq_ratio_l.append(_div(eq_val, assets[i]) if (assets[i] and assets[i] > 0) else None)
         curr_r_l.append(_div(ca[i], cl[i]) if (cl[i] and cl[i] > 0) else None)
-        quick_num = (ca[i] - (inv[i] or 0.0)) if ca[i] is not None else None
-        quick_r_l.append(_div(quick_num, cl[i]) if (cl[i] and cl[i] > 0) else None)
+        if cl[i] and cl[i] > 0:
+            if c_q is not None and ar[i] is not None:
+                quick_num = c_q + ar[i]
+            elif ca[i] is not None:
+                quick_num = ca[i] - (inv[i] or 0.0)
+            else:
+                quick_num = None
+            quick_r_l.append(_div(quick_num, cl[i]))
+        else:
+            quick_r_l.append(None)
 
-        cogs = (rev[i] - gp[i]) if (rev[i] is not None and gp[i] is not None) else None
-        dso_l.append((ar[i] / rev[i] * 365.0) if (ar[i] is not None and rev[i] and rev[i] > 0) else None)
-        dio_l.append((inv[i] / abs(cogs) * 365.0) if (inv[i] is not None and cogs and cogs != 0) else None)
+        cogs = abs(cost_rev[i]) if cost_rev[i] is not None else (
+            (rev[i] - gp[i]) if (rev[i] is not None and gp[i] is not None) else None
+        )
+        dso_l.append((avg_ar / rev[i] * 365.0) if (avg_ar is not None and rev[i] and rev[i] > 0) else None)
+        dio_l.append((avg_inv / abs(cogs) * 365.0) if (avg_inv is not None and cogs and cogs != 0) else None)
         depr_rate_l.append(_div(da[i], (da[i] + ppe[i])) if (da[i] is not None and ppe[i] is not None and (da[i] + ppe[i]) > 0) else None)
         other_ca = (ca[i] - (c_val or 0.0) - (ar[i] or 0.0) - (inv[i] or 0.0)) if ca[i] is not None else None
         other_ca_rev_l.append(_div(other_ca, rev[i]) if (other_ca is not None and rev[i] and rev[i] > 0) else None)
         cfo_ni_l.append(_div(cfo[i], ni[i]) if (cfo[i] is not None and ni[i] and ni[i] > 0) else None)
-        accruals_assets_l.append(_div((ni[i] - cfo[i]), assets[i]) if (ni[i] is not None and cfo[i] is not None and assets[i] and assets[i] > 0) else None)
+        acc_i = _div((ni[i] - cfo[i]), avg_assets) if (ni[i] is not None and cfo[i] is not None and avg_assets and avg_assets > 0) else None
+        accruals_assets_l.append(acc_i)
+        if ni[i] is not None and cfo[i] is not None and avg_assets and avg_assets > 0:
+            agg_acc = (ni[i] - (cfo[i] + cfi[i])) if cfi[i] is not None else (ni[i] - cfo[i])
+            sloan_l.append(_div(agg_acc, avg_assets))
+        else:
+            sloan_l.append(acc_i)
         # Net Owner Return proxy: ΔEq + Dividendes - Charge équité(8% approx)
         if i > 0 and eq[i] is not None and eq[i - 1] and eq[i - 1] > 0:
             dv = abs(div_paid[i] or 0.0)
@@ -641,19 +727,28 @@ def _extract_fundamental_bundle(
         "cur_current": _latest(curr_r_l),
         "current_yoy": _yoy(curr_r_l),
         "equity_ratio": _latest(eq_ratio_l),
-        "debt_ratio": _div(cur_debt, cur_assets) if (cur_assets and cur_assets > 0) else None,
+        "debt_ratio": _div(cur_liab, cur_assets) if (cur_liab is not None and cur_assets and cur_assets > 0) else (_div(cur_debt, cur_assets) if (cur_assets and cur_assets > 0) else None),
+        "total_debt_assets": _div(cur_debt, cur_assets) if (cur_assets and cur_assets > 0) else None,
         "liab_to_equity": _div(cur_liab, cur_eq) if (cur_eq and cur_eq > 0) else None,
         "net_debt_to_equity": _div(cur_nd, cur_eq) if (cur_eq and cur_eq > 0) else None,
         "net_debt_to_ebitda": _div(cur_nd, cur_ebitda) if (cur_ebitda and cur_ebitda > 0) else None,
-        "debt_to_tbv": _div(cur_debt, cur_tbv) if (cur_tbv and cur_tbv > 0) else None,
-        "cf_coverage": _div(cur_cfo, cur_debt) if cur_debt > 0 else (1.0 if (cur_cfo and cur_cfo > 0) else None),
-        "fcf_to_lt_debt": _div(cur_fcf, cur_lt_debt) if (cur_lt_debt and cur_lt_debt > 0) else (1.0 if (cur_fcf and cur_fcf > 0) else None),
+        "debt_to_tbv": _div(cur_liab, cur_tbv) if (cur_liab is not None and cur_tbv and cur_tbv > 0) else (_div(cur_debt, cur_tbv) if (cur_tbv and cur_tbv > 0) else None),
+        "cf_coverage": _div(cur_cfo, cur_liab) if (cur_liab and cur_liab > 0) else (_div(cur_cfo, cur_debt) if cur_debt > 0 else (1.0 if (cur_cfo and cur_cfo > 0) else None)),
+        "fcf_to_lt_debt": (
+            _div(_latest(fcff_l) if _latest(fcff_l) is not None else cur_fcf, cur_lt_debt)
+            if (cur_lt_debt and cur_lt_debt > 0)
+            else (1.0 if ((_latest(fcff_l) or cur_fcf or 0.0) > 0) else None)
+        ),
         "lt_debt_yoy": _yoy(lt_debt),
         "inv_1y_growth": _yoy(inv),
         "assets_1y_growth": _yoy(assets),
-        "abs_sloan": abs(_latest(accruals_assets_l)) if _latest(accruals_assets_l) is not None else None,
+        "abs_sloan": abs(_latest(sloan_l)) if _latest(sloan_l) is not None else None,
         "accruals_assets": _latest(accruals_assets_l),
-        "ext_fin_ratio": _div(((_latest(debt_iss) or 0.0) - (buyback_pos or 0.0)), cur_assets) if (cur_assets and cur_assets > 0) else None,
+        "ext_fin_ratio": (
+            ((_pair_latest(assets)[1] - _pair_latest(assets)[0] - cur_cfo) / _pair_latest(assets)[1])
+            if (_pair_latest(assets)[1] is not None and _pair_latest(assets)[0] is not None and _pair_latest(assets)[1] > 0 and cur_cfo is not None)
+            else (_div(((_latest(debt_iss) or 0.0) - (buyback_pos or 0.0)), cur_assets) if (cur_assets and cur_assets > 0) else None)
+        ),
         "stock_issued_le0": (cur_repurch is not None and cur_repurch <= 0) or (_yoy(shares_l) is not None and _yoy(shares_l) <= 0),
         "buyback_ratio": buyback_yield,
         "ni_never_profitable": not any(v is not None and v > 0 for v in ni),

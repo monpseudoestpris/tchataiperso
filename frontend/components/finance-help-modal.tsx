@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { FinanceThemeSwitcher, useInterfaceTheme } from "@/components/finance-theme-switcher";
 
-export type FinanceHelpGuideId = "intrinsic" | "scores";
+export type FinanceHelpGuideId = "intrinsic" | "scores" | "ratios";
 
 const GUIDES: Record<FinanceHelpGuideId, { tabLabel: string; title: string; src: string }> = {
   intrinsic: {
@@ -17,6 +17,11 @@ const GUIDES: Record<FinanceHelpGuideId, { tabLabel: string; title: string; src:
     tabLabel: "Scores Uncle Stock (36 chapitres)",
     title: "Guide détaillé — 31 Scores Uncle Stock (36 chapitres)",
     src: "/guides/uncle-stock-scores-guide.html",
+  },
+  ratios: {
+    tabLabel: "Référentiel Ratios & Calculs (508)",
+    title: "Référentiel complet — 508 métriques & calculs Uncle Stock",
+    src: "/guides/uncle-stock-ratios-guide.html",
   },
 };
 
@@ -42,9 +47,14 @@ export function FinanceHelpModal({ isOpen, initialGuide = "intrinsic", onClose }
     const doc = iframeRef.current?.contentDocument;
     if (!doc) return;
     doc.documentElement.dataset.theme = mode;
+    doc.body?.classList.toggle("dark", mode === "dark");
     const toggleBtn = doc.getElementById("theme-toggle");
     if (toggleBtn) {
       toggleBtn.textContent = mode === "dark" ? "◐ \u00a0 Thème clair" : "◐ \u00a0 Thème sombre";
+    }
+    const darkBtn = doc.getElementById("dark");
+    if (darkBtn) {
+      darkBtn.textContent = mode === "dark" ? "☀ Mode clair" : "☾ Mode sombre";
     }
   }, []);
 
@@ -86,7 +96,7 @@ export function FinanceHelpModal({ isOpen, initialGuide = "intrinsic", onClose }
             <strong>{meta.title}</strong>
           </div>
           <div className="finance-help-submodal-tabs" role="tablist" aria-label="Guides financiers">
-            {(["intrinsic", "scores"] as FinanceHelpGuideId[]).map(gid => (
+            {(["intrinsic", "scores", "ratios"] as FinanceHelpGuideId[]).map(gid => (
               <button
                 key={gid}
                 type="button"
