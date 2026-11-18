@@ -275,7 +275,10 @@ class Settings(BaseSettings):
     app_data_dir: Path = Path("./data")
     finance_data_dir: Path | None = None
     finance_quote_ttl_seconds: int = 300
-    finance_fundamentals_ttl_hours: int = 24
+    finance_fundamentals_ttl_hours: int = 360
+    finance_exchange_catalog_ttl_hours: int = 24
+    finance_exchange_auto_sync_enabled: bool = True
+    finance_exchange_auto_sync_codes: str = ""
     database_url: str = ""
     demo_mode: bool = False
     llm_api_key: SecretStr = SecretStr("")

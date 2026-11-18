@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import datetime
 import logging
 import math
@@ -15,7 +16,11 @@ import httpx
 from .config import Settings
 from .finance_warehouse import (
     get_exchange_catalog_meta,
+    get_sync_preferences,
+    list_warehouse_watchlist_items_for_sync,
+    record_sync_run_status,
     replace_exchange_symbols,
+    save_sync_preferences,
     search_exchange_symbols,
     warehouse_db_path,
 )
@@ -27,7 +32,35 @@ _USER_AGENT = (
     "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
 )
 _ISIN_RE = re.compile(r"^[A-Z]{2}[A-Z0-9]{9}[0-9]$")
-_EUFUND_TTL_SEC = 7 * 24 * 3600
+_EXCHANGE_CODE_RE = re.compile(r"^[A-Z0-9_-]{1,12}$")
+_DEFAULT_EXCHANGE_CODES: tuple[str, ...] = ("EUFUND", "PA", "US", "XETRA", "LSE", "CC")
+
+SUPPORTED_EXCHANGE_CATALOGS: tuple[dict[str, str], ...] = (
+    {"code": "EUFUND", "label": "Fonds EU", "description": "Fonds européens OPCVM / SICAV"},
+    {"code": "PA", "label": "Paris (PA)", "description": "Euronext Paris (actions & ETF)"},
+    {"code": "US", "label": "US", "description": "NYSE / NASDAQ / ARCA (actions & ETF)"},
+    {"code": "XETRA", "label": "Xetra", "description": "Allemagne (Deutsche Börse Xetra)"},
+    {"code": "LSE", "label": "Londres (LSE)", "description": "London Stock Exchange"},
+    {"code": "CC", "label": "Crypto (CC)", "description": "Cryptomonnaies EODHD"},
+)
+
+
+def _exchange_ttl_seconds(settings: Settings) -> int:
+    hours = int(getattr(settings, "finance_exchange_catalog_ttl_hours", 24) or 24)
+    return max(3600, hours * 3600)
+
+
+def parse_auto_sync_exchange_codes(settings: Settings) -> list[str]:
+    raw = str(getattr(settings, "finance_exchange_auto_sync_codes", "") or "")
+    codes: list[str] = []
+    seen: set[str] = set()
+    for part in raw.split(","):
+        code = part.strip().upper()
+        if not code or code == "ALL" or not _EXCHANGE_CODE_RE.fullmatch(code) or code in seen:
+            continue
+        seen.add(code)
+        codes.append(code)
+    return codes
 
 
 def looks_like_isin(value: str) -> bool:
@@ -85,7 +118,9 @@ def _iso_from_ts(ts: float | None) -> str | None:
     return datetime.datetime.fromtimestamp(ts, datetime.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def _normalize_eufund_rows(raw: list[Any]) -> list[dict[str, Any]]:
+def _normalize_exchange_rows(raw: list[Any], exchange_code: str = "EUFUND") -> list[dict[str, Any]]:
+    exch = (exchange_code or "EUFUND").strip().upper()
+    default_type = "Fund" if exch == "EUFUND" else ("Currency" if exch == "CC" else "Common Stock")
     rows: list[dict[str, Any]] = []
     for item in raw:
         if not isinstance(item, dict):
@@ -94,7 +129,7 @@ def _normalize_eufund_rows(raw: list[Any]) -> list[dict[str, Any]]:
         if not code:
             continue
         bare_code = code.split(".", 1)[0]
-        eod_ticker = code if "." in code else f"{code}.EUFUND"
+        eod_ticker = code if "." in code else f"{code}.{exch}"
         raw_isin = str(item.get("Isin") or item.get("ISIN") or "").strip().upper()
         isin = raw_isin if looks_like_isin(raw_isin) else (bare_code if looks_like_isin(bare_code) else "")
         rows.append(
@@ -105,24 +140,34 @@ def _normalize_eufund_rows(raw: list[Any]) -> list[dict[str, Any]]:
                 "isin": isin or None,
                 "country": str(item.get("Country") or "").strip(),
                 "currency": str(item.get("Currency") or "").strip().upper(),
-                "type": str(item.get("Type") or "Fund").strip(),
+                "type": str(item.get("Type") or default_type).strip(),
             }
         )
     return rows
 
 
-async def sync_eufund_catalog_if_needed(
+def _normalize_eufund_rows(raw: list[Any]) -> list[dict[str, Any]]:
+    return _normalize_exchange_rows(raw, "EUFUND")
+
+
+async def sync_exchange_catalog_if_needed(
     settings: Settings,
+    exchange_code: str = "EUFUND",
     *,
     refresh: bool = False,
 ) -> tuple[dict[str, Any], str]:
-    """Synchronise `/api/exchange-symbol-list/EUFUND` dans l'entrepôt SQLite si absent ou périmé."""
+    """Synchronise `/api/exchange-symbol-list/{EXCHANGE}` dans l'entrepôt SQLite (TTL quotidien 24h par défaut)."""
+    exch = (exchange_code or "EUFUND").strip().upper()
+    if not _EXCHANGE_CODE_RE.fullmatch(exch) or exch == "ALL":
+        raise ValueError(f"Code marché EODHD invalide : {exchange_code!r}")
+
     db_path = warehouse_db_path(settings)
-    meta = get_exchange_catalog_meta(db_path, "EUFUND")
+    meta = get_exchange_catalog_meta(db_path, exch)
+    ttl_sec = _exchange_ttl_seconds(settings)
     is_fresh = bool(
         meta["total"] > 0
         and meta["fetched_at"] is not None
-        and (time.time() - float(meta["fetched_at"])) <= _EUFUND_TTL_SEC
+        and (time.time() - float(meta["fetched_at"])) <= ttl_sec
     )
     if not refresh and is_fresh:
         return meta, "Entrepôt SQLite"
@@ -137,56 +182,308 @@ async def sync_eufund_catalog_if_needed(
             return meta, "Entrepôt SQLite"
         return meta, ("Mode démo" if settings.demo_mode else "Clé EODHD requise")
 
-    url = f"https://eodhd.com/api/exchange-symbol-list/EUFUND?api_token={urllib.parse.quote(eod_key)}&fmt=json"
+    url = (
+        f"https://eodhd.com/api/exchange-symbol-list/{urllib.parse.quote(exch)}"
+        f"?api_token={urllib.parse.quote(eod_key)}&fmt=json"
+    )
     try:
         async with httpx.AsyncClient(
             headers={"User-Agent": _USER_AGENT},
             follow_redirects=True,
-            timeout=35.0,
+            timeout=120.0,
         ) as client:
             resp = await client.get(url)
             if resp.status_code == 200:
                 raw = resp.json()
                 if isinstance(raw, list) and raw:
-                    rows = _normalize_eufund_rows(raw)
+                    rows = _normalize_exchange_rows(raw, exch)
                     if rows:
-                        replace_exchange_symbols(db_path, "EUFUND", rows)
-                        updated_meta = get_exchange_catalog_meta(db_path, "EUFUND")
-                        return updated_meta, "EODHD EUFUND API"
+                        replace_exchange_symbols(db_path, exch, rows)
+                        updated_meta = get_exchange_catalog_meta(db_path, exch)
+                        api_label = "EODHD EUFUND API" if exch == "EUFUND" else f"EODHD {exch} API"
+                        return updated_meta, api_label
             else:
-                _logger.warning("EODHD EUFUND catalog HTTP %s", resp.status_code)
+                _logger.warning("EODHD %s catalog HTTP %s", exch, resp.status_code)
     except Exception as exc:
-        _logger.warning("Échec synchronisation catalogue EUFUND EODHD: %s", exc)
+        _logger.warning("Échec synchronisation catalogue %s EODHD: %s", exch, exc)
 
     if meta["total"] > 0:
         return meta, "Entrepôt SQLite (secours)"
     return meta, "Indisponible"
 
 
-async def list_eufund_catalog(
+async def sync_eufund_catalog_if_needed(
     settings: Settings,
     *,
+    refresh: bool = False,
+) -> tuple[dict[str, Any], str]:
+    """Synchronise `/api/exchange-symbol-list/EUFUND` dans l'entrepôt SQLite si absent ou périmé."""
+    return await sync_exchange_catalog_if_needed(settings, "EUFUND", refresh=refresh)
+
+
+async def sync_configured_exchange_catalogs(
+    settings: Settings,
+    *,
+    refresh: bool = False,
+    codes: list[str] | None = None,
+) -> dict[str, Any]:
+    """Synchronise séquentiellement les places boursières demandées (`EUFUND, PA, US, XETRA, LSE, CC`)."""
+    raw_codes = codes if codes is not None else (parse_auto_sync_exchange_codes(settings) or list(_DEFAULT_EXCHANGE_CODES))
+    target_codes = [c.strip().upper() for c in raw_codes if c.strip()]
+    results: dict[str, dict[str, Any]] = {}
+    fetched_count = 0
+    for code in target_codes:
+        if not _EXCHANGE_CODE_RE.fullmatch(code) or code == "ALL":
+            continue
+        meta, source = await sync_exchange_catalog_if_needed(settings, code, refresh=refresh)
+        if source.startswith("EODHD"):
+            fetched_count += 1
+        results[code] = {
+            "total": meta["total"],
+            "source": source,
+            "synced_at": _iso_from_ts(meta["fetched_at"]),
+        }
+    return {
+        "codes": list(results.keys()),
+        "fetched_exchanges": fetched_count,
+        "exchanges": results,
+    }
+
+
+async def get_daily_sync_state(settings: Settings) -> dict[str, Any]:
+    """Retourne les préférences de synchro quotidienne + la liste des indices et marchés disponibles."""
+    from .finance_indices import list_principal_indices
+
+    db_path = warehouse_db_path(settings)
+    prefs = get_sync_preferences(db_path)
+    all_meta = get_exchange_catalog_meta(db_path, "ALL")
+    indices_payload = await list_principal_indices(settings, include_quotes=False, tier="all")
+    available_indices = [
+        {
+            "code": idx["code"],
+            "name": idx.get("name") or idx["code"],
+            "flag": idx.get("flag") or "",
+            "tier": idx.get("tier") or "major",
+            "region": idx.get("region") or "",
+            "constituents_count": int(idx.get("constituents_count") or 0),
+        }
+        for idx in (indices_payload.get("indices") or [])
+    ]
+    return {
+        "preferences": prefs,
+        "available_indices": available_indices,
+        "available_exchanges": _build_supported_exchanges_status(all_meta),
+    }
+
+
+async def update_daily_sync_preferences(
+    settings: Settings,
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    """Enregistre les préférences de synchro quotidienne puis retourne l'état complet."""
+    db_path = warehouse_db_path(settings)
+    save_sync_preferences(db_path, config)
+    return await get_daily_sync_state(settings)
+
+
+async def run_daily_sync_now(
+    settings: Settings,
+    *,
+    refresh: bool = False,
+    respect_enabled: bool = False,
+) -> dict[str, Any]:
+    """Exécute la synchronisation quotidienne selon les choix utilisateur (indices de base + sélections)."""
+    from types import SimpleNamespace
+    from .finance_indices import get_index_performances, list_eodhd_indx_catalog, list_principal_indices
+    from .finance_watchlist import fetch_watchlist_quotes
+
+    db_path = warehouse_db_path(settings)
+    prefs = get_sync_preferences(db_path)
+    if respect_enabled and not prefs.get("enabled", True):
+        return {
+            **(await get_daily_sync_state(settings)),
+            "summary": {"skipped": True, "reason": "disabled"},
+        }
+
+    summary: dict[str, Any] = {
+        "skipped": False,
+        "principal_indices_count": 0,
+        "indx_catalog_total": 0,
+        "indices": {},
+        "watchlist_items_count": 0,
+        "exchanges": {},
+        "errors": [],
+    }
+
+    if prefs.get("principal_indices"):
+        try:
+            idx_res = await list_principal_indices(settings, include_quotes=True, tier="major")
+            summary["principal_indices_count"] = len(idx_res.get("indices") or [])
+        except Exception as exc:
+            summary["errors"].append(f"indices: {exc}")
+
+    if prefs.get("indx_catalog"):
+        try:
+            cat_res = await list_eodhd_indx_catalog(settings, limit=50, refresh=refresh)
+            summary["indx_catalog_total"] = int(cat_res.get("total") or 0)
+        except Exception as exc:
+            summary["errors"].append(f"indx_catalog: {exc}")
+
+    for code in prefs.get("index_codes") or []:
+        try:
+            perf_res = await get_index_performances(settings, code, refresh=refresh)
+            if perf_res:
+                s_perf = perf_res.get("summary") or {}
+                summary["indices"][code] = {
+                    "loaded_count": int(s_perf.get("loaded_count") or 0),
+                    "from_cache_count": int(s_perf.get("from_cache_count") or 0),
+                    "fetched_count": int(s_perf.get("fetched_count") or 0),
+                }
+        except Exception as exc:
+            summary["errors"].append(f"index:{code}: {exc}")
+
+    if prefs.get("watchlists"):
+        try:
+            raw_items = list_warehouse_watchlist_items_for_sync(db_path)
+            if raw_items:
+                wl_objs = [SimpleNamespace(**it) for it in raw_items]
+                enriched = await fetch_watchlist_quotes(settings, wl_objs, refresh=refresh)
+                summary["watchlist_items_count"] = len(enriched)
+        except Exception as exc:
+            summary["errors"].append(f"watchlists: {exc}")
+
+    exch_codes: list[str] = []
+    seen_exch: set[str] = set()
+    for code in [*(prefs.get("exchanges") or []), *parse_auto_sync_exchange_codes(settings)]:
+        clean_c = str(code or "").strip().upper()
+        if clean_c and clean_c != "ALL" and _EXCHANGE_CODE_RE.fullmatch(clean_c) and clean_c not in seen_exch:
+            seen_exch.add(clean_c)
+            exch_codes.append(clean_c)
+
+    if exch_codes:
+        exch_res = await sync_configured_exchange_catalogs(settings, refresh=refresh, codes=exch_codes)
+        summary["exchanges"] = exch_res.get("exchanges") or {}
+
+    record_sync_run_status(db_path, summary)
+    state = await get_daily_sync_state(settings)
+    return {**state, "summary": summary}
+
+
+async def run_daily_exchange_catalog_sync_loop(settings: Settings) -> None:
+    """Tâche de fond quotidienne exécutant uniquement les éléments sélectionnés par l'utilisateur (indices par défaut)."""
+    try:
+        await asyncio.sleep(15.0)
+        while True:
+            try:
+                if (
+                    not settings.demo_mode
+                    and getattr(settings, "finance_exchange_auto_sync_enabled", True)
+                    and settings.enabled(settings.eod_historical_data_key)
+                ):
+                    db_path = warehouse_db_path(settings)
+                    prefs = get_sync_preferences(db_path)
+                    today_prefix = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
+                    last_run = str(prefs.get("last_run_at") or "")
+                    updated = str(prefs.get("updated_at") or "")
+                    already_ran_today = last_run.startswith(today_prefix) and (not updated or updated <= last_run)
+                    if prefs.get("enabled", True) and not already_ran_today:
+                        res = await run_daily_sync_now(settings, refresh=False, respect_enabled=True)
+                        s_info = res.get("summary") or {}
+                        if not s_info.get("skipped"):
+                            _logger.info(
+                                "Synchro quotidienne terminée (indices=%s, constituants=%d, watchlist=%d, marchés=%d).",
+                                s_info.get("principal_indices_count", 0),
+                                len(s_info.get("indices") or {}),
+                                s_info.get("watchlist_items_count", 0),
+                                len(s_info.get("exchanges") or {}),
+                            )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                _logger.warning("Erreur boucle synchro quotidienne finance: %s", exc)
+            sleep_sec = min(_exchange_ttl_seconds(settings), 6 * 3600)
+            await asyncio.sleep(sleep_sec)
+    except asyncio.CancelledError:
+        return
+
+
+def _build_supported_exchanges_status(meta: dict[str, Any]) -> list[dict[str, Any]]:
+    exch_map = meta.get("exchanges") or {}
+    out: list[dict[str, Any]] = []
+    known_codes: set[str] = set()
+    for entry in SUPPORTED_EXCHANGE_CATALOGS:
+        c = entry["code"]
+        known_codes.add(c)
+        info = exch_map.get(c) or {}
+        out.append(
+            {
+                **entry,
+                "total": int(info.get("total") or 0),
+                "synced_at": _iso_from_ts(info.get("fetched_at")),
+            }
+        )
+    for c, info in sorted(exch_map.items()):
+        if c not in known_codes:
+            out.append(
+                {
+                    "code": c,
+                    "label": c,
+                    "description": f"Marché {c}",
+                    "total": int(info.get("total") or 0),
+                    "synced_at": _iso_from_ts(info.get("fetched_at")),
+                }
+            )
+    return out
+
+
+async def list_exchange_catalog(
+    settings: Settings,
+    *,
+    exchange: str = "EUFUND",
     query: str = "",
     currency: str = "",
     country: str = "",
+    instrument_type: str = "",
+    fund_family: str = "",
     limit: int = 60,
     offset: int = 0,
     refresh: bool = False,
 ) -> dict[str, Any]:
-    """Liste et filtre les fonds européens EODHD (`EUFUND`) depuis l'entrepôt SQLite."""
-    meta, source = await sync_eufund_catalog_if_needed(settings, refresh=refresh)
+    """Liste et filtre un catalogue EODHD (`EUFUND`, `PA`, `US`, `XETRA`, `LSE`, `CC` ou `ALL`) depuis SQLite/FTS5."""
+    exch = (exchange or "EUFUND").strip().upper()
     db_path = warehouse_db_path(settings)
+    if exch == "ALL":
+        if refresh:
+            sync_summary = await sync_configured_exchange_catalogs(settings, refresh=True)
+            source = (
+                "EODHD Multi-Marchés API"
+                if sync_summary.get("fetched_exchanges", 0) > 0
+                else "Entrepôt SQLite"
+            )
+        else:
+            source = "Entrepôt SQLite"
+        meta = get_exchange_catalog_meta(db_path, "ALL")
+    else:
+        _, source = await sync_exchange_catalog_if_needed(settings, exch, refresh=refresh)
+        # Charger les totaux par marché pour afficher les compteurs dans les onglets UI
+        meta = get_exchange_catalog_meta(db_path, exch)
+        all_meta = get_exchange_catalog_meta(db_path, "ALL")
+        meta = {**meta, "exchanges": all_meta.get("exchanges") or {}}
+
     search_res = search_exchange_symbols(
         db_path,
-        "EUFUND",
+        exch,
         query=query,
         currency=currency,
         country=country,
+        instrument_type=instrument_type,
+        fund_family=fund_family,
         limit=limit,
         offset=offset,
     )
     return {
-        "exchange": "EUFUND",
+        "exchange": exch,
+        "supported_exchanges": _build_supported_exchanges_status(meta),
         "total": meta["total"],
         "matched": search_res["matched"],
         "offset": max(0, int(offset or 0)),
@@ -195,8 +492,37 @@ async def list_eufund_catalog(
         "synced_at": _iso_from_ts(meta["fetched_at"]),
         "currencies": meta["currencies"],
         "countries": meta["countries"],
+        "types": meta.get("types") or [],
+        "fund_families": meta.get("fund_families") or [],
         "items": search_res["items"],
     }
+
+
+async def list_eufund_catalog(
+    settings: Settings,
+    *,
+    query: str = "",
+    currency: str = "",
+    country: str = "",
+    instrument_type: str = "",
+    fund_family: str = "",
+    limit: int = 60,
+    offset: int = 0,
+    refresh: bool = False,
+) -> dict[str, Any]:
+    """Liste et filtre les fonds européens EODHD (`EUFUND`) depuis l'entrepôt SQLite."""
+    return await list_exchange_catalog(
+        settings,
+        exchange="EUFUND",
+        query=query,
+        currency=currency,
+        country=country,
+        instrument_type=instrument_type,
+        fund_family=fund_family,
+        limit=limit,
+        offset=offset,
+        refresh=refresh,
+    )
 
 
 async def search_eodhd_funds_live(

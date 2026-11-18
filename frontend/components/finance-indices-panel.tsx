@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowDown, ArrowUp, BarChart2, Check, ChevronDown, ChevronUp, Database, FolderPlus, Globe2, LayoutGrid, LoaderCircle, Plus, RefreshCw, Search, Table2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, BarChart2, CalendarClock, Check, ChevronDown, ChevronUp, Database, FolderPlus, Globe2, LayoutGrid, LoaderCircle, Plus, RefreshCw, Search, Table2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import {
@@ -29,9 +29,11 @@ export function FinanceIndicesStrip({
   loadingIndex,
   catalogOpen,
   eufundCatalogOpen,
+  syncOpen,
   onToggleIndex,
   onToggleCatalog,
   onToggleEufundCatalog,
+  onToggleSync,
   onOpenMinorTier,
 }: {
   indices: PrincipalIndexInfo[];
@@ -40,9 +42,11 @@ export function FinanceIndicesStrip({
   loadingIndex: boolean;
   catalogOpen: boolean;
   eufundCatalogOpen?: boolean;
+  syncOpen?: boolean;
   onToggleIndex: (code: string) => void;
   onToggleCatalog: () => void;
   onToggleEufundCatalog?: () => void;
+  onToggleSync?: () => void;
   onOpenMinorTier?: () => void;
 }) {
   const [tierView, setTierView] = useState<"major" | "minor" | "all">("major");
@@ -108,10 +112,21 @@ export function FinanceIndicesStrip({
             type="button"
             className={`finance-tf-btn finance-indx-catalog-btn ${eufundCatalogOpen ? "active" : ""}`}
             onClick={onToggleEufundCatalog}
-            title="Parcourir les fonds européens EODHD (/exchange-symbol-list/EUFUND) et rechercher par ISIN"
+            title="Parcourir les catalogues EODHD (EUFUND, PA, US, XETRA, LSE, CC) et rechercher par nom, ticker, ISIN ou société de gestion"
           >
             <Search size={11} />
-            <span>Fonds (.EUFUND)</span>
+            <span>Marchés &amp; Fonds (.EUFUND, PA, US…)</span>
+          </button>
+        )}
+        {onToggleSync && (
+          <button
+            type="button"
+            className={`finance-tf-btn finance-indx-catalog-btn ${syncOpen ? "active" : ""}`}
+            onClick={onToggleSync}
+            title="Choisir ce qui est synchronisé automatiquement chaque jour (indices, actions d'indices, listes, marchés)"
+          >
+            <CalendarClock size={11} />
+            <span>Synchro auto</span>
           </button>
         )}
         {warehouse && warehouse.instruments_count > 0 && (
@@ -346,7 +361,9 @@ export function FinanceIndexCompositionDrawer({
   onRefresh: () => void;
   onClose: () => void;
 }) {
-  const [viewMode, setViewMode] = useState<"cards" | "table">("cards");
+  const [viewMode, setViewMode] = useState<"cards" | "table" | null>(null);
+  const effectiveViewMode: "cards" | "table" =
+    viewMode ?? ((performances?.summary?.synced_today_count ?? 0) > 0 ? "table" : "cards");
   const [filterText, setFilterText] = useState("");
   const [sectorFilter, setSectorFilter] = useState("");
   const [onlyCached, setOnlyCached] = useState(false);
@@ -357,11 +374,11 @@ export function FinanceIndexCompositionDrawer({
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
   const activeItems = useMemo<(IndexConstituent | IndexPerformanceItem)[]>(() => {
-    if (viewMode === "table" && performances?.items?.length) {
+    if (effectiveViewMode === "table" && performances?.items?.length) {
       return performances.items;
     }
     return composition?.constituents || [];
-  }, [viewMode, performances, composition]);
+  }, [effectiveViewMode, performances, composition]);
 
   const filtered = useMemo(() => {
     const q = filterText.trim().toLowerCase();
@@ -452,7 +469,10 @@ export function FinanceIndexCompositionDrawer({
                 </strong>
                 <small>
                   {composition.index.region} · {composition.index.eod_ticker} · Source : {composition.index.source} ·{" "}
-                  {performances?.index?.cached_count ?? composition.index.cached_count} chargées en entrepôt
+                  {performances?.index?.cached_count ?? composition.index.cached_count} en entrepôt
+                  {(performances?.summary?.synced_today_count ?? composition.index.synced_today_count ?? 0) > 0
+                    ? ` · ${performances?.summary?.synced_today_count ?? composition.index.synced_today_count} sauvées aujourd'hui`
+                    : ""}
                 </small>
               </div>
             </>
@@ -466,7 +486,7 @@ export function FinanceIndexCompositionDrawer({
               <div className="finance-timeframe-selector" role="group" aria-label="Mode d'affichage de l'indice">
                 <button
                   type="button"
-                  className={`finance-tf-btn ${viewMode === "cards" ? "active" : ""}`}
+                  className={`finance-tf-btn ${effectiveViewMode === "cards" ? "active" : ""}`}
                   onClick={() => setViewMode("cards")}
                   title="Vue en cartes"
                 >
@@ -475,7 +495,7 @@ export function FinanceIndexCompositionDrawer({
                 </button>
                 <button
                   type="button"
-                  className={`finance-tf-btn ${viewMode === "table" ? "active" : ""}`}
+                  className={`finance-tf-btn ${effectiveViewMode === "table" ? "active" : ""}`}
                   onClick={() => void handleSwitchToTable()}
                   title="Afficher le tableau comparatif des performances"
                 >
@@ -488,16 +508,25 @@ export function FinanceIndexCompositionDrawer({
                   type="button"
                   className="finance-tf-btn active finance-stmt-refresh-btn"
                   disabled={performancesLoading || loading}
-                  onClick={() => void handleBatchLoad(Boolean(performances))}
-                  title="Télécharger toutes les actions de l'indice en entrepôt et calculer leurs performances (1J à 1A + YTD)"
+                  onClick={() =>
+                    void handleBatchLoad(
+                      Boolean(
+                        performances &&
+                          performances.summary.loaded_count >= performances.summary.total_count,
+                      ),
+                    )
+                  }
+                  title="Télécharger les actions manquantes ou recalculer toutes les performances depuis le réseau"
                 >
                   {performancesLoading ? <LoaderCircle size={12} className="spin" /> : <BarChart2 size={12} />}
                   <span>
                     {performancesLoading
                       ? "Chargement de l'indice…"
-                      : performances
-                        ? "Recalculer perfos"
-                        : "Charger tout l'indice"}
+                      : performances && performances.summary.loaded_count < performances.summary.total_count
+                        ? "Compléter l'indice"
+                        : performances
+                          ? "Recalculer perfos"
+                          : "Charger tout l'indice"}
                   </span>
                 </button>
               )}
@@ -595,14 +624,14 @@ export function FinanceIndexCompositionDrawer({
           <LoaderCircle size={18} className="spin text-emerald" />
           <span>Récupération des constituants…</span>
         </div>
-      ) : viewMode === "table" && performancesLoading && !performances ? (
+      ) : effectiveViewMode === "table" && performancesLoading && !performances ? (
         <div className="finance-index-drawer-loading">
           <LoaderCircle size={18} className="spin text-emerald" />
           <span>
             Chargement de toutes les actions de {composition?.index.name || "l'indice"} en entrepôt et calcul des performances…
           </span>
         </div>
-      ) : viewMode === "table" && performances ? (
+      ) : effectiveViewMode === "table" && performances ? (
         <>
           <div className="finance-index-perf-summary">
             <div className="finance-index-perf-kpi">
@@ -610,6 +639,22 @@ export function FinanceIndexCompositionDrawer({
               <strong>
                 {performances.summary.loaded_count} / {performances.summary.total_count}
               </strong>
+              {(performances.summary.synced_today_count ?? 0) > 0 && (
+                <small className="text-emerald">
+                  Sauvegardé aujourd&apos;hui
+                  {performances.summary.last_synced_at
+                    ? ` · ${new Date(performances.summary.last_synced_at).toLocaleTimeString("fr-FR", {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}`
+                    : ""}
+                  {(performances.summary.fetched_count ?? 0) === 0
+                    ? " (100% BDD)"
+                    : (performances.summary.from_cache_count ?? 0) > 0
+                      ? ` (${performances.summary.from_cache_count} BDD · ${performances.summary.fetched_count} réseau)`
+                      : ""}
+                </small>
+              )}
             </div>
             <div className="finance-index-perf-kpi">
               <span>Hausses / Baisses (1J)</span>

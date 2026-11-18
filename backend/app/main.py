@@ -1,5 +1,5 @@
 import asyncio
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -229,8 +229,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         with sessions() as db:
             if not db.scalar(select(User.id).where(User.is_admin.is_(True), User.active.is_(True))):
                 raise RuntimeError("Aucun administrateur actif; exécutez `python -m app.cli create-admin --username <identifiant>`. ")
-        yield
-        engine.dispose()
+        sync_task: asyncio.Task[None] | None = None
+        if (
+            not settings.demo_mode
+            and settings.finance_exchange_auto_sync_enabled
+            and settings.enabled(settings.eod_historical_data_key)
+        ):
+            from .finance_funds import run_daily_exchange_catalog_sync_loop
+
+            sync_task = asyncio.create_task(run_daily_exchange_catalog_sync_loop(settings))
+        try:
+            yield
+        finally:
+            if sync_task is not None:
+                sync_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await sync_task
+            engine.dispose()
 
     app = FastAPI(title="cLAIr", version="0.1.0", lifespan=lifespan)
     app.state.settings = settings

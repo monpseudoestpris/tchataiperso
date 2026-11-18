@@ -46,11 +46,13 @@ from .finance_provider import (
 )
 from .finance_report_html import build_classy_report_html, extract_report_highlights
 from .finance_warehouse import (
+    get_instrument_eod_sync_info,
     get_latest_bar_date,
     get_snapshot,
     get_stored_eod_bars,
     get_warehouse_stats,
     has_ai_analysis_for,
+    is_eod_fresh_today,
     list_ai_analyses,
     load_fundamental_series,
     resolve_canonical_symbol,
@@ -1415,9 +1417,15 @@ async def get_financial_dossier(
     # 2. Synchroniser 10+ ans de barres EOD journalières & l'historique des dividendes
     stored_bars = get_stored_eod_bars(db_path, canonical)
     latest_date = get_latest_bar_date(db_path, canonical)
+    sync_info = get_instrument_eod_sync_info(db_path, canonical)
+    fresh_bars_today = not refresh and is_eod_fresh_today(sync_info, min_bars_needed=2000)
     today_date = datetime.date.today()
-    need_bars_sync = refresh or len(stored_bars) < 200 or (
-        latest_date is not None and (today_date - datetime.date.fromisoformat(latest_date)).days >= 2
+    need_bars_sync = refresh or (
+        not fresh_bars_today
+        and (
+            len(stored_bars) < 200
+            or (latest_date is not None and (today_date - datetime.date.fromisoformat(latest_date)).days >= 2)
+        )
     )
 
     div_snap = get_snapshot(db_path, canonical, "dividends", max_age_seconds=ttl_seconds, include_raw=True)
@@ -1456,7 +1464,13 @@ async def get_financial_dossier(
                 new_divs = y_divs
 
         if new_bars:
-            upsert_eod_bars(db_path, canonical, new_bars, "eodhd" if eod_key else "yahoo_finance")
+            upsert_eod_bars(
+                db_path,
+                canonical,
+                new_bars,
+                "eodhd" if eod_key else "yahoo_finance",
+                requested_limit=2500,
+            )
             stored_bars = get_stored_eod_bars(db_path, canonical)
         if new_divs is not None:
             stored_divs = new_divs

@@ -30,9 +30,11 @@ from .finance import (
 from .finance_warehouse import (
     get_cached_symbols_set,
     get_index_constituents,
+    get_instrument_eod_sync_info,
     get_snapshot,
     get_stored_eod_bars,
     get_warehouse_overview,
+    is_eod_fresh_today,
     resolve_canonical_symbol,
     save_index_constituents,
     save_snapshot,
@@ -1473,8 +1475,10 @@ async def get_index_composition(
             save_index_constituents(db_path, code, items)
 
     cached_syms = get_cached_symbols_set(db_path)
+    today_iso = datetime.date.today().isoformat()
     enriched: list[dict[str, Any]] = []
     cached_count = 0
+    synced_today_count = 0
     sectors: set[str] = set()
     for item in items:
         sym = str(item.get("symbol") or "").upper()
@@ -1483,6 +1487,10 @@ async def get_index_composition(
         is_cached = sym in cached_syms or eod_t in cached_syms or y_t in cached_syms
         if is_cached:
             cached_count += 1
+        if is_cached:
+            sync_info = get_instrument_eod_sync_info(db_path, resolve_canonical_symbol(db_path, eod_t or sym))
+            if sync_info.get("eod_synced_date") == today_iso:
+                synced_today_count += 1
         sec = str(item.get("sector") or "").strip()
         if sec:
             sectors.add(sec)
@@ -1493,6 +1501,7 @@ async def get_index_composition(
             **defn,
             "constituents_count": len(enriched),
             "cached_count": cached_count,
+            "synced_today_count": synced_today_count,
             "source": source,
             "sectors": sorted(sectors),
         },
@@ -1606,10 +1615,11 @@ async def get_index_performances(
     index_code: str,
     *,
     refresh: bool = False,
+    cache_only: bool = False,
     max_constituents: int = 550,
 ) -> dict[str, Any] | None:
-    """Charge toutes les actions d'un indice en entrepôt et calcule leurs performances (1J à 1A + YTD)."""
-    comp = await get_index_composition(settings, index_code, refresh=refresh)
+    """Charge toutes les actions d'un indice en entrepôt (ou lit la BDD locale) et calcule leurs performances."""
+    comp = await get_index_composition(settings, index_code, refresh=refresh and not cache_only)
     if comp is None:
         return None
 
@@ -1621,7 +1631,7 @@ async def get_index_performances(
         if settings.enabled(settings.eod_historical_data_key)
         else ""
     )
-    fresh_cutoff = (datetime.date.today() - datetime.timedelta(days=4)).isoformat()
+    today_iso = datetime.date.today().isoformat()
     default_currency = str(defn.get("currency") or "EUR")
     sem = asyncio.Semaphore(10)
 
@@ -1630,13 +1640,17 @@ async def get_index_performances(
         yahoo_t = str(item.get("yahoo_symbol") or item.get("symbol") or "").upper()
         sym = str(item.get("symbol") or eod_t).upper()
         canonical = resolve_canonical_symbol(db_path, eod_t or sym)
+        sync_info = get_instrument_eod_sync_info(db_path, canonical)
         stored = get_stored_eod_bars(db_path, canonical, limit=420)
-        has_fresh = bool(stored and len(stored) >= 200 and str(stored[-1].get("date") or "") >= fresh_cutoff)
-        bars: list[dict[str, Any]] = stored if (has_fresh and not refresh) else []
+        fresh_today = is_eod_fresh_today(sync_info, min_bars_needed=380, today_iso=today_iso)
+
+        use_local_only = cache_only or (fresh_today and not refresh)
+        bars: list[dict[str, Any]] = stored if (use_local_only and stored) else []
+        loaded_from_cache = bool(bars)
         source_used = "warehouse" if bars else "none"
         currency = default_currency
 
-        if not bars and not settings.demo_mode:
+        if not bars and not cache_only and not settings.demo_mode:
             async with sem:
                 try:
                     if eod_key and eod_t:
@@ -1688,12 +1702,14 @@ async def get_index_performances(
                             "industry": str(item.get("industry") or "") or None,
                         },
                     )
-                    upsert_eod_bars(db_path, canonical, bars, source_used)
+                    upsert_eod_bars(db_path, canonical, bars, source_used, requested_limit=420)
+                    sync_info = get_instrument_eod_sync_info(db_path, canonical)
                 except Exception as exc:
                     _logger.debug("Persistance lot indice %s (%s) ignorée: %s", index_code, sym, exc)
 
         if not bars and stored:
             bars = stored
+            loaded_from_cache = True
 
         returns = compute_period_returns(bars)
         as_of = str(bars[-1].get("date") or "")[:10] if bars else None
@@ -1709,6 +1725,9 @@ async def get_index_performances(
             "change_1y_pct": returns["change_1y_pct"],
             "as_of": as_of,
             "bars_count": len(bars),
+            "eod_synced_date": sync_info.get("eod_synced_date"),
+            "eod_synced_at": sync_info.get("eod_synced_at"),
+            "loaded_from_cache": loaded_from_cache,
             "cached_in_warehouse": bool(bars) or bool(item.get("cached_in_warehouse")),
         }
 
@@ -1724,6 +1743,11 @@ async def get_index_performances(
         return round(sum(vals) / len(vals), 2) if vals else None
 
     loaded_count = sum(1 for r in rows if r.get("price") is not None)
+    from_cache_count = sum(1 for r in rows if r.get("loaded_from_cache") and r.get("price") is not None)
+    fetched_count = max(0, loaded_count - from_cache_count)
+    synced_today_count = sum(1 for r in rows if r.get("eod_synced_date") == today_iso)
+    sync_timestamps = [str(r["eod_synced_at"]) for r in rows if r.get("eod_synced_at")]
+    last_synced_at = max(sync_timestamps) if sync_timestamps else None
     gainers_1d = sum(1 for r in rows if (r.get("change_1d_pct") or 0) > 0)
     losers_1d = sum(1 for r in rows if (r.get("change_1d_pct") or 0) < 0)
     gainers_1y = sum(1 for r in rows if (r.get("change_1y_pct") or 0) > 0)
@@ -1733,10 +1757,15 @@ async def get_index_performances(
         "index": {
             **defn,
             "cached_count": sum(1 for r in rows if r.get("cached_in_warehouse")),
+            "synced_today_count": synced_today_count,
         },
         "summary": {
             "total_count": len(comp["constituents"]),
             "loaded_count": loaded_count,
+            "from_cache_count": from_cache_count,
+            "fetched_count": fetched_count,
+            "synced_today_count": synced_today_count,
+            "last_synced_at": last_synced_at,
             "avg_1d_pct": _avg("change_1d_pct"),
             "avg_1w_pct": _avg("change_1w_pct"),
             "avg_1m_pct": _avg("change_1m_pct"),

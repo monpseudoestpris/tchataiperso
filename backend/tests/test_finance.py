@@ -1101,6 +1101,135 @@ class FinanceWorkspaceTests(unittest.TestCase):
                 "finance_stock_moats",
             }.issubset(tables))
 
+    def test_finance_fundamentals_default_ttl_is_360_hours(self):
+        settings = Settings(_env_file=None)
+        self.assertEqual(settings.finance_fundamentals_ttl_hours, 360)
+
+    def test_dashboard_and_watchlist_same_day_zero_network_option_a(self):
+        import asyncio
+        import datetime
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+        from app.finance import get_financial_dashboard_data
+        from app.finance_watchlist import fetch_watchlist_quotes
+
+        today = datetime.date.today()
+        bars_desc = [
+            {
+                "date": (today - datetime.timedelta(days=5)).isoformat(),
+                "open": 150.0,
+                "high": 152.0,
+                "low": 149.0,
+                "close": 151.0,
+                "adjusted_close": 151.0,
+                "volume": 5000,
+            },
+            {
+                "date": (today - datetime.timedelta(days=6)).isoformat(),
+                "open": 148.0,
+                "high": 150.0,
+                "low": 147.0,
+                "close": 149.0,
+                "adjusted_close": 149.0,
+                "volume": 4500,
+            },
+        ]
+        fund_payload = {
+            "General": {
+                "Code": "AI",
+                "Exchange": "PA",
+                "Name": "Air Liquide",
+                "CurrencyCode": "EUR",
+                "CountryName": "France",
+                "Sector": "Basic Materials",
+                "Industry": "Specialty Chemicals",
+                "ISIN": "FR0000120073",
+            },
+            "Highlights": {"MarketCapitalization": 90_000_000_000, "PERatio": 24.5},
+            "Valuation": {},
+            "SharesStats": {},
+            "Technicals": {},
+            "Financials": {},
+        }
+        rt_payload = {"code": "AI.PA", "close": 151.5, "previousClose": 149.0, "change": 2.5, "change_p": 1.68}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            settings = Settings(
+                _env_file=None,
+                app_data_dir=tmp_path,
+                finance_data_dir=tmp_path / "finance",
+                demo_mode=False,
+                eod_historical_data_key="test-eod-key",
+            )
+
+            mock_rt_1 = AsyncMock(return_value=rt_payload)
+            mock_hist_1 = AsyncMock(return_value=bars_desc)
+            mock_fund_1 = AsyncMock(return_value=fund_payload)
+            with (
+                patch("app.finance.fetch_eodhd_realtime", new=mock_rt_1),
+                patch("app.finance.fetch_eodhd_historical_eod", new=mock_hist_1),
+                patch("app.finance.fetch_eodhd_fundamentals", new=mock_fund_1),
+                patch("app.finance.lookup_eodhd_search_metadata", new=AsyncMock(return_value=None)),
+            ):
+                res1 = asyncio.run(get_financial_dashboard_data(settings, "AI.PA", chart_range="1y"))
+            self.assertEqual(res1["price"], 151.5)
+            self.assertFalse(res1["loaded_from_cache"])
+            self.assertEqual(res1["eod_synced_date"], today.isoformat())
+            self.assertEqual(mock_rt_1.await_count, 1)
+            self.assertEqual(mock_hist_1.await_count, 1)
+            self.assertEqual(mock_fund_1.await_count, 1)
+
+            # 2e appel le même jour (Option A) : 0 appel réseau EOD/realtime/fundamentals/Yahoo
+            mock_fail = AsyncMock(side_effect=AssertionError("Appel réseau inattendu sur cache du jour"))
+            with (
+                patch("app.finance.fetch_eodhd_realtime", new=mock_fail),
+                patch("app.finance.fetch_eodhd_historical_eod", new=mock_fail),
+                patch("app.finance.fetch_eodhd_fundamentals", new=mock_fail),
+                patch("app.finance.lookup_eodhd_search_metadata", new=mock_fail),
+                patch("app.finance.fetch_yahoo_quote_summary", new=mock_fail),
+                patch("app.finance.fetch_yahoo_chart", new=mock_fail),
+            ):
+                res2 = asyncio.run(get_financial_dashboard_data(settings, "AI.PA", chart_range="1y"))
+            self.assertTrue(res2["loaded_from_cache"])
+            self.assertEqual(res2["eod_synced_date"], today.isoformat())
+            self.assertEqual(res2["price"], 151.0)
+
+            # Watchlist sur le même titre le même jour : 0 appel réseau également
+            wl_item = SimpleNamespace(
+                id="wl-1",
+                list_id="list-1",
+                symbol="AI.PA",
+                yahoo_symbol="AI.PA",
+                eod_ticker="AI.PA",
+                name="Air Liquide",
+                exchange="PA",
+                currency="EUR",
+                note="",
+                position=0,
+            )
+            with (
+                patch("app.finance_watchlist.fetch_eodhd_realtime", new=mock_fail),
+                patch("app.finance_watchlist.fetch_eodhd_historical_eod", new=mock_fail),
+                patch("app.finance_watchlist.fetch_yahoo_chart", new=mock_fail),
+            ):
+                wl_cached = asyncio.run(fetch_watchlist_quotes(settings, [wl_item]))
+            self.assertEqual(len(wl_cached), 1)
+            self.assertTrue(wl_cached[0]["loaded_from_cache"])
+            self.assertEqual(wl_cached[0]["price"], 151.0)
+
+            # Refresh explicite force bien le rechargement réseau
+            mock_rt_ref = AsyncMock(return_value=rt_payload)
+            mock_hist_ref = AsyncMock(return_value=bars_desc)
+            with (
+                patch("app.finance_watchlist.fetch_eodhd_realtime", new=mock_rt_ref),
+                patch("app.finance_watchlist.fetch_eodhd_historical_eod", new=mock_hist_ref),
+            ):
+                wl_refreshed = asyncio.run(fetch_watchlist_quotes(settings, [wl_item], refresh=True))
+            self.assertFalse(wl_refreshed[0]["loaded_from_cache"])
+            self.assertEqual(mock_rt_ref.await_count, 1)
+            self.assertEqual(mock_hist_ref.await_count, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

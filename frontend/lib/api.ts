@@ -1777,6 +1777,7 @@ export type IndexConstituent = {
 export type IndexCompositionResponse = {
   index: PrincipalIndexInfo & {
     cached_count: number;
+    synced_today_count?: number;
     source: string;
     sectors: string[];
   };
@@ -1868,11 +1869,18 @@ export type IndexPerformanceItem = IndexConstituent & {
   change_1y_pct: number | null;
   as_of: string | null;
   bars_count: number;
+  eod_synced_date?: string | null;
+  eod_synced_at?: string | null;
+  loaded_from_cache?: boolean;
 };
 
 export type IndexPerformancesSummary = {
   total_count: number;
   loaded_count: number;
+  from_cache_count?: number;
+  fetched_count?: number;
+  synced_today_count?: number;
+  last_synced_at?: string | null;
   avg_1d_pct: number | null;
   avg_1w_pct: number | null;
   avg_1m_pct: number | null;
@@ -1888,6 +1896,7 @@ export type IndexPerformancesSummary = {
 export type IndexPerformancesResponse = {
   index: PrincipalIndexInfo & {
     cached_count: number;
+    synced_today_count?: number;
     source?: string;
     sectors?: string[];
   };
@@ -1901,6 +1910,14 @@ export type ImportIndexWatchlistResponse = {
   added_count: number;
   total_constituents: number;
 };
+
+export async function fetchCachedIndexPerformances(
+  indexCode: string,
+): Promise<IndexPerformancesResponse> {
+  return api<IndexPerformancesResponse>(
+    `/finance/indices/${encodeURIComponent(indexCode)}/performances`,
+  );
+}
 
 export async function loadIndexPerformances(
   indexCode: string,
@@ -1934,6 +1951,7 @@ export type EodhdEufundItem = {
   eod_ticker: string;
   name: string;
   isin: string | null;
+  fund_family?: string | null;
   country: string;
   currency: string;
   type: string;
@@ -1942,8 +1960,19 @@ export type EodhdEufundItem = {
   cached_in_warehouse: boolean;
 };
 
+export type ExchangeCatalogItem = EodhdEufundItem;
+
+export type SupportedExchangeInfo = {
+  code: string;
+  label: string;
+  description: string;
+  total: number;
+  synced_at: string | null;
+};
+
 export type EodhdEufundCatalogResponse = {
   exchange: string;
+  supported_exchanges?: SupportedExchangeInfo[];
   total: number;
   matched: number;
   offset: number;
@@ -1952,6 +1981,8 @@ export type EodhdEufundCatalogResponse = {
   synced_at: string | null;
   currencies: string[];
   countries: string[];
+  types?: string[];
+  fund_families?: string[];
   items: EodhdEufundItem[];
 };
 
@@ -1960,6 +1991,105 @@ export type EodhdFundSearchResponse = {
   source: string;
   items: EodhdEufundItem[];
 };
+
+export async function fetchExchangeCatalog(params?: {
+  exchange?: string;
+  q?: string;
+  currency?: string;
+  country?: string;
+  type?: string;
+  fundFamily?: string;
+  limit?: number;
+  offset?: number;
+  refresh?: boolean;
+}): Promise<EodhdEufundCatalogResponse> {
+  const qs = new URLSearchParams();
+  if (params?.exchange?.trim()) qs.set("exchange", params.exchange.trim());
+  if (params?.q?.trim()) qs.set("q", params.q.trim());
+  if (params?.currency?.trim()) qs.set("currency", params.currency.trim());
+  if (params?.country?.trim()) qs.set("country", params.country.trim());
+  if (params?.type?.trim()) qs.set("type", params.type.trim());
+  if (params?.fundFamily?.trim()) qs.set("fund_family", params.fundFamily.trim());
+  if (params?.limit != null) qs.set("limit", String(params.limit));
+  if (params?.offset != null && params.offset > 0) qs.set("offset", String(params.offset));
+  if (params?.refresh) qs.set("refresh", "true");
+  const suffix = qs.toString();
+  return api<EodhdEufundCatalogResponse>(`/finance/catalog/exchanges${suffix ? `?${suffix}` : ""}`);
+}
+
+export async function syncExchangeCatalog(
+  exchange = "ALL",
+  refresh = true,
+): Promise<{
+  codes: string[];
+  fetched_exchanges: number;
+  exchanges: Record<string, { total: number; source: string; synced_at: string | number | null }>;
+}> {
+  const qs = new URLSearchParams({ exchange, refresh: String(refresh) });
+  return api(`/finance/catalog/exchanges/sync?${qs.toString()}`, { method: "POST" });
+}
+
+export type FinanceSyncRunSummary = {
+  skipped?: boolean;
+  reason?: string;
+  principal_indices_count?: number;
+  indx_catalog_total?: number;
+  indices?: Record<string, { loaded_count: number; from_cache_count: number; fetched_count: number }>;
+  watchlist_items_count?: number;
+  exchanges?: Record<string, { total: number; source: string; synced_at: string | null }>;
+  errors?: string[];
+};
+
+export type FinanceSyncPreferences = {
+  enabled: boolean;
+  principal_indices: boolean;
+  indx_catalog: boolean;
+  index_codes: string[];
+  watchlists: boolean;
+  exchanges: string[];
+  last_run_at: string | null;
+  last_status: FinanceSyncRunSummary | null;
+  updated_at: string | null;
+};
+
+export type FinanceSyncAvailableIndex = {
+  code: string;
+  name: string;
+  flag: string;
+  tier: "major" | "minor";
+  region: string;
+  constituents_count: number;
+};
+
+export type FinanceSyncStateResponse = {
+  preferences: FinanceSyncPreferences;
+  available_indices: FinanceSyncAvailableIndex[];
+  available_exchanges: SupportedExchangeInfo[];
+  summary?: FinanceSyncRunSummary;
+};
+
+export async function fetchFinanceSyncPreferences(): Promise<FinanceSyncStateResponse> {
+  return api<FinanceSyncStateResponse>("/finance/sync-preferences");
+}
+
+export async function updateFinanceSyncPreferences(
+  prefs: Pick<
+    FinanceSyncPreferences,
+    "enabled" | "principal_indices" | "indx_catalog" | "index_codes" | "watchlists" | "exchanges"
+  >,
+): Promise<FinanceSyncStateResponse> {
+  return api<FinanceSyncStateResponse>("/finance/sync-preferences", {
+    method: "PUT",
+    body: JSON.stringify(prefs),
+  });
+}
+
+export async function runFinanceSyncNow(refresh = false): Promise<FinanceSyncStateResponse> {
+  const qs = refresh ? "?refresh=true" : "";
+  return api<FinanceSyncStateResponse>(`/finance/sync-preferences/run${qs}`, {
+    method: "POST",
+  });
+}
 
 export async function fetchEodhdEufundCatalog(params?: {
   q?: string;
@@ -2015,6 +2145,8 @@ export type WatchlistItem = {
   change_3m_pct: number | null;
   change_ytd_pct?: number | null;
   change_1y_pct: number | null;
+  eod_synced_date?: string | null;
+  loaded_from_cache?: boolean;
 };
 
 export type WatchlistStateResponse = {
@@ -2027,12 +2159,14 @@ export async function fetchWatchlistState(
   seedDefaults = false,
   includeQuotes = true,
   listId?: string | null,
+  refresh = false,
 ): Promise<WatchlistStateResponse> {
   const qs = new URLSearchParams({
     seed_defaults: String(seedDefaults),
     include_quotes: String(includeQuotes),
   });
   if (listId) qs.set("list_id", listId);
+  if (refresh) qs.set("refresh", "true");
   return api<WatchlistStateResponse>(`/finance/watchlist?${qs.toString()}`);
 }
 

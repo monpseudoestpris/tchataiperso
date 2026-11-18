@@ -243,3 +243,81 @@ def test_load_index_performances_and_import_to_watchlist(tmp_path: Path) -> None
         res_imp_2 = client.post("/api/finance/indices/CAC40/watchlist", json={})
         assert res_imp_2.status_code == 201
         assert res_imp_2.json()["added_count"] == 0
+
+
+def test_index_performances_same_day_cache_even_with_old_bar_date_and_few_bars(tmp_path: Path) -> None:
+    import datetime
+    from tests.test_api import authenticated_client
+
+    s = Settings(
+        _env_file=None,
+        app_data_dir=tmp_path,
+        finance_data_dir=tmp_path / "finance",
+        demo_mode=False,
+        eod_historical_data_key="test-eod-key",
+        openrouter_api_key="",
+        brave_api_key="",
+        duckduckgo_instant_answers_enabled=False,
+    )
+
+    today = datetime.date.today()
+    # Dernière barre vieille de 6 jours et seulement 3 barres (cas week-end prolongé / titre récent)
+    stale_bars_desc = [
+        {"date": (today - datetime.timedelta(days=6)).isoformat(), "open": 110.0, "high": 111.0, "low": 109.0, "close": 110.0, "adjusted_close": 110.0, "volume": 1000},
+        {"date": (today - datetime.timedelta(days=7)).isoformat(), "open": 100.0, "high": 101.0, "low": 99.0, "close": 100.0, "adjusted_close": 100.0, "volume": 900},
+        {"date": (today - datetime.timedelta(days=366)).isoformat(), "open": 80.0, "high": 81.0, "low": 79.0, "close": 80.0, "adjusted_close": 80.0, "volume": 800},
+    ]
+
+    with authenticated_client(s) as client:
+        mock_hist = AsyncMock(return_value=stale_bars_desc)
+        with (
+            patch("app.finance_indices._fetch_eodhd_index_components", new=AsyncMock(return_value=[])),
+            patch("app.finance_indices.fetch_eodhd_historical_eod", new=mock_hist),
+        ):
+            res_first = client.post("/api/finance/indices/CAC40/performances")
+            assert res_first.status_code == 200
+            body_first = res_first.json()
+            assert body_first["summary"]["loaded_count"] == 40
+            assert body_first["summary"]["fetched_count"] == 40
+            assert body_first["summary"]["from_cache_count"] == 0
+            assert body_first["summary"]["synced_today_count"] == 40
+            assert body_first["summary"]["last_synced_at"]
+            assert mock_hist.await_count == 40
+
+        # 2e passage le même jour via GET cache-only -> 0 appel réseau
+        mock_hist_cached = AsyncMock(side_effect=AssertionError("Ne doit pas appeler le réseau"))
+        with (
+            patch("app.finance_indices._fetch_eodhd_index_components", new=AsyncMock(return_value=[])),
+            patch("app.finance_indices.fetch_eodhd_historical_eod", new=mock_hist_cached),
+        ):
+            res_get = client.get("/api/finance/indices/CAC40/performances")
+            assert res_get.status_code == 200
+            body_get = res_get.json()
+            assert body_get["summary"]["loaded_count"] == 40
+            assert body_get["summary"]["from_cache_count"] == 40
+            assert body_get["summary"]["fetched_count"] == 0
+            assert body_get["summary"]["synced_today_count"] == 40
+            assert body_get["items"][0]["loaded_from_cache"] is True
+            assert body_get["items"][0]["eod_synced_date"] == today.isoformat()
+            assert mock_hist_cached.await_count == 0
+
+            # POST sans refresh -> également 0 appel réseau grâce à eod_synced_date == today
+            res_post_cached = client.post("/api/finance/indices/CAC40/performances")
+            assert res_post_cached.status_code == 200
+            body_post_cached = res_post_cached.json()
+            assert body_post_cached["summary"]["from_cache_count"] == 40
+            assert body_post_cached["summary"]["fetched_count"] == 0
+            assert mock_hist_cached.await_count == 0
+
+        # POST avec refresh=true -> re-télécharge bien depuis le réseau
+        mock_hist_refresh = AsyncMock(return_value=stale_bars_desc)
+        with (
+            patch("app.finance_indices._fetch_eodhd_index_components", new=AsyncMock(return_value=[])),
+            patch("app.finance_indices.fetch_eodhd_historical_eod", new=mock_hist_refresh),
+        ):
+            res_refresh = client.post("/api/finance/indices/CAC40/performances?refresh=true")
+            assert res_refresh.status_code == 200
+            body_refresh = res_refresh.json()
+            assert body_refresh["summary"]["fetched_count"] == 40
+            assert body_refresh["summary"]["from_cache_count"] == 0
+            assert mock_hist_refresh.await_count == 40

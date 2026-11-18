@@ -13,9 +13,11 @@ from fastapi import HTTPException
 from .config import Settings
 from .finance_funds import looks_like_isin
 from .finance_warehouse import (
+    get_instrument_eod_sync_info,
     get_instrument_meta,
     get_snapshot,
     get_stored_eod_bars,
+    is_eod_fresh_today,
     lookup_exchange_symbol,
     resolve_canonical_symbol,
     upsert_eod_bars,
@@ -335,6 +337,8 @@ async def _fetch_single_watchlist_quote(
     eod_key: str,
     sem: asyncio.Semaphore,
     client: httpx.AsyncClient,
+    *,
+    refresh: bool = False,
 ) -> dict[str, Any]:
     base_payload = {
         "id": item.id,
@@ -353,6 +357,8 @@ async def _fetch_single_watchlist_quote(
         "change_1m_pct": None,
         "change_3m_pct": None,
         "change_1y_pct": None,
+        "eod_synced_date": None,
+        "loaded_from_cache": False,
     }
     if settings.demo_mode:
         return base_payload
@@ -364,12 +370,18 @@ async def _fetch_single_watchlist_quote(
     db_path = warehouse_db_path(settings)
     lookup_sym = item.eod_ticker or item.symbol or yahoo_sym
     canonical = resolve_canonical_symbol(db_path, lookup_sym)
-    stored_bars = get_stored_eod_bars(db_path, canonical, limit=270)
-    fresh_cutoff = (datetime.date.today() - datetime.timedelta(days=4)).isoformat()
-    has_fresh_stored = bool(stored_bars and str(stored_bars[-1].get("date") or "") >= fresh_cutoff)
+    sync_info = get_instrument_eod_sync_info(db_path, canonical)
+    if not refresh and is_eod_fresh_today(sync_info, min_bars_needed=260):
+        stored_bars = get_stored_eod_bars(db_path, canonical, limit=270)
+        if stored_bars:
+            metrics = compute_period_returns(stored_bars)
+            base_payload.update(metrics)
+            base_payload["eod_synced_date"] = sync_info.get("eod_synced_date") if sync_info else datetime.date.today().isoformat()
+            base_payload["loaded_from_cache"] = True
+            return base_payload
 
     async with sem:
-        bars: list[dict[str, Any]] = stored_bars if has_fresh_stored else []
+        bars: list[dict[str, Any]] = []
         current_price: float | None = None
         rt_change_pct: float | None = None
         currency = item.currency or "EUR"
@@ -386,14 +398,13 @@ async def _fetch_single_watchlist_quote(
                             current_price = rt_p
                         if rt_chg is not None:
                             rt_change_pct = rt_chg
-                if not bars:
-                    eod_bars = await fetch_eodhd_historical_eod(client, item.eod_ticker, eod_key, limit=270)
-                    if eod_bars:
-                        bars = list(reversed(eod_bars))
-                        try:
-                            upsert_eod_bars(db_path, canonical, bars, "eodhd")
-                        except Exception:
-                            pass
+                eod_bars = await fetch_eodhd_historical_eod(client, item.eod_ticker, eod_key, limit=270)
+                if eod_bars:
+                    bars = list(reversed(eod_bars))
+                    try:
+                        upsert_eod_bars(db_path, canonical, bars, "eodhd", requested_limit=270)
+                    except Exception:
+                        pass
 
             if not bars and not is_eufund:
                 chart = await fetch_yahoo_chart(client, yahoo_sym, range_period="1y", interval="1d")
@@ -407,12 +418,19 @@ async def _fetch_single_watchlist_quote(
                     if meta.get("currency"):
                         currency = str(meta["currency"])
                     bars = _yahoo_chart_to_daily_bars(chart)
+                    if bars:
+                        try:
+                            upsert_eod_bars(db_path, canonical, bars, "yahoo_finance", requested_limit=270)
+                        except Exception:
+                            pass
         except Exception as exc:
             _logger.warning("Échec récupération variations watchlist pour %s: %s", item.symbol, exc)
 
         metrics = compute_period_returns(bars, current_price=current_price, rt_change_pct=rt_change_pct)
         base_payload.update(metrics)
         base_payload["currency"] = currency
+        if bars:
+            base_payload["eod_synced_date"] = datetime.date.today().isoformat()
         return base_payload
 
 
@@ -487,7 +505,12 @@ async def repair_watchlist_item_names(settings: Settings, items: list[Any]) -> b
     return changed
 
 
-async def fetch_watchlist_quotes(settings: Settings, items: list[Any]) -> list[dict[str, Any]]:
+async def fetch_watchlist_quotes(
+    settings: Settings,
+    items: list[Any],
+    *,
+    refresh: bool = False,
+) -> list[dict[str, Any]]:
     """Enrichit les actions suivies avec leur cours et évolutions 1J, 1S, 1M, 3M et 1A."""
     if not items:
         return []
@@ -502,5 +525,8 @@ async def fetch_watchlist_quotes(settings: Settings, items: list[Any]) -> list[d
         follow_redirects=True,
         timeout=10.0,
     ) as client:
-        tasks = [_fetch_single_watchlist_quote(settings, item, eod_key, sem, client) for item in items]
+        tasks = [
+            _fetch_single_watchlist_quote(settings, item, eod_key, sem, client, refresh=refresh)
+            for item in items
+        ]
         return list(await asyncio.gather(*tasks))

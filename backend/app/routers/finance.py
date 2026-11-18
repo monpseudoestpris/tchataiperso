@@ -15,7 +15,16 @@ from ..deps import current_user, get_sessions, get_settings, get_upload_dir
 from ..finance import get_financial_dashboard_data
 from ..finance_dossier import generate_dossier_ai_analysis, get_financial_dossier
 from ..finance_experts import generate_finance_expert_opinion, list_finance_experts_and_cached
-from ..finance_funds import list_eufund_catalog, search_eodhd_funds_live
+from ..finance_funds import (
+    get_daily_sync_state,
+    list_eufund_catalog,
+    list_exchange_catalog,
+    run_daily_sync_now,
+    search_eodhd_funds_live,
+    sync_configured_exchange_catalogs,
+    sync_exchange_catalog_if_needed,
+    update_daily_sync_preferences,
+)
 from ..finance_indices import (
     get_index_composition,
     get_index_performances,
@@ -482,6 +491,19 @@ async def get_principal_index_composition(
     return payload
 
 
+@router.get("/indices/{index_code}/performances")
+async def get_cached_index_performances_endpoint(
+    index_code: str,
+    settings: Settings = Depends(get_settings),
+    user: User = Depends(current_user),
+) -> dict[str, Any]:
+    """Calcule le tableau des performances d'un indice uniquement à partir des cours déjà sauvegardés localement (0 appel réseau)."""
+    payload = await get_index_performances(settings, index_code, refresh=False, cache_only=True)
+    if payload is None:
+        raise HTTPException(404, f"Indice inconnu : {index_code}")
+    return payload
+
+
 @router.post("/indices/{index_code}/performances")
 async def load_index_performances_endpoint(
     index_code: str,
@@ -598,11 +620,102 @@ async def search_finance_catalog_endpoint(
     return {"items": search_finance_catalog(settings, q, limit=limit)}
 
 
+@router.get("/catalog/exchanges")
+async def get_exchange_catalog_endpoint(
+    exchange: str = Query("EUFUND", max_length=12, description="Place EODHD (EUFUND, PA, US, XETRA, LSE, CC ou ALL)"),
+    q: str = Query("", max_length=100, description="Filtre par nom, ISIN, gérant ou ticker"),
+    currency: str = Query("", max_length=12, description="Filtre par devise (EUR, USD, CHF...)"),
+    country: str = Query("", max_length=60, description="Filtre par pays"),
+    type: str = Query("", max_length=40, description="Filtre par type (Common Stock, ETF, Fund, Currency...)"),
+    fund_family: str = Query("", max_length=120, description="Filtre par société de gestion"),
+    limit: int = Query(60, ge=1, le=300),
+    offset: int = Query(0, ge=0),
+    refresh: bool = Query(False, description="Forcer la re-synchronisation depuis EODHD"),
+    settings: Settings = Depends(get_settings),
+    user: User = Depends(current_user),
+) -> dict[str, Any]:
+    """Catalogue multi-marchés EODHD (`/api/exchange-symbol-list/{EXCHANGE}`) indexé localement en SQLite/FTS5."""
+    try:
+        return await list_exchange_catalog(
+            settings,
+            exchange=exchange,
+            query=q,
+            currency=currency,
+            country=country,
+            instrument_type=type,
+            fund_family=fund_family,
+            limit=limit,
+            offset=offset,
+            refresh=refresh,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/catalog/exchanges/sync")
+async def sync_exchange_catalogs_endpoint(
+    exchange: str = Query("ALL", max_length=12, description="Place à synchroniser (EUFUND, PA, US, XETRA, LSE, CC ou ALL)"),
+    refresh: bool = Query(True, description="Forcer le téléchargement même si le cache a moins de 24h"),
+    settings: Settings = Depends(get_settings),
+    user: User = Depends(current_user),
+) -> dict[str, Any]:
+    """Synchronise manuellement un ou tous les marchés EODHD configurés."""
+    clean_exch = (exchange or "ALL").strip().upper()
+    if clean_exch == "ALL":
+        return await sync_configured_exchange_catalogs(settings, refresh=refresh)
+    try:
+        meta, source = await sync_exchange_catalog_if_needed(settings, clean_exch, refresh=refresh)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {
+        "codes": [clean_exch],
+        "fetched_exchanges": 1 if source.startswith("EODHD") else 0,
+        "exchanges": {
+            clean_exch: {
+                "total": meta["total"],
+                "source": source,
+                "synced_at": meta["fetched_at"],
+            }
+        },
+    }
+
+
+@router.get("/sync-preferences")
+async def get_finance_sync_preferences_endpoint(
+    settings: Settings = Depends(get_settings),
+    user: User = Depends(current_user),
+) -> dict[str, Any]:
+    """Retourne les réglages de synchronisation quotidienne automatique (indices activés par défaut)."""
+    return await get_daily_sync_state(settings)
+
+
+@router.put("/sync-preferences")
+async def update_finance_sync_preferences_endpoint(
+    body: dict[str, Any] = Body(...),
+    settings: Settings = Depends(get_settings),
+    user: User = Depends(current_user),
+) -> dict[str, Any]:
+    """Enregistre ce que l'utilisateur souhaite synchroniser quotidiennement en arrière-plan."""
+    return await update_daily_sync_preferences(settings, body)
+
+
+@router.post("/sync-preferences/run")
+async def run_finance_sync_now_endpoint(
+    refresh: bool = Query(False, description="Forcer le re-téléchargement même si déjà sauvegardé aujourd'hui"),
+    settings: Settings = Depends(get_settings),
+    user: User = Depends(current_user),
+) -> dict[str, Any]:
+    """Déclenche immédiatement la synchronisation selon la sélection enregistrée."""
+    return await run_daily_sync_now(settings, refresh=refresh, respect_enabled=False)
+
+
 @router.get("/funds/eufund")
 async def get_eufund_catalog_endpoint(
     q: str = Query("", max_length=100, description="Filtre par nom, ISIN ou code ticker"),
     currency: str = Query("", max_length=12, description="Filtre par devise (EUR, USD, CHF...)"),
     country: str = Query("", max_length=60, description="Filtre par pays"),
+    type: str = Query("", max_length=40, description="Filtre par type"),
+    fund_family: str = Query("", max_length=120, description="Filtre par société de gestion"),
     limit: int = Query(60, ge=1, le=300),
     offset: int = Query(0, ge=0),
     refresh: bool = Query(False, description="Forcer la re-synchronisation depuis EODHD"),
@@ -615,6 +728,8 @@ async def get_eufund_catalog_endpoint(
         query=q,
         currency=currency,
         country=country,
+        instrument_type=type,
+        fund_family=fund_family,
         limit=limit,
         offset=offset,
         refresh=refresh,
@@ -864,6 +979,7 @@ async def get_watchlist(
     list_id: str | None = Query(None, description="ID de la liste personnalisée à afficher"),
     seed_defaults: bool = Query(False, description="Initialiser la liste par défaut si vide"),
     include_quotes: bool = Query(True, description="Calculer les cours et variations 1J/1S/1M/3M/1A"),
+    refresh: bool = Query(False, description="Forcer la mise à jour réseau des cours"),
     settings: Settings = Depends(get_settings),
     user: User = Depends(current_user),
     sessions: sessionmaker = Depends(get_sessions),
@@ -921,7 +1037,7 @@ async def get_watchlist(
             "lists": lists_payload,
             "items": [watchlist_item_json(item) for item in items],
         }
-    enriched = await fetch_watchlist_quotes(settings, items)
+    enriched = await fetch_watchlist_quotes(settings, items, refresh=refresh)
     return {
         "active_list_id": target.id,
         "lists": lists_payload,

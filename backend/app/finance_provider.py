@@ -30,6 +30,7 @@ from .finance_warehouse import (
     load_fundamental_series,
     resolve_canonical_symbol,
     save_snapshot,
+    update_exchange_symbol_fund_family,
     upsert_fundamental_facts,
     upsert_instrument,
     warehouse_db_path,
@@ -408,6 +409,19 @@ def persist_eodhd_fundamentals_to_warehouse(
             "industry": gen.get("Industry"),
         },
     )
+    mf = fundamentals.get("Mutual_Fund") or {}
+    etf = fundamentals.get("ETF_Data") or {}
+    fund_family = (
+        mf.get("Fund_Family")
+        or etf.get("Company_Name")
+        or gen.get("FundFamily")
+        or ""
+    ).strip()
+    if fund_family:
+        try:
+            update_exchange_symbol_fund_family(db_path, eod_ticker or symbol, fund_family)
+        except Exception:
+            pass
     if annual_series:
         upsert_fundamental_facts(
             db_path, symbol, "annual", annual_series, build_statement_type_map(annual_series), "eodhd", currency

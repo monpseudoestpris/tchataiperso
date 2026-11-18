@@ -23,6 +23,7 @@ import {
 import { FinanceMoatPanel } from "@/components/finance-moat-panel";
 import { FinanceNewsPanel } from "@/components/finance-news-panel";
 import { FinanceReportsPanel } from "@/components/finance-reports-panel";
+import { FinanceSyncPanel } from "@/components/finance-sync-panel";
 import { FinanceStatements } from "@/components/finance-statements";
 import { FinanceTvChart } from "@/components/finance-tv-chart";
 import { FinanceWatchlistTable } from "@/components/finance-watchlist-table";
@@ -68,6 +69,7 @@ import {
   deleteCustomIndicator,
   deleteWatchlist,
   deleteWatchlistItem,
+  fetchCachedIndexPerformances,
   fetchCustomIndicators,
   fetchFinanceDetails,
   fetchIndexComposition,
@@ -217,7 +219,9 @@ export function FinanceModal({
   const [warehouseStats, setWarehouseStats] = useState<WarehouseOverview | null>(null);
   const [activeIndexCode, setActiveIndexCode] = useState<string | null>(null);
   const [indexComposition, setIndexComposition] = useState<IndexCompositionResponse | null>(null);
-  const [indexPerformances, setIndexPerformances] = useState<IndexPerformancesResponse | null>(null);
+  const [indexPerformancesByCode, setIndexPerformancesByCode] = useState<
+    Record<string, IndexPerformancesResponse>
+  >({});
   const [indexPerfLoading, setIndexPerfLoading] = useState(false);
   const [indexImportBusy, setIndexImportBusy] = useState(false);
   const [indexImportBanner, setIndexImportBanner] = useState<string | null>(null);
@@ -225,6 +229,7 @@ export function FinanceModal({
   const [indexError, setIndexError] = useState<string | null>(null);
   const [indxCatalogOpen, setIndxCatalogOpen] = useState(false);
   const [eufundCatalogOpen, setEufundCatalogOpen] = useState(false);
+  const [syncPanelOpen, setSyncPanelOpen] = useState(false);
   const [watchlistSidebarOpen, setWatchlistSidebarOpen] = useState<boolean>(() => {
     if (typeof window === "undefined") return true;
     return window.localStorage.getItem(WATCHLIST_SIDEBAR_OPEN_KEY) !== "0";
@@ -381,9 +386,14 @@ export function FinanceModal({
         targetListId !== undefined ? targetListId : (activeListId ?? storedListId);
 
       // Si l'ID mémorisé localement n'existe plus côté BDD, retomber proprement sur la liste par défaut
-      const wlState = await fetchWatchlistState(!alreadySeeded, true, listParam).catch(async () => {
+      const wlState = await fetchWatchlistState(
+        !alreadySeeded,
+        true,
+        listParam,
+        forceRefreshWatchlist,
+      ).catch(async () => {
         if (listParam) {
-          return fetchWatchlistState(!alreadySeeded, true, null);
+          return fetchWatchlistState(!alreadySeeded, true, null, forceRefreshWatchlist);
         }
         throw new Error("Impossible de charger les listes de suivi depuis la base de données.");
       });
@@ -462,19 +472,29 @@ export function FinanceModal({
     await handleSelectWatchlistTab(fallbackId || "");
   }
 
+  const activeIndexPerformances = useMemo(() => {
+    if (!activeIndexCode) return null;
+    return (
+      indexPerformancesByCode[activeIndexCode] ||
+      Object.values(indexPerformancesByCode).find(
+        p => p.index.code === activeIndexCode || p.index.eod_ticker === activeIndexCode,
+      ) ||
+      null
+    );
+  }, [activeIndexCode, indexPerformancesByCode]);
+
   async function handleToggleIndex(code: string, forceRefresh = false) {
     if (!forceRefresh && activeIndexCode === code) {
       setActiveIndexCode(null);
       setIndexComposition(null);
-      setIndexPerformances(null);
       setIndexImportBanner(null);
       setIndexError(null);
       return;
     }
     setIndxCatalogOpen(false);
     setEufundCatalogOpen(false);
+    setSyncPanelOpen(false);
     setActiveIndexCode(code);
-    setIndexPerformances(null);
     setIndexImportBanner(null);
     setIndexLoading(true);
     setIndexError(null);
@@ -482,8 +502,22 @@ export function FinanceModal({
       modalBodyRef.current?.scrollTo({ top: 0, behavior: "smooth" });
     });
     try {
-      const res = await fetchIndexComposition(code, forceRefresh);
-      setIndexComposition(res);
+      const [compRes, cachedPerfRes] = await Promise.all([
+        fetchIndexComposition(code, forceRefresh),
+        !forceRefresh ? fetchCachedIndexPerformances(code).catch(() => null) : Promise.resolve(null),
+      ]);
+      setIndexComposition(compRes);
+      if (
+        cachedPerfRes &&
+        ((cachedPerfRes.summary.synced_today_count ?? 0) > 0 || cachedPerfRes.summary.loaded_count > 0)
+      ) {
+        setIndexPerformancesByCode(prev => ({
+          ...prev,
+          [code]: cachedPerfRes,
+          [cachedPerfRes.index.code]: cachedPerfRes,
+        }));
+        if (cachedPerfRes.warehouse) setWarehouseStats(cachedPerfRes.warehouse);
+      }
     } catch (err: any) {
       setIndexError(err?.message || "Impossible de charger la composition de l'indice.");
     } finally {
@@ -497,13 +531,21 @@ export function FinanceModal({
     setIndexError(null);
     try {
       const res = await loadIndexPerformances(code, forceRefresh);
-      setIndexPerformances(res);
+      setIndexPerformancesByCode(prev => ({
+        ...prev,
+        [code]: res,
+        [res.index.code]: res,
+      }));
       if (res.warehouse) setWarehouseStats(res.warehouse);
       setIndexComposition(prev =>
         prev
           ? {
               ...prev,
-              index: { ...prev.index, cached_count: res.index.cached_count },
+              index: {
+                ...prev.index,
+                cached_count: res.index.cached_count,
+                synced_today_count: res.index.synced_today_count,
+              },
               constituents: prev.constituents.map(c => {
                 const match = res.items.find(it => it.symbol === c.symbol);
                 return match ? { ...c, cached_in_warehouse: match.cached_in_warehouse } : c;
@@ -954,9 +996,11 @@ export function FinanceModal({
             loadingIndex={indexLoading}
             catalogOpen={indxCatalogOpen}
             eufundCatalogOpen={eufundCatalogOpen}
+            syncOpen={syncPanelOpen}
             onToggleIndex={code => void handleToggleIndex(code)}
             onToggleCatalog={() => {
               setEufundCatalogOpen(false);
+              setSyncPanelOpen(false);
               setIndxCatalogOpen(prev => {
                 const next = !prev;
                 if (next) {
@@ -970,8 +1014,23 @@ export function FinanceModal({
             }}
             onToggleEufundCatalog={() => {
               setIndxCatalogOpen(false);
+              setSyncPanelOpen(false);
               setActiveIndexCode(null);
               setEufundCatalogOpen(prev => {
+                const next = !prev;
+                if (next) {
+                  window.requestAnimationFrame(() => {
+                    modalBodyRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+                  });
+                }
+                return next;
+              });
+            }}
+            onToggleSync={() => {
+              setIndxCatalogOpen(false);
+              setEufundCatalogOpen(false);
+              setActiveIndexCode(null);
+              setSyncPanelOpen(prev => {
                 const next = !prev;
                 if (next) {
                   window.requestAnimationFrame(() => {
@@ -1007,6 +1066,15 @@ export function FinanceModal({
               />
             )}
 
+            {syncPanelOpen && (
+              <FinanceSyncPanel
+                onSynced={() => {
+                  void loadWorkspaceData(false);
+                }}
+                onClose={() => setSyncPanelOpen(false)}
+              />
+            )}
+
             {activeIndexCode && (
               <FinanceIndexCompositionDrawer
                 key={activeIndexCode}
@@ -1017,13 +1085,7 @@ export function FinanceModal({
                     ? indexComposition
                     : null
                 }
-                performances={
-                  indexPerformances &&
-                  (indexPerformances.index.code === activeIndexCode ||
-                    indexPerformances.index.eod_ticker === activeIndexCode)
-                    ? indexPerformances
-                    : null
-                }
+                performances={activeIndexPerformances}
                 performancesLoading={indexPerfLoading}
                 importingWatchlist={indexImportBusy}
                 importBanner={indexImportBanner}
@@ -1038,7 +1100,6 @@ export function FinanceModal({
                 onClose={() => {
                   setActiveIndexCode(null);
                   setIndexComposition(null);
-                  setIndexPerformances(null);
                   setIndexImportBanner(null);
                   setIndexError(null);
                 }}

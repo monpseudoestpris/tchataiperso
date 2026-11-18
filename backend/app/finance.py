@@ -1568,9 +1568,14 @@ async def get_financial_dashboard_data(
         persist_eodhd_fundamentals_to_warehouse,
     )
     from .finance_warehouse import (
+        get_instrument_eod_sync_info,
+        get_instrument_meta,
         get_snapshot,
+        get_stored_eod_bars,
         get_warehouse_stats,
+        is_eod_fresh_today,
         lookup_exchange_symbol,
+        resolve_canonical_symbol,
         save_snapshot,
         upsert_eod_bars,
         upsert_instrument,
@@ -1609,7 +1614,11 @@ async def get_financial_dashboard_data(
             "ISIN": hit["isin"],
         }
 
+    eod_bars_from_cache = False
+    eod_sync_info: dict[str, Any] | None = None
+
     async def _get_eod():
+        nonlocal eod_bars_from_cache, eod_sync_info
         if not eod_key or is_yahoo_finance_url(clean_target):
             return None, None, [], None
         try:
@@ -1635,6 +1644,13 @@ async def get_financial_dashboard_data(
                         eod_item = cat_hit
                         ticker_candidate = cat_hit["ticker"]
 
+                if not ticker_candidate and use_warehouse and not refresh:
+                    resolved_local = resolve_canonical_symbol(db_path, clean_target)
+                    if "." in resolved_local:
+                        local_meta = get_instrument_meta(db_path, resolved_local)
+                        if local_meta:
+                            ticker_candidate = local_meta.get("eod_ticker") or resolved_local
+
                 if not ticker_candidate:
                     for variant in query_variants(clean_target):
                         eod_item = await search_eodhd_ticker(client, variant, eod_key)
@@ -1645,14 +1661,34 @@ async def get_financial_dashboard_data(
                 if not ticker_candidate:
                     return None, None, [], None
 
+                canonical_candidate = (
+                    resolve_canonical_symbol(db_path, ticker_candidate)
+                    if use_warehouse
+                    else ticker_candidate
+                )
+
                 if eod_item is None and ticker_candidate.upper().endswith(".EUFUND"):
                     eod_item = _catalog_item_from_warehouse(ticker_candidate)
+
+                if eod_item is None and use_warehouse:
+                    local_meta = get_instrument_meta(db_path, canonical_candidate)
+                    if local_meta:
+                        code_p, _, exch_p = canonical_candidate.partition(".")
+                        eod_item = {
+                            "Code": code_p.upper(),
+                            "Exchange": (local_meta.get("exchange") or exch_p).upper(),
+                            "Name": local_meta.get("long_name") or local_meta.get("short_name") or "",
+                            "ticker": (local_meta.get("eod_ticker") or canonical_candidate).upper(),
+                            "Country": local_meta.get("country"),
+                            "Currency": local_meta.get("currency"),
+                            "ISIN": local_meta.get("isin"),
+                        }
 
                 cached_eod_fund = None
                 if use_warehouse and not refresh:
                     snap = get_snapshot(
                         db_path,
-                        ticker_candidate,
+                        canonical_candidate,
                         "fundamentals",
                         provider="eodhd",
                         max_age_seconds=fund_ttl,
@@ -1661,7 +1697,29 @@ async def get_financial_dashboard_data(
                     if snap and isinstance(snap.get("raw"), dict):
                         cached_eod_fund = snap["raw"]
 
-                if cached_eod_fund is not None:
+                sync_info = (
+                    get_instrument_eod_sync_info(db_path, canonical_candidate)
+                    if (use_warehouse and not refresh and not intraday)
+                    else None
+                )
+                bars_fresh_today = is_eod_fresh_today(sync_info, min_bars_needed=eod_limit)
+                stored_cached_bars = (
+                    get_stored_eod_bars(db_path, canonical_candidate, limit=eod_limit)
+                    if bars_fresh_today
+                    else []
+                )
+
+                if stored_cached_bars:
+                    # Option A: cours déjà sauvegardés aujourd'hui -> lecture 100% locale sans appel réseau EOD/temps réel.
+                    bars = list(reversed(stored_cached_bars))
+                    rt_data = None
+                    eod_bars_from_cache = True
+                    eod_sync_info = sync_info
+                    if cached_eod_fund is not None:
+                        eod_fund = cached_eod_fund
+                    else:
+                        eod_fund = await fetch_eodhd_fundamentals(client, ticker_candidate, eod_key)
+                elif cached_eod_fund is not None:
                     rt_data, bars = await asyncio.gather(
                         fetch_eodhd_realtime(client, ticker_candidate, eod_key),
                         fetch_eodhd_historical_eod(client, ticker_candidate, eod_key, limit=eod_limit),
@@ -1677,7 +1735,7 @@ async def get_financial_dashboard_data(
                     (eod_fund or {}).get("General", {}).get("Name")
                     or (eod_item and eod_item.get("Name") and str(eod_item["Name"]).upper() != ticker_candidate.upper())
                 )
-                if not has_real_name:
+                if not has_real_name and not eod_bars_from_cache:
                     search_meta = await lookup_eodhd_search_metadata(client, ticker_candidate, eod_key)
                     if search_meta and search_meta.get("Name"):
                         eod_item = {**(eod_item or {}), **search_meta}
@@ -1731,19 +1789,60 @@ async def get_financial_dashboard_data(
     # EODHD prioritaire ; Yahoo Finance uniquement en backup (ou pour les barres intraday 1J/1Sem).
     eod_item, eod_rt, eod_bars, eod_fund = await _get_eod()
     eod_resolved_sym = (eod_item.get("ticker") if eod_item else None) or (eod_rt.get("code") if eod_rt else None)
+
+    if not eod_bars and use_warehouse and not refresh and not intraday:
+        local_canonical = resolve_canonical_symbol(db_path, eod_resolved_sym or clean_target)
+        local_sync = get_instrument_eod_sync_info(db_path, local_canonical)
+        if is_eod_fresh_today(local_sync, min_bars_needed=eod_limit):
+            local_stored = get_stored_eod_bars(db_path, local_canonical, limit=eod_limit)
+            if local_stored:
+                eod_bars = list(reversed(local_stored))
+                eod_bars_from_cache = True
+                eod_sync_info = local_sync
+                if eod_item is None:
+                    local_meta = get_instrument_meta(db_path, local_canonical)
+                    if local_meta:
+                        code_p, _, exch_p = local_canonical.partition(".")
+                        eod_item = {
+                            "Code": code_p.upper(),
+                            "Exchange": (local_meta.get("exchange") or exch_p).upper(),
+                            "Name": local_meta.get("long_name") or local_meta.get("short_name") or "",
+                            "ticker": (local_meta.get("eod_ticker") or local_canonical).upper(),
+                            "Country": local_meta.get("country"),
+                            "Currency": local_meta.get("currency"),
+                            "ISIN": local_meta.get("isin"),
+                        }
+                        eod_resolved_sym = eod_item["ticker"]
+
     is_eufund = str(eod_resolved_sym or clean_target).upper().endswith(".EUFUND") or (
         str((eod_item or {}).get("Exchange") or "").upper() == "EUFUND"
     )
 
-    need_yahoo_summary = (not is_eufund) and (eod_fund is None or (eod_rt is None and eod_fund is None))
-    need_yahoo_chart = (not is_eufund and intraday) or not eod_bars
     yahoo_top, yahoo_sum, yahoo_chart, yahoo_sym = (None, None, None, None)
+    need_yahoo_summary = (not is_eufund) and (eod_fund is None or (eod_rt is None and eod_fund is None))
+    if need_yahoo_summary and use_warehouse and not refresh:
+        y_canonical = resolve_canonical_symbol(db_path, eod_resolved_sym or clean_target)
+        y_snap = get_snapshot(
+            db_path,
+            y_canonical,
+            "quote_summary",
+            provider="yahoo_finance",
+            max_age_seconds=fund_ttl,
+            include_raw=True,
+        )
+        if y_snap and isinstance(y_snap.get("raw"), dict):
+            yahoo_sum = y_snap["raw"]
+            need_yahoo_summary = False
+
+    need_yahoo_chart = (not is_eufund and intraday) or not eod_bars
     if (need_yahoo_summary or need_yahoo_chart) and not (is_eufund and (eod_bars or eod_fund)):
-        yahoo_top, yahoo_sum, yahoo_chart, yahoo_sym = await _get_yahoo(
+        yahoo_top, fetched_yahoo_sum, yahoo_chart, yahoo_sym = await _get_yahoo(
             eod_resolved_sym,
             fetch_summary=need_yahoo_summary,
             fetch_chart=need_yahoo_chart,
         )
+        if fetched_yahoo_sum is not None:
+            yahoo_sum = fetched_yahoo_sum
 
     if not eod_rt and not eod_bars and not eod_fund and not yahoo_sum and not yahoo_chart:
         raise HTTPException(404, f"Impossible d'identifier l'actif financier pour « {query} ».")
@@ -1929,8 +2028,14 @@ async def get_financial_dashboard_data(
                     "industry": financial_stats.get("profile", {}).get("industry"),
                 },
             )
-            if warehouse_bars and not intraday:
-                upsert_eod_bars(db_path, display_symbol, warehouse_bars, bars_source)
+            if warehouse_bars and not intraday and not eod_bars_from_cache:
+                upsert_eod_bars(
+                    db_path,
+                    display_symbol,
+                    warehouse_bars,
+                    bars_source,
+                    requested_limit=eod_limit,
+                )
             if eod_fund:
                 persist_eodhd_fundamentals_to_warehouse(
                     settings,
@@ -1974,6 +2079,16 @@ async def get_financial_dashboard_data(
         "has_eod": bool(eod_rt or eod_bars or eod_fund),
         "has_yahoo": bool(yahoo_sum),
         "fundamentals_source": fundamentals_source,
+        "loaded_from_cache": eod_bars_from_cache,
+        "eod_synced_date": (
+            eod_sync_info.get("eod_synced_date")
+            if eod_sync_info
+            else (
+                datetime.date.today().isoformat()
+                if (use_warehouse and warehouse_bars and not intraday)
+                else None
+            )
+        ),
         "warehouse_stats": warehouse_stats,
         "eod_bars": chronological_bars,
         "financial_stats": financial_stats,
