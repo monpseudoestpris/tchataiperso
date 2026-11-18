@@ -1,3 +1,4 @@
+import { type IndicatorFillConfig } from "./chart-zone-fills";
 import { ISO_PRESSURE_STRATEGIES, type IsoPressureMaType, type IsoPressureStrategy } from "./indicators";
 
 export type IndicatorKey =
@@ -39,41 +40,76 @@ export type IsoPressureParams = {
   maTypeTest: IsoPressureMaType;
 };
 
+const baseFill = (
+  upColor = "#10b981",
+  downColor = "#f43f5e",
+  reference: IndicatorFillConfig["reference"] = "auto",
+  extra: Partial<IndicatorFillConfig> = {},
+): IndicatorFillConfig => ({
+  enabled: false,
+  upColor,
+  downColor,
+  opacity: 0.16,
+  reference,
+  ...extra,
+});
+
 export type IndicatorParamsMap = {
-  sma20: { period: number };
-  sma50: { period: number };
-  sma200: { period: number };
-  ema20: { period: number };
-  ema50: { period: number };
-  boll: { period: number; mult: number };
-  supertrend: { period: number; multiplier: number };
-  sar: { step: number; max: number };
-  rsi: { period: number; overbought: number; oversold: number };
-  macd: { fast: number; slow: number; signal: number };
-  rex: { period: number; signal: number };
-  isopressure: IsoPressureParams;
-  stoch: { period: number; signal: number };
-  willr: { period: number };
-  cci: { period: number };
-  roc: { period: number };
-  atr: { period: number };
-  adx: { period: number };
+  sma20: { period: number; fill: IndicatorFillConfig };
+  sma50: { period: number; fill: IndicatorFillConfig };
+  sma200: { period: number; fill: IndicatorFillConfig };
+  ema20: { period: number; fill: IndicatorFillConfig };
+  ema50: { period: number; fill: IndicatorFillConfig };
+  boll: { period: number; mult: number; fill: IndicatorFillConfig };
+  supertrend: { period: number; multiplier: number; fill: IndicatorFillConfig };
+  vwap: { fill: IndicatorFillConfig };
+  sar: { step: number; max: number; fill: IndicatorFillConfig };
+  rsi: { period: number; overbought: number; oversold: number; fill: IndicatorFillConfig };
+  macd: { fast: number; slow: number; signal: number; fill: IndicatorFillConfig };
+  rex: { period: number; signal: number; fill: IndicatorFillConfig };
+  isopressure: IsoPressureParams & { fill: IndicatorFillConfig };
+  stoch: { period: number; signal: number; fill: IndicatorFillConfig };
+  willr: { period: number; fill: IndicatorFillConfig };
+  cci: { period: number; fill: IndicatorFillConfig };
+  roc: { period: number; fill: IndicatorFillConfig };
+  atr: { period: number; fill: IndicatorFillConfig };
+  adx: { period: number; fill: IndicatorFillConfig };
+  obv: { fill: IndicatorFillConfig };
 };
 
 export type ConfigurableIndicatorKey = keyof IndicatorParamsMap;
 
 export const DEFAULT_INDICATOR_PARAMS: IndicatorParamsMap = {
-  sma20: { period: 20 },
-  sma50: { period: 50 },
-  sma200: { period: 200 },
-  ema20: { period: 20 },
-  ema50: { period: 50 },
-  boll: { period: 20, mult: 2 },
-  supertrend: { period: 10, multiplier: 3 },
-  sar: { step: 0.02, max: 0.2 },
-  rsi: { period: 14, overbought: 70, oversold: 30 },
-  macd: { fast: 12, slow: 26, signal: 9 },
-  rex: { period: 14, signal: 14 },
+  sma20: { period: 20, fill: baseFill("#10b981", "#f43f5e", "close", { opacity: 0.14 }) },
+  sma50: { period: 50, fill: baseFill("#10b981", "#f43f5e", "close", { opacity: 0.14 }) },
+  sma200: { period: 200, fill: baseFill("#10b981", "#f43f5e", "close", { opacity: 0.14 }) },
+  ema20: { period: 20, fill: baseFill("#10b981", "#f43f5e", "close", { opacity: 0.14 }) },
+  ema50: { period: 50, fill: baseFill("#10b981", "#f43f5e", "close", { opacity: 0.14 }) },
+  boll: { period: 20, mult: 2, fill: baseFill("#64748b", "#64748b", "auto", { opacity: 0.12 }) },
+  supertrend: {
+    period: 10,
+    multiplier: 3,
+    fill: baseFill("#10b981", "#f43f5e", "close", { enabled: true, opacity: 0.16 }),
+  },
+  vwap: { fill: baseFill("#10b981", "#f43f5e", "close", { opacity: 0.14 }) },
+  sar: { step: 0.02, max: 0.2, fill: baseFill("#10b981", "#f43f5e", "close", { opacity: 0.14 }) },
+  rsi: {
+    period: 14,
+    overbought: 70,
+    oversold: 30,
+    fill: baseFill("#f43f5e", "#10b981", "auto", { opacity: 0.18, upperThreshold: 70, lowerThreshold: 30 }),
+  },
+  macd: {
+    fast: 12,
+    slow: 26,
+    signal: 9,
+    fill: baseFill("#10b981", "#f43f5e", "auto", { opacity: 0.16, upperThreshold: 0, lowerThreshold: 0 }),
+  },
+  rex: {
+    period: 14,
+    signal: 14,
+    fill: baseFill("#10b981", "#f43f5e", "auto", { opacity: 0.16, upperThreshold: 0, lowerThreshold: 0 }),
+  },
   isopressure: {
     strategy: "Best Overall 5 20",
     length: 14,
@@ -88,13 +124,36 @@ export const DEFAULT_INDICATOR_PARAMS: IndicatorParamsMap = {
     wcciTest: 0.1,
     wmfiTest: 0.5,
     maTypeTest: "RMA",
+    fill: baseFill("#10b981", "#f43f5e", "auto", { opacity: 0.15, upperThreshold: 0, lowerThreshold: 0 }),
   },
-  stoch: { period: 14, signal: 3 },
-  willr: { period: 14 },
-  cci: { period: 20 },
-  roc: { period: 12 },
-  atr: { period: 14 },
-  adx: { period: 14 },
+  stoch: {
+    period: 14,
+    signal: 3,
+    fill: baseFill("#10b981", "#f43f5e", "auto", { opacity: 0.16, upperThreshold: 80, lowerThreshold: 20 }),
+  },
+  willr: {
+    period: 14,
+    fill: baseFill("#f43f5e", "#10b981", "auto", { opacity: 0.18, upperThreshold: -20, lowerThreshold: -80 }),
+  },
+  cci: {
+    period: 20,
+    fill: baseFill("#f43f5e", "#10b981", "auto", { opacity: 0.18, upperThreshold: 100, lowerThreshold: -100 }),
+  },
+  roc: {
+    period: 12,
+    fill: baseFill("#10b981", "#f43f5e", "auto", { opacity: 0.16, upperThreshold: 0, lowerThreshold: 0 }),
+  },
+  atr: {
+    period: 14,
+    fill: baseFill("#f97316", "#64748b", "auto", { opacity: 0.16, upperThreshold: 0, lowerThreshold: 0 }),
+  },
+  adx: {
+    period: 14,
+    fill: baseFill("#10b981", "#f43f5e", "auto", { opacity: 0.15, upperThreshold: 25, lowerThreshold: 25 }),
+  },
+  obv: {
+    fill: baseFill("#10b981", "#f43f5e", "auto", { opacity: 0.15, upperThreshold: 0, lowerThreshold: 0 }),
+  },
 };
 
 export type ParamFieldDef =
@@ -140,6 +199,10 @@ export const INDICATOR_PARAM_DEFS: Record<
       { field: "period", label: "Période ATR", min: 2, max: 100, step: 1 },
       { field: "multiplier", label: "Multiplicateur", min: 0.5, max: 10, step: 0.1 },
     ],
+  },
+  vwap: {
+    title: "VWAP",
+    fields: [],
   },
   sar: {
     title: "Parabolic SAR",
@@ -201,6 +264,7 @@ export const INDICATOR_PARAM_DEFS: Record<
   roc: { title: "ROC (%)", fields: [{ field: "period", label: "Période", min: 1, max: 200, step: 1 }] },
   atr: { title: "ATR", fields: [{ field: "period", label: "Période", min: 2, max: 100, step: 1 }] },
   adx: { title: "ADX / +DI / -DI", fields: [{ field: "period", label: "Période", min: 2, max: 100, step: 1 }] },
+  obv: { title: "OBV (On-Balance Volume)", fields: [] },
 };
 
 export function isConfigurableIndicator(key: IndicatorKey): key is ConfigurableIndicatorKey {
@@ -255,6 +319,7 @@ export function formatIndicatorLabel(key: IndicatorKey, params: IndicatorParamsM
 }
 
 const STORAGE_KEY = "clair_finance_indicator_params_v1";
+const CUSTOM_FILLS_STORAGE_KEY = "clair_finance_custom_fills_v1";
 
 export function loadIndicatorParams(): IndicatorParamsMap {
   if (typeof window === "undefined") return DEFAULT_INDICATOR_PARAMS;
@@ -264,13 +329,57 @@ export function loadIndicatorParams(): IndicatorParamsMap {
     const parsed = JSON.parse(raw) as Partial<IndicatorParamsMap>;
     const merged: IndicatorParamsMap = { ...DEFAULT_INDICATOR_PARAMS };
     for (const k of Object.keys(DEFAULT_INDICATOR_PARAMS) as ConfigurableIndicatorKey[]) {
-      if (parsed[k] && typeof parsed[k] === "object") {
-        merged[k] = { ...DEFAULT_INDICATOR_PARAMS[k], ...parsed[k] } as never;
+      const entry = parsed[k] as ({ fill?: Partial<IndicatorFillConfig> } & Record<string, unknown>) | undefined;
+      if (entry && typeof entry === "object") {
+        const def = DEFAULT_INDICATOR_PARAMS[k];
+        merged[k] = {
+          ...def,
+          ...entry,
+          fill: {
+            ...def.fill,
+            ...(entry.fill && typeof entry.fill === "object" ? entry.fill : {}),
+          },
+        } as never;
       }
     }
     return merged;
   } catch {
     return DEFAULT_INDICATOR_PARAMS;
+  }
+}
+
+export function loadCustomIndicatorFills(): Record<string, IndicatorFillConfig> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(CUSTOM_FILLS_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, Partial<IndicatorFillConfig>>;
+    const out: Record<string, IndicatorFillConfig> = {};
+    for (const [id, cfg] of Object.entries(parsed)) {
+      if (cfg && typeof cfg === "object") {
+        out[id] = {
+          enabled: Boolean(cfg.enabled),
+          upColor: typeof cfg.upColor === "string" ? cfg.upColor : "#10b981",
+          downColor: typeof cfg.downColor === "string" ? cfg.downColor : "#f43f5e",
+          opacity: typeof cfg.opacity === "number" ? cfg.opacity : 0.16,
+          reference: (cfg.reference as IndicatorFillConfig["reference"]) ?? "auto",
+          upperThreshold: typeof cfg.upperThreshold === "number" ? cfg.upperThreshold : 0,
+          lowerThreshold: typeof cfg.lowerThreshold === "number" ? cfg.lowerThreshold : 0,
+        };
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+export function saveCustomIndicatorFills(fills: Record<string, IndicatorFillConfig>): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(CUSTOM_FILLS_STORAGE_KEY, JSON.stringify(fills));
+  } catch {
+    // Ignore storage quota errors
   }
 }
 

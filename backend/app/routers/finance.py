@@ -1,3 +1,4 @@
+import datetime
 import logging
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,7 @@ from ..config import Settings
 from ..deps import current_user, get_sessions, get_settings, get_upload_dir
 from ..finance import get_financial_dashboard_data
 from ..finance_dossier import generate_dossier_ai_analysis, get_financial_dossier
+from ..finance_experts import generate_finance_expert_opinion, list_finance_experts_and_cached
 from ..finance_indices import (
     get_index_composition,
     list_eodhd_indx_catalog,
@@ -24,7 +26,17 @@ from ..finance_moat import analyze_and_build_stock_moat
 from ..finance_news import search_and_summarize_stock_news
 from ..finance_ranges import ChartRange, DEFAULT_CHART_RANGE
 from ..finance_reports import MAX_REPORT_EXTRACTED_CHARS, analyze_quarterly_report, extract_report_text
+from ..finance_report_html import build_classy_report_html
 from ..finance_statements import get_financial_statements, is_valid_symbol
+from ..finance_warehouse import (
+    delete_ai_analysis_entry,
+    get_ai_analysis_entry,
+    list_ai_analyses,
+    load_user_watchlists_from_warehouse,
+    resolve_canonical_symbol,
+    sync_user_watchlists_to_warehouse,
+    warehouse_db_path,
+)
 from ..finance_watchlist import DEFAULT_WATCHLIST_SEEDS, fetch_watchlist_quotes, resolve_watchlist_instrument
 from ..models import (
     FinanceCustomIndicator,
@@ -139,6 +151,287 @@ async def analyze_finance_dossier(
         raise HTTPException(502, f"Erreur réseau lors de l'analyse IA : {exc}") from exc
 
 
+@router.get("/experts")
+def get_finance_experts_endpoint(
+    symbol: str | None = Query(None, max_length=24, description="Ticker pour charger les avis déjà mémorisés"),
+    settings: Settings = Depends(get_settings),
+    user: User = Depends(current_user),
+) -> dict[str, Any]:
+    """Liste les personnalités célèbres de la finance et leurs avis déjà enregistrés pour une action."""
+    clean = (symbol or "").strip()
+    if clean and not is_valid_symbol(clean):
+        raise HTTPException(400, "Ticker invalide.")
+    return list_finance_experts_and_cached(settings, clean or None)
+
+
+@router.post("/dossier/expert")
+async def request_finance_expert_opinion(
+    body: dict[str, Any] = Body(...),
+    settings: Settings = Depends(get_settings),
+    user: User = Depends(current_user),
+) -> dict[str, Any]:
+    """Génère l'avis d'un expert célèbre de la finance basé sur les chiffres complets et le modèle IA choisi."""
+    clean = str(body.get("symbol") or "").strip()
+    if not clean or not is_valid_symbol(clean):
+        raise HTTPException(400, "Ticker invalide.")
+    expert_id = str(body.get("expert_id") or "").strip()
+    if not expert_id:
+        raise HTTPException(400, "Identifiant d'expert requis.")
+    model_id = body.get("model_id")
+    question = body.get("question")
+    try:
+        return await generate_finance_expert_opinion(
+            settings,
+            clean,
+            expert_id=expert_id,
+            model_id=str(model_id).strip() if model_id else None,
+            question=str(question).strip() if question else None,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except ProviderError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"Erreur réseau lors de la consultation d'expert : {exc}") from exc
+
+
+def _dt_to_utc_iso(dt_val: datetime.datetime | None) -> str:
+    if not dt_val:
+        return ""
+    if dt_val.tzinfo is None:
+        dt_val = dt_val.replace(tzinfo=datetime.timezone.utc)
+    return dt_val.astimezone(datetime.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+@router.get("/ai-history")
+def list_finance_ai_history(
+    request: Request,
+    symbol: str | None = Query(None, max_length=24, description="Filtrer par ticker (optionnel)"),
+    kind: str | None = Query(None, max_length=24, description="expert | dossier | moat | news | report"),
+    expert_id: str | None = Query(None, max_length=64),
+    limit: int = Query(120, ge=1, le=300),
+    settings: Settings = Depends(get_settings),
+    user: User = Depends(current_user),
+) -> dict[str, Any]:
+    """Retourne l'historique daté complet des analyses IA (Experts, Dossier, MOAT, Veille, Rapports)."""
+    clean_sym = (symbol or "").strip()
+    if clean_sym and not is_valid_symbol(clean_sym):
+        raise HTTPException(400, "Ticker invalide.")
+    clean_kind = (kind or "").strip().lower() or None
+    clean_expert = (expert_id or "").strip() or None
+
+    db_path = warehouse_db_path(settings)
+    items: list[dict[str, Any]] = []
+
+    if clean_sym:
+        # Déclenche l'éventuelle migration douce des anciens snapshots experts
+        list_finance_experts_and_cached(settings, clean_sym)
+
+    if clean_kind in (None, "expert", "dossier"):
+        items.extend(
+            list_ai_analyses(
+                db_path,
+                symbol=clean_sym or None,
+                kind=clean_kind,
+                expert_id=clean_expert,
+                limit=limit,
+            )
+        )
+
+    sessions = getattr(request.app.state, "sessions", None)
+    if sessions and not clean_expert and clean_kind in (None, "moat", "news", "report"):
+        sym_candidates: list[str] | None = None
+        if clean_sym:
+            raw_u = clean_sym.upper()
+            canon_u = resolve_canonical_symbol(db_path, clean_sym)
+            sym_candidates = list({raw_u, canon_u, raw_u.split(".")[0], canon_u.split(".")[0]})
+
+        with sessions() as db:
+            if clean_kind in (None, "moat"):
+                stmt = select(FinanceStockMoat).where(FinanceStockMoat.user_id == user.id)
+                if sym_candidates:
+                    stmt = stmt.where(FinanceStockMoat.symbol.in_(sym_candidates))
+                for m in db.scalars(stmt.order_by(FinanceStockMoat.created_at.desc()).limit(limit)):
+                    c_iso = _dt_to_utc_iso(m.created_at)
+                    verdict_txt = f"{m.moat_rating.upper()} ({m.moat_score}/100)"
+                    items.append(
+                        {
+                            "id": f"moat:{m.id}",
+                            "symbol": m.symbol,
+                            "company_name": m.company_name,
+                            "kind": "moat",
+                            "expert_id": "",
+                            "expert_name": "Évaluation MOAT",
+                            "model": "IA MOAT",
+                            "question": None,
+                            "verdict": verdict_txt,
+                            "conviction": f"{round(m.moat_score / 10, 1)}/10",
+                            "horizon": "Avantage concurrentiel",
+                            "markdown": m.summary_markdown,
+                            "content_html": build_classy_report_html(
+                                m.summary_markdown,
+                                title=f"Analyse MOAT — {m.company_name or m.symbol}",
+                                subtitle=f"Score MOAT : {m.moat_score}/100 ({m.moat_rating})",
+                                symbol=m.symbol,
+                                model="Analyse MOAT",
+                                created_at=c_iso,
+                                accent="#0ea5e9",
+                                badge_label="MOAT",
+                            ),
+                            "news_sources": [],
+                            "news_articles": [],
+                            "created_at": c_iso,
+                        }
+                    )
+
+            if clean_kind in (None, "news"):
+                stmt = select(FinanceStockNews).where(FinanceStockNews.user_id == user.id)
+                if sym_candidates:
+                    stmt = stmt.where(FinanceStockNews.symbol.in_(sym_candidates))
+                for n in db.scalars(stmt.order_by(FinanceStockNews.created_at.desc()).limit(limit)):
+                    c_iso = _dt_to_utc_iso(n.created_at)
+                    items.append(
+                        {
+                            "id": f"news:{n.id}",
+                            "symbol": n.symbol,
+                            "company_name": n.company_name,
+                            "kind": "news",
+                            "expert_id": "",
+                            "expert_name": "Veille Actualités IA",
+                            "model": n.search_query or "Veille Web",
+                            "question": n.search_query or None,
+                            "verdict": "",
+                            "conviction": "",
+                            "horizon": "",
+                            "markdown": n.summary_markdown,
+                            "content_html": build_classy_report_html(
+                                n.summary_markdown,
+                                title=f"Veille Actualités — {n.company_name or n.symbol}",
+                                subtitle=n.search_query or "Synthèse d'actualités boursières",
+                                symbol=n.symbol,
+                                model="Veille IA",
+                                created_at=c_iso,
+                                accent="#f59e0b",
+                                badge_label="Actualités IA",
+                                question=n.search_query or None,
+                            ),
+                            "news_sources": ["SearXNG"],
+                            "news_articles": n.articles or [],
+                            "created_at": c_iso,
+                        }
+                    )
+
+            if clean_kind in (None, "report"):
+                stmt = select(FinanceQuarterlyReport).where(FinanceQuarterlyReport.user_id == user.id)
+                if sym_candidates:
+                    stmt = stmt.where(FinanceQuarterlyReport.symbol.in_(sym_candidates))
+                for r in db.scalars(stmt.order_by(FinanceQuarterlyReport.created_at.desc()).limit(limit)):
+                    c_iso = _dt_to_utc_iso(r.created_at)
+                    items.append(
+                        {
+                            "id": f"report:{r.id}",
+                            "symbol": r.symbol,
+                            "company_name": r.company_name,
+                            "kind": "report",
+                            "expert_id": "",
+                            "expert_name": f"Rapport · {r.period_label or r.title}",
+                            "model": r.source_type or "Rapport",
+                            "question": None,
+                            "verdict": r.period_label or "",
+                            "conviction": "",
+                            "horizon": "",
+                            "markdown": r.summary_markdown,
+                            "content_html": build_classy_report_html(
+                                r.summary_markdown,
+                                title=f"{r.title} — {r.company_name or r.symbol}",
+                                subtitle=r.period_label or "Analyse de rapport financier",
+                                symbol=r.symbol,
+                                model=r.source_type or "Rapport",
+                                created_at=c_iso,
+                                accent="#8b5cf6",
+                                badge_label="Rapport Trimestriel",
+                            ),
+                            "news_sources": [],
+                            "news_articles": [],
+                            "created_at": c_iso,
+                        }
+                    )
+
+    items.sort(key=lambda it: str(it.get("created_at") or ""), reverse=True)
+    return {"items": items[:limit]}
+
+
+@router.get("/ai-history/{analysis_id}")
+def get_finance_ai_history_item(
+    analysis_id: str,
+    settings: Settings = Depends(get_settings),
+    user: User = Depends(current_user),
+) -> dict[str, Any]:
+    """Retourne le détail d'une analyse IA archivée."""
+    db_path = warehouse_db_path(settings)
+    item = get_ai_analysis_entry(db_path, analysis_id)
+    if not item:
+        raise HTTPException(404, "Analyse archivée introuvable.")
+    return item
+
+
+@router.delete("/ai-history/{analysis_id}", status_code=204)
+def delete_finance_ai_history_item(
+    request: Request,
+    analysis_id: str,
+    settings: Settings = Depends(get_settings),
+    user: User = Depends(current_user),
+) -> Response:
+    """Supprime une analyse IA archivée (expert, dossier, MOAT, veille ou rapport)."""
+    clean_id = analysis_id.strip()
+    sessions = getattr(request.app.state, "sessions", None)
+    if clean_id.startswith("moat:") and sessions:
+        raw_id = clean_id.split(":", 1)[1]
+        with sessions() as db:
+            row = db.scalar(
+                select(FinanceStockMoat).where(FinanceStockMoat.id == raw_id, FinanceStockMoat.user_id == user.id)
+            )
+            if not row:
+                raise HTTPException(404, "Analyse MOAT introuvable.")
+            db.delete(row)
+            db.commit()
+        return Response(status_code=204)
+    if clean_id.startswith("news:") and sessions:
+        raw_id = clean_id.split(":", 1)[1]
+        with sessions() as db:
+            row = db.scalar(
+                select(FinanceStockNews).where(FinanceStockNews.id == raw_id, FinanceStockNews.user_id == user.id)
+            )
+            if not row:
+                raise HTTPException(404, "Archive actualité introuvable.")
+            db.delete(row)
+            db.commit()
+        return Response(status_code=204)
+    if clean_id.startswith("report:") and sessions:
+        raw_id = clean_id.split(":", 1)[1]
+        storage_name: str | None = None
+        with sessions() as db:
+            row = db.scalar(
+                select(FinanceQuarterlyReport).where(
+                    FinanceQuarterlyReport.id == raw_id, FinanceQuarterlyReport.user_id == user.id
+                )
+            )
+            if not row:
+                raise HTTPException(404, "Rapport introuvable.")
+            storage_name = row.storage_name
+            db.delete(row)
+            db.commit()
+        if storage_name:
+            (settings.resolved_upload_dir / storage_name).unlink(missing_ok=True)
+        return Response(status_code=204)
+
+    db_path = warehouse_db_path(settings)
+    deleted = delete_ai_analysis_entry(db_path, clean_id)
+    if not deleted:
+        raise HTTPException(404, "Analyse archivée introuvable.")
+    return Response(status_code=204)
+
+
 # ---------------------------------------------------------------------------
 # Indices principaux, Compositions & Recherche entrepôt rapide
 # ---------------------------------------------------------------------------
@@ -197,8 +490,61 @@ async def search_finance_catalog_endpoint(
 # ---------------------------------------------------------------------------
 
 
-def _ensure_user_watchlists(db: Any, user_id: str) -> list[FinanceWatchlist]:
-    """Garantit au moins une liste par défaut et rattache les anciens suivis sans list_id."""
+def _backup_user_watchlists_to_warehouse(settings: Settings | None, db: Any, user_id: str) -> None:
+    """Synchronise les listes et actions de l'utilisateur dans `finance_warehouse.db` (volume finance_data)."""
+    if settings is None:
+        return
+    try:
+        wls = list(
+            db.scalars(
+                select(FinanceWatchlist)
+                .where(FinanceWatchlist.user_id == user_id)
+                .order_by(FinanceWatchlist.position.asc(), FinanceWatchlist.created_at.asc())
+            )
+        )
+        its = list(
+            db.scalars(
+                select(FinanceWatchlistItem)
+                .where(FinanceWatchlistItem.user_id == user_id)
+                .order_by(FinanceWatchlistItem.position.asc(), FinanceWatchlistItem.created_at.asc())
+            )
+        )
+        sync_user_watchlists_to_warehouse(
+            warehouse_db_path(settings),
+            user_id,
+            [
+                {
+                    "id": w.id,
+                    "name": w.name,
+                    "position": w.position,
+                    "created_at": w.created_at.isoformat() if w.created_at else None,
+                    "updated_at": w.updated_at.isoformat() if w.updated_at else None,
+                }
+                for w in wls
+            ],
+            [
+                {
+                    "id": it.id,
+                    "list_id": it.list_id,
+                    "symbol": it.symbol,
+                    "yahoo_symbol": it.yahoo_symbol,
+                    "eod_ticker": it.eod_ticker,
+                    "name": it.name,
+                    "exchange": it.exchange,
+                    "currency": it.currency,
+                    "position": it.position,
+                    "created_at": it.created_at.isoformat() if it.created_at else None,
+                }
+                for it in its
+                if it.list_id
+            ],
+        )
+    except Exception as exc:
+        logging.getLogger("uvicorn.error").warning("Synchronisation backup listes vers entrepôt ignorée : %s", exc)
+
+
+def _ensure_user_watchlists(db: Any, user_id: str, settings: Settings | None = None) -> list[FinanceWatchlist]:
+    """Garantit au moins une liste (ou restaure depuis `finance_warehouse.db`) et rattache les orphelins."""
     lists = list(
         db.scalars(
             select(FinanceWatchlist)
@@ -206,12 +552,51 @@ def _ensure_user_watchlists(db: Any, user_id: str) -> list[FinanceWatchlist]:
             .order_by(FinanceWatchlist.position.asc(), FinanceWatchlist.created_at.asc())
         )
     )
+    changed = False
+    if not lists and settings is not None:
+        backup = load_user_watchlists_from_warehouse(warehouse_db_path(settings), user_id)
+        if backup.get("lists"):
+            restored_ids: set[str] = set()
+            for bw in backup["lists"]:
+                wl = FinanceWatchlist(
+                    id=str(bw["id"]),
+                    user_id=user_id,
+                    name=str(bw["name"])[:80],
+                    position=int(bw.get("position") or 0),
+                )
+                db.add(wl)
+                restored_ids.add(wl.id)
+                lists.append(wl)
+            for bit in backup.get("items") or []:
+                lid = str(bit.get("list_id") or "")
+                if lid not in restored_ids:
+                    continue
+                db.add(
+                    FinanceWatchlistItem(
+                        id=str(bit["id"]),
+                        user_id=user_id,
+                        list_id=lid,
+                        symbol=str(bit["symbol"]),
+                        yahoo_symbol=str(bit.get("yahoo_symbol") or ""),
+                        eod_ticker=str(bit.get("eod_ticker") or ""),
+                        name=str(bit.get("name") or bit["symbol"]),
+                        exchange=str(bit.get("exchange") or ""),
+                        currency=str(bit.get("currency") or "EUR"),
+                        position=int(bit.get("position") or 0),
+                    )
+                )
+            db.commit()
+            for wl in lists:
+                db.refresh(wl)
+            return lists
+
     if not lists:
         default_wl = FinanceWatchlist(user_id=user_id, name="Suivi principal", position=0)
         db.add(default_wl)
         db.commit()
         db.refresh(default_wl)
         lists = [default_wl]
+        changed = True
 
     orphans = list(
         db.scalars(
@@ -226,6 +611,9 @@ def _ensure_user_watchlists(db: Any, user_id: str) -> list[FinanceWatchlist]:
         for item in orphans:
             item.list_id = first_id
         db.commit()
+        changed = True
+    if changed:
+        _backup_user_watchlists_to_warehouse(settings, db, user_id)
     return lists
 
 
@@ -238,8 +626,13 @@ def _watchlist_counts(db: Any, user_id: str) -> dict[str, int]:
     return {str(lid): int(cnt) for lid, cnt in rows if lid}
 
 
-def _resolve_target_watchlist(db: Any, user_id: str, list_id: str | None) -> tuple[list[FinanceWatchlist], FinanceWatchlist]:
-    lists = _ensure_user_watchlists(db, user_id)
+def _resolve_target_watchlist(
+    db: Any,
+    user_id: str,
+    list_id: str | None,
+    settings: Settings | None = None,
+) -> tuple[list[FinanceWatchlist], FinanceWatchlist]:
+    lists = _ensure_user_watchlists(db, user_id, settings=settings)
     if not list_id:
         return lists, lists[0]
     target = next((wl for wl in lists if wl.id == list_id), None)
@@ -250,11 +643,12 @@ def _resolve_target_watchlist(db: Any, user_id: str, list_id: str | None) -> tup
 
 @router.get("/watchlists")
 def list_user_watchlists(
+    settings: Settings = Depends(get_settings),
     user: User = Depends(current_user),
     sessions: sessionmaker = Depends(get_sessions),
 ) -> dict[str, Any]:
     with sessions() as db:
-        lists = _ensure_user_watchlists(db, user.id)
+        lists = _ensure_user_watchlists(db, user.id, settings=settings)
         counts = _watchlist_counts(db, user.id)
     return {"lists": [watchlist_json(wl, counts.get(wl.id, 0)) for wl in lists]}
 
@@ -262,11 +656,12 @@ def list_user_watchlists(
 @router.post("/watchlists", status_code=201)
 def create_user_watchlist(
     body: CreateWatchlistRequest,
+    settings: Settings = Depends(get_settings),
     user: User = Depends(current_user),
     sessions: sessionmaker = Depends(get_sessions),
 ) -> dict[str, Any]:
     with sessions() as db:
-        lists = _ensure_user_watchlists(db, user.id)
+        lists = _ensure_user_watchlists(db, user.id, settings=settings)
         if any(wl.name.lower() == body.name.lower() for wl in lists):
             raise HTTPException(409, f"Une liste nommée « {body.name} » existe déjà.")
         max_pos = max((wl.position for wl in lists), default=-1)
@@ -274,6 +669,7 @@ def create_user_watchlist(
         db.add(wl)
         db.commit()
         db.refresh(wl)
+        _backup_user_watchlists_to_warehouse(settings, db, user.id)
     return watchlist_json(wl, 0)
 
 
@@ -281,32 +677,36 @@ def create_user_watchlist(
 def rename_user_watchlist(
     list_id: str,
     body: UpdateWatchlistRequest,
+    settings: Settings = Depends(get_settings),
     user: User = Depends(current_user),
     sessions: sessionmaker = Depends(get_sessions),
 ) -> dict[str, Any]:
     with sessions() as db:
-        lists, target = _resolve_target_watchlist(db, user.id, list_id)
+        lists, target = _resolve_target_watchlist(db, user.id, list_id, settings=settings)
         if any(wl.id != list_id and wl.name.lower() == body.name.lower() for wl in lists):
             raise HTTPException(409, f"Une liste nommée « {body.name} » existe déjà.")
         target.name = body.name
         db.commit()
         db.refresh(target)
         counts = _watchlist_counts(db, user.id)
+        _backup_user_watchlists_to_warehouse(settings, db, user.id)
     return watchlist_json(target, counts.get(target.id, 0))
 
 
 @router.delete("/watchlists/{list_id}", status_code=204)
 def delete_user_watchlist(
     list_id: str,
+    settings: Settings = Depends(get_settings),
     user: User = Depends(current_user),
     sessions: sessionmaker = Depends(get_sessions),
 ):
     with sessions() as db:
-        lists, target = _resolve_target_watchlist(db, user.id, list_id)
+        lists, target = _resolve_target_watchlist(db, user.id, list_id, settings=settings)
         if len(lists) <= 1:
             raise HTTPException(400, "Vous devez conserver au moins une liste de suivi.")
         db.delete(target)
         db.commit()
+        _backup_user_watchlists_to_warehouse(settings, db, user.id)
     return Response(status_code=204)
 
 
@@ -320,7 +720,7 @@ async def get_watchlist(
     sessions: sessionmaker = Depends(get_sessions),
 ) -> dict[str, Any]:
     with sessions() as db:
-        lists, target = _resolve_target_watchlist(db, user.id, list_id)
+        lists, target = _resolve_target_watchlist(db, user.id, list_id, settings=settings)
         items = list(
             db.scalars(
                 select(FinanceWatchlistItem)
@@ -347,6 +747,7 @@ async def get_watchlist(
                     )
                 )
             db.commit()
+            _backup_user_watchlists_to_warehouse(settings, db, user.id)
             items = list(
                 db.scalars(
                     select(FinanceWatchlistItem)
@@ -383,7 +784,7 @@ async def add_watchlist_item(
 ) -> dict[str, Any]:
     resolved = await resolve_watchlist_instrument(settings, body.query)
     with sessions() as db:
-        _, target = _resolve_target_watchlist(db, user.id, body.list_id)
+        _, target = _resolve_target_watchlist(db, user.id, body.list_id, settings=settings)
         existing = db.scalar(
             select(FinanceWatchlistItem).where(
                 FinanceWatchlistItem.user_id == user.id,
@@ -414,6 +815,7 @@ async def add_watchlist_item(
             db.add(item)
             db.commit()
             db.refresh(item)
+            _backup_user_watchlists_to_warehouse(settings, db, user.id)
 
     enriched = await fetch_watchlist_quotes(settings, [item])
     return enriched[0]
@@ -427,7 +829,7 @@ async def seed_default_watchlist(
     sessions: sessionmaker = Depends(get_sessions),
 ) -> dict[str, Any]:
     with sessions() as db:
-        _, target = _resolve_target_watchlist(db, user.id, list_id)
+        _, target = _resolve_target_watchlist(db, user.id, list_id, settings=settings)
         existing_symbols = set(
             db.scalars(
                 select(FinanceWatchlistItem.symbol).where(
@@ -461,6 +863,7 @@ async def seed_default_watchlist(
             )
             next_pos += 1
         db.commit()
+        _backup_user_watchlists_to_warehouse(settings, db, user.id)
         items = list(
             db.scalars(
                 select(FinanceWatchlistItem)
@@ -478,6 +881,7 @@ async def seed_default_watchlist(
 @router.delete("/watchlist/{item_id}", status_code=204)
 def delete_watchlist_item(
     item_id: str,
+    settings: Settings = Depends(get_settings),
     user: User = Depends(current_user),
     sessions: sessionmaker = Depends(get_sessions),
 ):
@@ -492,6 +896,7 @@ def delete_watchlist_item(
             raise HTTPException(404, "Action suivie introuvable.")
         db.delete(item)
         db.commit()
+        _backup_user_watchlists_to_warehouse(settings, db, user.id)
     return Response(status_code=204)
 
 

@@ -27,11 +27,29 @@ import {
 } from "@/lib/chart-drawings";
 import { evaluateCustomIndicator } from "@/lib/custom-indicators";
 import {
+  attachZoneFill,
+  buildBollingerFillSpecs,
+  buildCustomOscillatorFillSpecs,
+  buildDualCurveFillSpecs,
+  buildOscillatorBandFillSpecs,
+  buildOverlayLineFillSpecs,
+  buildSupertrendFillSpecs,
+  buildThresholdSplitFillSpecs,
+  getCustomFillReferenceOptions,
+  getFillReferenceOptions,
+  resolveDefaultCustomFill,
+  supportsCustomThresholds,
+  type IndicatorFillConfig,
+  type IndicatorFillReference,
+} from "@/lib/chart-zone-fills";
+import {
   DEFAULT_INDICATOR_PARAMS,
   formatIndicatorLabel,
   INDICATOR_PARAM_DEFS,
   isConfigurableIndicator,
+  loadCustomIndicatorFills,
   loadIndicatorParams,
+  saveCustomIndicatorFills,
   saveIndicatorParams,
   type ConfigurableIndicatorKey,
   type IndicatorKey,
@@ -115,13 +133,19 @@ export function FinanceTvChart({
   const [active, setActive] = useState<Set<IndicatorKey>>(new Set(["sma20", "volume", "rsi"]));
   const [activeCustom, setActiveCustom] = useState<Set<string>>(new Set());
   const [params, setParams] = useState<IndicatorParamsMap>(() => loadIndicatorParams());
+  const [customFills, setCustomFills] = useState<Record<string, IndicatorFillConfig>>(() => loadCustomIndicatorFills());
   const [editingParamKey, setEditingParamKey] = useState<ConfigurableIndicatorKey | null>(null);
+  const [editingCustomId, setEditingCustomId] = useState<string | null>(null);
   const [toolbarsCollapsed, setToolbarsCollapsed] = useState(false);
   const seenCustomIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     saveIndicatorParams(params);
   }, [params]);
+
+  useEffect(() => {
+    saveCustomIndicatorFills(customFills);
+  }, [customFills]);
 
   // Drawing state
   const [tool, setTool] = useState<DrawingTool>("none");
@@ -277,6 +301,26 @@ export function FinanceTvChart({
         primarySeries = addLine(values, ind.color, paneIndex, ind.name);
       }
 
+      if (primarySeries) {
+        const customFill =
+          customFills[ind.id] ??
+          resolveDefaultCustomFill(
+            ind.pane,
+            (ind.guide_lines || []).map(g => g.value),
+          );
+        if (customFill.enabled) {
+          const specs =
+            ind.pane === "overlay"
+              ? buildOverlayLineFillSpecs(values, customFill, closes, highs, lows)
+              : buildCustomOscillatorFillSpecs(
+                  values,
+                  customFill,
+                  (ind.guide_lines || []).map(g => g.value),
+                );
+          attachZoneFill(primarySeries, times, specs, customFill);
+        }
+      }
+
       if (primarySeries && Array.isArray(ind.guide_lines)) {
         for (const guide of ind.guide_lines) {
           if (typeof guide?.value === "number" && Number.isFinite(guide.value)) {
@@ -293,15 +337,38 @@ export function FinanceTvChart({
       }
     };
 
-    if (active.has("sma20")) addLine(sma(closes, params.sma20.period), "#3b82f6");
-    if (active.has("sma50")) addLine(sma(closes, params.sma50.period), "#f59e0b");
-    if (active.has("sma200")) addLine(sma(closes, params.sma200.period), "#ef4444");
-    if (active.has("ema20")) addLine(ema(closes, params.ema20.period), "#a855f7");
-    if (active.has("ema50")) addLine(ema(closes, params.ema50.period), "#ec4899");
+    if (active.has("sma20")) {
+      const vals = sma(closes, params.sma20.period);
+      const s = addLine(vals, "#3b82f6");
+      attachZoneFill(s, times, buildOverlayLineFillSpecs(vals, params.sma20.fill, closes, highs, lows), params.sma20.fill);
+    }
+    if (active.has("sma50")) {
+      const vals = sma(closes, params.sma50.period);
+      const s = addLine(vals, "#f59e0b");
+      attachZoneFill(s, times, buildOverlayLineFillSpecs(vals, params.sma50.fill, closes, highs, lows), params.sma50.fill);
+    }
+    if (active.has("sma200")) {
+      const vals = sma(closes, params.sma200.period);
+      const s = addLine(vals, "#ef4444");
+      attachZoneFill(s, times, buildOverlayLineFillSpecs(vals, params.sma200.fill, closes, highs, lows), params.sma200.fill);
+    }
+    if (active.has("ema20")) {
+      const vals = ema(closes, params.ema20.period);
+      const s = addLine(vals, "#a855f7");
+      attachZoneFill(s, times, buildOverlayLineFillSpecs(vals, params.ema20.fill, closes, highs, lows), params.ema20.fill);
+    }
+    if (active.has("ema50")) {
+      const vals = ema(closes, params.ema50.period);
+      const s = addLine(vals, "#ec4899");
+      attachZoneFill(s, times, buildOverlayLineFillSpecs(vals, params.ema50.fill, closes, highs, lows), params.ema50.fill);
+    }
     if (active.has("vwap")) {
-      addLine(vwap(highs, lows, closes, volumes, rows.map(b => b.date.slice(0, 10))), "#0ea5e9");
+      const vals = vwap(highs, lows, closes, volumes, rows.map(b => b.date.slice(0, 10)));
+      const s = addLine(vals, "#0ea5e9");
+      attachZoneFill(s, times, buildOverlayLineFillSpecs(vals, params.vwap.fill, closes, highs, lows), params.vwap.fill);
     }
     if (active.has("sar")) {
+      const sarVals = parabolicSar(highs, lows, params.sar.step, params.sar.max);
       const sar = chart.addSeries(LineSeries, {
         color: "#f97316",
         lineVisible: false,
@@ -310,13 +377,20 @@ export function FinanceTvChart({
         priceLineVisible: false,
         lastValueVisible: false,
       });
-      sar.setData(pick(times, parabolicSar(highs, lows, params.sar.step, params.sar.max)));
+      sar.setData(pick(times, sarVals));
+      attachZoneFill(sar, times, buildOverlayLineFillSpecs(sarVals, params.sar.fill, closes, highs, lows), params.sar.fill);
     }
     if (active.has("boll")) {
       const b = bollinger(closes, params.boll.period, params.boll.mult);
       addLine(b.upper, "#94a3b8");
-      addLine(b.mid, "#64748b");
+      const midSeries = addLine(b.mid, "#64748b");
       addLine(b.lower, "#94a3b8");
+      attachZoneFill(
+        midSeries,
+        times,
+        buildBollingerFillSpecs(b.upper, b.mid, b.lower, params.boll.fill, closes, highs, lows),
+        params.boll.fill,
+      );
     }
     if (active.has("supertrend")) {
       const st = supertrend(highs, lows, closes, params.supertrend.period, params.supertrend.multiplier);
@@ -338,6 +412,12 @@ export function FinanceTvChart({
                 },
               ],
         ),
+      );
+      attachZoneFill(
+        stSeries,
+        times,
+        buildSupertrendFillSpecs(st.value, st.direction, params.supertrend.fill, closes, highs, lows),
+        params.supertrend.fill,
       );
     }
     if (active.has("volume")) {
@@ -374,10 +454,18 @@ export function FinanceTvChart({
     for (const key of OSCILLATOR_KEYS) {
       if (!active.has(key)) continue;
       if (key === "rsi") {
-        guides(addLine(rsi(closes, params.rsi.period), "#8b5cf6", pane, `RSI ${params.rsi.period}`), [
+        const rsiVals = rsi(closes, params.rsi.period);
+        const s = addLine(rsiVals, "#8b5cf6", pane, `RSI ${params.rsi.period}`);
+        guides(s, [
           [params.rsi.overbought, "#f43f5e"],
           [params.rsi.oversold, "#10b981"],
         ]);
+        attachZoneFill(
+          s,
+          times,
+          buildOscillatorBandFillSpecs(rsiVals, params.rsi.fill, params.rsi.overbought, params.rsi.oversold),
+          params.rsi.fill,
+        );
       } else if (key === "macd") {
         const m = macd(closes, params.macd.fast, params.macd.slow, params.macd.signal);
         const hist = chart.addSeries(HistogramSeries, { priceLineVisible: false, lastValueVisible: false }, pane);
@@ -386,40 +474,104 @@ export function FinanceTvChart({
             v == null ? [] : [{ time: times[i], value: v, color: v >= 0 ? "#10b98199" : "#f43f5e99" }],
           ),
         );
-        addLine(m.line, "#3b82f6", pane, "MACD");
+        const macdSeries = addLine(m.line, "#3b82f6", pane, "MACD");
         addLine(m.signal, "#f59e0b", pane, "Signal");
+        attachZoneFill(macdSeries, times, buildDualCurveFillSpecs(m.line, m.signal, params.macd.fill, 0), params.macd.fill);
       } else if (key === "rex") {
         const r = rex(opens, highs, lows, closes, params.rex.period, params.rex.signal);
-        guides(addLine(r.rex, "#3b82f6", pane, "REX"), [[0, "#94a3b8"]]);
+        const rexSeries = addLine(r.rex, "#3b82f6", pane, "REX");
+        guides(rexSeries, [[0, "#94a3b8"]]);
         addLine(r.signal, "#f59e0b", pane, "Signal");
+        attachZoneFill(rexSeries, times, buildDualCurveFillSpecs(r.rex, r.signal, params.rex.fill, 0), params.rex.fill);
       } else if (key === "isopressure") {
         const ipCfg = params.isopressure;
         const ip = isoPressure(highs, lows, closes, volumes, ipCfg);
-        if (ipCfg.showRaw) addLine(ip.raw, "#94a3b8", pane, "Pression brute");
-        if (ipCfg.show5) addLine(ip.p5, "#a855f7", pane, "Pression 5");
-        if (ipCfg.show20) addLine(ip.p20, "#3b82f6", pane, "Pression 20");
-        if (ipCfg.show50) addLine(ip.p50, "#f97316", pane, "Pression 50");
-        if (ipCfg.show100) addLine(ip.p100, "#ef4444", pane, "Pression 100");
-        if (ipCfg.show200) addLine(ip.p200, dark ? "#e2e8f0" : "#0f172a", pane, "Pression 200");
+        let firstIpSeries: ReturnType<typeof addLine> | null = null;
+        const visibleCurves: Num[][] = [];
+        if (ipCfg.showRaw) {
+          firstIpSeries ??= addLine(ip.raw, "#94a3b8", pane, "Pression brute");
+          visibleCurves.push(ip.raw);
+        }
+        if (ipCfg.show5) {
+          const s = addLine(ip.p5, "#a855f7", pane, "Pression 5");
+          firstIpSeries ??= s;
+          visibleCurves.push(ip.p5);
+        }
+        if (ipCfg.show20) {
+          const s = addLine(ip.p20, "#3b82f6", pane, "Pression 20");
+          firstIpSeries ??= s;
+          visibleCurves.push(ip.p20);
+        }
+        if (ipCfg.show50) {
+          const s = addLine(ip.p50, "#f97316", pane, "Pression 50");
+          firstIpSeries ??= s;
+          visibleCurves.push(ip.p50);
+        }
+        if (ipCfg.show100) {
+          const s = addLine(ip.p100, "#ef4444", pane, "Pression 100");
+          firstIpSeries ??= s;
+          visibleCurves.push(ip.p100);
+        }
+        if (ipCfg.show200) {
+          const s = addLine(ip.p200, dark ? "#e2e8f0" : "#0f172a", pane, "Pression 200");
+          firstIpSeries ??= s;
+          visibleCurves.push(ip.p200);
+        }
+        if (firstIpSeries && visibleCurves.length > 0) {
+          const specs =
+            visibleCurves.length >= 2 && ipCfg.fill.reference !== "threshold"
+              ? buildDualCurveFillSpecs(visibleCurves[0], visibleCurves[1], ipCfg.fill, 0)
+              : buildThresholdSplitFillSpecs(visibleCurves[0], ipCfg.fill, 0);
+          attachZoneFill(firstIpSeries, times, specs, ipCfg.fill);
+        }
       } else if (key === "stoch") {
         const st = stochastic(highs, lows, closes, params.stoch.period, params.stoch.signal);
-        guides(addLine(st.k, "#3b82f6", pane, "%K"), [[80, "#f43f5e"], [20, "#10b981"]]);
+        const kSeries = addLine(st.k, "#3b82f6", pane, "%K");
+        guides(kSeries, [[80, "#f43f5e"], [20, "#10b981"]]);
         addLine(st.d, "#f59e0b", pane, "%D");
+        const stochSpecs =
+          params.stoch.fill.reference === "threshold"
+            ? buildOscillatorBandFillSpecs(st.k, params.stoch.fill, 80, 20)
+            : buildDualCurveFillSpecs(st.k, st.d, params.stoch.fill, 50);
+        attachZoneFill(kSeries, times, stochSpecs, params.stoch.fill);
       } else if (key === "willr") {
-        guides(addLine(williamsR(highs, lows, closes, params.willr.period), "#14b8a6", pane, "%R"), [[-20, "#f43f5e"], [-80, "#10b981"]]);
+        const wrVals = williamsR(highs, lows, closes, params.willr.period);
+        const s = addLine(wrVals, "#14b8a6", pane, "%R");
+        guides(s, [[-20, "#f43f5e"], [-80, "#10b981"]]);
+        attachZoneFill(s, times, buildOscillatorBandFillSpecs(wrVals, params.willr.fill, -20, -80), params.willr.fill);
       } else if (key === "cci") {
-        guides(addLine(cci(highs, lows, closes, params.cci.period), "#6366f1", pane, "CCI"), [[100, "#f43f5e"], [-100, "#10b981"]]);
+        const cciVals = cci(highs, lows, closes, params.cci.period);
+        const s = addLine(cciVals, "#6366f1", pane, "CCI");
+        guides(s, [[100, "#f43f5e"], [-100, "#10b981"]]);
+        attachZoneFill(s, times, buildOscillatorBandFillSpecs(cciVals, params.cci.fill, 100, -100), params.cci.fill);
       } else if (key === "roc") {
-        guides(addLine(roc(closes, params.roc.period), "#0ea5e9", pane, "ROC"), [[0, "#94a3b8"]]);
+        const rocVals = roc(closes, params.roc.period);
+        const s = addLine(rocVals, "#0ea5e9", pane, "ROC");
+        guides(s, [[0, "#94a3b8"]]);
+        attachZoneFill(s, times, buildThresholdSplitFillSpecs(rocVals, params.roc.fill, 0), params.roc.fill);
       } else if (key === "atr") {
-        addLine(atr(highs, lows, closes, params.atr.period), "#f97316", pane, "ATR");
+        const atrVals = atr(highs, lows, closes, params.atr.period);
+        const s = addLine(atrVals, "#f97316", pane, "ATR");
+        attachZoneFill(s, times, buildThresholdSplitFillSpecs(atrVals, params.atr.fill, 0), params.atr.fill);
       } else if (key === "adx") {
         const a = adx(highs, lows, closes, params.adx.period);
-        guides(addLine(a.adx, "#0f172a", pane, "ADX"), [[25, "#94a3b8"]]);
+        const adxSeries = addLine(a.adx, "#0f172a", pane, "ADX");
+        guides(adxSeries, [[25, "#94a3b8"]]);
         addLine(a.plusDi, "#10b981", pane, "+DI");
         addLine(a.minusDi, "#f43f5e", pane, "-DI");
+        const adxSpecs =
+          params.adx.fill.reference === "threshold"
+            ? buildThresholdSplitFillSpecs(a.adx, params.adx.fill, 25)
+            : buildDualCurveFillSpecs(a.plusDi, a.minusDi, params.adx.fill, 25);
+        attachZoneFill(adxSeries, times, adxSpecs, params.adx.fill);
       } else if (key === "obv") {
-        addLine(obv(closes, volumes), "#a855f7", pane, "OBV");
+        const obvVals = obv(closes, volumes);
+        const obvSeries = addLine(obvVals, "#a855f7", pane, "OBV");
+        const obvSignal = ema(
+          obvVals.map(v => v ?? 0),
+          20,
+        );
+        attachZoneFill(obvSeries, times, buildDualCurveFillSpecs(obvVals, obvSignal, params.obv.fill, 0), params.obv.fill);
       }
       pane++;
     }
@@ -451,7 +603,7 @@ export function FinanceTvChart({
       chartRef.current = null;
       candlesRef.current = null;
     };
-  }, [bars, active, activeCustom, customIndicators, customResults, dark, params]);
+  }, [bars, active, activeCustom, customIndicators, customResults, dark, params, customFills]);
 
   const projectDrawing = useCallback((d: ChartDrawing, paneWidth: number): ProjectedDrawing | null => {
     const chart = chartRef.current;
@@ -737,18 +889,31 @@ export function FinanceTvChart({
       );
     }
     const isEditing = editingParamKey === key;
+    const fillEnabled = params[key].fill.enabled;
     return (
       <FinanceHoverTip key={key} termKey={key} delayMs={220}>
         <span
           className={`finance-native-ind-pill ${isActive ? "active" : ""} ${isEditing ? "is-editing" : ""}`}
         >
           <button type="button" className="finance-native-ind-toggle" onClick={() => toggle(key)}>
-            {label}
+            <span>{label}</span>
+            {fillEnabled && (
+              <span
+                className="finance-ind-fill-dot"
+                style={{
+                  background: `linear-gradient(135deg, ${params[key].fill.upColor} 50%, ${params[key].fill.downColor} 50%)`,
+                }}
+                title="Zone remplie active"
+              />
+            )}
           </button>
           <button
             type="button"
             className="finance-native-ind-gear"
-            onClick={() => setEditingParamKey(prev => (prev === key ? null : key))}
+            onClick={() => {
+              setEditingCustomId(null);
+              setEditingParamKey(prev => (prev === key ? null : key));
+            }}
             title={`Paramétrer ${INDICATOR_PARAM_DEFS[key].title}`}
             aria-label={`Paramétrer ${label}`}
           >
@@ -759,8 +924,129 @@ export function FinanceTvChart({
     );
   }
 
+  function renderCustomPill(ind: CustomIndicator) {
+    const isActive = activeCustom.has(ind.id);
+    const isEditing = editingCustomId === ind.id;
+    const customFill = customFills[ind.id];
+    const summary =
+      ind.pane === "overlay"
+        ? "Indicateur technique personnalisé superposé au graphique."
+        : "Oscillateur technique personnalisé affiché dans un panneau dédié.";
+    return (
+      <FinanceHoverTip
+        key={ind.id}
+        delayMs={220}
+        definition={{ title: ind.name, summary, formula: ind.formula }}
+      >
+        <span className={`finance-custom-ind-pill ${isActive ? "active" : ""} ${isEditing ? "is-editing" : ""}`}>
+          <button
+            type="button"
+            className="finance-custom-ind-toggle"
+            onClick={() => toggleCustom(ind.id)}
+          >
+            <span className="finance-custom-dot" style={{ background: ind.color }} />
+            <span>{ind.name}</span>
+            {customFill?.enabled && (
+              <span
+                className="finance-ind-fill-dot"
+                style={{
+                  background: `linear-gradient(135deg, ${customFill.upColor} 50%, ${customFill.downColor} 50%)`,
+                }}
+                title="Zone remplie active"
+              />
+            )}
+          </button>
+          <button
+            type="button"
+            className="finance-custom-ind-action"
+            onClick={() => {
+              setEditingParamKey(null);
+              setEditingCustomId(prev => (prev === ind.id ? null : ind.id));
+            }}
+            title="Paramétrer la zone remplie"
+            aria-label={`Zone remplie ${ind.name}`}
+          >
+            <Settings2 size={10} />
+          </button>
+          {onOpenIndicatorEditor && (
+            <button
+              type="button"
+              className="finance-custom-ind-action"
+              onClick={() => onOpenIndicatorEditor(ind)}
+              title="Modifier cet indicateur"
+              aria-label={`Modifier ${ind.name}`}
+            >
+              <Pencil size={10} />
+            </button>
+          )}
+          {onDeleteCustomIndicator && (
+            <button
+              type="button"
+              className="finance-custom-ind-action is-del"
+              onClick={() => onDeleteCustomIndicator(ind.id)}
+              title="Supprimer cet indicateur"
+              aria-label={`Supprimer ${ind.name}`}
+            >
+              <Trash2 size={10} />
+            </button>
+          )}
+        </span>
+      </FinanceHoverTip>
+    );
+  }
+
   const editingMeta = editingParamKey ? INDICATOR_PARAM_DEFS[editingParamKey] : null;
-  const editingValues = editingParamKey ? (params[editingParamKey] as Record<string, number | string | boolean>) : null;
+  const editingValues = editingParamKey
+    ? (params[editingParamKey] as unknown as Record<string, number | string | boolean>)
+    : null;
+  const editingCustomInd = editingCustomId
+    ? customIndicators.find(ind => ind.id === editingCustomId) ?? null
+    : null;
+  const editingFill: IndicatorFillConfig | null = editingParamKey
+    ? params[editingParamKey].fill
+    : editingCustomInd
+      ? customFills[editingCustomInd.id] ??
+        resolveDefaultCustomFill(
+          editingCustomInd.pane,
+          (editingCustomInd.guide_lines || []).map(g => g.value),
+        )
+      : null;
+
+  const updateEditingFill = (patch: Partial<IndicatorFillConfig>) => {
+    if (editingParamKey) {
+      setParams(prev => ({
+        ...prev,
+        [editingParamKey]: {
+          ...prev[editingParamKey],
+          fill: {
+            ...prev[editingParamKey].fill,
+            ...patch,
+          },
+        },
+      }));
+    } else if (editingCustomInd && editingFill) {
+      setCustomFills(prev => ({
+        ...prev,
+        [editingCustomInd.id]: {
+          ...editingFill,
+          ...patch,
+        },
+      }));
+    }
+  };
+
+  const editingRefOptions = editingParamKey
+    ? getFillReferenceOptions(editingParamKey)
+    : editingCustomInd
+      ? getCustomFillReferenceOptions(editingCustomInd.pane)
+      : [];
+  const showFillThresholds = Boolean(
+    editingFill &&
+      editingFill.enabled &&
+      (editingParamKey
+        ? supportsCustomThresholds(editingParamKey, editingFill)
+        : editingFill.reference === "threshold"),
+  );
 
   return (
     <div className={`finance-tv-wrap${fullscreen ? " is-fullscreen" : ""}`}>
@@ -783,53 +1069,10 @@ export function FinanceTvChart({
 
       {showToolbars && (
         <>
-          <div className="finance-tv-toolbar">
+      <div className="finance-tv-toolbar">
         <small>Tendance & prix</small>
         {OVERLAY_KEYS.map(renderNativePill)}
-        {customOverlays.map(ind => (
-          <FinanceHoverTip
-            key={ind.id}
-            delayMs={220}
-            definition={{
-              title: ind.name,
-              summary: "Indicateur technique personnalisé superposé au graphique.",
-              formula: ind.formula,
-            }}
-          >
-            <span className={`finance-custom-ind-pill ${activeCustom.has(ind.id) ? "active" : ""}`}>
-              <button
-                type="button"
-                className="finance-custom-ind-toggle"
-                onClick={() => toggleCustom(ind.id)}
-              >
-                <span className="finance-custom-dot" style={{ background: ind.color }} />
-                <span>{ind.name}</span>
-              </button>
-              {onOpenIndicatorEditor && (
-                <button
-                  type="button"
-                  className="finance-custom-ind-action"
-                  onClick={() => onOpenIndicatorEditor(ind)}
-                  title="Modifier cet indicateur"
-                  aria-label={`Modifier ${ind.name}`}
-                >
-                  <Pencil size={10} />
-                </button>
-              )}
-              {onDeleteCustomIndicator && (
-                <button
-                  type="button"
-                  className="finance-custom-ind-action is-del"
-                  onClick={() => onDeleteCustomIndicator(ind.id)}
-                  title="Supprimer cet indicateur"
-                  aria-label={`Supprimer ${ind.name}`}
-                >
-                  <Trash2 size={10} />
-                </button>
-              )}
-            </span>
-          </FinanceHoverTip>
-        ))}
+        {customOverlays.map(renderCustomPill)}
         {onOpenIndicatorEditor && (
           <button
             type="button"
@@ -846,155 +1089,217 @@ export function FinanceTvChart({
       <div className="finance-tv-toolbar">
         <small>Oscillateurs</small>
         {OSCILLATOR_KEYS.map(renderNativePill)}
-        {customOscillators.map(ind => (
-          <FinanceHoverTip
-            key={ind.id}
-            delayMs={220}
-            definition={{
-              title: ind.name,
-              summary: "Oscillateur technique personnalisé affiché dans un panneau dédié.",
-              formula: ind.formula,
-            }}
-          >
-            <span className={`finance-custom-ind-pill ${activeCustom.has(ind.id) ? "active" : ""}`}>
-              <button
-                type="button"
-                className="finance-custom-ind-toggle"
-                onClick={() => toggleCustom(ind.id)}
-              >
-                <span className="finance-custom-dot" style={{ background: ind.color }} />
-                <span>{ind.name}</span>
-              </button>
-              {onOpenIndicatorEditor && (
-                <button
-                  type="button"
-                  className="finance-custom-ind-action"
-                  onClick={() => onOpenIndicatorEditor(ind)}
-                  title="Modifier cet indicateur"
-                  aria-label={`Modifier ${ind.name}`}
-                >
-                  <Pencil size={10} />
-                </button>
-              )}
-              {onDeleteCustomIndicator && (
-                <button
-                  type="button"
-                  className="finance-custom-ind-action is-del"
-                  onClick={() => onDeleteCustomIndicator(ind.id)}
-                  title="Supprimer cet indicateur"
-                  aria-label={`Supprimer ${ind.name}`}
-                >
-                  <Trash2 size={10} />
-                </button>
-              )}
-            </span>
-          </FinanceHoverTip>
-        ))}
+        {customOscillators.map(renderCustomPill)}
           </div>
 
-          {editingParamKey && editingMeta && editingValues && (
+          {((editingParamKey && editingMeta && editingValues) || editingCustomInd) && editingFill && (
             <div className="finance-ind-params-panel">
-              <strong className="finance-ind-params-title">{editingMeta.title}</strong>
+              <strong className="finance-ind-params-title">
+                {editingMeta ? editingMeta.title : `${editingCustomInd!.name} (Perso)`}
+              </strong>
               <div className="finance-ind-params-fields">
-                {editingMeta.fields
-                  .filter(f => {
-                    if (
-                      editingParamKey === "isopressure" &&
-                      editingValues.strategy !== "Test" &&
-                      (f.field === "wrsiTest" ||
-                        f.field === "wstochTest" ||
-                        f.field === "wcciTest" ||
-                        f.field === "wmfiTest" ||
-                        f.field === "maTypeTest")
-                    ) {
-                      return false;
-                    }
-                    return true;
-                  })
-                  .map(f => {
-                    if (f.type === "select") {
+                {editingParamKey &&
+                  editingMeta &&
+                  editingValues &&
+                  editingMeta.fields
+                    .filter(f => {
+                      if (
+                        editingParamKey === "isopressure" &&
+                        editingValues.strategy !== "Test" &&
+                        (f.field === "wrsiTest" ||
+                          f.field === "wstochTest" ||
+                          f.field === "wcciTest" ||
+                          f.field === "wmfiTest" ||
+                          f.field === "maTypeTest")
+                      ) {
+                        return false;
+                      }
+                      return true;
+                    })
+                    .map(f => {
+                      if (f.type === "select") {
+                        return (
+                          <label key={f.field} className="finance-ind-param-field">
+                            <span>{f.label}</span>
+                            <select
+                              value={String(editingValues[f.field] ?? f.options[0])}
+                              onChange={e => {
+                                const val = e.target.value;
+                                setParams(prev => ({
+                                  ...prev,
+                                  [editingParamKey]: {
+                                    ...prev[editingParamKey],
+                                    [f.field]: val,
+                                  },
+                                }));
+                              }}
+                            >
+                              {f.options.map(opt => (
+                                <option key={opt} value={opt}>
+                                  {opt}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        );
+                      }
+                      if (f.type === "boolean") {
+                        return (
+                          <label key={f.field} className="finance-ind-param-field is-checkbox">
+                            <input
+                              type="checkbox"
+                              checked={Boolean(editingValues[f.field])}
+                              onChange={e => {
+                                const checked = e.target.checked;
+                                setParams(prev => ({
+                                  ...prev,
+                                  [editingParamKey]: {
+                                    ...prev[editingParamKey],
+                                    [f.field]: checked,
+                                  },
+                                }));
+                              }}
+                            />
+                            <span>{f.label}</span>
+                          </label>
+                        );
+                      }
                       return (
                         <label key={f.field} className="finance-ind-param-field">
                           <span>{f.label}</span>
-                          <select
-                            value={String(editingValues[f.field] ?? f.options[0])}
-                            onChange={e => {
-                              const val = e.target.value;
-                              setParams(prev => ({
-                                ...prev,
-                                [editingParamKey]: {
-                                  ...prev[editingParamKey],
-                                  [f.field]: val,
-                                },
-                              }));
-                            }}
-                          >
-                            {f.options.map(opt => (
-                              <option key={opt} value={opt}>
-                                {opt}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                      );
-                    }
-                    if (f.type === "boolean") {
-                      return (
-                        <label key={f.field} className="finance-ind-param-field is-checkbox">
                           <input
-                            type="checkbox"
-                            checked={Boolean(editingValues[f.field])}
+                            type="number"
+                            min={f.min}
+                            max={f.max}
+                            step={f.step}
+                            value={Number(editingValues[f.field] ?? f.min)}
                             onChange={e => {
-                              const checked = e.target.checked;
+                              const raw = Number(e.target.value);
+                              if (!Number.isFinite(raw)) return;
+                              const clamped = Math.max(f.min, Math.min(f.max, raw));
                               setParams(prev => ({
                                 ...prev,
                                 [editingParamKey]: {
                                   ...prev[editingParamKey],
-                                  [f.field]: checked,
+                                  [f.field]: clamped,
                                 },
                               }));
                             }}
                           />
-                          <span>{f.label}</span>
                         </label>
                       );
-                    }
-                    return (
-                      <label key={f.field} className="finance-ind-param-field">
-                        <span>{f.label}</span>
+                    })}
+
+                <div className="finance-ind-fill-group">
+                  <label className="finance-ind-param-field is-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={editingFill.enabled}
+                      onChange={e => updateEditingFill({ enabled: e.target.checked })}
+                    />
+                    <span>Zone remplie</span>
+                  </label>
+
+                  {editingFill.enabled && (
+                    <>
+                      <label className="finance-ind-param-field">
+                        <span>Référence</span>
+                        <select
+                          value={editingFill.reference}
+                          onChange={e =>
+                            updateEditingFill({ reference: e.target.value as IndicatorFillReference })
+                          }
+                        >
+                          {editingRefOptions.map(opt => (
+                            <option key={opt.value} value={opt.value}>
+                              {opt.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+
+                      <label className="finance-ind-param-field is-color" title="Couleur haussière / haute">
+                        <span>Haussier</span>
                         <input
-                          type="number"
-                          min={f.min}
-                          max={f.max}
-                          step={f.step}
-                          value={Number(editingValues[f.field] ?? f.min)}
-                          onChange={e => {
-                            const raw = Number(e.target.value);
-                            if (!Number.isFinite(raw)) return;
-                            const clamped = Math.max(f.min, Math.min(f.max, raw));
-                            setParams(prev => ({
-                              ...prev,
-                              [editingParamKey]: {
-                                ...prev[editingParamKey],
-                                [f.field]: clamped,
-                              },
-                            }));
-                          }}
+                          type="color"
+                          value={editingFill.upColor}
+                          onChange={e => updateEditingFill({ upColor: e.target.value })}
                         />
                       </label>
-                    );
-                  })}
+
+                      <label className="finance-ind-param-field is-color" title="Couleur baissière / basse">
+                        <span>Baissier</span>
+                        <input
+                          type="color"
+                          value={editingFill.downColor}
+                          onChange={e => updateEditingFill({ downColor: e.target.value })}
+                        />
+                      </label>
+
+                      <label className="finance-ind-param-field is-range">
+                        <span>Opacité ({Math.round(editingFill.opacity * 100)}%)</span>
+                        <input
+                          type="range"
+                          min={5}
+                          max={65}
+                          step={1}
+                          value={Math.round(editingFill.opacity * 100)}
+                          onChange={e => updateEditingFill({ opacity: Number(e.target.value) / 100 })}
+                        />
+                      </label>
+
+                      {showFillThresholds && (
+                        <>
+                          <label className="finance-ind-param-field">
+                            <span>Seuil +</span>
+                            <input
+                              type="number"
+                              step="any"
+                              value={editingFill.upperThreshold ?? 0}
+                              onChange={e => {
+                                const val = Number(e.target.value);
+                                if (Number.isFinite(val)) updateEditingFill({ upperThreshold: val });
+                              }}
+                            />
+                          </label>
+                          <label className="finance-ind-param-field">
+                            <span>Seuil -</span>
+                            <input
+                              type="number"
+                              step="any"
+                              value={editingFill.lowerThreshold ?? 0}
+                              onChange={e => {
+                                const val = Number(e.target.value);
+                                if (Number.isFinite(val)) updateEditingFill({ lowerThreshold: val });
+                              }}
+                            />
+                          </label>
+                        </>
+                      )}
+                    </>
+                  )}
+                </div>
               </div>
               <div className="finance-ind-params-actions">
                 <button
                   type="button"
                   className="finance-tf-btn finance-draw-btn"
-                  onClick={() =>
-                    setParams(prev => ({
-                      ...prev,
-                      [editingParamKey]: DEFAULT_INDICATOR_PARAMS[editingParamKey],
-                    }))
-                  }
+                  onClick={() => {
+                    if (editingParamKey) {
+                      setParams(prev => ({
+                        ...prev,
+                        [editingParamKey]: DEFAULT_INDICATOR_PARAMS[editingParamKey],
+                      }));
+                    } else if (editingCustomInd) {
+                      setCustomFills(prev => ({
+                        ...prev,
+                        [editingCustomInd.id]: resolveDefaultCustomFill(
+                          editingCustomInd.pane,
+                          (editingCustomInd.guide_lines || []).map(g => g.value),
+                        ),
+                      }));
+                    }
+                  }}
                   title="Rétablir les valeurs par défaut"
                 >
                   <RotateCcw size={11} />
@@ -1003,7 +1308,10 @@ export function FinanceTvChart({
                 <button
                   type="button"
                   className="finance-tf-btn finance-draw-btn"
-                  onClick={() => setEditingParamKey(null)}
+                  onClick={() => {
+                    setEditingParamKey(null);
+                    setEditingCustomId(null);
+                  }}
                   aria-label="Fermer les paramètres"
                 >
                   <X size={11} />

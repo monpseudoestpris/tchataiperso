@@ -3749,6 +3749,9 @@ export function ChatApp() {
       onClose={() => setFinanceModalOpen(false)}
       initialQuery={financeModalQuery}
       initialData={financeModalData}
+      models={config?.models ?? []}
+      defaultModel={model}
+      onRefreshModels={refreshModels}
       onInsertIntoChat={(promptText) => {
         setDraft(promptText);
         textareaRef.current?.focus();

@@ -898,6 +898,25 @@ class FinanceWorkspaceTests(unittest.TestCase):
                     self.assertEqual(custom_view.status_code, 200)
                     self.assertEqual(len(custom_view.json()["items"]), 1)
 
+                    # Vérifier le miroir dans finance_warehouse.db + restauration si table principale vidée
+                    from app.finance_warehouse import load_user_watchlists_from_warehouse, warehouse_db_path
+                    from app.models import FinanceWatchlist, User
+                    from sqlalchemy import delete as sql_delete, select
+
+                    with client.app.state.sessions() as db_check:
+                        uid = db_check.scalar(select(User.id))
+                        wh_saved = load_user_watchlists_from_warehouse(warehouse_db_path(settings), uid)
+                        self.assertEqual([w["name"] for w in wh_saved["lists"]], ["Suivi principal", "IA & Cloud"])
+                        self.assertTrue(any(it["list_id"] == tech_wl["id"] for it in wh_saved["items"]))
+                        # Vider finance_watchlists dans la BDD principale puis vérifier la restauration auto depuis l'entrepôt
+                        db_check.execute(sql_delete(FinanceWatchlist).where(FinanceWatchlist.user_id == uid))
+                        db_check.commit()
+
+                    restored_res = client.get(f"/api/finance/watchlist?list_id={tech_wl['id']}&include_quotes=false")
+                    self.assertEqual(restored_res.status_code, 200)
+                    self.assertEqual([w["name"] for w in restored_res.json()["lists"]], ["Suivi principal", "IA & Cloud"])
+                    self.assertEqual(len(restored_res.json()["items"]), 1)
+
                     del_custom = client.delete(f"/api/finance/watchlists/{tech_wl['id']}")
                     self.assertEqual(del_custom.status_code, 204)
                     del_last = client.delete(f"/api/finance/watchlists/{default_wl['id']}")

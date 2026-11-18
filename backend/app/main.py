@@ -166,14 +166,56 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     conn.execute(text("ALTER TABLE web_page_versions ADD COLUMN canvas_files JSON NOT NULL DEFAULT '[]'"))
         if "finance_watchlist_items" in inspector.get_table_names():
             wl_columns = {column["name"] for column in inspector.get_columns("finance_watchlist_items")}
-            wl_uqs = {u["name"] for u in inspector.get_unique_constraints("finance_watchlist_items") if u.get("name")}
+            wl_uqs = {u["name"]: u.get("column_names") or [] for u in inspector.get_unique_constraints("finance_watchlist_items") if u.get("name")}
+            wl_idxs = {idx["name"]: idx.get("column_names") or [] for idx in inspector.get_indexes("finance_watchlist_items") if idx.get("name") and idx.get("unique")}
+            has_old_user_sym_uq = (
+                "uq_finance_watchlist_user_symbol" in wl_uqs
+                or any(cols == ["user_id", "symbol"] for cols in wl_uqs.values())
+                or any(cols == ["user_id", "symbol"] for cols in wl_idxs.values())
+            )
             with engine.begin() as conn:
                 if "list_id" not in wl_columns:
                     conn.execute(text("ALTER TABLE finance_watchlist_items ADD COLUMN list_id VARCHAR(36)"))
                     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_finance_watchlist_items_list_id ON finance_watchlist_items (list_id)"))
-                if "uq_finance_watchlist_user_symbol" in wl_uqs and not settings.db_url.startswith("sqlite"):
-                    conn.execute(text("ALTER TABLE finance_watchlist_items DROP CONSTRAINT IF EXISTS uq_finance_watchlist_user_symbol"))
-                    conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_finance_watchlist_list_symbol ON finance_watchlist_items (list_id, symbol)"))
+                if has_old_user_sym_uq:
+                    if settings.db_url.startswith("sqlite"):
+                        # SQLite ne permet pas DROP CONSTRAINT : reconstruire la table proprement en gardant les lignes
+                        conn.execute(text(
+                            """
+                            CREATE TABLE finance_watchlist_items_new (
+                                id VARCHAR(36) PRIMARY KEY,
+                                user_id VARCHAR(36) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                                list_id VARCHAR(36) REFERENCES finance_watchlists(id) ON DELETE CASCADE,
+                                symbol VARCHAR(32) NOT NULL,
+                                yahoo_symbol VARCHAR(32) NOT NULL DEFAULT '',
+                                eod_ticker VARCHAR(32) NOT NULL DEFAULT '',
+                                name VARCHAR(200) NOT NULL,
+                                exchange VARCHAR(80) NOT NULL DEFAULT '',
+                                currency VARCHAR(16) NOT NULL DEFAULT 'EUR',
+                                position INTEGER NOT NULL DEFAULT 0,
+                                created_at DATETIME NOT NULL,
+                                CONSTRAINT uq_finance_watchlist_list_symbol UNIQUE (list_id, symbol)
+                            )
+                            """
+                        ))
+                        conn.execute(text(
+                            """
+                            INSERT INTO finance_watchlist_items_new
+                                (id, user_id, list_id, symbol, yahoo_symbol, eod_ticker, name, exchange, currency, position, created_at)
+                            SELECT id, user_id, list_id, symbol, yahoo_symbol, eod_ticker, name, exchange, currency, position, created_at
+                            FROM finance_watchlist_items
+                            """
+                        ))
+                        conn.execute(text("DROP TABLE finance_watchlist_items"))
+                        conn.execute(text("ALTER TABLE finance_watchlist_items_new RENAME TO finance_watchlist_items"))
+                        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_finance_watchlist_items_user_id ON finance_watchlist_items (user_id)"))
+                        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_finance_watchlist_items_list_id ON finance_watchlist_items (list_id)"))
+                    else:
+                        for cname, ccols in {**wl_uqs, **wl_idxs}.items():
+                            if cname == "uq_finance_watchlist_user_symbol" or ccols == ["user_id", "symbol"]:
+                                conn.execute(text(f'ALTER TABLE finance_watchlist_items DROP CONSTRAINT IF EXISTS "{cname}"'))
+                                conn.execute(text(f'DROP INDEX IF EXISTS "{cname}"'))
+                        conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_finance_watchlist_list_symbol ON finance_watchlist_items (list_id, symbol)"))
         for table in ("conversations", "attachments", "memories"):
             if "user_id" not in {column["name"] for column in inspector.get_columns(table)}:
                 raise RuntimeError("Base non migrée; exécutez les étapes `migrate-schema`, `create-admin` et `migrate-legacy` du README.")

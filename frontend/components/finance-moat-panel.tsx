@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 
 import { FinanceMetricLabel } from "@/components/finance-info-tip";
-import { MathMarkdown } from "@/components/math-markdown";
+import { FinanceRichReport } from "@/components/finance-rich-report";
 import {
   analyzeStockMoat,
   deleteStockMoat,
@@ -415,9 +415,18 @@ export function FinanceMoatPanel({
                   </div>
                 )}
 
-                <div className="finance-archive-markdown">
-                  <MathMarkdown content={entry.summary_markdown} />
-                </div>
+                <FinanceRichReport
+                  markdown={entry.summary_markdown}
+                  meta={{
+                    title: `Analyse MOAT — ${entry.company_name || entry.symbol}`,
+                    subtitle: `Score MOAT : ${entry.moat_score}/100 (${entry.moat_rating})`,
+                    symbol: entry.symbol,
+                    model: "Analyse MOAT",
+                    createdAt: entry.created_at,
+                    accent: "#0ea5e9",
+                    badgeLabel: "MOAT",
+                  }}
+                />
               </article>
             );
           })}

@@ -252,61 +252,79 @@ async def _summarize_news_with_llm(
     return None
 
 
-async def search_and_summarize_stock_news(
+async def collect_latest_stock_news(
     settings: Settings,
     symbol: str,
     company_name: str = "",
     focus_query: str = "",
+    limit: int = 12,
 ) -> dict[str, Any]:
-    """Collecte les actualités (Yahoo Finance + Web Search) et génère une synthèse stockable."""
+    """Collecte en parallèle les dernières actualités via EODHD (ou Yahoo) et SearXNG."""
     clean_sym = symbol.strip().upper()
     clean_name = company_name.strip()
     clean_focus = focus_query.strip()
 
-    yahoo_articles: list[dict[str, str]] = []
-    web_articles: list[dict[str, str]] = []
+    primary_articles: list[dict[str, Any]] = []
+    web_articles: list[dict[str, Any]] = []
+    sources_used: list[str] = []
 
     if not settings.demo_mode:
-        async def _get_primary_news():
+        async def _get_primary_news() -> tuple[list[dict[str, Any]], str | None]:
             if settings.enabled(settings.eod_historical_data_key):
                 eod_key = settings.eod_historical_data_key.get_secret_value()
                 eod_sym = clean_sym if "." in clean_sym else f"{clean_sym}.US"
-                eod_items = await fetch_eodhd_news(eod_sym, eod_key, limit=10)
+                eod_items = await fetch_eodhd_news(eod_sym, eod_key, limit=max(limit, 12))
                 if eod_items:
-                    return eod_items
+                    return eod_items, "EODHD News"
             yahoo_lookup = clean_sym[:-3] if clean_sym.endswith(".US") else clean_sym
             async with httpx.AsyncClient(
                 headers={"User-Agent": _YAHOO_UA},
                 follow_redirects=True,
                 timeout=10.0,
             ) as client:
-                return await fetch_yahoo_symbol_news(client, yahoo_lookup, limit=8)
+                y_items = await fetch_yahoo_symbol_news(client, yahoo_lookup, limit=10)
+            return (y_items, "Yahoo Finance News") if y_items else ([], None)
 
-        async def _get_web_news():
+        async def _get_web_news() -> tuple[list[dict[str, Any]], str | None]:
             target = clean_name or clean_sym
-            query_parts = [target, clean_sym if clean_name and clean_sym not in clean_name else "", "stock news actualités"]
+            query_parts = [
+                target,
+                clean_sym if clean_name and clean_sym not in clean_name else "",
+                "stock news actualités",
+            ]
             if clean_focus:
                 query_parts.append(clean_focus)
             search_q = " ".join(p for p in query_parts if p).strip()
             try:
-                raw_sources = await search_web(settings, search_q, limit=6)
+                raw_sources = await search_web(settings, search_q, limit=8)
             except Exception as exc:
                 _logger.debug("Recherche web news ignorée (%s): %s", clean_sym, exc)
-                return []
-            mapped: list[dict[str, str]] = []
+                return [], None
+            mapped: list[dict[str, Any]] = []
+            provider_tag = "SearXNG"
             for src in raw_sources:
+                prov_name = str(src.get("provider") or "").strip()
+                if prov_name:
+                    provider_tag = prov_name
                 mapped.append({
                     "title": str(src.get("title") or ""),
                     "url": str(src.get("url") or ""),
-                    "source": str(src.get("provider") or "Web"),
-                    "published_at": "",
+                    "source": prov_name or "Web",
+                    "published_at": str(src.get("published_at") or ""),
                     "snippet": str(src.get("snippet") or ""),
                 })
-            return mapped
+            return (mapped, provider_tag) if mapped else ([], None)
 
-        yahoo_articles, web_articles = await asyncio.gather(_get_primary_news(), _get_web_news())
+        (primary_articles, primary_label), (web_articles, web_label) = await asyncio.gather(
+            _get_primary_news(),
+            _get_web_news(),
+        )
+        if primary_label:
+            sources_used.append(primary_label)
+        if web_label:
+            sources_used.append(web_label)
     else:
-        yahoo_articles = [
+        primary_articles = [
             {
                 "title": f"{clean_name or clean_sym} : suivi trimestriel et perspectives de marché (démo)",
                 "url": f"https://finance.yahoo.com/quote/{urllib.parse.quote(clean_sym)}",
@@ -315,8 +333,34 @@ async def search_and_summarize_stock_news(
                 "snippet": f"Synthèse de démonstration générée pour {clean_name or clean_sym} ({clean_sym}).",
             }
         ]
+        sources_used.append("Démo Finance")
 
-    articles = _deduplicate_articles([*yahoo_articles, *web_articles], limit=12)
+    articles = _deduplicate_articles([*primary_articles, *web_articles], limit=limit)
+    return {
+        "articles": articles,
+        "sources_used": sources_used,
+    }
+
+
+async def search_and_summarize_stock_news(
+    settings: Settings,
+    symbol: str,
+    company_name: str = "",
+    focus_query: str = "",
+) -> dict[str, Any]:
+    """Collecte les actualités (EODHD / Yahoo Finance + SearXNG) et génère une synthèse stockable."""
+    clean_sym = symbol.strip().upper()
+    clean_name = company_name.strip()
+    clean_focus = focus_query.strip()
+
+    collected = await collect_latest_stock_news(
+        settings,
+        clean_sym,
+        company_name=clean_name,
+        focus_query=clean_focus,
+        limit=12,
+    )
+    articles = collected["articles"]
     summary = await _summarize_news_with_llm(settings, clean_sym, clean_name, clean_focus, articles)
     if not summary:
         summary = _fallback_news_summary(clean_sym, clean_name, clean_focus, articles)

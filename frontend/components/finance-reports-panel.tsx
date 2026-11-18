@@ -12,7 +12,7 @@ import {
   Trash2,
 } from "lucide-react";
 
-import { MathMarkdown } from "@/components/math-markdown";
+import { FinanceRichReport } from "@/components/finance-rich-report";
 import {
   deleteQuarterlyReport,
   fetchQuarterlyReport,
@@ -316,9 +316,18 @@ export function FinanceReportsPanel({ symbol, companyName, onInsertIntoChat }: F
                   </div>
                 )}
 
-                <div className="finance-archive-markdown">
-                  <MathMarkdown content={report.summary_markdown} />
-                </div>
+                <FinanceRichReport
+                  markdown={report.summary_markdown}
+                  meta={{
+                    title: `${report.title} — ${report.company_name || report.symbol}`,
+                    subtitle: report.period_label || "Analyse de rapport financier",
+                    symbol: report.symbol,
+                    model: report.source_type || "Rapport",
+                    createdAt: report.created_at,
+                    accent: "#8b5cf6",
+                    badgeLabel: "Rapport Trimestriel",
+                  }}
+                />
 
                 <div className="finance-report-raw-toggle">
                   <button

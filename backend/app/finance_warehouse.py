@@ -12,6 +12,7 @@ import json
 import logging
 import sqlite3
 import time
+import uuid
 import zlib
 from contextlib import contextmanager
 from pathlib import Path
@@ -101,6 +102,56 @@ CREATE TABLE IF NOT EXISTS finance_raw_snapshots (
     raw_zlib BLOB,
     PRIMARY KEY (symbol, provider, payload_type)
 ) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS finance_user_watchlists (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    position INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT,
+    updated_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_fin_user_wl_user ON finance_user_watchlists (user_id, position);
+
+CREATE TABLE IF NOT EXISTS finance_user_watchlist_items (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    list_id TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    yahoo_symbol TEXT NOT NULL DEFAULT '',
+    eod_ticker TEXT NOT NULL DEFAULT '',
+    name TEXT NOT NULL,
+    exchange TEXT NOT NULL DEFAULT '',
+    currency TEXT NOT NULL DEFAULT 'EUR',
+    position INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT,
+    UNIQUE (list_id, symbol)
+);
+
+CREATE INDEX IF NOT EXISTS idx_fin_user_wl_items_list ON finance_user_watchlist_items (user_id, list_id, position);
+
+CREATE TABLE IF NOT EXISTS finance_ai_analyses (
+    id TEXT PRIMARY KEY,
+    symbol TEXT NOT NULL,
+    company_name TEXT NOT NULL DEFAULT '',
+    kind TEXT NOT NULL,
+    expert_id TEXT NOT NULL DEFAULT '',
+    expert_name TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    question TEXT,
+    verdict TEXT NOT NULL DEFAULT '',
+    conviction TEXT NOT NULL DEFAULT '',
+    horizon TEXT NOT NULL DEFAULT '',
+    markdown TEXT NOT NULL,
+    content_html TEXT NOT NULL DEFAULT '',
+    news_sources_json TEXT NOT NULL DEFAULT '[]',
+    news_articles_json TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_fin_ai_sym_kind_date ON finance_ai_analyses (symbol, kind, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_fin_ai_date ON finance_ai_analyses (created_at DESC);
 """
 
 
@@ -789,3 +840,284 @@ def get_warehouse_overview(db_path: Path) -> dict[str, Any]:
         "index_constituents_count": int(idx_cnt or 0),
         "db_size_bytes": int(db_size),
     }
+
+
+def sync_user_watchlists_to_warehouse(
+    db_path: Path,
+    user_id: str,
+    watchlists: list[dict[str, Any]],
+    items: list[dict[str, Any]],
+) -> None:
+    """Sauvegarde en miroir dans `finance_warehouse.db` les listes de suivi et actions d'un utilisateur."""
+    clean_uid = (user_id or "").strip()
+    if not clean_uid:
+        return
+    with _connect(db_path) as conn:
+        conn.execute("DELETE FROM finance_user_watchlist_items WHERE user_id = ?", (clean_uid,))
+        conn.execute("DELETE FROM finance_user_watchlists WHERE user_id = ?", (clean_uid,))
+        if watchlists:
+            conn.executemany(
+                """
+                INSERT INTO finance_user_watchlists (id, user_id, name, position, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        str(w["id"]),
+                        clean_uid,
+                        str(w["name"]),
+                        int(w.get("position") or 0),
+                        str(w.get("created_at") or _utc_iso()),
+                        str(w.get("updated_at") or _utc_iso()),
+                    )
+                    for w in watchlists
+                ],
+            )
+        if items:
+            conn.executemany(
+                """
+                INSERT OR REPLACE INTO finance_user_watchlist_items
+                    (id, user_id, list_id, symbol, yahoo_symbol, eod_ticker, name, exchange, currency, position, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        str(it["id"]),
+                        clean_uid,
+                        str(it["list_id"]),
+                        str(it["symbol"]),
+                        str(it.get("yahoo_symbol") or ""),
+                        str(it.get("eod_ticker") or ""),
+                        str(it.get("name") or it["symbol"]),
+                        str(it.get("exchange") or ""),
+                        str(it.get("currency") or "EUR"),
+                        int(it.get("position") or 0),
+                        str(it.get("created_at") or _utc_iso()),
+                    )
+                    for it in items
+                    if it.get("list_id")
+                ],
+            )
+
+
+def load_user_watchlists_from_warehouse(db_path: Path, user_id: str) -> dict[str, list[dict[str, Any]]]:
+    """Charge depuis `finance_warehouse.db` les listes de suivi et actions mémorisées d'un utilisateur."""
+    clean_uid = (user_id or "").strip()
+    if not clean_uid or not db_path.exists():
+        return {"lists": [], "items": []}
+    with _connect(db_path) as conn:
+        wl_rows = conn.execute(
+            """
+            SELECT id, user_id, name, position, created_at, updated_at
+            FROM finance_user_watchlists
+            WHERE user_id = ?
+            ORDER BY position ASC, created_at ASC
+            """,
+            (clean_uid,),
+        ).fetchall()
+        item_rows = conn.execute(
+            """
+            SELECT id, user_id, list_id, symbol, yahoo_symbol, eod_ticker, name, exchange, currency, position, created_at
+            FROM finance_user_watchlist_items
+            WHERE user_id = ?
+            ORDER BY position ASC, created_at ASC
+            """,
+            (clean_uid,),
+        ).fetchall()
+    return {
+        "lists": [dict(r) for r in wl_rows],
+        "items": [dict(r) for r in item_rows],
+    }
+
+
+def _row_to_ai_analysis(row: sqlite3.Row) -> dict[str, Any]:
+    try:
+        news_sources = json.loads(row["news_sources_json"]) if row["news_sources_json"] else []
+    except Exception:
+        news_sources = []
+    try:
+        news_articles = json.loads(row["news_articles_json"]) if row["news_articles_json"] else []
+    except Exception:
+        news_articles = []
+    return {
+        "id": row["id"],
+        "symbol": row["symbol"],
+        "company_name": row["company_name"] or "",
+        "kind": row["kind"],
+        "expert_id": row["expert_id"] or "",
+        "expert_name": row["expert_name"] or "",
+        "model": row["model"] or "",
+        "question": row["question"] or None,
+        "verdict": row["verdict"] or "",
+        "conviction": row["conviction"] or "",
+        "horizon": row["horizon"] or "",
+        "markdown": row["markdown"] or "",
+        "content_html": row["content_html"] or "",
+        "news_sources": news_sources if isinstance(news_sources, list) else [],
+        "news_articles": news_articles if isinstance(news_articles, list) else [],
+        "created_at": row["created_at"],
+    }
+
+
+def save_ai_analysis_entry(
+    db_path: Path,
+    *,
+    symbol: str,
+    company_name: str = "",
+    kind: str,
+    expert_id: str = "",
+    expert_name: str = "",
+    model: str = "",
+    question: str | None = None,
+    verdict: str = "",
+    conviction: str = "",
+    horizon: str = "",
+    markdown: str = "",
+    content_html: str = "",
+    news_sources: list[str] | None = None,
+    news_articles: list[dict[str, Any]] | None = None,
+    created_at: str | None = None,
+    analysis_id: str | None = None,
+) -> dict[str, Any]:
+    """Enregistre et date une analyse IA (avis d'expert ou synthèse dossier) dans l'historique persistant."""
+    sym = _norm_sym(symbol)
+    entry_id = analysis_id or str(uuid.uuid4())
+    iso_date = created_at or _utc_iso()
+    sources_list = list(news_sources or [])
+    articles_list = list(news_articles or [])
+    sources_json = json.dumps(sources_list, ensure_ascii=False, separators=(",", ":"))
+    articles_json = json.dumps(articles_list, ensure_ascii=False, separators=(",", ":"))
+
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO finance_ai_analyses (
+                id, symbol, company_name, kind, expert_id, expert_name, model,
+                question, verdict, conviction, horizon, markdown, content_html,
+                news_sources_json, news_articles_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                entry_id,
+                sym,
+                (company_name or "").strip(),
+                (kind or "dossier").strip().lower(),
+                (expert_id or "").strip(),
+                (expert_name or "").strip(),
+                (model or "").strip(),
+                question.strip() if isinstance(question, str) and question.strip() else None,
+                (verdict or "").strip(),
+                (conviction or "").strip(),
+                (horizon or "").strip(),
+                markdown or "",
+                content_html or "",
+                sources_json,
+                articles_json,
+                iso_date,
+            ),
+        )
+
+    return {
+        "id": entry_id,
+        "symbol": sym,
+        "company_name": (company_name or "").strip(),
+        "kind": (kind or "dossier").strip().lower(),
+        "expert_id": (expert_id or "").strip(),
+        "expert_name": (expert_name or "").strip(),
+        "model": (model or "").strip(),
+        "question": question.strip() if isinstance(question, str) and question.strip() else None,
+        "verdict": (verdict or "").strip(),
+        "conviction": (conviction or "").strip(),
+        "horizon": (horizon or "").strip(),
+        "markdown": markdown or "",
+        "content_html": content_html or "",
+        "news_sources": sources_list,
+        "news_articles": articles_list,
+        "created_at": iso_date,
+    }
+
+
+def list_ai_analyses(
+    db_path: Path,
+    *,
+    symbol: str | None = None,
+    kind: str | None = None,
+    expert_id: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """Retourne l'historique daté des analyses IA sauvegardées (du plus récent au plus ancien)."""
+    if not db_path.exists():
+        return []
+    clauses: list[str] = []
+    params: list[Any] = []
+    if symbol and symbol.strip():
+        sym = resolve_canonical_symbol(db_path, symbol.strip())
+        clauses.append("symbol = ?")
+        params.append(sym)
+    if kind and kind.strip():
+        clauses.append("kind = ?")
+        params.append(kind.strip().lower())
+    if expert_id and expert_id.strip():
+        clauses.append("expert_id = ?")
+        params.append(expert_id.strip())
+
+    where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    safe_limit = max(1, min(500, int(limit or 100)))
+    params.append(safe_limit)
+
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            f"""
+            SELECT * FROM finance_ai_analyses
+            {where_sql}
+            ORDER BY created_at DESC, rowid DESC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+    return [_row_to_ai_analysis(r) for r in rows]
+
+
+def get_ai_analysis_entry(db_path: Path, analysis_id: str) -> dict[str, Any] | None:
+    """Retourne une analyse IA archivée par son identifiant."""
+    clean_id = (analysis_id or "").strip()
+    if not clean_id or not db_path.exists():
+        return None
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM finance_ai_analyses WHERE id = ? LIMIT 1",
+            (clean_id,),
+        ).fetchone()
+    return _row_to_ai_analysis(row) if row else None
+
+
+def delete_ai_analysis_entry(db_path: Path, analysis_id: str) -> bool:
+    """Supprime une analyse IA archivée par son identifiant."""
+    clean_id = (analysis_id or "").strip()
+    if not clean_id or not db_path.exists():
+        return False
+    with _connect(db_path) as conn:
+        cur = conn.execute("DELETE FROM finance_ai_analyses WHERE id = ?", (clean_id,))
+        return (cur.rowcount or 0) > 0
+
+
+def has_ai_analysis_for(
+    db_path: Path,
+    symbol: str,
+    kind: str,
+    expert_id: str = "",
+) -> bool:
+    """Indique si au moins une analyse datée existe déjà pour `(symbol, kind, expert_id)`."""
+    if not db_path.exists():
+        return False
+    sym = _norm_sym(symbol)
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT 1 FROM finance_ai_analyses
+            WHERE symbol = ? AND kind = ? AND expert_id = ?
+            LIMIT 1
+            """,
+            (sym, kind.strip().lower(), expert_id.strip()),
+        ).fetchone()
+    return bool(row)

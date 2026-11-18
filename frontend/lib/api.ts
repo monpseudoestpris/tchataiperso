@@ -1466,7 +1466,8 @@ export type FinancialDossier = {
   } | null;
   intrinsic_valuation?: IntrinsicValuationPayload | null;
   uncle_stock_scores?: UncleStockScoresPayload | null;
-  ai_analysis: { markdown: string; updated_at?: string | null; model?: string | null } | null;
+  ai_analysis: FinanceAiAnalysisRecord | null;
+  ai_history?: FinanceAiAnalysisRecord[];
 };
 
 export interface UncleStockScoreComponent {
@@ -1603,13 +1604,101 @@ export async function fetchFinanceDossier(symbol: string, refresh = false): Prom
   return api<FinancialDossier>(`/finance/dossier?${qs.toString()}`);
 }
 
+export type FinanceAiAnalysisKind = "expert" | "dossier" | "moat" | "news" | "report";
+
+export type FinanceAiAnalysisRecord = {
+  id?: string;
+  symbol?: string;
+  company_name?: string;
+  kind?: FinanceAiAnalysisKind;
+  expert_id?: string;
+  expert_name?: string;
+  model?: string | null;
+  question?: string | null;
+  verdict?: string;
+  conviction?: string;
+  horizon?: string;
+  markdown: string;
+  content_html?: string;
+  news_sources?: string[];
+  news_articles?: { title: string; url: string; source: string; published_at: string }[];
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
 export async function analyzeFinanceDossier(
   symbol: string,
   modelId?: string,
-): Promise<{ markdown: string; updated_at?: string | null; model?: string | null }> {
-  return api<{ markdown: string; updated_at?: string | null; model?: string | null }>("/finance/dossier/analyze", {
+): Promise<FinanceAiAnalysisRecord> {
+  return api<FinanceAiAnalysisRecord>("/finance/dossier/analyze", {
     method: "POST",
     body: JSON.stringify({ symbol, model_id: modelId || null }),
+  });
+}
+
+export type FinanceExpertPersona = {
+  id: string;
+  name: string;
+  monogram: string;
+  accent: string;
+  era_firm: string;
+  style: string;
+  tagline: string;
+  favorite_metrics: string[];
+};
+
+export type FinanceExpertOpinion = FinanceAiAnalysisRecord & {
+  expert_id: string;
+  expert_name: string;
+  model: string;
+};
+
+export type FinanceExpertsResponse = {
+  experts: FinanceExpertPersona[];
+  cached_opinions: Record<string, FinanceExpertOpinion>;
+  history?: FinanceExpertOpinion[];
+};
+
+export async function fetchFinanceExperts(symbol?: string | null): Promise<FinanceExpertsResponse> {
+  const qs = new URLSearchParams();
+  if (symbol && symbol.trim()) qs.set("symbol", symbol.trim());
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  return api<FinanceExpertsResponse>(`/finance/experts${suffix}`);
+}
+
+export async function fetchFinanceAiHistory(params?: {
+  symbol?: string | null;
+  kind?: FinanceAiAnalysisKind | null;
+  expertId?: string | null;
+  limit?: number;
+}): Promise<{ items: FinanceAiAnalysisRecord[] }> {
+  const qs = new URLSearchParams();
+  if (params?.symbol?.trim()) qs.set("symbol", params.symbol.trim());
+  if (params?.kind) qs.set("kind", params.kind);
+  if (params?.expertId?.trim()) qs.set("expert_id", params.expertId.trim());
+  if (params?.limit) qs.set("limit", String(params.limit));
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  return api<{ items: FinanceAiAnalysisRecord[] }>(`/finance/ai-history${suffix}`);
+}
+
+export async function deleteFinanceAiHistoryItem(analysisId: string): Promise<void> {
+  await api<void>(`/finance/ai-history/${encodeURIComponent(analysisId)}`, { method: "DELETE" });
+}
+
+export async function requestFinanceExpertOpinion(payload: {
+  symbol: string;
+  expertId: string;
+  modelId?: string | null;
+  question?: string | null;
+}): Promise<FinanceExpertOpinion> {
+  return api<FinanceExpertOpinion>("/finance/dossier/expert", {
+    method: "POST",
+    body: JSON.stringify({
+      symbol: payload.symbol,
+      expert_id: payload.expertId,
+      model_id: payload.modelId || null,
+      question: payload.question?.trim() || null,
+    }),
   });
 }
 

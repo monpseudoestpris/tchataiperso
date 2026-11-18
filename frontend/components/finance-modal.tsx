@@ -1,10 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { FinanceAiHistoryPanel } from "@/components/finance-ai-history-panel";
 import { FinanceCustomIndicatorModal } from "@/components/finance-custom-indicator-modal";
 import { FinanceDossierPanel } from "@/components/finance-dossier-panel";
+import { FinanceExpertsPanel } from "@/components/finance-experts-panel";
 import { FinanceHelpGuideId, FinanceHelpModal } from "@/components/finance-help-modal";
 import { FinanceThemeSwitcher, useInterfaceTheme } from "@/components/finance-theme-switcher";
+import { ModelModal } from "@/components/model-modal";
 import {
   FinanceEodhdIndxBrowser,
   FinanceIndexCompositionDrawer,
@@ -25,6 +28,7 @@ import { FinanceWatchlistTable } from "@/components/finance-watchlist-table";
 import {
   ArrowDownRight,
   ArrowUpRight,
+  Award,
   BarChart3,
   Building2,
   Calendar,
@@ -35,6 +39,7 @@ import {
   ExternalLink,
   FileText,
   HelpCircle,
+  History,
   LineChart,
   LoaderCircle,
   Maximize2,
@@ -54,6 +59,7 @@ import {
 } from "lucide-react";
 import {
   addWatchlistItem,
+  api,
   createCustomIndicator,
   createWatchlist,
   deleteCustomIndicator,
@@ -69,6 +75,7 @@ import {
   seedDefaultWatchlist,
   updateCustomIndicator,
   type CatalogSearchItem,
+  type Config,
   type CustomIndicator,
   type CustomIndicatorGuideLine,
   type FinanceRange,
@@ -78,6 +85,7 @@ import {
   type FinancialStats,
   type IndexCompositionResponse,
   type IndexConstituent,
+  type Model,
   type PrincipalIndexInfo,
   type WarehouseOverview,
   type WatchlistItem,
@@ -88,11 +96,16 @@ type FinanceModalProps = {
   onClose: () => void;
   initialQuery?: string | null;
   initialData?: FinancialDashboardData | null;
+  models?: Model[];
+  defaultModel?: string;
+  onRefreshModels?: () => Promise<void>;
   onInsertIntoChat?: (text: string) => void;
 };
 
 type ActiveTab =
   | "dossier"
+  | "experts"
+  | "ai_history"
   | "valuation"
   | "profitability"
   | "balance_sheet"
@@ -105,6 +118,7 @@ type ActiveTab =
   | "reports";
 
 const WATCHLIST_SEED_STORAGE_KEY = "clair_watchlist_seeded_v1";
+const WATCHLIST_ACTIVE_LIST_KEY = "clair_active_watchlist_id_v1";
 
 const QUICK_SUGGESTIONS = [
   "Air Liquide",
@@ -151,9 +165,16 @@ export function FinanceModal({
   onClose,
   initialQuery,
   initialData,
+  models: propModels,
+  defaultModel: propDefaultModel,
+  onRefreshModels,
   onInsertIntoChat,
 }: FinanceModalProps) {
   const theme = useInterfaceTheme();
+  const [fallbackModels, setFallbackModels] = useState<Model[]>([]);
+  const [fallbackDefaultModel, setFallbackDefaultModel] = useState<string>("");
+  const [selectedExpertModel, setSelectedExpertModel] = useState<string>("");
+  const [modelModalOpen, setModelModalOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [data, setData] = useState<FinancialDashboardData | null>(initialData || null);
   const [loading, setLoading] = useState(false);
@@ -195,11 +216,45 @@ export function FinanceModal({
   const chartSectionRef = useRef<HTMLDivElement | null>(null);
   const modalBodyRef = useRef<HTMLDivElement | null>(null);
 
+  const availableModels = propModels && propModels.length > 0 ? propModels : fallbackModels;
+  const resolvedExpertModel =
+    selectedExpertModel || propDefaultModel || fallbackDefaultModel || availableModels[0]?.id || "";
+  const resolvedExpertModelInfo = useMemo(
+    () => availableModels.find(m => m.id === resolvedExpertModel),
+    [availableModels, resolvedExpertModel],
+  );
+
+  async function refreshModelsForFinance() {
+    if (onRefreshModels) {
+      await onRefreshModels();
+      return;
+    }
+    try {
+      const res = await api<{ models: Model[]; default_model?: string }>("/models?refresh=true");
+      if (res?.models?.length) {
+        setFallbackModels(res.models);
+        if (res.default_model) setFallbackDefaultModel(res.default_model);
+      }
+    } catch {
+      const cfg = await api<Config>("/config");
+      setFallbackModels(cfg.models || []);
+      if (cfg.default_model) setFallbackDefaultModel(cfg.default_model);
+    }
+  }
+
   // Synchronize when opening modal
   useEffect(() => {
     if (!isOpen) return;
 
     void loadWorkspaceData();
+    if (!propModels || propModels.length === 0) {
+      api<Config>("/config")
+        .then(cfg => {
+          setFallbackModels(cfg.models || []);
+          if (cfg.default_model) setFallbackDefaultModel(cfg.default_model);
+        })
+        .catch(() => {});
+    }
 
     if (initialData) {
       setData(initialData);
@@ -224,6 +279,10 @@ export function FinanceModal({
     if (!isOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
+        if (modelModalOpen) {
+          setModelModalOpen(false);
+          return;
+        }
         if (helpOpen) {
           setHelpOpen(false);
           return;
@@ -242,7 +301,7 @@ export function FinanceModal({
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen, helpOpen, indicatorModalOpen, chartFullscreen, onClose]);
+  }, [isOpen, modelModalOpen, helpOpen, indicatorModalOpen, chartFullscreen, onClose]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -273,28 +332,44 @@ export function FinanceModal({
       const alreadySeeded =
         typeof window !== "undefined" &&
         window.localStorage.getItem(WATCHLIST_SEED_STORAGE_KEY) === "1";
-      const listParam = targetListId === undefined ? activeListId : targetListId;
-      const [wlState, inds, idxRes] = await Promise.all([
-        fetchWatchlistState(!alreadySeeded, true, listParam),
-        fetchCustomIndicators(),
-        fetchPrincipalIndices(true).catch(() => null),
-      ]);
+      const storedListId =
+        typeof window !== "undefined" ? window.localStorage.getItem(WATCHLIST_ACTIVE_LIST_KEY) : null;
+      const listParam =
+        targetListId !== undefined ? targetListId : (activeListId ?? storedListId);
+
+      // Si l'ID mémorisé localement n'existe plus côté BDD, retomber proprement sur la liste par défaut
+      const wlState = await fetchWatchlistState(!alreadySeeded, true, listParam).catch(async () => {
+        if (listParam) {
+          return fetchWatchlistState(!alreadySeeded, true, null);
+        }
+        throw new Error("Impossible de charger les listes de suivi depuis la base de données.");
+      });
+
+      const resolvedId = wlState.active_list_id || null;
       setWatchlist(wlState.items || []);
       setWatchlists(wlState.lists || []);
-      setActiveListId(wlState.active_list_id || null);
-      setHeroFollowListId(prev => prev || wlState.active_list_id || "");
-      setCustomIndicators(inds);
+      setActiveListId(resolvedId);
+      setHeroFollowListId(prev => prev || resolvedId || "");
+      if (typeof window !== "undefined") {
+        if (resolvedId) {
+          window.localStorage.setItem(WATCHLIST_ACTIVE_LIST_KEY, resolvedId);
+        }
+        if (!alreadySeeded) {
+          window.localStorage.setItem(WATCHLIST_SEED_STORAGE_KEY, "1");
+        }
+      }
+
+      const [inds, idxRes] = await Promise.all([
+        fetchCustomIndicators().catch(() => null),
+        fetchPrincipalIndices(true).catch(() => null),
+      ]);
+      if (inds) setCustomIndicators(inds);
       if (idxRes) {
         setIndices(idxRes.indices || []);
         setWarehouseStats(idxRes.warehouse || null);
       }
-      if (typeof window !== "undefined" && !alreadySeeded) {
-        window.localStorage.setItem(WATCHLIST_SEED_STORAGE_KEY, "1");
-      }
-    } catch {
-      if (forceRefreshWatchlist) {
-        setError("Impossible d'actualiser le suivi d'actions.");
-      }
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Impossible d'actualiser les listes de suivi.");
     } finally {
       setWatchlistLoading(false);
     }
@@ -303,12 +378,23 @@ export function FinanceModal({
   async function handleSelectWatchlistTab(listId: string) {
     setActiveListId(listId);
     setHeroFollowListId(listId);
+    if (typeof window !== "undefined") {
+      if (listId) {
+        window.localStorage.setItem(WATCHLIST_ACTIVE_LIST_KEY, listId);
+      } else {
+        window.localStorage.removeItem(WATCHLIST_ACTIVE_LIST_KEY);
+      }
+    }
     setWatchlistLoading(true);
     try {
-      const wlState = await fetchWatchlistState(false, true, listId);
+      const wlState = await fetchWatchlistState(false, true, listId || null);
       setWatchlist(wlState.items || []);
       setWatchlists(wlState.lists || []);
-      setActiveListId(wlState.active_list_id || listId);
+      const resolvedId = wlState.active_list_id || listId || null;
+      setActiveListId(resolvedId);
+      if (typeof window !== "undefined" && resolvedId) {
+        window.localStorage.setItem(WATCHLIST_ACTIVE_LIST_KEY, resolvedId);
+      }
     } finally {
       setWatchlistLoading(false);
     }
@@ -1183,6 +1269,22 @@ export function FinanceModal({
                   </button>
                   <button
                     type="button"
+                    className={`finance-tab-btn ${activeTab === "experts" ? "active" : ""}`}
+                    onClick={() => setActiveTab("experts")}
+                  >
+                    <Award size={15} />
+                    <span>Avis de l&apos;expert</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`finance-tab-btn ${activeTab === "ai_history" ? "active" : ""}`}
+                    onClick={() => setActiveTab("ai_history")}
+                  >
+                    <History size={15} />
+                    <span>Archives IA</span>
+                  </button>
+                  <button
+                    type="button"
                     className={`finance-tab-btn ${activeTab === "valuation" ? "active" : ""}`}
                     onClick={() => setActiveTab("valuation")}
                   >
@@ -1270,6 +1372,34 @@ export function FinanceModal({
                       symbol={data.eod_ticker || data.yahoo_symbol || data.symbol}
                       onInsertIntoChat={onInsertIntoChat}
                       onOpenHelp={openHelpGuide}
+                    />
+                  </div>
+                )}
+
+                {/* Tab 0b: Avis de l'expert (Buffett, Lynch, Munger, Graham, Damodaran...) */}
+                {activeTab === "experts" && (
+                  <div className="finance-tab-content">
+                    <FinanceExpertsPanel
+                      symbol={data.eod_ticker || data.yahoo_symbol || data.symbol}
+                      companyName={data.long_name || data.short_name || data.symbol}
+                      selectedModel={resolvedExpertModel}
+                      selectedModelInfo={resolvedExpertModelInfo}
+                      onOpenModelModal={() => setModelModalOpen(true)}
+                      onInsertIntoChat={onInsertIntoChat}
+                    />
+                  </div>
+                )}
+
+                {/* Tab 0c: Archives IA datées */}
+                {activeTab === "ai_history" && (
+                  <div className="finance-tab-content">
+                    <FinanceAiHistoryPanel
+                      symbol={data.eod_ticker || data.yahoo_symbol || data.symbol}
+                      onSelectSymbol={sym => {
+                        setActiveTab("dossier");
+                        void loadDetails(sym);
+                      }}
+                      onInsertIntoChat={onInsertIntoChat}
                     />
                   </div>
                 )}
@@ -1749,6 +1879,19 @@ export function FinanceModal({
         initialGuide={helpGuide}
         onClose={() => setHelpOpen(false)}
       />
+
+      {modelModalOpen && (
+        <ModelModal
+          currentModel={resolvedExpertModel}
+          models={availableModels}
+          onSelectModel={modelId => {
+            setSelectedExpertModel(modelId);
+            setModelModalOpen(false);
+          }}
+          onClose={() => setModelModalOpen(false)}
+          onRefreshModels={refreshModelsForFinance}
+        />
+      )}
     </div>
   );
 }

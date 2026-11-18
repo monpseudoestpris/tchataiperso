@@ -44,13 +44,17 @@ from .finance_provider import (
     get_unified_financial_statements,
     persist_eodhd_fundamentals_to_warehouse,
 )
+from .finance_report_html import build_classy_report_html, extract_report_highlights
 from .finance_warehouse import (
     get_latest_bar_date,
     get_snapshot,
     get_stored_eod_bars,
     get_warehouse_stats,
+    has_ai_analysis_for,
+    list_ai_analyses,
     load_fundamental_series,
     resolve_canonical_symbol,
+    save_ai_analysis_entry,
     save_snapshot,
     upsert_eod_bars,
     upsert_instrument,
@@ -1517,8 +1521,53 @@ async def get_financial_dossier(
     ih_info = annual_tables["ih_score"]
     price_dynamics = _compute_price_dynamics(price, mma50, mma200)
 
-    # Relire une éventuelle analyse IA sauvegardée et synchroniser actualités + flux complémentaires EODHD
+    # Relire les analyses IA sauvegardées & datées (et migrer un éventuel ancien snapshot)
     ai_snap = get_snapshot(db_path, canonical, "ai_analysis", include_raw=False)
+    company_display = str(gen.get("Name") or y_price.get("longName") or y_price.get("shortName") or canonical)
+    if ai_snap and ai_snap.get("normalized") and (ai_snap["normalized"] or {}).get("markdown"):
+        if not has_ai_analysis_for(db_path, canonical, "dossier"):
+            norm_ai = ai_snap["normalized"]
+            md_ai = str(norm_ai.get("markdown") or "")
+            created_ai = str(ai_snap.get("updated_at") or "")
+            hl_ai = extract_report_highlights(md_ai)
+            html_ai = str(norm_ai.get("content_html") or "") or build_classy_report_html(
+                md_ai,
+                title=f"Synthèse Fondamentale IA — {company_display}",
+                subtitle="Analyse institutionnelle complète multi-exercices",
+                symbol=canonical,
+                model=str(norm_ai.get("model") or ""),
+                created_at=created_ai,
+                accent="#4f46e5",
+                badge_label="Analyse Dossier IA",
+            )
+            save_ai_analysis_entry(
+                db_path,
+                symbol=canonical,
+                company_name=company_display,
+                kind="dossier",
+                model=str(norm_ai.get("model") or ""),
+                verdict=str(norm_ai.get("verdict") or hl_ai["verdict"]),
+                conviction=str(norm_ai.get("conviction") or hl_ai["conviction"]),
+                horizon=str(norm_ai.get("horizon") or hl_ai["horizon"]),
+                markdown=md_ai,
+                content_html=html_ai,
+                created_at=created_ai or None,
+            )
+    ai_history = list_ai_analyses(db_path, symbol=canonical, kind="dossier", limit=100)
+    for item in ai_history:
+        if not item.get("content_html"):
+            item["content_html"] = build_classy_report_html(
+                item.get("markdown") or "",
+                title=f"Synthèse Fondamentale IA — {company_display}",
+                subtitle="Analyse institutionnelle complète multi-exercices",
+                symbol=canonical,
+                model=item.get("model") or "",
+                created_at=item.get("created_at") or "",
+                accent="#4f46e5",
+                badge_label="Analyse Dossier IA",
+            )
+        item["updated_at"] = item.get("created_at")
+
     news_payload, eod_extras = await asyncio.gather(
         _sync_dossier_news(settings, db_path, canonical, yahoo_lookup, eod_key, ttl_seconds, refresh),
         _sync_eodhd_extras(settings, db_path, canonical, eod_fund, eod_key, ttl_seconds, refresh),
@@ -1680,15 +1729,8 @@ async def get_financial_dossier(
         "macro_context": eod_extras.get("macro_context"),
         "intrinsic_valuation": intrinsic_valuation,
         "uncle_stock_scores": uncle_stock_scores,
-        "ai_analysis": (
-            {
-                "markdown": (ai_snap.get("normalized") or {}).get("markdown"),
-                "updated_at": ai_snap.get("updated_at"),
-                "model": (ai_snap.get("normalized") or {}).get("model"),
-            }
-            if ai_snap and ai_snap.get("normalized")
-            else None
-        ),
+        "ai_analysis": ai_history[0] if ai_history else None,
+        "ai_history": ai_history,
     }
 
 
@@ -1764,18 +1806,9 @@ def _compact_statement_period(period: dict[str, Any] | None, max_periods: int = 
     return out
 
 
-async def generate_dossier_ai_analysis(
-    settings: Settings,
-    symbol: str,
-    model_id: str | None = None,
-) -> dict[str, Any]:
-    """Génère et sauvegarde une analyse fondamentale complète basée sur tous les résultats du dossier (modèle Gemini Hydrogen)."""
-    from .providers import ProviderError, _check_response, _json, _key
-
-    dossier = await get_financial_dossier(settings, symbol, refresh=False)
+def build_dossier_facts_context(dossier: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    """Assemble le contexte chiffré vérifié complet d'un dossier pour l'analyse IA ou les experts."""
     canonical = dossier["symbol"]
-    db_path = warehouse_db_path(settings)
-
     hdr = dossier["header"]
     cap = dossier["capital_valuation"]
     ann_tbl = dossier["annual_tables"]
@@ -1919,6 +1952,74 @@ async def generate_dossier_ai_analysis(
             else None
         ),
     }
+    return facts_context, period_label
+
+
+def _finalize_and_save_dossier_analysis(
+    db_path: Any,
+    *,
+    canonical: str,
+    company_name: str,
+    currency: str,
+    markdown: str,
+    model: str,
+) -> dict[str, Any]:
+    now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    hl = extract_report_highlights(markdown)
+    content_html = build_classy_report_html(
+        markdown,
+        title=f"Synthèse Fondamentale IA — {company_name or canonical}",
+        subtitle="Analyse institutionnelle complète multi-exercices",
+        symbol=canonical,
+        model=model,
+        created_at=now_iso,
+        accent="#4f46e5",
+        badge_label="Analyse Dossier IA",
+    )
+    entry = save_ai_analysis_entry(
+        db_path,
+        symbol=canonical,
+        company_name=company_name,
+        kind="dossier",
+        model=model,
+        verdict=hl["verdict"],
+        conviction=hl["conviction"],
+        horizon=hl["horizon"],
+        markdown=markdown,
+        content_html=content_html,
+        created_at=now_iso,
+    )
+    saved_snap = {
+        "id": entry["id"],
+        "markdown": markdown,
+        "content_html": content_html,
+        "verdict": hl["verdict"],
+        "conviction": hl["conviction"],
+        "horizon": hl["horizon"],
+        "model": model,
+    }
+    save_snapshot(db_path, canonical, "clair", "ai_analysis", None, saved_snap, currency=currency)
+    return {
+        **entry,
+        "updated_at": entry["created_at"],
+    }
+
+
+async def generate_dossier_ai_analysis(
+    settings: Settings,
+    symbol: str,
+    model_id: str | None = None,
+) -> dict[str, Any]:
+    """Génère et sauvegarde une analyse fondamentale complète basée sur tous les résultats du dossier (modèle Gemini Hydrogen)."""
+    from .providers import ProviderError, _check_response, _json, _key
+
+    dossier = await get_financial_dossier(settings, symbol, refresh=False)
+    canonical = dossier["symbol"]
+    db_path = warehouse_db_path(settings)
+    hdr = dossier["header"]
+    cap = dossier["capital_valuation"]
+    ann_tbl = dossier["annual_tables"]
+    facts_context, period_label = build_dossier_facts_context(dossier)
 
     chosen_model = _resolve_gemini_hydrogen_model(settings, model_id)
     if settings.demo_mode or not settings.enabled(settings.llm_api_key):
@@ -1931,9 +2032,14 @@ async def generate_dossier_ai_analysis(
             f"- **Valorisation TTM** : PER **{cap.get('pe_ttm') or 'N/A'}**, VE/EBITDA **{cap.get('ev_ebitda') or 'N/A'}**, "
             f"marge opérationnelle **{cap.get('op_margin_ttm') or 'N/A'}%**."
         )
-        saved = {"markdown": md, "model": "synthese-locale"}
-        save_snapshot(db_path, canonical, "clair", "ai_analysis", None, saved, currency=dossier["currency"])
-        return saved
+        return _finalize_and_save_dossier_analysis(
+            db_path,
+            canonical=canonical,
+            company_name=str(hdr.get("name") or canonical),
+            currency=str(dossier["currency"] or ""),
+            markdown=md,
+            model="synthese-locale",
+        )
 
     context_json = json.dumps(facts_context, ensure_ascii=False, separators=(",", ":"))
     source_name = facts_context["source_principale"]
@@ -1962,7 +2068,7 @@ Tu cherches à identifier ce que les chiffres disent réellement.
 
 ## 2. COLLECTE ET FIABILITÉ DES DONNÉES
 
-Utilise exclusivement les données vérifiées issues de la fiche boursière de l'application (source : {source_name}, date d'analyse : {today_iso}, date de référence du cours : {facts_context['date_reference_cours']}) fournies en annexe JSON ci-dessous, incluant les comptes annuels, comptes trimestriels, TTM, scores qualitatifs (IH Score, Piotroski F-Score, Altman Z-Score), profil de risque 1A–5A, performances ajustées, consensus analystes, direction, opérations d'initiés, actionnariat institutionnel et surprises BPA.
+Utilise exclusivement les données vérifiées issues de la fiche boursière de l'application (source : {source_name}, date d'analyse : {facts_context['date_generation_analyse']}, date de référence du cours : {facts_context['date_reference_cours']}) fournies en annexe JSON ci-dessous, incluant les comptes annuels, comptes trimestriels, TTM, scores qualitatifs (IH Score, Piotroski F-Score, Altman Z-Score), profil de risque 1A–5A, performances ajustées, consensus analystes, direction, opérations d'initiés, actionnariat institutionnel et surprises BPA.
 
 Compare systématiquement :
 
@@ -2242,6 +2348,11 @@ DONNÉES COMPLÈTES VÉRIFIÉES DU DOSSIER ({canonical}) :
         else:
             raise
 
-    saved = {"markdown": md, "model": used_model}
-    save_snapshot(db_path, canonical, "clair", "ai_analysis", None, saved, currency=dossier["currency"])
-    return {**saved, "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")}
+    return _finalize_and_save_dossier_analysis(
+        db_path,
+        canonical=canonical,
+        company_name=str(hdr.get("name") or canonical),
+        currency=str(dossier["currency"] or ""),
+        markdown=md,
+        model=used_model,
+    )

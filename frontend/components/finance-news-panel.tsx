@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { ExternalLink, LoaderCircle, MessageSquarePlus, Newspaper, Search, Trash2 } from "lucide-react";
 
-import { MathMarkdown } from "@/components/math-markdown";
+import { FinanceRichReport } from "@/components/finance-rich-report";
 import {
   deleteStockNews,
   fetchStockNews,
@@ -145,9 +145,19 @@ export function FinanceNewsPanel({ symbol, companyName, onInsertIntoChat }: Fina
                 </div>
               </header>
 
-              <div className="finance-archive-markdown">
-                <MathMarkdown content={entry.summary_markdown} />
-              </div>
+              <FinanceRichReport
+                markdown={entry.summary_markdown}
+                meta={{
+                  title: `Veille Actualités — ${entry.company_name || entry.symbol}`,
+                  subtitle: entry.search_query || "Synthèse d'actualités boursières",
+                  symbol: entry.symbol,
+                  model: "Veille IA",
+                  createdAt: entry.created_at,
+                  accent: "#f59e0b",
+                  badgeLabel: "Actualités IA",
+                  question: entry.search_query || null,
+                }}
+              />
 
               {entry.articles.length > 0 && (
                 <div className="finance-news-sources">

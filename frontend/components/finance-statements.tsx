@@ -4,6 +4,7 @@ import { RefreshCw, Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { FinanceMetricLabel } from "@/components/finance-info-tip";
+import { buildStatementRatioCalc } from "@/lib/finance-calc-details";
 import {
   fetchFinanceStatements,
   type EarningsHistoryRow,
@@ -87,6 +88,8 @@ function StatementTable({
   newestFirst,
   showVarPct,
   isRatio,
+  period,
+  currency,
   format,
 }: {
   title: string;
@@ -96,6 +99,8 @@ function StatementTable({
   newestFirst: boolean;
   showVarPct: boolean;
   isRatio?: boolean;
+  period?: StatementPeriod;
+  currency?: string;
   format: (row: StatementRow, v: number | null) => string;
 }) {
   if (rows.length === 0 || dates.length === 0) return null;
@@ -127,10 +132,14 @@ function StatementTable({
           <tbody>
             {rows.map(row => {
               const evol = computeTotalEvolution(row.values);
+              const latestVal = row.values[row.values.length - 1] ?? null;
+              const calcDetail = period
+                ? buildStatementRatioCalc(row.key, row.label, latestVal, period, currency || "USD")
+                : undefined;
               return (
                 <tr key={row.key}>
                   <td className="finance-stmt-sticky-col">
-                    <FinanceMetricLabel termKey={row.key} label={row.label} strong />
+                    <FinanceMetricLabel termKey={row.key} label={row.label} calcDetail={calcDetail} strong />
                   </td>
                   <td className="finance-stmt-trend-col">
                     <MiniSparkline values={row.values} />
@@ -474,6 +483,8 @@ export function FinanceStatements({ symbol, currency }: { symbol: string; curren
               newestFirst={newestFirst}
               showVarPct={false}
               isRatio
+              period={period}
+              currency={currency}
               format={(row, v) => {
                 if (v == null) return "—";
                 const fmt = period.ratios.find(r => r.key === row.key)?.format;
@@ -504,6 +515,8 @@ export function FinanceStatements({ symbol, currency }: { symbol: string; curren
               granularity={granularity}
               newestFirst={newestFirst}
               showVarPct={showVarPct}
+              period={period}
+              currency={currency}
               format={amount}
             />
           )}
@@ -515,6 +528,8 @@ export function FinanceStatements({ symbol, currency }: { symbol: string; curren
               granularity={granularity}
               newestFirst={newestFirst}
               showVarPct={showVarPct}
+              period={period}
+              currency={currency}
               format={amount}
             />
           )}

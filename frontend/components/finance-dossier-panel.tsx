@@ -6,29 +6,43 @@ import {
   BookOpen,
   ExternalLink,
   FileSpreadsheet,
+  History,
   Layers,
   Newspaper,
   RefreshCw,
   Scale,
   Sparkles,
+  Trash2,
   TrendingDown,
   TrendingUp,
   Users,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 
 import { type FinanceHelpGuideId } from "@/components/finance-help-modal";
 import { FinanceMetricLabel } from "@/components/finance-info-tip";
+import { FinanceRichReport } from "@/components/finance-rich-report";
+import {
+  buildAnnualRatioCalc,
+  buildCapitalMetricCalc,
+  buildCostOfCapitalCalc,
+  buildIntrinsicMethodCalc,
+  buildIntrinsicSummaryCalc,
+  buildQualitativeScoreCalc,
+  buildRiskMetricCalc,
+  buildUncleStockScoreCalc,
+} from "@/lib/finance-calc-details";
 import {
   analyzeFinanceDossier,
+  deleteFinanceAiHistoryItem,
   fetchFinanceDossier,
   type DossierMetricRow,
+  type FinanceAiAnalysisRecord,
   type FinancialDossier,
   type IntrinsicValuationPayload,
   type StatementPeriod,
   type StatementRow,
+  type UncleStockScoreItem,
   type UncleStockScoresPayload,
 } from "@/lib/api";
 
@@ -137,12 +151,14 @@ function AnnualMatrixTable({
   years,
   rows,
   unitNote,
+  dossier,
 }: {
   id?: string;
   title: string;
   years: string[];
   rows: DossierMetricRow[];
   unitNote?: string;
+  dossier?: FinancialDossier;
 }) {
   if (years.length === 0 || rows.length === 0) return null;
   const visibleRows = rows.filter(r => r.values.some(v => v != null));
@@ -173,7 +189,12 @@ function AnnualMatrixTable({
             {visibleRows.map(row => (
               <tr key={row.key}>
                 <td className="finance-stmt-sticky-col">
-                  <FinanceMetricLabel termKey={row.key} label={row.label} strong />
+                  <FinanceMetricLabel
+                    termKey={row.key}
+                    label={row.label}
+                    calcDetail={dossier ? buildAnnualRatioCalc(row, dossier) : undefined}
+                    strong
+                  />
                 </td>
                 {row.values.map((v, i) => (
                   <td key={`${row.key}-v-${i}-${years[i]}`} className={v != null && v < 0 ? "text-rose" : undefined}>
@@ -221,6 +242,7 @@ export function FinanceDossierPanel({
   const [refreshing, setRefreshing] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
+  const [selectedAiId, setSelectedAiId] = useState<string | null>(null);
   const [depth, setDepth] = useState<DepthMode>("5");
   const [subTab, setSubTab] = useState<DossierSubTab>("synthese");
   const [holdersTab, setHoldersTab] = useState<"funds" | "institutions">("funds");
@@ -231,6 +253,7 @@ export function FinanceDossierPanel({
       .then(res => {
         if (!cancelled) {
           setAiError(null);
+          setSelectedAiId(null);
           setState({ symbol, data: res, error: null });
         }
       })
@@ -266,14 +289,41 @@ export function FinanceDossierPanel({
         prev.data
           ? {
               ...prev,
-              data: { ...prev.data, ai_analysis: res },
+              data: {
+                ...prev.data,
+                ai_analysis: res,
+                ai_history: [res, ...(prev.data.ai_history || []).filter(h => h.id !== res.id)],
+              },
             }
           : prev,
       );
+      if (res.id) setSelectedAiId(res.id);
     } catch (err) {
       setAiError(err instanceof Error ? err.message : "Impossible de générer l'analyse IA.");
     } finally {
       setAnalyzing(false);
+    }
+  }
+
+  async function handleDeleteDossierAi(entry: FinanceAiAnalysisRecord) {
+    if (!entry.id) return;
+    try {
+      await deleteFinanceAiHistoryItem(entry.id);
+      setState(prev => {
+        if (!prev.data) return prev;
+        const nextHist = (prev.data.ai_history || []).filter(h => h.id !== entry.id);
+        return {
+          ...prev,
+          data: {
+            ...prev.data,
+            ai_history: nextHist,
+            ai_analysis: nextHist[0] ?? null,
+          },
+        };
+      });
+      if (selectedAiId === entry.id) setSelectedAiId(null);
+    } catch (err) {
+      setAiError(err instanceof Error ? err.message : "Suppression impossible.");
     }
   }
 
@@ -548,58 +598,113 @@ export function FinanceDossierPanel({
       </div>
 
       {/* Analyse fondamentale narrative (tous résultats via Gemini Hydrogen) */}
-      {show("synthese") && (
-      <section id="dossier-analyse" className="finance-dossier-section finance-dossier-ai-box">
-        <div className="finance-dossier-sec-head">
-          <h4>Analyse fondamentale IA de {hdr.name} : synthèse complète</h4>
-          <div className="finance-dossier-ai-actions">
-            {dossier.ai_analysis?.model && (
-              <span className="finance-stmt-source-badge">{dossier.ai_analysis.model}</span>
+      {show("synthese") && (() => {
+        const aiHistoryList: FinanceAiAnalysisRecord[] =
+          dossier.ai_history && dossier.ai_history.length > 0
+            ? dossier.ai_history
+            : dossier.ai_analysis
+              ? [dossier.ai_analysis]
+              : [];
+        const currentAi =
+          (selectedAiId ? aiHistoryList.find(h => h.id === selectedAiId) : undefined) ??
+          aiHistoryList[0] ??
+          dossier.ai_analysis;
+        return (
+          <section id="dossier-analyse" className="finance-dossier-section finance-dossier-ai-box">
+            <div className="finance-dossier-sec-head">
+              <h4>Analyse fondamentale IA de {hdr.name} : synthèse complète</h4>
+              <div className="finance-dossier-ai-actions">
+                <button
+                  type="button"
+                  className="finance-tf-btn active finance-stmt-refresh-btn"
+                  disabled={analyzing}
+                  onClick={() => void handleGenerateAi()}
+                >
+                  <Sparkles size={12} />
+                  <span>
+                    {analyzing
+                      ? "Analyse Gemini Hydrogen en cours…"
+                      : currentAi
+                        ? "Nouvelle analyse datée (Gemini Hydrogen)"
+                        : "Analyser tous les résultats (Gemini Hydrogen)"}
+                  </span>
+                </button>
+              </div>
+            </div>
+
+            {aiError && <p className="text-rose">{aiError}</p>}
+
+            {aiHistoryList.length > 0 && (
+              <div className="finance-ai-history-strip" aria-label="Historique des analyses IA du dossier">
+                <span className="finance-ai-history-label">
+                  <History size={12} />
+                  <span>Historique daté ({aiHistoryList.length}) :</span>
+                </span>
+                <div className="finance-ai-history-pills">
+                  {aiHistoryList.map((item, idx) => {
+                    const isCurrent = currentAi?.id ? currentAi.id === item.id : idx === 0;
+                    const dtIso = item.created_at || item.updated_at;
+                    const dtLabel = dtIso
+                      ? new Date(dtIso).toLocaleString("fr-FR", {
+                          day: "2-digit",
+                          month: "short",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })
+                      : `Analyse #${idx + 1}`;
+                    return (
+                      <div key={item.id || `${idx}-${dtIso}`} className={`finance-ai-hist-chip ${isCurrent ? "active" : ""}`}>
+                        <button
+                          type="button"
+                          className="finance-ai-hist-chip-btn"
+                          onClick={() => setSelectedAiId(item.id || null)}
+                        >
+                          <strong>{dtLabel}</strong>
+                          {item.verdict && <span className="finance-ai-hist-verdict">{item.verdict}</span>}
+                          {item.model && <small>{item.model.split("/").pop()}</small>}
+                        </button>
+                        {item.id && (
+                          <button
+                            type="button"
+                            className="finance-ai-hist-del"
+                            onClick={() => void handleDeleteDossierAi(item)}
+                            title="Supprimer cette analyse archivée"
+                            aria-label="Supprimer cette analyse"
+                          >
+                            <Trash2 size={10} />
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
             )}
-            {dossier.ai_analysis?.updated_at && (
-              <small className="finance-stmt-meta-date">
-                Mise à jour le {new Date(dossier.ai_analysis.updated_at).toLocaleDateString("fr-FR")}
-              </small>
+
+            {currentAi?.markdown ? (
+              <FinanceRichReport
+                contentHtml={currentAi.content_html}
+                markdown={currentAi.markdown}
+                onInsertIntoChat={onInsertIntoChat}
+                meta={{
+                  title: `Synthèse Fondamentale IA — ${hdr.name}`,
+                  subtitle: "Analyse institutionnelle complète multi-exercices",
+                  symbol: dossier.symbol,
+                  model: currentAi.model,
+                  createdAt: currentAi.created_at || currentAi.updated_at,
+                  accent: "#4f46e5",
+                  badgeLabel: "Analyse Dossier IA",
+                }}
+              />
+            ) : (
+              <p className="finance-dossier-ai-placeholder">
+                {hdr.description ? `${hdr.description} — ` : ""}
+                Cliquez sur « Analyser tous les résultats (Gemini Hydrogen) » pour obtenir une synthèse complète sauvegardée en HTML coloré couvrant valorisation, performances, risques, rentabilité, solidité, scores (IH, Piotroski, Altman) et gouvernance.
+              </p>
             )}
-            <button
-              type="button"
-              className="finance-tf-btn active finance-stmt-refresh-btn"
-              disabled={analyzing}
-              onClick={() => void handleGenerateAi()}
-            >
-              <Sparkles size={12} />
-              <span>
-                {analyzing
-                  ? "Analyse Gemini Hydrogen en cours…"
-                  : dossier.ai_analysis
-                    ? "Actualiser l’analyse IA"
-                    : "Analyser tous les résultats (Gemini Hydrogen)"}
-              </span>
-            </button>
-            {onInsertIntoChat && dossier.ai_analysis?.markdown && (
-              <button
-                type="button"
-                className="finance-tf-btn"
-                onClick={() => onInsertIntoChat(dossier.ai_analysis?.markdown || "")}
-              >
-                Envoyer au tchat
-              </button>
-            )}
-          </div>
-        </div>
-        {aiError && <p className="text-rose">{aiError}</p>}
-        {dossier.ai_analysis?.markdown ? (
-          <div className="finance-dossier-ai-text">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{dossier.ai_analysis.markdown}</ReactMarkdown>
-          </div>
-        ) : (
-          <p className="finance-dossier-ai-placeholder">
-            {hdr.description ? `${hdr.description} — ` : ""}
-            Cliquez sur « Analyser tous les résultats (Gemini Hydrogen) » pour obtenir une synthèse complète couvrant valorisation, performances, risques, rentabilité, solidité, scores (IH, Piotroski, Altman) et gouvernance.
-          </p>
-        )}
-      </section>
-      )}
+          </section>
+        );
+      })()}
 
       {/* Actualités & sentiment */}
       {show("news") && (
@@ -703,34 +808,34 @@ export function FinanceDossierPanel({
         </div>
         <div className="finance-dossier-grids-stack">
           <div className="finance-dossier-6grid">
-            <div><FinanceMetricLabel termKey="shares_outstanding" label="Nbr d’actions" /><strong>{fmtInt(cap.shares_outstanding)}</strong></div>
-            <div><FinanceMetricLabel termKey="float_pct" label="Flottant" /><strong>{fmtNum(cap.float_pct, 1, "%")}</strong></div>
+            <div><FinanceMetricLabel termKey="shares_outstanding" label="Nbr d’actions" calcDetail={buildCapitalMetricCalc("shares_outstanding", dossier)} /><strong>{fmtInt(cap.shares_outstanding)}</strong></div>
+            <div><FinanceMetricLabel termKey="float_pct" label="Flottant" calcDetail={buildCapitalMetricCalc("float_pct", dossier)} /><strong>{fmtNum(cap.float_pct, 1, "%")}</strong></div>
             <div><FinanceMetricLabel termKey="insiders_pct" label="Initiés" /><strong>{fmtNum(cap.insiders_pct, 1, "%")}</strong></div>
             <div><FinanceMetricLabel termKey="institutions_pct" label="Institutionnels" /><strong>{fmtNum(cap.institutions_pct, 1, "%")}</strong></div>
             <div><FinanceMetricLabel termKey="short_ratio" label="Short Ratio" /><strong>{fmtNum(cap.short_ratio, 1)}</strong></div>
             <div><FinanceMetricLabel termKey="short_pct_float" label="Flottant en VAD" /><strong>{fmtNum(cap.short_pct_float, 1, "%")}</strong></div>
           </div>
           <div className="finance-dossier-6grid">
-            <div><FinanceMetricLabel termKey="pe_ttm" label="PER TTM" /><strong>{fmtNum(cap.pe_ttm, 1)}</strong></div>
-            <div><FinanceMetricLabel termKey="pe_forward" label="PER prévi." /><strong>{fmtNum(cap.pe_forward, 1)}</strong></div>
-            <div><FinanceMetricLabel termKey="peg" label="PEG" /><strong>{fmtNum(cap.peg, 1)}</strong></div>
-            <div><FinanceMetricLabel termKey="pb" label="P/B" /><strong>{fmtNum(cap.pb, 1)}</strong></div>
-            <div><FinanceMetricLabel termKey="ev_ebitda" label="VE/EBITDA TTM" /><strong>{fmtNum(cap.ev_ebitda, 1)}</strong></div>
-            <div><FinanceMetricLabel termKey="ev_revenue" label="VE/CA TTM" /><strong>{fmtNum(cap.ev_revenue, 1)}</strong></div>
+            <div><FinanceMetricLabel termKey="pe_ttm" label="PER TTM" calcDetail={buildCapitalMetricCalc("pe_ttm", dossier)} /><strong>{fmtNum(cap.pe_ttm, 1)}</strong></div>
+            <div><FinanceMetricLabel termKey="pe_forward" label="PER prévi." calcDetail={buildCapitalMetricCalc("pe_forward", dossier)} /><strong>{fmtNum(cap.pe_forward, 1)}</strong></div>
+            <div><FinanceMetricLabel termKey="peg" label="PEG" calcDetail={buildCapitalMetricCalc("peg", dossier)} /><strong>{fmtNum(cap.peg, 1)}</strong></div>
+            <div><FinanceMetricLabel termKey="pb" label="P/B" calcDetail={buildCapitalMetricCalc("pb", dossier)} /><strong>{fmtNum(cap.pb, 1)}</strong></div>
+            <div><FinanceMetricLabel termKey="ev_ebitda" label="VE/EBITDA TTM" calcDetail={buildCapitalMetricCalc("ev_ebitda", dossier)} /><strong>{fmtNum(cap.ev_ebitda, 1)}</strong></div>
+            <div><FinanceMetricLabel termKey="ev_revenue" label="VE/CA TTM" calcDetail={buildCapitalMetricCalc("ev_revenue", dossier)} /><strong>{fmtNum(cap.ev_revenue, 1)}</strong></div>
           </div>
           <div className="finance-dossier-6grid">
-            <div><FinanceMetricLabel termKey="op_m" label="Marge opé. TTM" /><strong>{fmtNum(cap.op_margin_ttm, 1, "%")}</strong></div>
-            <div><FinanceMetricLabel termKey="net_m" label="Marge nette TTM" /><strong>{fmtNum(cap.net_margin_ttm, 1, "%")}</strong></div>
-            <div><FinanceMetricLabel termKey="roe" label="ROE TTM" /><strong>{fmtNum(cap.roe_ttm, 1, "%")}</strong></div>
-            <div><FinanceMetricLabel termKey="roa" label="ROA TTM" /><strong>{fmtNum(cap.roa_ttm, 1, "%")}</strong></div>
+            <div><FinanceMetricLabel termKey="op_m" label="Marge opé. TTM" calcDetail={buildCapitalMetricCalc("op_margin_ttm", dossier)} /><strong>{fmtNum(cap.op_margin_ttm, 1, "%")}</strong></div>
+            <div><FinanceMetricLabel termKey="net_m" label="Marge nette TTM" calcDetail={buildCapitalMetricCalc("net_margin_ttm", dossier)} /><strong>{fmtNum(cap.net_margin_ttm, 1, "%")}</strong></div>
+            <div><FinanceMetricLabel termKey="roe" label="ROE TTM" calcDetail={buildCapitalMetricCalc("roe_ttm", dossier)} /><strong>{fmtNum(cap.roe_ttm, 1, "%")}</strong></div>
+            <div><FinanceMetricLabel termKey="roa" label="ROA TTM" calcDetail={buildCapitalMetricCalc("roa_ttm", dossier)} /><strong>{fmtNum(cap.roa_ttm, 1, "%")}</strong></div>
             <div><FinanceMetricLabel termKey="rev_growth" label="Δ CA trim. YoY" /><strong>{fmtNum(cap.rev_growth_q_yoy, 1, "%")}</strong></div>
             <div><FinanceMetricLabel termKey="eps" label="Δ RN trim. YoY" /><strong>{fmtNum(cap.eps_growth_q_yoy, 1, "%")}</strong></div>
           </div>
           <div className="finance-dossier-6grid">
             <div><span>Cours</span><strong>{fmtNum(cap.price, 2, ` ${dossier.currency}`)}</strong></div>
-            <div><FinanceMetricLabel termKey="target_price" label="Cible" /><strong>{fmtNum(cap.target_price, 1)}</strong></div>
-            <div><FinanceMetricLabel termKey="mma50" label="MMA50" /><strong>{fmtNum(cap.mma50, 1)}</strong></div>
-            <div><FinanceMetricLabel termKey="mma200" label="MMA200" /><strong>{fmtNum(cap.mma200, 1)}</strong></div>
+            <div><FinanceMetricLabel termKey="target_price" label="Cible" calcDetail={buildCapitalMetricCalc("target_price", dossier)} /><strong>{fmtNum(cap.target_price, 1)}</strong></div>
+            <div><FinanceMetricLabel termKey="mma50" label="MMA50" calcDetail={buildCapitalMetricCalc("mma50", dossier)} /><strong>{fmtNum(cap.mma50, 1)}</strong></div>
+            <div><FinanceMetricLabel termKey="mma200" label="MMA200" calcDetail={buildCapitalMetricCalc("mma200", dossier)} /><strong>{fmtNum(cap.mma200, 1)}</strong></div>
             <div><FinanceMetricLabel termKey="w52_range" label="+ bas 52 s." /><strong>{fmtNum(cap.low_52w, 1)}</strong></div>
             <div><FinanceMetricLabel termKey="w52_range" label="+ haut 52 s." /><strong>{fmtNum(cap.high_52w, 1)}</strong></div>
           </div>
@@ -821,6 +926,7 @@ export function FinanceDossierPanel({
         <IntrinsicValuationSection
           data={dossier.intrinsic_valuation}
           currency={dossier.currency}
+          dossier={dossier}
           onOpenHelp={onOpenHelp ? () => onOpenHelp("intrinsic") : undefined}
         />
       ) : (
@@ -901,7 +1007,12 @@ export function FinanceDossierPanel({
               {dossier.risk.metrics.map(m => (
                 <tr key={m.key}>
                   <td className="finance-stmt-sticky-col">
-                    <FinanceMetricLabel termKey={m.key} label={m.label} strong />
+                    <FinanceMetricLabel
+                      termKey={m.key}
+                      label={m.label}
+                      calcDetail={buildRiskMetricCalc(m, dossier)}
+                      strong
+                    />
                   </td>
                   {m.values.map((v, idx) => (
                     <td key={`${m.key}-${idx}`}>
@@ -1080,24 +1191,27 @@ export function FinanceDossierPanel({
         unitNote={unitLabel}
         years={slicedAnnual.years}
         rows={slicedAnnual.summary}
+        dossier={dossier}
       />
 
       {/* Ratios */}
       <div id="dossier-ratios" className="finance-dossier-ratios-stack">
-        <AnnualMatrixTable id="dossier-profitabilite" title="Ratios de profitabilité" years={slicedAnnual.years} rows={slicedAnnual.profitability} />
-        <AnnualMatrixTable id="dossier-solvabilite" title="Ratios de solvabilité" years={slicedAnnual.years} rows={slicedAnnual.solvency} />
+        <AnnualMatrixTable id="dossier-profitabilite" title="Ratios de profitabilité" years={slicedAnnual.years} rows={slicedAnnual.profitability} dossier={dossier} />
+        <AnnualMatrixTable id="dossier-solvabilite" title="Ratios de solvabilité" years={slicedAnnual.years} rows={slicedAnnual.solvency} dossier={dossier} />
         <AnnualMatrixTable
           id="dossier-distribution"
           title="Ratios de distribution"
           unitNote={unitLabel}
           years={slicedAnnual.years}
           rows={slicedAnnual.distribution}
+          dossier={dossier}
         />
         <AnnualMatrixTable
           id="dossier-efficacite"
           title="Ratios du cycle de conversion et d'efficacité"
           years={slicedAnnual.years}
           rows={slicedAnnual.efficiency}
+          dossier={dossier}
         />
       </div>
       </>
@@ -1106,6 +1220,7 @@ export function FinanceDossierPanel({
       {show("scores") && dossier.uncle_stock_scores?.available && (
         <UncleStockScoresSection
           data={dossier.uncle_stock_scores}
+          dossier={dossier}
           onOpenHelp={onOpenHelp ? () => onOpenHelp("scores") : undefined}
         />
       )}
@@ -1132,8 +1247,13 @@ export function FinanceDossierPanel({
           <div id="dossier-ihscore" className="finance-dossier-score-block">
             <div className="finance-dossier-score-banner">
               <strong>
-                <FinanceMetricLabel termKey="ih_score" label="IH Score" strong /> :{" "}
-                {slicedAnnual.ih_score.latest_score?.toFixed(1) ?? "—"}/9 (
+                <FinanceMetricLabel
+                  termKey="ih_score"
+                  label="IH Score"
+                  calcDetail={buildQualitativeScoreCalc("ih_score", dossier.annual_tables, dossier)}
+                  strong
+                />{" "}
+                : {slicedAnnual.ih_score.latest_score?.toFixed(1) ?? "—"}/9 (
                 {slicedAnnual.ih_score.quality_label})
               </strong>
               <span className="finance-dossier-trend-pill">
@@ -1190,8 +1310,13 @@ export function FinanceDossierPanel({
         {slicedAnnual.piotroski.years.length > 0 && (
           <div id="dossier-piotroski" className="finance-dossier-score-block">
             <h5>
-              <FinanceMetricLabel termKey="piotroski" label="F-Score Piotroski" strong /> — Dernier exercice :{" "}
-              <strong>{slicedAnnual.piotroski.latest_score ?? "—"}/9</strong>
+              <FinanceMetricLabel
+                termKey="piotroski"
+                label="F-Score Piotroski"
+                calcDetail={buildQualitativeScoreCalc("piotroski", dossier.annual_tables, dossier)}
+                strong
+              />{" "}
+              — Dernier exercice : <strong>{slicedAnnual.piotroski.latest_score ?? "—"}/9</strong>
             </h5>
             <div className="finance-table-wrapper finance-stmt-scroll">
               <table className="finance-data-table finance-stmt-table">
@@ -1227,8 +1352,13 @@ export function FinanceDossierPanel({
         {slicedAnnual.altman.years.length > 0 && (
           <div id="dossier-altman" className="finance-dossier-score-block">
             <h5>
-              <FinanceMetricLabel termKey="altman" label="Z-Score Altman" strong /> — Dernier exercice :{" "}
-              <strong>{slicedAnnual.altman.latest_score?.toFixed(1) ?? "—"}</strong>
+              <FinanceMetricLabel
+                termKey="altman"
+                label="Z-Score Altman"
+                calcDetail={buildQualitativeScoreCalc("altman", dossier.annual_tables, dossier)}
+                strong
+              />{" "}
+              — Dernier exercice : <strong>{slicedAnnual.altman.latest_score?.toFixed(1) ?? "—"}</strong>
             </h5>
             <div className="finance-table-wrapper finance-stmt-scroll">
               <table className="finance-data-table finance-stmt-table">
@@ -1402,10 +1532,12 @@ export function FinanceDossierPanel({
 function IntrinsicValuationSection({
   data,
   currency,
+  dossier,
   onOpenHelp,
 }: {
   data: IntrinsicValuationPayload;
   currency: string;
+  dossier: FinancialDossier;
   onOpenHelp?: () => void;
 }) {
   const [mode, setMode] = useState<"corrected" | "unclestock">("corrected");
@@ -1430,7 +1562,12 @@ function IntrinsicValuationSection({
         <tr key={m.id} className={st !== "valid" ? "is-muted-row" : undefined}>
           <td>
             <div className="finance-intrinsic-method-name">
-              <FinanceMetricLabel termKey={m.id} label={m.name} strong />
+              <FinanceMetricLabel
+                termKey={m.id}
+                label={m.name}
+                calcDetail={buildIntrinsicMethodCalc(m, mode, currency, dossier)}
+                strong
+              />
               {hasDetails && (
                 <button
                   type="button"
@@ -1528,6 +1665,7 @@ function IntrinsicValuationSection({
             <FinanceMetricLabel
               termKey="intrinsic_value"
               label={`VI Globale (${activeAgg ? `${activeAgg.weight_used}/${activeAgg.weight_max} poids` : "—"})`}
+              calcDetail={buildIntrinsicSummaryCalc("iv", data, mode, currency, dossier)}
             />
             <strong>{activeAgg ? `${activeAgg.intrinsic_value.toFixed(2)} ${currency}` : "—"}</strong>
           </div>
@@ -1536,7 +1674,11 @@ function IntrinsicValuationSection({
             <strong>{data.current_price != null ? `${data.current_price.toFixed(2)} ${currency}` : "—"}</strong>
           </div>
           <div>
-            <FinanceMetricLabel termKey="margin_of_safety" label="Marge de sécurité" />
+            <FinanceMetricLabel
+              termKey="margin_of_safety"
+              label="Marge de sécurité"
+              calcDetail={buildIntrinsicSummaryCalc("mos", data, mode, currency, dossier)}
+            />
             <strong
               className={
                 activeAgg?.margin_of_safety_pct == null
@@ -1552,18 +1694,27 @@ function IntrinsicValuationSection({
             </strong>
           </div>
           <div>
-            <FinanceMetricLabel termKey="price_to_iv" label="Ratio Cours / VI" />
+            <FinanceMetricLabel
+              termKey="price_to_iv"
+              label="Ratio Cours / VI"
+              calcDetail={buildIntrinsicSummaryCalc("price_to_iv", data, mode, currency, dossier)}
+            />
             <strong>{activeAgg?.price_to_iv != null ? `${activeAgg.price_to_iv.toFixed(2)}×` : "—"}</strong>
           </div>
           <div>
             <FinanceMetricLabel
               termKey="wacc"
               label={`WACC (plancher ${fmtNum(coc.wacc_floor_pct, 1, "%")})`}
+              calcDetail={buildCostOfCapitalCalc("wacc", data, currency, dossier)}
             />
             <strong>{fmtNum(coc.wacc_pct, 2, "%")}</strong>
           </div>
           <div>
-            <FinanceMetricLabel termKey="ke_capm" label="Ke (CAPM) / Kd net" />
+            <FinanceMetricLabel
+              termKey="ke_capm"
+              label="Ke (CAPM) / Kd net"
+              calcDetail={buildCostOfCapitalCalc("ke_capm", data, currency, dossier)}
+            />
             <strong>
               {fmtNum(coc.cost_of_equity_capm_pct, 2, "%")} / {fmtNum(coc.after_tax_cost_of_debt_pct, 2, "%")}
             </strong>
@@ -1572,31 +1723,55 @@ function IntrinsicValuationSection({
 
         <div className="finance-dossier-6grid">
           <div>
-            <FinanceMetricLabel termKey="total_owner_return" label="Total Owner Return" />
+            <FinanceMetricLabel
+              termKey="total_owner_return"
+              label="Total Owner Return"
+              calcDetail={buildCostOfCapitalCalc("total_owner_return", data, currency, dossier)}
+            />
             <strong className={owr.total_owner_return_pct == null ? undefined : owr.total_owner_return_pct >= 0 ? "text-emerald" : "text-rose"}>
               {owr.total_owner_return_pct != null ? `${owr.total_owner_return_pct >= 0 ? "+" : ""}${owr.total_owner_return_pct.toFixed(1)}%` : "—"}
             </strong>
           </div>
           <div>
-            <FinanceMetricLabel termKey="net_owner_return" label="Net Owner Return" />
+            <FinanceMetricLabel
+              termKey="net_owner_return"
+              label="Net Owner Return"
+              calcDetail={buildCostOfCapitalCalc("net_owner_return", data, currency, dossier)}
+            />
             <strong className={owr.net_owner_return_pct == null ? undefined : owr.net_owner_return_pct >= 0 ? "text-emerald" : "text-rose"}>
               {owr.net_owner_return_pct != null ? `${owr.net_owner_return_pct >= 0 ? "+" : ""}${owr.net_owner_return_pct.toFixed(1)}%` : "—"}
             </strong>
           </div>
           <div>
-            <FinanceMetricLabel termKey="buffett_irr" label="TRI Buffett (implicite)" />
+            <FinanceMetricLabel
+              termKey="buffett_irr"
+              label="TRI Buffett (implicite)"
+              calcDetail={buildCostOfCapitalCalc("buffett_irr", data, currency, dossier)}
+            />
             <strong>{fmtNum(owr.buffett_rate_of_return_pct, 2, "%")}</strong>
           </div>
           <div>
-            <FinanceMetricLabel termKey="forward_return_yacktman" label="Rdt Prospectif Yacktman" />
+            <FinanceMetricLabel
+              termKey="forward_return_yacktman"
+              label="Rdt Prospectif Yacktman"
+              calcDetail={buildCostOfCapitalCalc("forward_return_yacktman", data, currency, dossier)}
+            />
             <strong>{fmtNum(owr.forward_rate_of_return_pct, 2, "%")}</strong>
           </div>
           <div>
-            <FinanceMetricLabel termKey="payback_market" label="Payback marché estimé" />
+            <FinanceMetricLabel
+              termKey="payback_market"
+              label="Payback marché estimé"
+              calcDetail={buildCostOfCapitalCalc("payback_market", data, currency, dossier)}
+            />
             <strong>{owr.payback_years_market != null ? `${owr.payback_years_market.toFixed(1)} ans` : "—"}</strong>
           </div>
           <div>
-            <FinanceMetricLabel termKey="equity_charge" label="Charge d’équité / act." />
+            <FinanceMetricLabel
+              termKey="equity_charge"
+              label="Charge d’équité / act."
+              calcDetail={buildCostOfCapitalCalc("equity_charge", data, currency, dossier)}
+            />
             <strong>{fmtNum(coc.equity_charge_ps, 2, ` ${currency}`)}</strong>
           </div>
         </div>
@@ -1762,9 +1937,11 @@ function fmtCompVal(v: number | string | boolean | null | undefined): string {
 
 function UncleStockScoresSection({
   data,
+  dossier,
   onOpenHelp,
 }: {
   data: UncleStockScoresPayload;
+  dossier: FinancialDossier;
   onOpenHelp?: () => void;
 }) {
   const [mode, setMode] = useState<"verified" | "documented">("verified");
@@ -1828,48 +2005,58 @@ function UncleStockScoresSection({
       </div>
 
       {/* Cartes de synthèse */}
-      <div className="finance-intrinsic-summary-grid finance-unclestock-summary-grid">
-        <div className="finance-intrinsic-kpi">
-          <span><FinanceMetricLabel termKey="advice" label="Verdict Advice" /></span>
-          <strong className={scoreToneClass("advice", activeAdvice, true)}>{activeAdvice || "—"}</strong>
-          <small>{summary.categories || "Profil standard"}</small>
-        </div>
-        <div className="finance-intrinsic-kpi">
-          <span><FinanceMetricLabel termKey="uncle_stock_score" label="Uncle Stock Score" /></span>
-          <strong className={scoreToneClass("uncle_stock_score", activeUncleScore, activeUncleScore != null)}>
-            {activeUncleScore != null ? `${activeUncleScore.toFixed(1)} / 100` : "—"}
-          </strong>
-          <small>{mode === "verified" ? "Dénominateur aligné /1540" : "Littéral /1420 (clampé 1540)"}</small>
-        </div>
-        <div className="finance-intrinsic-kpi">
-          <span><FinanceMetricLabel termKey="quality_score" label="Quality" /></span>
-          <strong className={scoreToneClass("quality_score", summary.quality_score, summary.quality_score != null)}>
-            {summary.quality_score != null ? `${summary.quality_score.toFixed(1)} / 100` : "—"}
-          </strong>
-          <small>Rentabilité &amp; marges</small>
-        </div>
-        <div className="finance-intrinsic-kpi">
-          <span><FinanceMetricLabel termKey="value_score" label="Value" /></span>
-          <strong className={scoreToneClass("value_score", summary.value_score, summary.value_score != null)}>
-            {summary.value_score != null ? `${summary.value_score.toFixed(1)} / 100` : "—"}
-          </strong>
-          <small>Multiples &amp; décote</small>
-        </div>
-        <div className="finance-intrinsic-kpi">
-          <span><FinanceMetricLabel termKey="financial_health_score" label="Financial Health" /></span>
-          <strong className={scoreToneClass("financial_health_score", summary.financial_health_score, summary.financial_health_score != null)}>
-            {summary.financial_health_score != null ? `${summary.financial_health_score.toFixed(1)} / 100` : "—"}
-          </strong>
-          <small>Solvabilité &amp; flux</small>
-        </div>
-        <div className="finance-intrinsic-kpi">
-          <span><FinanceMetricLabel termKey="trap_score" label="Trap Score" /></span>
-          <strong className={scoreToneClass("trap_score", summary.trap_score, summary.trap_score != null)}>
-            {summary.trap_score != null ? `${summary.trap_score.toFixed(1)} / 100` : "—"}
-          </strong>
-          <small>Plus bas = moins de risque</small>
-        </div>
-      </div>
+      {(() => {
+        const byScoreId = Object.fromEntries(data.items.map(it => [it.id, it])) as Record<
+          string,
+          UncleStockScoreItem
+        >;
+        const kpiCalc = (id: string) =>
+          byScoreId[id] ? buildUncleStockScoreCalc(byScoreId[id], mode, dossier) : undefined;
+        return (
+          <div className="finance-intrinsic-summary-grid finance-unclestock-summary-grid">
+            <div className="finance-intrinsic-kpi">
+              <span><FinanceMetricLabel termKey="advice" label="Verdict Advice" calcDetail={kpiCalc("advice")} /></span>
+              <strong className={scoreToneClass("advice", activeAdvice, true)}>{activeAdvice || "—"}</strong>
+              <small>{summary.categories || "Profil standard"}</small>
+            </div>
+            <div className="finance-intrinsic-kpi">
+              <span><FinanceMetricLabel termKey="uncle_stock_score" label="Uncle Stock Score" calcDetail={kpiCalc("uncle_stock_score")} /></span>
+              <strong className={scoreToneClass("uncle_stock_score", activeUncleScore, activeUncleScore != null)}>
+                {activeUncleScore != null ? `${activeUncleScore.toFixed(1)} / 100` : "—"}
+              </strong>
+              <small>{mode === "verified" ? "Dénominateur aligné /1540" : "Littéral /1420 (clampé 1540)"}</small>
+            </div>
+            <div className="finance-intrinsic-kpi">
+              <span><FinanceMetricLabel termKey="quality_score" label="Quality" calcDetail={kpiCalc("quality_score")} /></span>
+              <strong className={scoreToneClass("quality_score", summary.quality_score, summary.quality_score != null)}>
+                {summary.quality_score != null ? `${summary.quality_score.toFixed(1)} / 100` : "—"}
+              </strong>
+              <small>Rentabilité &amp; marges</small>
+            </div>
+            <div className="finance-intrinsic-kpi">
+              <span><FinanceMetricLabel termKey="value_score" label="Value" calcDetail={kpiCalc("value_score")} /></span>
+              <strong className={scoreToneClass("value_score", summary.value_score, summary.value_score != null)}>
+                {summary.value_score != null ? `${summary.value_score.toFixed(1)} / 100` : "—"}
+              </strong>
+              <small>Multiples &amp; décote</small>
+            </div>
+            <div className="finance-intrinsic-kpi">
+              <span><FinanceMetricLabel termKey="financial_health_score" label="Financial Health" calcDetail={kpiCalc("financial_health_score")} /></span>
+              <strong className={scoreToneClass("financial_health_score", summary.financial_health_score, summary.financial_health_score != null)}>
+                {summary.financial_health_score != null ? `${summary.financial_health_score.toFixed(1)} / 100` : "—"}
+              </strong>
+              <small>Solvabilité &amp; flux</small>
+            </div>
+            <div className="finance-intrinsic-kpi">
+              <span><FinanceMetricLabel termKey="trap_score" label="Trap Score" calcDetail={kpiCalc("trap_score")} /></span>
+              <strong className={scoreToneClass("trap_score", summary.trap_score, summary.trap_score != null)}>
+                {summary.trap_score != null ? `${summary.trap_score.toFixed(1)} / 100` : "—"}
+              </strong>
+              <small>Plus bas = moins de risque</small>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Filtres par catégorie */}
       <div className="finance-unclestock-filters" role="group" aria-label="Filtrer les scores par catégorie">
@@ -1908,7 +2095,12 @@ function UncleStockScoresSection({
                 <tr key={item.id} className={!res.available ? "is-muted-row" : undefined}>
                   <td>
                     <div className="finance-intrinsic-method-name">
-                      <FinanceMetricLabel termKey={item.id} label={item.name} strong />
+                      <FinanceMetricLabel
+                        termKey={item.id}
+                        label={item.name}
+                        calcDetail={buildUncleStockScoreCalc(item, mode, dossier)}
+                        strong
+                      />
                       {hasDetails && (
                         <button
                           type="button"
