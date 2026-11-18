@@ -102,6 +102,7 @@ def compute_period_returns(
             "change_1w_pct": None,
             "change_1m_pct": None,
             "change_3m_pct": None,
+            "change_ytd_pct": None,
             "change_1y_pct": None,
         }
 
@@ -133,12 +134,24 @@ def compute_period_returns(
         )
         return _pct(ref_close)
 
+    ytd_ref_close: float | None = None
+    if len(dated_bars) >= 2 and dated_bars[0][0] <= datetime.date(latest_date.year, 1, 7):
+        ytd_cutoff = datetime.date(latest_date.year - 1, 12, 31)
+        for bar_date, close_val in dated_bars:
+            if bar_date <= ytd_cutoff:
+                ytd_ref_close = close_val
+            else:
+                break
+        if ytd_ref_close is None:
+            ytd_ref_close = dated_bars[0][1]
+
     return {
         "price": round(effective_price, 4) if effective_price is not None else None,
         "change_1d_pct": round(change_1d, 2) if change_1d is not None else None,
         "change_1w_pct": _horizon_pct(7, 5, 4),
         "change_1m_pct": _horizon_pct(30, 21, 20),
         "change_3m_pct": _horizon_pct(90, 63, 60),
+        "change_ytd_pct": _pct(ytd_ref_close),
         "change_1y_pct": _horizon_pct(365, 250, 200),
     }
 

@@ -1857,6 +1857,78 @@ export async function searchFinanceCatalog(
   return res.items || [];
 }
 
+export type IndexPerformanceItem = IndexConstituent & {
+  currency: string;
+  price: number | null;
+  change_1d_pct: number | null;
+  change_1w_pct: number | null;
+  change_1m_pct: number | null;
+  change_3m_pct: number | null;
+  change_ytd_pct: number | null;
+  change_1y_pct: number | null;
+  as_of: string | null;
+  bars_count: number;
+};
+
+export type IndexPerformancesSummary = {
+  total_count: number;
+  loaded_count: number;
+  avg_1d_pct: number | null;
+  avg_1w_pct: number | null;
+  avg_1m_pct: number | null;
+  avg_3m_pct: number | null;
+  avg_ytd_pct: number | null;
+  avg_1y_pct: number | null;
+  gainers_1d: number;
+  losers_1d: number;
+  gainers_1y: number;
+  losers_1y: number;
+};
+
+export type IndexPerformancesResponse = {
+  index: PrincipalIndexInfo & {
+    cached_count: number;
+    source?: string;
+    sectors?: string[];
+  };
+  summary: IndexPerformancesSummary;
+  items: IndexPerformanceItem[];
+  warehouse: WarehouseOverview;
+};
+
+export type ImportIndexWatchlistResponse = {
+  list: FinanceWatchlistMeta;
+  added_count: number;
+  total_constituents: number;
+};
+
+export async function loadIndexPerformances(
+  indexCode: string,
+  refresh = false,
+): Promise<IndexPerformancesResponse> {
+  const qs = refresh ? "?refresh=true" : "";
+  return api<IndexPerformancesResponse>(
+    `/finance/indices/${encodeURIComponent(indexCode)}/performances${qs}`,
+    { method: "POST" },
+  );
+}
+
+export async function importIndexToWatchlist(
+  indexCode: string,
+  options?: { listId?: string | null; listName?: string | null },
+): Promise<ImportIndexWatchlistResponse> {
+  return api<ImportIndexWatchlistResponse>(
+    `/finance/indices/${encodeURIComponent(indexCode)}/watchlist`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        list_id: options?.listId || null,
+        list_name: options?.listName || null,
+      }),
+    },
+  );
+}
+
 export type EodhdEufundItem = {
   symbol: string;
   eod_ticker: string;
@@ -1941,6 +2013,7 @@ export type WatchlistItem = {
   change_1w_pct: number | null;
   change_1m_pct: number | null;
   change_3m_pct: number | null;
+  change_ytd_pct?: number | null;
   change_1y_pct: number | null;
 };
 

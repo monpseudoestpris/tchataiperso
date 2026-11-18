@@ -20,17 +20,28 @@ from typing import Any
 import httpx
 
 from .config import Settings
-from .finance import DEFAULT_USER_AGENT, _safe_float, fetch_eodhd_historical_eod, fetch_yahoo_chart
+from .finance import (
+    DEFAULT_USER_AGENT,
+    _safe_float,
+    _to_adjusted_ohlc_bar,
+    fetch_eodhd_historical_eod,
+    fetch_yahoo_chart,
+)
 from .finance_warehouse import (
     get_cached_symbols_set,
     get_index_constituents,
     get_snapshot,
+    get_stored_eod_bars,
     get_warehouse_overview,
+    resolve_canonical_symbol,
     save_index_constituents,
     save_snapshot,
     search_warehouse_catalog,
+    upsert_eod_bars,
+    upsert_instrument,
     warehouse_db_path,
 )
+from .finance_watchlist import compute_period_returns
 
 _logger = logging.getLogger("uvicorn.error")
 
@@ -1554,3 +1565,189 @@ def search_finance_catalog(
                 if len(results) >= limit:
                     return results
     return results
+
+
+def _yahoo_chart_to_adjusted_bars(chart: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not chart or "timestamp" not in chart:
+        return []
+    ts = chart.get("timestamp") or []
+    ind = chart.get("indicators") or {}
+    q_ind = (ind.get("quote") or [{}])[0] or {}
+    adj_ind = ((ind.get("adjclose") or [{}])[0] or {}).get("adjclose") or []
+    opens = q_ind.get("open") or []
+    highs = q_ind.get("high") or []
+    lows = q_ind.get("low") or []
+    closes = q_ind.get("close") or []
+    vols = q_ind.get("volume") or []
+    bars: list[dict[str, Any]] = []
+    for i, t_val in enumerate(ts):
+        if t_val is None or i >= len(closes):
+            continue
+        c_val = closes[i]
+        if c_val is None:
+            continue
+        d_str = datetime.datetime.fromtimestamp(t_val, datetime.timezone.utc).strftime("%Y-%m-%d")
+        adj_bar = _to_adjusted_ohlc_bar(
+            d_str,
+            opens[i] if i < len(opens) else None,
+            highs[i] if i < len(highs) else None,
+            lows[i] if i < len(lows) else None,
+            c_val,
+            adj_ind[i] if i < len(adj_ind) else None,
+            vols[i] if i < len(vols) else None,
+        )
+        if adj_bar:
+            bars.append(adj_bar)
+    return bars
+
+
+async def get_index_performances(
+    settings: Settings,
+    index_code: str,
+    *,
+    refresh: bool = False,
+    max_constituents: int = 550,
+) -> dict[str, Any] | None:
+    """Charge toutes les actions d'un indice en entrepôt et calcule leurs performances (1J à 1A + YTD)."""
+    comp = await get_index_composition(settings, index_code, refresh=refresh)
+    if comp is None:
+        return None
+
+    defn = comp["index"]
+    constituents = list(comp["constituents"] or [])[: max(1, max_constituents)]
+    db_path = warehouse_db_path(settings)
+    eod_key = (
+        settings.eod_historical_data_key.get_secret_value()
+        if settings.enabled(settings.eod_historical_data_key)
+        else ""
+    )
+    fresh_cutoff = (datetime.date.today() - datetime.timedelta(days=4)).isoformat()
+    default_currency = str(defn.get("currency") or "EUR")
+    sem = asyncio.Semaphore(10)
+
+    async def _load_one(client: httpx.AsyncClient, item: dict[str, Any]) -> dict[str, Any]:
+        eod_t = str(item.get("eod_ticker") or item.get("symbol") or "").upper()
+        yahoo_t = str(item.get("yahoo_symbol") or item.get("symbol") or "").upper()
+        sym = str(item.get("symbol") or eod_t).upper()
+        canonical = resolve_canonical_symbol(db_path, eod_t or sym)
+        stored = get_stored_eod_bars(db_path, canonical, limit=420)
+        has_fresh = bool(stored and len(stored) >= 200 and str(stored[-1].get("date") or "") >= fresh_cutoff)
+        bars: list[dict[str, Any]] = stored if (has_fresh and not refresh) else []
+        source_used = "warehouse" if bars else "none"
+        currency = default_currency
+
+        if not bars and not settings.demo_mode:
+            async with sem:
+                try:
+                    if eod_key and eod_t:
+                        raw_eod = await fetch_eodhd_historical_eod(client, eod_t, eod_key, limit=420)
+                        if raw_eod:
+                            parsed: list[dict[str, Any]] = []
+                            for b in reversed(raw_eod):
+                                d_str = str(b.get("date") or "")[:10]
+                                adj_bar = _to_adjusted_ohlc_bar(
+                                    d_str,
+                                    b.get("open"),
+                                    b.get("high"),
+                                    b.get("low"),
+                                    b.get("close"),
+                                    b.get("adjusted_close"),
+                                    b.get("volume"),
+                                )
+                                if adj_bar:
+                                    parsed.append(adj_bar)
+                            if parsed:
+                                bars = parsed
+                                source_used = "eodhd"
+                    if not bars and yahoo_t:
+                        chart = await fetch_yahoo_chart(client, yahoo_t, range_period="2y", interval="1d")
+                        if chart:
+                            meta = chart.get("meta") or {}
+                            if meta.get("currency"):
+                                currency = str(meta["currency"]).upper()
+                            y_bars = _yahoo_chart_to_adjusted_bars(chart)
+                            if y_bars:
+                                bars = y_bars
+                                source_used = "yahoo_finance"
+                except Exception as exc:
+                    _logger.debug("Chargement lot indice %s (%s) ignoré: %s", index_code, sym, exc)
+
+            if bars:
+                try:
+                    upsert_instrument(
+                        db_path,
+                        {
+                            "symbol": canonical,
+                            "eod_ticker": eod_t or canonical,
+                            "yahoo_symbol": yahoo_t or canonical,
+                            "short_name": str(item.get("name") or sym),
+                            "long_name": str(item.get("name") or sym),
+                            "exchange": str(item.get("exchange") or ""),
+                            "currency": currency,
+                            "sector": str(item.get("sector") or "") or None,
+                            "industry": str(item.get("industry") or "") or None,
+                        },
+                    )
+                    upsert_eod_bars(db_path, canonical, bars, source_used)
+                except Exception as exc:
+                    _logger.debug("Persistance lot indice %s (%s) ignorée: %s", index_code, sym, exc)
+
+        if not bars and stored:
+            bars = stored
+
+        returns = compute_period_returns(bars)
+        as_of = str(bars[-1].get("date") or "")[:10] if bars else None
+        return {
+            **item,
+            "currency": currency,
+            "price": returns["price"],
+            "change_1d_pct": returns["change_1d_pct"],
+            "change_1w_pct": returns["change_1w_pct"],
+            "change_1m_pct": returns["change_1m_pct"],
+            "change_3m_pct": returns["change_3m_pct"],
+            "change_ytd_pct": returns.get("change_ytd_pct"),
+            "change_1y_pct": returns["change_1y_pct"],
+            "as_of": as_of,
+            "bars_count": len(bars),
+            "cached_in_warehouse": bool(bars) or bool(item.get("cached_in_warehouse")),
+        }
+
+    async with httpx.AsyncClient(
+        headers={"User-Agent": DEFAULT_USER_AGENT},
+        follow_redirects=True,
+        timeout=15.0,
+    ) as client:
+        rows = list(await asyncio.gather(*(_load_one(client, c) for c in constituents)))
+
+    def _avg(key: str) -> float | None:
+        vals = [float(r[key]) for r in rows if r.get(key) is not None]
+        return round(sum(vals) / len(vals), 2) if vals else None
+
+    loaded_count = sum(1 for r in rows if r.get("price") is not None)
+    gainers_1d = sum(1 for r in rows if (r.get("change_1d_pct") or 0) > 0)
+    losers_1d = sum(1 for r in rows if (r.get("change_1d_pct") or 0) < 0)
+    gainers_1y = sum(1 for r in rows if (r.get("change_1y_pct") or 0) > 0)
+    losers_1y = sum(1 for r in rows if (r.get("change_1y_pct") or 0) < 0)
+
+    return {
+        "index": {
+            **defn,
+            "cached_count": sum(1 for r in rows if r.get("cached_in_warehouse")),
+        },
+        "summary": {
+            "total_count": len(comp["constituents"]),
+            "loaded_count": loaded_count,
+            "avg_1d_pct": _avg("change_1d_pct"),
+            "avg_1w_pct": _avg("change_1w_pct"),
+            "avg_1m_pct": _avg("change_1m_pct"),
+            "avg_3m_pct": _avg("change_3m_pct"),
+            "avg_ytd_pct": _avg("change_ytd_pct"),
+            "avg_1y_pct": _avg("change_1y_pct"),
+            "gainers_1d": gainers_1d,
+            "losers_1d": losers_1d,
+            "gainers_1y": gainers_1y,
+            "losers_1y": losers_1y,
+        },
+        "items": rows,
+        "warehouse": get_warehouse_overview(db_path),
+    }

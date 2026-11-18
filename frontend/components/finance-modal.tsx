@@ -73,6 +73,8 @@ import {
   fetchIndexComposition,
   fetchPrincipalIndices,
   fetchWatchlistState,
+  importIndexToWatchlist,
+  loadIndexPerformances,
   renameWatchlist,
   searchFinanceCatalog,
   seedDefaultWatchlist,
@@ -90,6 +92,7 @@ import {
   type FinancialStats,
   type IndexCompositionResponse,
   type IndexConstituent,
+  type IndexPerformancesResponse,
   type Model,
   type PrincipalIndexInfo,
   type WarehouseOverview,
@@ -214,6 +217,10 @@ export function FinanceModal({
   const [warehouseStats, setWarehouseStats] = useState<WarehouseOverview | null>(null);
   const [activeIndexCode, setActiveIndexCode] = useState<string | null>(null);
   const [indexComposition, setIndexComposition] = useState<IndexCompositionResponse | null>(null);
+  const [indexPerformances, setIndexPerformances] = useState<IndexPerformancesResponse | null>(null);
+  const [indexPerfLoading, setIndexPerfLoading] = useState(false);
+  const [indexImportBusy, setIndexImportBusy] = useState(false);
+  const [indexImportBanner, setIndexImportBanner] = useState<string | null>(null);
   const [indexLoading, setIndexLoading] = useState(false);
   const [indexError, setIndexError] = useState<string | null>(null);
   const [indxCatalogOpen, setIndxCatalogOpen] = useState(false);
@@ -459,12 +466,16 @@ export function FinanceModal({
     if (!forceRefresh && activeIndexCode === code) {
       setActiveIndexCode(null);
       setIndexComposition(null);
+      setIndexPerformances(null);
+      setIndexImportBanner(null);
       setIndexError(null);
       return;
     }
     setIndxCatalogOpen(false);
     setEufundCatalogOpen(false);
     setActiveIndexCode(code);
+    setIndexPerformances(null);
+    setIndexImportBanner(null);
     setIndexLoading(true);
     setIndexError(null);
     window.requestAnimationFrame(() => {
@@ -477,6 +488,58 @@ export function FinanceModal({
       setIndexError(err?.message || "Impossible de charger la composition de l'indice.");
     } finally {
       setIndexLoading(false);
+    }
+  }
+
+  async function handleLoadIndexPerformances(code: string, forceRefresh = false) {
+    if (!code || indexPerfLoading) return;
+    setIndexPerfLoading(true);
+    setIndexError(null);
+    try {
+      const res = await loadIndexPerformances(code, forceRefresh);
+      setIndexPerformances(res);
+      if (res.warehouse) setWarehouseStats(res.warehouse);
+      setIndexComposition(prev =>
+        prev
+          ? {
+              ...prev,
+              index: { ...prev.index, cached_count: res.index.cached_count },
+              constituents: prev.constituents.map(c => {
+                const match = res.items.find(it => it.symbol === c.symbol);
+                return match ? { ...c, cached_in_warehouse: match.cached_in_warehouse } : c;
+              }),
+            }
+          : prev,
+      );
+    } catch (err: any) {
+      setIndexError(err?.message || "Impossible de charger les performances de l'indice.");
+    } finally {
+      setIndexPerfLoading(false);
+    }
+  }
+
+  async function handleImportIndexToWatchlist(code: string) {
+    if (!code || indexImportBusy) return;
+    setIndexImportBusy(true);
+    setIndexImportBanner(null);
+    setIndexError(null);
+    try {
+      const res = await importIndexToWatchlist(code);
+      setWatchlists(prev => {
+        const exists = prev.some(l => l.id === res.list.id);
+        return exists ? prev.map(l => (l.id === res.list.id ? res.list : l)) : [...prev, res.list];
+      });
+      setIndexImportBanner(
+        res.added_count > 0
+          ? `${res.added_count} valeurs ajoutées à la liste « ${res.list.name} » (${res.list.items_count} au total).`
+          : `Toutes les valeurs de l'indice sont déjà présentes dans la liste « ${res.list.name} ».`,
+      );
+      toggleWatchlistSidebar(true);
+      await handleSelectWatchlistTab(res.list.id);
+    } catch (err: any) {
+      setIndexError(err?.message || "Impossible d'importer l'indice dans une liste.");
+    } finally {
+      setIndexImportBusy(false);
     }
   }
 
@@ -954,15 +1017,29 @@ export function FinanceModal({
                     ? indexComposition
                     : null
                 }
+                performances={
+                  indexPerformances &&
+                  (indexPerformances.index.code === activeIndexCode ||
+                    indexPerformances.index.eod_ticker === activeIndexCode)
+                    ? indexPerformances
+                    : null
+                }
+                performancesLoading={indexPerfLoading}
+                importingWatchlist={indexImportBusy}
+                importBanner={indexImportBanner}
                 loading={indexLoading}
                 error={indexError}
                 selectedSymbol={data?.eod_ticker || data?.yahoo_symbol || data?.symbol || null}
                 onSelectStock={item => void handleSelectIndexStock(item)}
                 onAddWatchlist={handleAddIndexStockToWatchlist}
+                onLoadPerformances={forceRefresh => handleLoadIndexPerformances(activeIndexCode, Boolean(forceRefresh))}
+                onImportToWatchlist={() => handleImportIndexToWatchlist(activeIndexCode)}
                 onRefresh={() => void handleToggleIndex(activeIndexCode, true)}
                 onClose={() => {
                   setActiveIndexCode(null);
                   setIndexComposition(null);
+                  setIndexPerformances(null);
+                  setIndexImportBanner(null);
                   setIndexError(null);
                 }}
               />

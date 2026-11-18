@@ -21966,6 +21966,81 @@ thead .finance-stmt-sticky-col {
   padding-top: 2px;
 }
 
+.finance-index-import-banner {
+  padding: 7px 12px;
+  border-radius: 9px;
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.32);
+  color: #047857;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+:root[data-theme="dark"] .finance-index-import-banner {
+  background: rgba(16, 185, 129, 0.16);
+  color: #6ee7b7;
+}
+
+.finance-index-perf-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(125px, 1fr));
+  gap: 8px;
+}
+
+.finance-index-perf-kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+}
+
+:root[data-theme="dark"] .finance-index-perf-kpi {
+  border-color: #1e293b;
+  background: #0f172a;
+}
+
+.finance-index-perf-kpi > span:first-child {
+  font-size: 11px;
+  color: #64748b;
+  font-weight: 600;
+}
+
+:root[data-theme="dark"] .finance-index-perf-kpi > span:first-child {
+  color: #94a3b8;
+}
+
+.finance-index-perf-kpi > strong {
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.finance-index-perf-table-wrap {
+  max-height: 460px;
+  overflow: auto;
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+}
+
+:root[data-theme="dark"] .finance-index-perf-table-wrap {
+  border-color: #1e293b;
+  background: #020617;
+}
+
+.finance-index-perf-table-wrap thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #f8fafc;
+}
+
+:root[data-theme="dark"] .finance-index-perf-table-wrap thead th {
+  background: #0f172a;
+}
+
 /* =========================================================================
    FINANCE HERO FOLLOW BUTTON & CUSTOM WATCHLISTS TABS
    ========================================================================= */

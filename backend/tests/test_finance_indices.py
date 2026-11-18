@@ -192,3 +192,54 @@ def test_eodhd_indx_catalog_endpoint_mocked_and_cached(tmp_path: Path) -> None:
     assert comp is not None
     assert comp["index"]["eod_ticker"] == "RUT.INDX"
     assert len(comp["constituents"]) >= 15
+
+
+def test_load_index_performances_and_import_to_watchlist(tmp_path: Path) -> None:
+    import datetime
+    from tests.test_api import authenticated_client
+
+    s = Settings(
+        _env_file=None,
+        app_data_dir=tmp_path,
+        finance_data_dir=tmp_path / "finance",
+        demo_mode=False,
+        eod_historical_data_key="test-eod-key",
+        openrouter_api_key="",
+        brave_api_key="",
+        duckduckgo_instant_answers_enabled=False,
+    )
+
+    today = datetime.date.today()
+    bars_desc = [
+        {"date": today.isoformat(), "open": 105.0, "high": 106.0, "low": 104.0, "close": 105.0, "adjusted_close": 105.0, "volume": 1000},
+        {"date": (today - datetime.timedelta(days=1)).isoformat(), "open": 100.0, "high": 101.0, "low": 99.0, "close": 100.0, "adjusted_close": 100.0, "volume": 900},
+        {"date": (today - datetime.timedelta(days=366)).isoformat(), "open": 80.0, "high": 81.0, "low": 79.0, "close": 80.0, "adjusted_close": 80.0, "volume": 800},
+    ]
+
+    with authenticated_client(s) as client:
+        with (
+            patch("app.finance_indices._fetch_eodhd_index_components", new=AsyncMock(return_value=[])),
+            patch("app.finance_indices.fetch_eodhd_historical_eod", new=AsyncMock(return_value=bars_desc)),
+        ):
+            res_perf = client.post("/api/finance/indices/CAC40/performances")
+            assert res_perf.status_code == 200
+            body = res_perf.json()
+            assert body["summary"]["total_count"] == 40
+            assert body["summary"]["loaded_count"] == 40
+            assert body["summary"]["avg_1d_pct"] == 5.0
+            assert body["summary"]["avg_1y_pct"] == 31.25
+            assert body["items"][0]["price"] == 105.0
+            assert body["items"][0]["change_1d_pct"] == 5.0
+            assert body["warehouse"]["instruments_count"] == 40
+
+        res_imp = client.post("/api/finance/indices/CAC40/watchlist", json={})
+        assert res_imp.status_code == 201
+        imp = res_imp.json()
+        assert imp["list"]["name"] == "CAC 40"
+        assert imp["added_count"] == 40
+        assert imp["list"]["items_count"] == 40
+
+        # Idempotent si relancé
+        res_imp_2 = client.post("/api/finance/indices/CAC40/watchlist", json={})
+        assert res_imp_2.status_code == 201
+        assert res_imp_2.json()["added_count"] == 0

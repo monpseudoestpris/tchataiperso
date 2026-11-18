@@ -18,6 +18,7 @@ from ..finance_experts import generate_finance_expert_opinion, list_finance_expe
 from ..finance_funds import list_eufund_catalog, search_eodhd_funds_live
 from ..finance_indices import (
     get_index_composition,
+    get_index_performances,
     list_eodhd_indx_catalog,
     list_principal_indices,
     search_finance_catalog,
@@ -479,6 +480,111 @@ async def get_principal_index_composition(
     if payload is None:
         raise HTTPException(404, f"Indice inconnu : {index_code}")
     return payload
+
+
+@router.post("/indices/{index_code}/performances")
+async def load_index_performances_endpoint(
+    index_code: str,
+    refresh: bool = Query(False, description="Forcer le re-téléchargement des cours EOD"),
+    settings: Settings = Depends(get_settings),
+    user: User = Depends(current_user),
+) -> dict[str, Any]:
+    """Charge toutes les actions d'un indice en entrepôt et calcule le tableau complet de leurs performances."""
+    payload = await get_index_performances(settings, index_code, refresh=refresh)
+    if payload is None:
+        raise HTTPException(404, f"Indice inconnu : {index_code}")
+    return payload
+
+
+@router.post("/indices/{index_code}/watchlist", status_code=201)
+async def import_index_to_watchlist_endpoint(
+    index_code: str,
+    body: dict[str, Any] | None = Body(default=None),
+    settings: Settings = Depends(get_settings),
+    user: User = Depends(current_user),
+    sessions: sessionmaker = Depends(get_sessions),
+) -> dict[str, Any]:
+    """Crée ou complète une liste de suivi avec toutes les actions d'un indice en une seule opération."""
+    comp = await get_index_composition(settings, index_code, refresh=False)
+    if comp is None:
+        raise HTTPException(404, f"Indice inconnu : {index_code}")
+
+    defn = comp["index"]
+    constituents = comp["constituents"] or []
+    req_body = body if isinstance(body, dict) else {}
+    target_list_id = str(req_body.get("list_id") or "").strip() or None
+    requested_name = str(req_body.get("list_name") or defn.get("name") or index_code).strip()[:80]
+    default_curr = str(defn.get("currency") or "EUR").upper()[:16]
+
+    with sessions() as db:
+        lists = _ensure_user_watchlists(db, user.id, settings=settings)
+        target: FinanceWatchlist | None = None
+        if target_list_id:
+            target = next((wl for wl in lists if wl.id == target_list_id), None)
+            if not target:
+                raise HTTPException(404, "Liste de suivi introuvable.")
+        else:
+            target = next((wl for wl in lists if wl.name.lower() == requested_name.lower()), None)
+            if not target:
+                max_pos = max((wl.position for wl in lists), default=-1)
+                target = FinanceWatchlist(user_id=user.id, name=requested_name, position=max_pos + 1)
+                db.add(target)
+                db.commit()
+                db.refresh(target)
+
+        existing_rows = db.execute(
+            select(FinanceWatchlistItem.symbol, FinanceWatchlistItem.eod_ticker).where(
+                FinanceWatchlistItem.user_id == user.id,
+                FinanceWatchlistItem.list_id == target.id,
+            )
+        ).all()
+        existing_syms = {str(r[0]).upper() for r in existing_rows if r[0]} | {
+            str(r[1]).upper() for r in existing_rows if r[1]
+        }
+        max_item_pos = db.scalar(
+            select(func.max(FinanceWatchlistItem.position)).where(
+                FinanceWatchlistItem.user_id == user.id,
+                FinanceWatchlistItem.list_id == target.id,
+            )
+        )
+        next_pos = (max_item_pos if max_item_pos is not None else -1) + 1
+        added_count = 0
+        for item in constituents:
+            sym = str(item.get("eod_ticker") or item.get("symbol") or "").strip().upper()[:32]
+            if not sym or sym in existing_syms:
+                continue
+            existing_syms.add(sym)
+            db.add(
+                FinanceWatchlistItem(
+                    user_id=user.id,
+                    list_id=target.id,
+                    symbol=sym,
+                    yahoo_symbol=str(item.get("yahoo_symbol") or sym).strip().upper()[:32],
+                    eod_ticker=str(item.get("eod_ticker") or sym).strip().upper()[:32],
+                    name=str(item.get("name") or sym).strip()[:200],
+                    exchange=str(item.get("exchange") or "")[:80],
+                    currency=default_curr,
+                    position=next_pos,
+                )
+            )
+            next_pos += 1
+            added_count += 1
+        if added_count > 0:
+            db.commit()
+        total_in_list = db.scalar(
+            select(func.count(FinanceWatchlistItem.id)).where(
+                FinanceWatchlistItem.user_id == user.id,
+                FinanceWatchlistItem.list_id == target.id,
+            )
+        )
+        _backup_user_watchlists_to_warehouse(settings, db, user.id)
+        wl_payload = watchlist_json(target, int(total_in_list or 0))
+
+    return {
+        "list": wl_payload,
+        "added_count": added_count,
+        "total_constituents": len(constituents),
+    }
 
 
 @router.get("/catalog/search")

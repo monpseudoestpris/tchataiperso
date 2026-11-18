@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, ChevronDown, ChevronUp, Database, Globe2, LoaderCircle, Plus, RefreshCw, Search, X } from "lucide-react";
+import { ArrowDown, ArrowUp, BarChart2, Check, ChevronDown, ChevronUp, Database, FolderPlus, Globe2, LayoutGrid, LoaderCircle, Plus, RefreshCw, Search, Table2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import {
@@ -8,6 +8,8 @@ import {
   type EodhdIndxCatalogItem,
   type IndexCompositionResponse,
   type IndexConstituent,
+  type IndexPerformanceItem,
+  type IndexPerformancesResponse,
   type PrincipalIndexInfo,
   type WarehouseOverview,
 } from "@/lib/api";
@@ -289,36 +291,81 @@ export function FinanceEodhdIndxBrowser({
   );
 }
 
+type PerfSortKey =
+  | "name"
+  | "weight_pct"
+  | "price"
+  | "change_1d_pct"
+  | "change_1w_pct"
+  | "change_1m_pct"
+  | "change_3m_pct"
+  | "change_ytd_pct"
+  | "change_1y_pct";
+
+function IndexPerfCell({ value }: { value: number | null | undefined }) {
+  if (value == null || !Number.isFinite(value)) {
+    return <span className="finance-perf-na">—</span>;
+  }
+  const cls = value > 0 ? "is-up" : value < 0 ? "is-down" : "is-flat";
+  return (
+    <span className={`finance-perf-pill ${cls}`}>
+      {value > 0 ? "+" : ""}
+      {value.toFixed(2)}%
+    </span>
+  );
+}
+
 export function FinanceIndexCompositionDrawer({
   composition,
+  performances,
+  performancesLoading = false,
+  importingWatchlist = false,
+  importBanner = null,
   loading,
   error,
   selectedSymbol,
   onSelectStock,
   onAddWatchlist,
+  onLoadPerformances,
+  onImportToWatchlist,
   onRefresh,
   onClose,
 }: {
   composition: IndexCompositionResponse | null;
+  performances?: IndexPerformancesResponse | null;
+  performancesLoading?: boolean;
+  importingWatchlist?: boolean;
+  importBanner?: string | null;
   loading: boolean;
   error: string | null;
   selectedSymbol?: string | null;
   onSelectStock: (item: IndexConstituent) => void;
   onAddWatchlist?: (item: IndexConstituent) => Promise<void>;
+  onLoadPerformances?: (forceRefresh?: boolean) => Promise<void>;
+  onImportToWatchlist?: () => Promise<void>;
   onRefresh: () => void;
   onClose: () => void;
 }) {
+  const [viewMode, setViewMode] = useState<"cards" | "table">("cards");
   const [filterText, setFilterText] = useState("");
   const [sectorFilter, setSectorFilter] = useState("");
   const [onlyCached, setOnlyCached] = useState(false);
   const [visibleLimit, setVisibleLimit] = useState(PAGE_STEP);
   const [addingSym, setAddingSym] = useState<string | null>(null);
   const [addedSyms, setAddedSyms] = useState<Record<string, boolean>>({});
+  const [sortKey, setSortKey] = useState<PerfSortKey>("change_1d_pct");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+
+  const activeItems = useMemo<(IndexConstituent | IndexPerformanceItem)[]>(() => {
+    if (viewMode === "table" && performances?.items?.length) {
+      return performances.items;
+    }
+    return composition?.constituents || [];
+  }, [viewMode, performances, composition]);
 
   const filtered = useMemo(() => {
-    const items = composition?.constituents || [];
     const q = filterText.trim().toLowerCase();
-    return items.filter(c => {
+    return activeItems.filter(c => {
       if (onlyCached && !c.cached_in_warehouse) return false;
       if (sectorFilter && c.sector !== sectorFilter) return false;
       if (!q) return true;
@@ -329,11 +376,56 @@ export function FinanceIndexCompositionDrawer({
         c.sector.toLowerCase().includes(q)
       );
     });
-  }, [composition, filterText, sectorFilter, onlyCached]);
+  }, [activeItems, filterText, sectorFilter, onlyCached]);
+
+  const sortedPerfItems = useMemo(() => {
+    const list = [...filtered] as IndexPerformanceItem[];
+    list.sort((a, b) => {
+      if (sortKey === "name") {
+        const cmp = a.name.localeCompare(b.name, "fr");
+        return sortDir === "asc" ? cmp : -cmp;
+      }
+      const va = a[sortKey] ?? null;
+      const vb = b[sortKey] ?? null;
+      if (va == null && vb == null) return 0;
+      if (va == null) return 1;
+      if (vb == null) return -1;
+      return sortDir === "asc" ? Number(va) - Number(vb) : Number(vb) - Number(va);
+    });
+    return list;
+  }, [filtered, sortKey, sortDir]);
 
   const visibleItems = filtered.slice(0, visibleLimit);
   const remaining = Math.max(0, filtered.length - visibleItems.length);
   const selectedUpper = (selectedSymbol || "").toUpperCase();
+
+  function toggleSort(key: PerfSortKey) {
+    if (sortKey === key) {
+      setSortDir(prev => (prev === "desc" ? "asc" : "desc"));
+    } else {
+      setSortKey(key);
+      setSortDir(key === "name" ? "asc" : "desc");
+    }
+  }
+
+  function renderSortIcon(key: PerfSortKey) {
+    if (sortKey !== key) return null;
+    return sortDir === "asc" ? <ArrowUp size={11} /> : <ArrowDown size={11} />;
+  }
+
+  async function handleSwitchToTable() {
+    setViewMode("table");
+    if (!performances && onLoadPerformances && !performancesLoading) {
+      await onLoadPerformances(false);
+    }
+  }
+
+  async function handleBatchLoad(forceRefresh = false) {
+    setViewMode("table");
+    if (onLoadPerformances) {
+      await onLoadPerformances(forceRefresh);
+    }
+  }
 
   async function handleAdd(e: React.MouseEvent, item: IndexConstituent) {
     e.stopPropagation();
@@ -360,7 +452,7 @@ export function FinanceIndexCompositionDrawer({
                 </strong>
                 <small>
                   {composition.index.region} · {composition.index.eod_ticker} · Source : {composition.index.source} ·{" "}
-                  {composition.index.cached_count} déjà chargées en entrepôt
+                  {performances?.index?.cached_count ?? composition.index.cached_count} chargées en entrepôt
                 </small>
               </div>
             </>
@@ -369,6 +461,60 @@ export function FinanceIndexCompositionDrawer({
           )}
         </div>
         <div className="finance-index-drawer-actions">
+          {composition && composition.constituents.length > 0 && (
+            <>
+              <div className="finance-timeframe-selector" role="group" aria-label="Mode d'affichage de l'indice">
+                <button
+                  type="button"
+                  className={`finance-tf-btn ${viewMode === "cards" ? "active" : ""}`}
+                  onClick={() => setViewMode("cards")}
+                  title="Vue en cartes"
+                >
+                  <LayoutGrid size={12} />
+                  <span>Cartes</span>
+                </button>
+                <button
+                  type="button"
+                  className={`finance-tf-btn ${viewMode === "table" ? "active" : ""}`}
+                  onClick={() => void handleSwitchToTable()}
+                  title="Afficher le tableau comparatif des performances"
+                >
+                  <Table2 size={12} />
+                  <span>Tableau Perfos</span>
+                </button>
+              </div>
+              {onLoadPerformances && (
+                <button
+                  type="button"
+                  className="finance-tf-btn active finance-stmt-refresh-btn"
+                  disabled={performancesLoading || loading}
+                  onClick={() => void handleBatchLoad(Boolean(performances))}
+                  title="Télécharger toutes les actions de l'indice en entrepôt et calculer leurs performances (1J à 1A + YTD)"
+                >
+                  {performancesLoading ? <LoaderCircle size={12} className="spin" /> : <BarChart2 size={12} />}
+                  <span>
+                    {performancesLoading
+                      ? "Chargement de l'indice…"
+                      : performances
+                        ? "Recalculer perfos"
+                        : "Charger tout l'indice"}
+                  </span>
+                </button>
+              )}
+              {onImportToWatchlist && (
+                <button
+                  type="button"
+                  className="finance-tf-btn finance-stmt-refresh-btn"
+                  disabled={importingWatchlist || loading}
+                  onClick={() => void onImportToWatchlist()}
+                  title={`Créer ou compléter une liste « ${composition.index.name} » avec toutes les valeurs de cet indice`}
+                >
+                  {importingWatchlist ? <LoaderCircle size={12} className="spin" /> : <FolderPlus size={12} />}
+                  <span>Liste « {composition.index.name} »</span>
+                </button>
+              )}
+            </>
+          )}
           <button
             type="button"
             className="finance-tf-btn finance-stmt-refresh-btn"
@@ -389,6 +535,8 @@ export function FinanceIndexCompositionDrawer({
           </button>
         </div>
       </div>
+
+      {importBanner && <div className="finance-index-import-banner">✓ {importBanner}</div>}
 
       {composition && (
         <div className="finance-index-drawer-filters">
@@ -447,6 +595,169 @@ export function FinanceIndexCompositionDrawer({
           <LoaderCircle size={18} className="spin text-emerald" />
           <span>Récupération des constituants…</span>
         </div>
+      ) : viewMode === "table" && performancesLoading && !performances ? (
+        <div className="finance-index-drawer-loading">
+          <LoaderCircle size={18} className="spin text-emerald" />
+          <span>
+            Chargement de toutes les actions de {composition?.index.name || "l'indice"} en entrepôt et calcul des performances…
+          </span>
+        </div>
+      ) : viewMode === "table" && performances ? (
+        <>
+          <div className="finance-index-perf-summary">
+            <div className="finance-index-perf-kpi">
+              <span>Actions chargées</span>
+              <strong>
+                {performances.summary.loaded_count} / {performances.summary.total_count}
+              </strong>
+            </div>
+            <div className="finance-index-perf-kpi">
+              <span>Hausses / Baisses (1J)</span>
+              <strong>
+                <span className="text-emerald">{performances.summary.gainers_1d} ↑</span> ·{" "}
+                <span className="text-rose">{performances.summary.losers_1d} ↓</span>
+              </strong>
+            </div>
+            <div className="finance-index-perf-kpi">
+              <span>Moy. Jour</span>
+              <IndexPerfCell value={performances.summary.avg_1d_pct} />
+            </div>
+            <div className="finance-index-perf-kpi">
+              <span>Moy. Mois</span>
+              <IndexPerfCell value={performances.summary.avg_1m_pct} />
+            </div>
+            <div className="finance-index-perf-kpi">
+              <span>Moy. YTD</span>
+              <IndexPerfCell value={performances.summary.avg_ytd_pct} />
+            </div>
+            <div className="finance-index-perf-kpi">
+              <span>Moy. 1 An</span>
+              <IndexPerfCell value={performances.summary.avg_1y_pct} />
+            </div>
+          </div>
+
+          {sortedPerfItems.length === 0 ? (
+            <div className="finance-index-drawer-empty">
+              Aucune valeur ne correspond à ce filtre dans cet indice.
+            </div>
+          ) : (
+            <div className="finance-table-wrapper finance-index-perf-table-wrap">
+              <table className="finance-data-table finance-watchlist-table">
+                <thead>
+                  <tr>
+                    <th>
+                      <button type="button" className="finance-sort-btn" onClick={() => toggleSort("name")}>
+                        Action {renderSortIcon("name")}
+                      </button>
+                    </th>
+                    <th className="is-num">
+                      <button type="button" className="finance-sort-btn" onClick={() => toggleSort("weight_pct")}>
+                        Poids {renderSortIcon("weight_pct")}
+                      </button>
+                    </th>
+                    <th className="is-num">
+                      <button type="button" className="finance-sort-btn" onClick={() => toggleSort("price")}>
+                        Cours {renderSortIcon("price")}
+                      </button>
+                    </th>
+                    <th className="is-num">
+                      <button type="button" className="finance-sort-btn" onClick={() => toggleSort("change_1d_pct")}>
+                        Jour {renderSortIcon("change_1d_pct")}
+                      </button>
+                    </th>
+                    <th className="is-num">
+                      <button type="button" className="finance-sort-btn" onClick={() => toggleSort("change_1w_pct")}>
+                        Semaine {renderSortIcon("change_1w_pct")}
+                      </button>
+                    </th>
+                    <th className="is-num">
+                      <button type="button" className="finance-sort-btn" onClick={() => toggleSort("change_1m_pct")}>
+                        Mois {renderSortIcon("change_1m_pct")}
+                      </button>
+                    </th>
+                    <th className="is-num">
+                      <button type="button" className="finance-sort-btn" onClick={() => toggleSort("change_3m_pct")}>
+                        3 Mois {renderSortIcon("change_3m_pct")}
+                      </button>
+                    </th>
+                    <th className="is-num">
+                      <button type="button" className="finance-sort-btn" onClick={() => toggleSort("change_ytd_pct")}>
+                        YTD {renderSortIcon("change_ytd_pct")}
+                      </button>
+                    </th>
+                    <th className="is-num">
+                      <button type="button" className="finance-sort-btn" onClick={() => toggleSort("change_1y_pct")}>
+                        1 An {renderSortIcon("change_1y_pct")}
+                      </button>
+                    </th>
+                    <th className="is-actions"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sortedPerfItems.map(item => {
+                    const isSelected =
+                      selectedUpper &&
+                      (selectedUpper === item.symbol.toUpperCase() ||
+                        selectedUpper === item.eod_ticker.toUpperCase() ||
+                        selectedUpper === item.yahoo_symbol.toUpperCase());
+                    const isAdded = Boolean(addedSyms[item.symbol]);
+                    const isBusy = addingSym === item.symbol;
+                    return (
+                      <tr
+                        key={item.symbol}
+                        className={`finance-watchlist-row ${isSelected ? "is-selected" : ""}`}
+                        onClick={() => onSelectStock(item)}
+                        title={`Ouvrir ${item.name} (${item.eod_ticker})`}
+                      >
+                        <td>
+                          <div className="finance-wl-identity">
+                            <strong>{item.name}</strong>
+                            <div className="finance-wl-meta">
+                              <span className="finance-symbol-tag">{item.eod_ticker || item.symbol}</span>
+                              {item.sector && <span className="finance-wl-exch">{item.sector}</span>}
+                            </div>
+                          </div>
+                        </td>
+                        <td className="is-num">
+                          {item.weight_pct != null ? `${item.weight_pct.toFixed(2)}%` : <span className="finance-perf-na">—</span>}
+                        </td>
+                        <td className="is-num">
+                          {item.price != null ? (
+                            <strong className="finance-wl-price">
+                              {item.price.toFixed(2)} <small>{item.currency}</small>
+                            </strong>
+                          ) : (
+                            <span className="finance-perf-na">—</span>
+                          )}
+                        </td>
+                        <td className="is-num"><IndexPerfCell value={item.change_1d_pct} /></td>
+                        <td className="is-num"><IndexPerfCell value={item.change_1w_pct} /></td>
+                        <td className="is-num"><IndexPerfCell value={item.change_1m_pct} /></td>
+                        <td className="is-num"><IndexPerfCell value={item.change_3m_pct} /></td>
+                        <td className="is-num"><IndexPerfCell value={item.change_ytd_pct} /></td>
+                        <td className="is-num"><IndexPerfCell value={item.change_1y_pct} /></td>
+                        <td className="is-actions">
+                          {onAddWatchlist && (
+                            <button
+                              type="button"
+                              className={`finance-index-add-btn ${isAdded ? "is-added" : ""}`}
+                              disabled={isBusy}
+                              onClick={e => void handleAdd(e, item)}
+                              title={isAdded ? "Ajoutée au suivi" : "Ajouter au tableau de suivi"}
+                              aria-label={`Ajouter ${item.name} au suivi`}
+                            >
+                              {isBusy ? <LoaderCircle size={11} className="spin" /> : isAdded ? <Check size={11} /> : <Plus size={11} />}
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
       ) : visibleItems.length === 0 ? (
         <div className="finance-index-drawer-empty">
           {composition && composition.constituents.length === 0
