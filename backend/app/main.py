@@ -164,6 +164,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             with engine.begin() as conn:
                 if "canvas_files" not in wpv_columns:
                     conn.execute(text("ALTER TABLE web_page_versions ADD COLUMN canvas_files JSON NOT NULL DEFAULT '[]'"))
+        if "finance_quarterly_reports" in inspector.get_table_names():
+            fqr_columns = {column["name"] for column in inspector.get_columns("finance_quarterly_reports")}
+            dt_type = "TIMESTAMPTZ" if engine.dialect.name == "postgresql" else "DATETIME"
+            with engine.begin() as conn:
+                if "extracted_tables" not in fqr_columns:
+                    conn.execute(text("ALTER TABLE finance_quarterly_reports ADD COLUMN extracted_tables JSON"))
+                if "extracted_at" not in fqr_columns:
+                    conn.execute(text(f"ALTER TABLE finance_quarterly_reports ADD COLUMN extracted_at {dt_type}"))
         if "finance_watchlist_items" in inspector.get_table_names():
             wl_columns = {column["name"] for column in inspector.get_columns("finance_watchlist_items")}
             wl_uqs = {u["name"]: u.get("column_names") or [] for u in inspector.get_unique_constraints("finance_watchlist_items") if u.get("name")}

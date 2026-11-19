@@ -10,6 +10,7 @@ from __future__ import annotations
 import datetime
 import json
 import logging
+import os
 import re
 import sqlite3
 import time
@@ -251,7 +252,27 @@ CREATE TABLE IF NOT EXISTS finance_sync_preferences (
 
 def warehouse_db_path(settings: Settings) -> Path:
     """Retourne le chemin vers la base SQLite de l'entrepôt financier."""
-    return settings.resolved_finance_data_dir / _WAREHOUSE_FILENAME
+    primary_dir = settings.resolved_finance_data_dir
+    fallback_dir = (settings.app_data_dir / "finance").resolve()
+    if primary_dir != fallback_dir:
+        try:
+            primary_dir.mkdir(parents=True, exist_ok=True)
+            if os.access(primary_dir, os.W_OK | os.X_OK):
+                return primary_dir / _WAREHOUSE_FILENAME
+            _logger.warning(
+                "Répertoire entrepôt financier non accessible en écriture (%s); repli sur %s",
+                primary_dir,
+                fallback_dir,
+            )
+        except OSError as exc:
+            _logger.warning(
+                "Impossible de créer le répertoire entrepôt financier (%s: %s); repli sur %s",
+                primary_dir,
+                exc,
+                fallback_dir,
+            )
+        return fallback_dir / _WAREHOUSE_FILENAME
+    return primary_dir / _WAREHOUSE_FILENAME
 
 
 def _utc_iso(ts: float | None = None) -> str:

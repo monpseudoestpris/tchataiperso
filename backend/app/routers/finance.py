@@ -36,7 +36,12 @@ from ..providers import ProviderError
 from ..finance_moat import analyze_and_build_stock_moat
 from ..finance_news import get_cached_or_fetch_eodhd_news_feed, search_and_summarize_stock_news
 from ..finance_ranges import ChartRange, DEFAULT_CHART_RANGE
-from ..finance_reports import MAX_REPORT_EXTRACTED_CHARS, analyze_quarterly_report, extract_report_content
+from ..finance_reports import (
+    MAX_REPORT_EXTRACTED_CHARS,
+    analyze_quarterly_report,
+    extract_markdown_tables,
+    extract_report_content,
+)
 from ..finance_report_html import build_classy_report_html
 from ..finance_statements import get_financial_statements, is_valid_symbol
 from ..finance_warehouse import (
@@ -1516,6 +1521,9 @@ async def import_and_analyze_quarterly_report(
         if not clean_title:
             clean_title = f"Rapport {clean_period or clean_symbol}"[:255]
 
+    extracted_tables = extract_markdown_tables(extracted_text)
+    extracted_at = datetime.datetime.now(datetime.timezone.utc)
+
     try:
         summary_markdown, key_metrics = await analyze_quarterly_report(
             settings,
@@ -1536,6 +1544,8 @@ async def import_and_analyze_quarterly_report(
                 filename=filename,
                 storage_name=storage_name,
                 extracted_text=extracted_text,
+                extracted_tables=extracted_tables,
+                extracted_at=extracted_at,
                 summary_markdown=summary_markdown,
                 key_metrics=key_metrics,
             )

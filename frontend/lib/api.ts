@@ -2419,6 +2419,7 @@ export type QuarterlyReport = {
   summary_markdown: string;
   key_metrics: Record<string, string>;
   has_file: boolean;
+  extracted_at?: string;
   created_at: string;
   extracted_text?: string;
   extracted_tables?: QuarterlyReportTable[];

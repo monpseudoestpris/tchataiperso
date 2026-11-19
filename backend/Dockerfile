@@ -6,7 +6,7 @@ COPY requirements.lock.txt ./
 RUN --mount=type=secret,id=cloud_ca \
     if [ -f /run/secrets/cloud_ca ]; then export PIP_CERT=/run/secrets/cloud_ca; fi; \
     pip install --no-cache-dir --require-hashes -r requirements.lock.txt && \
-    useradd --uid 10001 --create-home app && mkdir -p /data /app/data && chown app:app /data /app/data
+    useradd --uid 10001 --create-home app && mkdir -p /data /app/data /app/finance_data && chown app:app /data /app/data /app/finance_data
 COPY --chown=app:app app ./app
 COPY --chown=app:app migrations ./migrations
 COPY --chown=app:app alembic.ini ./alembic.ini

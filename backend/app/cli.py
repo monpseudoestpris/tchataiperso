@@ -61,6 +61,7 @@ def prepare_schema(settings: Settings) -> None:
         "0023_add_agent_personas",
         "0024_add_finance_watchlists",
         "0025_add_watchlist_item_note",
+        "0026_add_finance_report_extracts",
     }:
         raise SystemExit(f"Révision de base non reconnue : {current}")
 

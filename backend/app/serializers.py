@@ -508,7 +508,12 @@ def stock_news_json(item: FinanceStockNews) -> dict:
 
 def quarterly_report_json(item: FinanceQuarterlyReport, include_extracted: bool = False) -> dict:
     extracted = item.extracted_text or ""
-    tables = extract_markdown_tables(extracted)
+    tables = (
+        item.extracted_tables
+        if isinstance(item.extracted_tables, list)
+        else extract_markdown_tables(extracted)
+    )
+    extracted_at_dt = item.extracted_at or item.created_at
     data = {
         "id": item.id,
         "symbol": item.symbol,
@@ -523,6 +528,7 @@ def quarterly_report_json(item: FinanceQuarterlyReport, include_extracted: bool 
         "summary_markdown": item.summary_markdown or "",
         "key_metrics": item.key_metrics if isinstance(item.key_metrics, dict) else {},
         "has_file": bool(item.storage_name),
+        "extracted_at": stamp(extracted_at_dt),
         "created_at": stamp(item.created_at),
     }
     if include_extracted:

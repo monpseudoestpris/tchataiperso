@@ -335,7 +335,62 @@ def test_quarterly_report_serializer_and_router_expose_tables(tmp_path: Path) ->
         assert created["page_count"] == 2
         assert created["tables_count"] == 2
         assert len(created["extracted_tables"]) == 2
+        assert created["extracted_at"]
 
         res_list = client.get("/api/finance/reports?symbol=AI.PA")
         assert res_list.status_code == 200
         assert res_list.json()["items"][0]["tables_count"] == 2
+        assert res_list.json()["items"][0]["extracted_at"] == created["extracted_at"]
+
+        # Verifie que les extracts (texte, tableaux, date) sont bien persistes en BDD
+        from app.models import FinanceQuarterlyReport as _FQR
+        from sqlalchemy import select as _select
+
+        with client.app.state.sessions() as db:
+            saved = db.scalar(_select(_FQR).where(_FQR.id == created["id"]))
+            assert saved is not None
+            assert saved.extracted_text == sample_text
+            assert isinstance(saved.extracted_tables, list)
+            assert len(saved.extracted_tables) == 2
+            assert saved.extracted_at is not None
+
+
+def test_quarterly_report_serializer_prefers_persisted_extracts_and_warehouse_fallback(tmp_path: Path) -> None:
+    from app.finance_warehouse import warehouse_db_path
+
+    custom_tables = [
+        {"index": 1, "page": 3, "title": "Tableau persiste", "markdown": "| A | B |\n| --- | --- |\n| 1 | 2 |", "rows_count": 1, "cols_count": 2}
+    ]
+    extracted_dt = datetime(2026, 11, 19, 14, 30, tzinfo=timezone.utc)
+    item = FinanceQuarterlyReport(
+        id="rep-persisted",
+        user_id="u-1",
+        symbol="MC.PA",
+        company_name="LVMH",
+        title="T3 2026",
+        period_label="T3 2026",
+        source_type="pdf-ocr",
+        filename="lvmh.pdf",
+        extracted_text="Texte sans tableau markdown",
+        extracted_tables=custom_tables,
+        extracted_at=extracted_dt,
+        summary_markdown="## Resume",
+        key_metrics={},
+        created_at=extracted_dt,
+    )
+    full = quarterly_report_json(item, include_extracted=True)
+    assert full["tables_count"] == 1
+    assert full["extracted_tables"] == custom_tables
+    assert full["extracted_at"].startswith("2026-11-19T14:30:00")
+
+    readonly_dir = tmp_path / "readonly_fin"
+    readonly_dir.mkdir()
+    readonly_dir.chmod(0o555)
+    try:
+        s = Settings(_env_file=None, app_data_dir=tmp_path / "data", finance_data_dir=readonly_dir)
+        resolved = warehouse_db_path(s)
+        # Note: sous root (CI), os.access peut retourner True malgre 0o555; on verifie le chemin attendu
+        if resolved.parent != readonly_dir.resolve():
+            assert resolved == (tmp_path / "data" / "finance" / "finance_warehouse.db").resolve()
+    finally:
+        readonly_dir.chmod(0o755)

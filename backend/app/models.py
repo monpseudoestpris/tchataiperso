@@ -469,6 +469,8 @@ class FinanceQuarterlyReport(Base):
     filename: Mapped[str] = mapped_column(String(255), default="")
     storage_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     extracted_text: Mapped[str] = mapped_column(Text, default="")
+    extracted_tables: Mapped[list | None] = mapped_column(JSON, nullable=True, default=None)
+    extracted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, default=now)
     summary_markdown: Mapped[str] = mapped_column(Text, default="")
     key_metrics: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)

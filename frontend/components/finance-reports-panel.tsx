@@ -339,6 +339,9 @@ export function FinanceReportsPanel({ symbol, companyName, onInsertIntoChat }: F
                         </span>
                       )}
                       <span>{report.extracted_chars.toLocaleString("fr-FR")} caractères extraits</span>
+                      {report.extracted_at && (
+                        <span>Extrait le {new Date(report.extracted_at).toLocaleString("fr-FR")}</span>
+                      )}
                     </div>
                   </div>
                   <div className="finance-archive-actions">

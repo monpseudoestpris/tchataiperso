@@ -8,28 +8,21 @@ Application de chat IA multi-fournisseurs (`tchataiperso`) composée d'un backen
 - Le connecteur agentique **Hermes Agent** et la recherche approfondie **Google Deep Research** (Interactions API).
 
 ## 2. Current Objective
-Routage unifié de **tous les appels aux modèles Google** (`google/*`, `gemini-*`, `imagen-*`, `gemma-*`) vers **Google Cloud** (Vertex AI OAuth2/ADC par défaut, plus `vertex_api_key` et `gemini_api` en option) afin de consommer le crédit mensuel Google Cloud de 10 $/mois inclus avec l'abonnement Google AI Pro, tout en conservant les modèles non-Google sur OpenRouter / leurs fournisseurs natifs.
+1. Persistance et horodatage en base de données des extraits de rapports trimestriels (`extracted_text`, `extracted_tables`, `extracted_at` sur `FinanceQuarterlyReport`).
+2. Correction de l'erreur Docker `sqlite3.OperationalError: unable to open database file` sur l'entrepôt financier (`/app/finance_data`).
 
-**Statut** : Implémentation et suite de tests complètes **terminées et vérifiées** (`py_compile` exit 0, `241 passed` sur le cœur + `test_google_cloud.py` / `test_google_deep_research.py`, `56 passed` ciblés sur `test_api.py`, `14 passed` ciblés sur `test_hermes.py`, `npx tsc --noEmit` exit 0). Rappel : la configuration manuelle du `.env` local (projet GCP, activation API `aiplatform.googleapis.com`, ADC ou compte de service JSON) reste à effectuer par l'utilisateur.
+**Statut** : Implémentation terminée et vérifiée (`py_compile` exit 0, `47 passed` sur `tests/test_finance_reports.py` + `tests/test_finance.py`, `npx tsc --noEmit` exit 0). En Docker, il faut reconstruire `clair-api` / `clair-web` (`docker compose up -d --build`).
 
 ## 3. Completed Work
-- **Module central Google Cloud (`backend/app/google_cloud.py`)** :
-  - Détection & normalisation des IDs Google (`is_google_model`, `normalize_google_model_id` avec support `:free`/`:thinking`, `GOOGLE_CLOUD_MODEL_MAP` et rejet des traversées de chemin).
-  - Authentification Vertex AI OAuth2 / ADC via `google-auth==2.62.2` (`_HttpxAuthRequest` sans dépendance `requests`, cache thread-safe avec rafraîchissement automatique avant expiration).
-  - Routage unifié (`post_chat_completion`, `open_chat_stream` via `AsyncExitStack`), adaptation des charges OpenAI (suppression `cache_control`, champs OpenRouter et en-têtes `HTTP-Referer`/`X-Title`, conversion `reasoning` → `reasoning_effort`) et traduction complète OpenAI ↔ Gemini natif (`openai_to_gemini_native_request`, `gemini_native_to_openai_dict`, `iter_gemini_sse_as_openai_data`) pour le mode `vertex_api_key`.
-  - Génération d'images Google Cloud (`generate_google_cloud_image` : Gemini `:generateContent` avec `responseModalities: ["IMAGE"]` + `imageConfig.aspectRatio`, Imagen `:predict`, validation de signature MIME et limite 10 Mio).
-  - Helpers Interactions API (`resolve_interactions_config`, `get_interactions_request_params`, `build_interaction_url`) pour Google Deep Research sur Vertex AI `v1beta1` (OAuth2 Bearer rafraîchi à chaque appel/polling) et Gemini Developer API.
-  - Politique stricte sans repli OpenRouter par défaut (`GOOGLE_CLOUD_FALLBACK_OPENROUTER=false`, vérifiée aussi dans `can_fallback_to_model`).
-- **Configuration, dépendances & conteneurs (`backend/app/config.py`, `.env.example`, `compose.yaml`, `backend/requirements*.txt`)** :
-  - Ajout de `google-auth==2.62.2` et recompilation des lockfiles via `uv` (`requirements.lock.txt`, `requirements-dev.txt`).
-  - Ajout dans `Settings` de `google_cloud_mode` (`auto` | `vertex_oauth` | `vertex_api_key` | `gemini_api` | `disabled`), `google_cloud_project`, `google_cloud_location`, `google_application_credentials`, `vertex_api_key`, `google_cloud_fallback_openrouter`, `google_cloud_model_map`, validateurs stricts, rechargement live tolérant (`refresh_from_env_file`) avec alias (`VERTEX_PROJECT_ID`, `VERTEX_LOCATION`, `GOOGLE_CLOUD_API_KEY`, `GEMINI_API_KEY`) et exposition du catalogue Google même sans `LLM_API_KEY`.
-- **Migration intégrale des moteurs, agents auxiliaires, routeurs & frontend** :
-  - `providers.py` (streaming SSE avec extraction `extra_content.google.thought`, 32 appels non-streaming, génération d'images et garde-fous de repli), `multi_agent.py`, `memory_agent.py`, `topic_agent.py` (correction du bug `openrouter_api_key` + URL codée en dur), `blog.py`, `page_bricks.py`, `page_generator.py`, `presentation_html.py`, `finance_dossier.py`, `finance_experts.py`, `finance_moat.py`, `finance_news.py`, `finance_reports.py`.
-  - `hermes_agent.py` : support streaming Google Cloud dans `_run_openrouter_turn`, auto-apprentissage et contournement automatique du Gateway Docker externe `clair-hermes` vers `local_autonomous` lorsqu'un modèle Google est utilisé avec Google Cloud actif et sans repli OpenRouter.
-  - `google_deep_research.py` : support Vertex AI OAuth2 Interactions API (`locations/global/interactions`) et conservation de `GOOGLE_API_KEY`.
-  - Routeurs (`routers/system.py`, `messages.py`, `images.py`, `skills.py`, `sounds.py`, `conversations.py`) et type frontend (`frontend/lib/api.ts`) autorisant l'usage exclusif de Google Cloud sans `LLM_API_KEY` et exposant `features.google_cloud` et `google_cloud_mode`.
-- **Travaux antérieurs non commités préservés** :
-  - Espace **Marchés Financiers** (`FinanceModal`, MOAT, 31 scores Uncle Stock, valeurs intrinsèques, catalogue EODHD, rapports PDF-OCR Mistral Map-Reduce), **Code Canvas / cLAIr Pages / Briques Préfaites**, et **Ideogram v2** intactement conservés dans l'arbre de travail.
+- **Persistance et datation des extraits de rapports (`FinanceQuarterlyReport`)** :
+  - Ajout des colonnes `extracted_tables` (`JSON`, nullable) et `extracted_at` (`DateTime(timezone=True)`, nullable) sur `FinanceQuarterlyReport` (`backend/app/models.py`), migration Alembic `backend/migrations/versions/0026_add_finance_report_extracts.py`, enregistrement dans `backend/app/cli.py`, et mise à niveau idempotente dans `backend/app/main.py` (`lifespan`).
+  - `POST /api/finance/reports` (`backend/app/routers/finance.py`) extrait et persiste désormais `extracted_text`, `extracted_tables` et `extracted_at` en base ; `quarterly_report_json` (`backend/app/serializers.py`) lit les tableaux persistés (avec repli sur `extract_markdown_tables` pour les anciens rapports) et expose `extracted_at`.
+  - Frontend (`frontend/lib/api.ts`, `frontend/components/finance-reports-panel.tsx`) : ajout du champ `extracted_at` et affichage de `Extrait le <date>` sur chaque rapport.
+- **Correction `unable to open database file` dans l'entrepôt financier Docker** :
+  - `backend/Dockerfile` : création et `chown app:app` de `/app/finance_data` (en plus de `/data` et `/app/data`) pour que le volume nommé `finance_data` soit accessible en écriture par l'utilisateur `app` (uid 10001).
+  - `backend/app/finance_warehouse.py` : `warehouse_db_path()` vérifie l'accessibilité en écriture de `FINANCE_DATA_DIR` et bascule automatiquement sur `app_data_dir / "finance"` (`/app/data/finance`) avec un avertissement si le répertoire/volume existant est bloqué en permissions.
+- **Travaux antérieurs conservés** :
+  - Routage Google Cloud / Vertex AI, espace Marchés Financiers, Code Canvas / cLAIr Pages / Briques Préfaites, Ideogram v2.
 
 ## 4. Key Decisions
 - **Vertex AI (`vertex_oauth`) choisi comme mode Google Cloud principal** : le crédit mensuel de 10 $/mois inclus avec Google AI Pro est crédité sur le compte de facturation GCP, consommé nativement en post-paiement par Vertex AI (`aiplatform.googleapis.com` via OAuth2/ADC ou Service Account JSON, endpoints `endpoints/openapi` et `publishers/google/models`). `vertex_api_key` (Express/API Key natif) et `gemini_api` (`generativelanguage.googleapis.com`) sont supportés en complément.
