@@ -11,7 +11,8 @@ import httpx
 
 from .config import Settings
 from .finance_reports import _strip_json_fences
-from .providers import _check_response, _json, _key
+from .google_cloud import has_llm_access, post_chat_completion
+from .providers import _check_response, _json
 
 _logger = logging.getLogger("uvicorn.error")
 
@@ -328,11 +329,9 @@ async def analyze_and_build_stock_moat(
         custom_focus=custom_focus.strip(),
     )
 
-    if settings.demo_mode or not settings.enabled(settings.llm_api_key):
-        return fallback
-
-    key = _key(settings, "llm_api_key", "du fournisseur IA")
     model = settings.summary_model or settings.default_model
+    if settings.demo_mode or not has_llm_access(settings, model):
+        return fallback
 
     prof = stats.get("profile") if isinstance(stats.get("profile"), dict) else {}
     val = stats.get("valuation") if isinstance(stats.get("valuation"), dict) else {}
@@ -405,10 +404,9 @@ async def analyze_and_build_stock_moat(
 
     try:
         async with httpx.AsyncClient(timeout=60.0, follow_redirects=False) as client:
-            response = await client.post(
-                settings.llm_base_url.rstrip("/") + "/chat/completions",
-                headers={"Authorization": f"Bearer {key}"},
-                json={
+            response = await post_chat_completion(
+                settings,
+                {
                     "model": model,
                     "messages": [
                         {"role": "system", "content": system_prompt},
@@ -418,6 +416,7 @@ async def analyze_and_build_stock_moat(
                     "temperature": 0.2,
                     "max_tokens": 3200,
                 },
+                client=client,
             )
         _check_response(response, "Fournisseur IA")
         payload = _json(response, "Fournisseur IA")

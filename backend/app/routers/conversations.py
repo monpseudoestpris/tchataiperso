@@ -10,6 +10,7 @@ from ..chat_site_store import get_or_create_chat_site
 from ..presentation_html import generate_chat_presentation_html
 from ..config import Settings
 from ..deps import check_model, current_user, get_conversation, get_sessions, get_settings, get_upload_dir
+from ..google_cloud import has_llm_access
 from ..models import ChatSite, Conversation, User, now
 from ..schemas import (
     ClassifyConversationRequest,
@@ -114,7 +115,7 @@ async def classify_all_conversations(
                 asst_msgs = "\n".join(m.content for m in item.messages if m.role == "assistant" and m.content.strip())[:1500]
                 targets.append((item.id, item.title, user_msgs, asst_msgs))
 
-    use_real = not settings.demo_mode and settings.enabled(settings.llm_api_key)
+    use_real = not settings.demo_mode and has_llm_access(settings)
     updates: dict[str, dict] = {}
     for conv_id, curr_title, user_msgs, asst_msgs in targets:
         if use_real:
@@ -180,7 +181,7 @@ async def classify_single_conversation(
         asst_msgs = "\n".join(m.content for m in item.messages if m.role == "assistant" and m.content.strip())[:1500]
         curr_title = item.title
 
-    if not settings.demo_mode and settings.enabled(settings.llm_api_key):
+    if not settings.demo_mode and has_llm_access(settings):
         try:
             meta = await providers.classify_conversation(settings, user_msgs, asst_msgs, current_title=curr_title)
         except providers.ProviderError:

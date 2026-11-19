@@ -9,7 +9,8 @@ from typing import Any
 import httpx
 
 from .config import Settings
-from .providers import ProviderError, _check_response, _json, _key
+from .google_cloud import can_fallback_to_model, has_llm_access, post_chat_completion
+from .providers import ProviderError, _check_response, _json
 from .motion_fx import MOTION_FX_CSS, MOTION_FX_JS, inject_motion_fx
 from .page_runtime import CLAIR_PAGE_RUNTIME_JS, sanitize_and_enhance_html
 from .svg_assets import inject_svg_placeholders, render_svg_asset
@@ -1458,15 +1459,7 @@ async def generate_page_html(
 
     full_user_prompt = "\n\n".join(user_query_parts)
 
-    has_llm_key = False
-    try:
-        if not getattr(settings, "demo_mode", False):
-            _key(settings, "llm_api_key", "du fournisseur IA")
-            has_llm_key = True
-    except ProviderError:
-        has_llm_key = False
-
-    if not has_llm_key or getattr(settings, "demo_mode", False):
+    if getattr(settings, "demo_mode", False) or not has_llm_access(settings, target_model):
         if raise_on_failure:
             raise ProviderError("La création de page nécessite un fournisseur IA actif.")
         resolved_title = title or (clean_prompt[:60].strip() or "Synthèse de conversation")
@@ -1490,7 +1483,6 @@ async def generate_page_html(
     # Temperature adapted to creative freedom
     temp = 0.2 if creative_freedom == "low" else (0.75 if creative_freedom == "high" else 0.45)
 
-    key = _key(settings, "llm_api_key", "du fournisseur IA")
     messages = [
         {"role": "system", "content": _get_page_system_prompt(is_strict_a4)},
         {"role": "user", "content": full_user_prompt},
@@ -1508,21 +1500,17 @@ async def generate_page_html(
             # Retry incomplete documents once, regenerating from the original input.
             # Never append closing tags to a response whose content may be truncated.
             for attempt in range(2):
-                response = await client.post(
-                    settings.llm_base_url.rstrip("/") + "/chat/completions",
-                    headers={"Authorization": f"Bearer {key}"},
-                    json=request_payload,
-                )
+                response = await post_chat_completion(settings, request_payload, client=client)
                 # Follow the existing presentation fallback for unsupported page models.
                 fallback_model = getattr(settings, "default_model", "")
-                if (response.status_code in (400, 404, 422)
-                        and fallback_model and fallback_model != request_payload["model"]):
+                if (
+                    response.status_code in (400, 404, 422)
+                    and fallback_model
+                    and fallback_model != request_payload["model"]
+                    and can_fallback_to_model(settings, request_payload["model"], fallback_model)
+                ):
                     request_payload = {**request_payload, "model": fallback_model}
-                    response = await client.post(
-                        settings.llm_base_url.rstrip("/") + "/chat/completions",
-                        headers={"Authorization": f"Bearer {key}"},
-                        json=request_payload,
-                    )
+                    response = await post_chat_completion(settings, request_payload, client=client)
                 _check_response(response, "Fournisseur IA")
                 payload = _json(response, "Fournisseur IA")
                 choice = payload["choices"][0]
@@ -1645,22 +1633,13 @@ async def refine_page_html(
         else:
             detected_layout = "a4_1p"
 
-    has_llm_key = False
-    try:
-        if not getattr(settings, "demo_mode", False):
-            _key(settings, "llm_api_key", "du fournisseur IA")
-            has_llm_key = True
-    except ProviderError:
-        has_llm_key = False
-
-    if not has_llm_key or getattr(settings, "demo_mode", False):
+    if getattr(settings, "demo_mode", False) or not has_llm_access(settings, target_model):
         # Demo fallback: simple substitution or append a banner note
         note = f"<!-- Modifié suite à la consigne : {html.escape(clean_instruction)} -->"
         if "</head>" in current_html:
             return current_html.replace("</head>", f"{note}\n</head>")
         return f"{note}\n{current_html}"
 
-    key = _key(settings, "llm_api_key", "du fournisseur IA")
     a4_refine_note = ""
     if has_a4_sheet:
         target_pages = "2 pages A4 (<div class=\"a4-sheet\">)" if detected_layout == "a4_2p" else "1 SEULE page A4 (<div class=\"a4-sheet\">)"
@@ -1691,11 +1670,7 @@ async def refine_page_html(
         }
         async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=False) as client:
             for attempt in range(2):
-                response = await client.post(
-                    settings.llm_base_url.rstrip("/") + "/chat/completions",
-                    headers={"Authorization": f"Bearer {key}"},
-                    json=request_payload,
-                )
+                response = await post_chat_completion(settings, request_payload, client=client)
                 _check_response(response, "Fournisseur IA")
                 payload = _json(response, "Fournisseur IA")
                 raw_content = payload["choices"][0]["message"]["content"]
@@ -2051,19 +2026,9 @@ async def propose_page_topics(
     is_a4_2p = layout_style == "a4_2p" or page_type == "a4_revision_2p"
     is_cheat_sheet = layout_style == "cheat_sheet" or page_type == "cheat_sheet"
 
-    has_llm_key = False
-    try:
-        if not getattr(settings, "demo_mode", False):
-            _key(settings, "llm_api_key", "du fournisseur IA")
-            has_llm_key = True
-    except ProviderError:
-        has_llm_key = False
-
-    if not has_llm_key or getattr(settings, "demo_mode", False):
+    if getattr(settings, "demo_mode", False) or not has_llm_access(settings, target_model):
         f_title, f_summary, f_topics = _generate_fallback_topics(clean_prompt, title)
         return f_title, f_summary, _apply_a4_topic_constraints(f_topics, is_a4_1p, is_a4_2p, is_cheat_sheet)
-
-    key = _key(settings, "llm_api_key", "du fournisseur IA")
 
     user_query_parts = []
     if chat_transcript:
@@ -2124,11 +2089,7 @@ async def propose_page_topics(
             "max_tokens": 8192,
         }
         async with httpx.AsyncClient(timeout=httpx.Timeout(45.0, connect=10.0), follow_redirects=False) as client:
-            response = await client.post(
-                settings.llm_base_url.rstrip("/") + "/chat/completions",
-                headers={"Authorization": f"Bearer {key}"},
-                json=request_payload,
-            )
+            response = await post_chat_completion(settings, request_payload, client=client)
             _check_response(response, "Fournisseur IA")
             payload = _json(response, "Fournisseur IA")
             raw_content = payload["choices"][0]["message"]["content"].strip()

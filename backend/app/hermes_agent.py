@@ -24,6 +24,13 @@ import httpx
 
 from . import hermes_tools, providers
 from .config import Settings
+from .google_cloud import (
+    has_llm_access,
+    is_google_model,
+    open_chat_stream,
+    post_chat_completion,
+    should_route_to_google_cloud,
+)
 from .routers.hermes_mcp import (
     register_gateway_mission_lease,
     resolve_gateway_mission_lease,
@@ -157,9 +164,13 @@ async def probe_hermes_gateway(settings: Settings) -> dict[str, Any]:
     """Vérifie si le Gateway externe `nousresearch/hermes-agent` répond."""
     gateway_url = (getattr(settings, "hermes_api_url", "") or "").strip().rstrip("/")
     hermes_enabled = bool(getattr(settings, "hermes_enabled", True))
-    has_llm = settings.enabled(settings.llm_api_key)
+    has_llm = has_llm_access(settings)
+    has_openrouter = settings.enabled(settings.llm_api_key)
     llm_base_url = (getattr(settings, "llm_base_url", "") or "").strip()
-    provider = "openrouter" if "openrouter.ai" in llm_base_url.lower() else "openai_compatible"
+    if getattr(settings, "google_cloud_enabled", False) and not has_openrouter:
+        provider = "google_cloud"
+    else:
+        provider = "openrouter" if "openrouter.ai" in llm_base_url.lower() else "openai_compatible"
 
     if settings.demo_mode:
         return {
@@ -301,10 +312,9 @@ async def _synthesize_hermes_learning(
     model: str,
 ) -> tuple[dict[str, str] | None, str | None]:
     """Extrait une compétence réutilisable (`SKILL.md`) et un fait mémoire (`MEMORY.md`)."""
-    if settings.demo_mode or not settings.enabled(settings.llm_api_key) or not answer.strip():
-        return None, None
-    key = settings.llm_api_key.get_secret_value().strip()
     learn_model = (getattr(settings, "skill_prompt_model", "") or model or settings.default_model).strip()
+    if settings.demo_mode or not has_llm_access(settings, learn_model) or not answer.strip():
+        return None, None
     messages = [
         {
             "role": "system",
@@ -323,16 +333,17 @@ async def _synthesize_hermes_learning(
     ]
     try:
         async with httpx.AsyncClient(timeout=_LEARNING_TIMEOUT, follow_redirects=False) as client:
-            resp = await client.post(
-                settings.llm_base_url.rstrip("/") + "/chat/completions",
-                headers={"Authorization": f"Bearer {key}"},
-                json={
+            resp = await post_chat_completion(
+                settings,
+                {
                     "model": learn_model,
                     "messages": messages,
                     "stream": False,
                     "temperature": 0.1,
                     "max_tokens": 500,
                 },
+                client=client,
+                timeout=_LEARNING_TIMEOUT,
             )
         if not resp.is_success:
             return None, None
@@ -351,7 +362,7 @@ async def _synthesize_hermes_learning(
         raw_mem = parsed.get("memory")
         suggested_memory = str(raw_mem).strip()[:500] if isinstance(raw_mem, str) and raw_mem.strip() else None
         return suggested_skill, suggested_memory
-    except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as exc:
+    except (providers.ProviderError, httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as exc:
         _logger.debug("Auto-apprentissage Hermes ignoré: %s", exc)
         return None, None
 
@@ -766,9 +777,7 @@ async def _run_openrouter_turn(
     *,
     tool_choice: str = "auto",
 ) -> AsyncIterator[dict[str, Any]]:
-    """Exécute un tour LLM OpenRouter en streaming avec support `tools`, `finish_reason` et `usage`."""
-    key = settings.llm_api_key.get_secret_value().strip()
-    url = settings.llm_base_url.rstrip("/") + "/chat/completions"
+    """Exécute un tour LLM (Google Cloud ou OpenRouter) en streaming avec support `tools`, `finish_reason` et `usage`."""
     payload: dict[str, Any] = {
         "model": llm_model,
         "messages": messages,
@@ -787,35 +796,33 @@ async def _run_openrouter_turn(
     usage: dict[str, int] = {}
     cost_usd = 0.0
     stream_error = ""
+    active_route = "OpenRouter"
 
     async with httpx.AsyncClient(timeout=_GATEWAY_STREAM_TIMEOUT, follow_redirects=False) as client:
-        async with client.stream(
-            "POST",
-            url,
-            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-            json=payload,
-        ) as resp:
+        async with open_chat_stream(
+            settings,
+            payload,
+            client=client,
+            timeout=_GATEWAY_STREAM_TIMEOUT,
+            provider_label="OpenRouter",
+            raise_on_error=False,
+        ) as (resp, data_iter, route_label):
+            active_route = route_label
             if resp.status_code in {400, 404} and openai_tools:
                 yield {"type": "_tools_unsupported"}
                 return
             if not resp.is_success:
                 body = (await resp.aread()).decode("utf-8", errors="ignore")[:300]
-                raise providers.ProviderError(f"Erreur OpenRouter HTTP {resp.status_code} : {body}")
+                raise providers.ProviderError(f"Erreur {route_label} HTTP {resp.status_code} : {body}")
 
-            async for line in resp.aiter_lines():
-                stripped = line.strip()
-                if not stripped or not stripped.startswith("data:"):
-                    continue
-                data_raw = stripped[5:].strip()
-                if data_raw == "[DONE]":
-                    break
+            async for data_raw in data_iter:
                 try:
                     chunk = json.loads(data_raw)
                 except ValueError:
                     continue
                 if isinstance(chunk.get("error"), dict):
                     err_obj = chunk["error"]
-                    stream_error = str(err_obj.get("message") or err_obj.get("code") or "Erreur OpenRouter inconnue")
+                    stream_error = str(err_obj.get("message") or err_obj.get("code") or f"Erreur {route_label} inconnue")
                     break
                 if isinstance(chunk.get("usage"), dict):
                     for k in ("prompt_tokens", "completion_tokens", "total_tokens"):
@@ -834,7 +841,11 @@ async def _run_openrouter_turn(
                 if isinstance(choice0.get("finish_reason"), str) and choice0["finish_reason"]:
                     finish_reason = choice0["finish_reason"]
                 delta = choice0.get("delta") or {}
-                reasoning = delta.get("reasoning") or delta.get("reasoning_content")
+                reasoning = delta.get("reasoning") or delta.get("reasoning_content") or delta.get("thought")
+                if not isinstance(reasoning, str) or not reasoning:
+                    google_extra = (delta.get("extra_content") or {}).get("google")
+                    if isinstance(google_extra, dict) and isinstance(google_extra.get("thought"), str):
+                        reasoning = google_extra["thought"]
                 if isinstance(reasoning, str) and reasoning:
                     thought_acc += reasoning
                     yield {"type": "thought", "text": reasoning}
@@ -857,8 +868,8 @@ async def _run_openrouter_turn(
                         yield {"type": "delta", "text": c_out}
 
     if stream_error:
-        _logger.warning("Erreur SSE OpenRouter (model=%s): %s", llm_model, stream_error)
-        raise providers.ProviderError(f"Erreur OpenRouter : {stream_error}")
+        _logger.warning("Erreur SSE %s (model=%s): %s", active_route, llm_model, stream_error)
+        raise providers.ProviderError(f"Erreur {active_route} : {stream_error}")
 
     fin_c, fin_t = splitter.finalize()
     if fin_t:
@@ -953,22 +964,30 @@ async def stream_hermes_mission(
     if mode == "disabled":
         raise providers.ProviderError("L'intégration Hermes Agent est désactivée par configuration (HERMES_ENABLED=false).")
     if mode == "offline":
-        raise providers.ProviderError("Configurez LLM_API_KEY, un Gateway Hermes actif ou DEMO_MODE=true.")
+        raise providers.ProviderError("Configurez LLM_API_KEY ou Google Cloud (Vertex AI / Gemini), un Gateway Hermes actif ou DEMO_MODE=true.")
+
+    active_tools = list(dict.fromkeys(enabled_tools or ["web_search", "memory", "skills", "code_execution"]))
+    allowed_permissions = permissions_from_enabled_tools(active_tools)
+    active_session = (session_id or "").strip() or f"clair-{uuid4().hex[:12]}"
+    selected_model = (model or "").strip() or getattr(settings, "hermes_default_model", "") or settings.default_model
 
     pref = (execution_mode or "auto").strip()
     if pref == "local_autonomous" and mode == "gateway":
-        if not settings.enabled(settings.llm_api_key):
-            raise providers.ProviderError("Configurez LLM_API_KEY pour utiliser le moteur local_autonomous.")
+        if not has_llm_access(settings, selected_model):
+            raise providers.ProviderError("Configurez LLM_API_KEY ou Google Cloud pour utiliser le moteur local_autonomous.")
         mode = "local_autonomous"
     elif pref == "gateway" and mode not in {"gateway", "demo"}:
         raise providers.ProviderError(
             "Le Gateway Docker Hermes (8642) n'est pas joignable. Lancez clair-hermes ou choisissez local_autonomous."
         )
 
-    active_tools = list(dict.fromkeys(enabled_tools or ["web_search", "memory", "skills", "code_execution"]))
-    allowed_permissions = permissions_from_enabled_tools(active_tools)
-    active_session = (session_id or "").strip() or f"clair-{uuid4().hex[:12]}"
-    selected_model = (model or "").strip() or getattr(settings, "hermes_default_model", "") or settings.default_model
+    if mode == "gateway" and should_route_to_google_cloud(settings, selected_model) and not getattr(settings, "google_cloud_fallback_openrouter", False):
+        _logger.info(
+            "Hermes bypass du Gateway externe pour le modèle Google '%s' afin de router via Google Cloud.",
+            selected_model,
+        )
+        mode = "local_autonomous"
+
     memories = user_memories or []
     skills = user_skills or []
     soul = (soul_prompt or "").strip() or DEFAULT_HERMES_SOUL
@@ -1104,7 +1123,11 @@ async def stream_hermes_mission(
     sources: list[dict[str, str]] = []
     valid_ids = {m["id"] for m in settings.models}
     is_openrouter = probe.get("provider") == "openrouter"
-    if selected_model in valid_ids or (is_openrouter and "/" in selected_model):
+    if (
+        selected_model in valid_ids
+        or (is_openrouter and "/" in selected_model)
+        or (is_google_model(selected_model) and getattr(settings, "google_cloud_enabled", False))
+    ):
         llm_model = selected_model
     else:
         llm_model = settings.default_model
@@ -1153,13 +1176,18 @@ async def stream_hermes_mission(
         turn = llm_calls
         llm_calls += 1
         step_id = f"step_llm_{turn}"
+        route_display = (
+            "Google Cloud"
+            if should_route_to_google_cloud(settings, llm_model)
+            else ("OpenRouter" if is_openrouter else "LLM")
+        )
         yield {
             "type": "step",
             "id": step_id,
             "tool": "code_execution",
             "title": f"Raisonnement Hermes (tour {turn + 1})",
             "status": "running",
-            "detail": f"Modèle {llm_model} via {'OpenRouter' if is_openrouter else 'LLM'}",
+            "detail": f"Modèle {llm_model} via {route_display}",
         }
 
         turn_tools = openai_tools if use_native_tools else []

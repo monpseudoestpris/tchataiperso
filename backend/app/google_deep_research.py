@@ -17,7 +17,7 @@ from uuid import uuid4
 from urllib.parse import urlsplit, parse_qs
 import httpx
 
-from .config import _clean_api_key
+from .google_cloud import build_interaction_url, get_interactions_request_params, resolve_interactions_config
 from .providers import ProviderError, extract_sources_from_research, research_activity
 
 _logger = logging.getLogger(__name__)
@@ -529,14 +529,14 @@ async def plan_google_deep_research(
     du plan d'investigation proposé et les requêtes clés identifiées.
     """
     clean_query = query.strip() or ("Plan de formation structuré" if learn_mode else "Plan d'investigation approfondi")
-    raw_key = _clean_api_key(getattr(settings, "google_api_key", None)) or _clean_api_key(getattr(settings, "gemini_api_key", None))
 
     # Détermination de l'agent Google Deep Research (Standard ou Max)
     agent_id = _DEFAULT_GOOGLE_RESEARCH_AGENT
     if "max" in model.lower():
         agent_id = "deep-research-max-preview-04-2026"
 
-    if settings.demo_mode or not raw_key:
+    interactions_cfg = None if settings.demo_mode else resolve_interactions_config(settings)
+    if settings.demo_mode or not interactions_cfg or interactions_cfg.get("mode") == "demo":
         if learn_mode:
             demo_plan = (
                 f"### Plan didactique proposé par Google Deep Research : {clean_query}\n\n"
@@ -611,18 +611,11 @@ async def plan_google_deep_research(
                 f"et les points de vigilance méthodologiques. Présente uniquement ce plan de travail à faire valider par l'utilisateur."
             )
 
-    headers = {
-        "Content-Type": "application/json",
-        "x-goog-api-key": raw_key,
-    }
+    base_url, headers, _ = await get_interactions_request_params(settings)
 
     if previous_interaction_id and not str(previous_interaction_id).startswith("demo-"):
         # Synchroniser l'agent avec celui de l'interaction précédente pour respecter la contrainte Google
-        chk_url = (
-            f"https://generativelanguage.googleapis.com/v1beta/{previous_interaction_id}"
-            if str(previous_interaction_id).startswith("interactions/")
-            else f"{_GOOGLE_INTERACTIONS_URL}/{previous_interaction_id}"
-        )
+        chk_url = build_interaction_url(base_url, str(previous_interaction_id))
         try:
             chk_resp = httpx.get(chk_url, headers=headers, timeout=10.0)
             if chk_resp.status_code == 200:
@@ -647,7 +640,8 @@ async def plan_google_deep_research(
 
     async with httpx.AsyncClient(timeout=_GOOGLE_DEEP_RESEARCH_TIMEOUT, follow_redirects=True) as client:
         try:
-            resp = await client.post(_GOOGLE_INTERACTIONS_URL, headers=headers, json=payload)
+            base_url, headers, _ = await get_interactions_request_params(settings)
+            resp = await client.post(base_url, headers=headers, json=payload)
         except Exception as exc:
             raise ProviderError(f"Connexion Google Interactions API impossible pour la planification: {exc}") from exc
 
@@ -657,20 +651,24 @@ async def plan_google_deep_research(
                 fallback_agent = _DEFAULT_GOOGLE_RESEARCH_AGENT if payload["agent"] != _DEFAULT_GOOGLE_RESEARCH_AGENT else "deep-research-max-preview-04-2026"
                 _logger.info("Mismatch d'agent détecté pour la planification, bascule vers %s", fallback_agent)
                 payload["agent"] = fallback_agent
-                resp = await client.post(_GOOGLE_INTERACTIONS_URL, headers=headers, json=payload)
+                _, headers, _ = await get_interactions_request_params(settings)
+                resp = await client.post(base_url, headers=headers, json=payload)
                 if resp.status_code >= 400 and "belongs to a different agent" in resp.text:
                     payload.pop("previous_interaction_id", None)
-                    resp = await client.post(_GOOGLE_INTERACTIONS_URL, headers=headers, json=payload)
+                    _, headers, _ = await get_interactions_request_params(settings)
+                    resp = await client.post(base_url, headers=headers, json=payload)
             elif ("not yet complete" in err_text or "not complete" in err_text) and payload.get("previous_interaction_id"):
                 _logger.info("Interaction préalable encore en cours pour la planification, attente brève...")
                 for _ in range(4):
                     await asyncio.sleep(2.5)
-                    resp = await client.post(_GOOGLE_INTERACTIONS_URL, headers=headers, json=payload)
+                    _, headers, _ = await get_interactions_request_params(settings)
+                    resp = await client.post(base_url, headers=headers, json=payload)
                     if resp.status_code < 400 or ("not yet complete" not in resp.text and "not complete" not in resp.text):
                         break
                 if resp.status_code >= 400 and ("not yet complete" in resp.text or "not complete" in resp.text):
                     payload.pop("previous_interaction_id", None)
-                    resp = await client.post(_GOOGLE_INTERACTIONS_URL, headers=headers, json=payload)
+                    _, headers, _ = await get_interactions_request_params(settings)
+                    resp = await client.post(base_url, headers=headers, json=payload)
 
         if resp.status_code >= 400:
             err_msg = resp.text[:300]
@@ -687,12 +685,9 @@ async def plan_google_deep_research(
             poll_interval = 2.0
             for _ in range(max_polls):
                 await asyncio.sleep(poll_interval)
-                poll_url = (
-                    f"https://generativelanguage.googleapis.com/v1beta/{interaction_id}"
-                    if str(interaction_id).startswith("interactions/")
-                    else f"{_GOOGLE_INTERACTIONS_URL}/{interaction_id}"
-                )
+                poll_url = build_interaction_url(base_url, str(interaction_id))
                 try:
+                    _, headers, _ = await get_interactions_request_params(settings)
                     p_resp = await client.get(poll_url, headers=headers)
                     if p_resp.status_code == 200:
                         p_data = p_resp.json()
@@ -753,7 +748,6 @@ async def stream_google_deep_research(
     et le rapport finalement rédigé avec toutes ses citations.
     """
     clean_query = query.strip() or ("Cours structuré" if learn_mode else "Investigation approfondie")
-    raw_key = _clean_api_key(getattr(settings, "google_api_key", None)) or _clean_api_key(getattr(settings, "gemini_api_key", None))
 
     agent_id = _DEFAULT_GOOGLE_RESEARCH_AGENT
     is_max = "max" in model.lower()
@@ -763,8 +757,9 @@ async def stream_google_deep_research(
     display_agent_name = "Google Deep Research Max" if is_max else "Google Deep Research"
     mode_label = "Mode Apprendre" if learn_mode else "DeepSearch"
 
+    interactions_cfg = None if settings.demo_mode else resolve_interactions_config(settings)
     # Mode démonstration
-    if settings.demo_mode or not raw_key:
+    if settings.demo_mode or not interactions_cfg or interactions_cfg.get("mode") == "demo":
         yield {"type": "status", "message": f"{mode_label} [Démonstration] · Recherche autonome {display_agent_name} ({agent_id})…"}
         demo_sources = [
             {
@@ -925,20 +920,13 @@ async def stream_google_deep_research(
             state="found",
         )
 
-    headers = {
-        "Content-Type": "application/json",
-        "x-goog-api-key": raw_key,
-    }
+    base_url, headers, _ = await get_interactions_request_params(settings)
 
     chk_url = ""
     if interaction_id and not str(interaction_id).startswith("demo-"):
         # Synchroniser l'agent avec celui de l'interaction précédente pour respecter la contrainte stricte de Google :
         # "Previous interaction ... belongs to a different agent"
-        chk_url = (
-            f"https://generativelanguage.googleapis.com/v1beta/{interaction_id}"
-            if str(interaction_id).startswith("interactions/")
-            else f"{_GOOGLE_INTERACTIONS_URL}/{interaction_id}"
-        )
+        chk_url = build_interaction_url(base_url, str(interaction_id))
         try:
             chk_resp = httpx.get(chk_url, headers=headers, timeout=10.0)
             if chk_resp.status_code == 200:
@@ -956,6 +944,7 @@ async def stream_google_deep_research(
                     for _ in range(6):
                         await asyncio.sleep(2.0)
                         try:
+                            _, headers, _ = await get_interactions_request_params(settings)
                             p_chk = httpx.get(chk_url, headers=headers, timeout=5.0)
                             if p_chk.status_code == 200 and str(p_chk.json().get("status") or "").lower() == "completed":
                                 break
@@ -1009,7 +998,8 @@ async def stream_google_deep_research(
 
     async with httpx.AsyncClient(timeout=_GOOGLE_DEEP_RESEARCH_TIMEOUT, follow_redirects=True) as client:
         try:
-            start_resp = await client.post(_GOOGLE_INTERACTIONS_URL, headers=headers, json=payload)
+            base_url, headers, _ = await get_interactions_request_params(settings)
+            start_resp = await client.post(base_url, headers=headers, json=payload)
         except Exception as exc:
             raise ProviderError(f"Connexion à Google Interactions API impossible: {exc}") from exc
 
@@ -1019,12 +1009,14 @@ async def stream_google_deep_research(
                 fallback_agent = _DEFAULT_GOOGLE_RESEARCH_AGENT if payload["agent"] != _DEFAULT_GOOGLE_RESEARCH_AGENT else "deep-research-max-preview-04-2026"
                 _logger.info("Mismatch d'agent détecté pour l'interaction précédente, bascule vers %s", fallback_agent)
                 payload["agent"] = fallback_agent
-                start_resp = await client.post(_GOOGLE_INTERACTIONS_URL, headers=headers, json=payload)
+                _, headers, _ = await get_interactions_request_params(settings)
+                start_resp = await client.post(base_url, headers=headers, json=payload)
                 if start_resp.status_code >= 400 and "belongs to a different agent" in start_resp.text:
                     _logger.warning("Bascule vers exécution autonome complète sans previous_interaction_id")
                     payload.pop("previous_interaction_id", None)
                     payload["input"] = f"{full_input}\n\nPLAN D'INVESTIGATION VALIDÉ ET AXES PRIORITAIRES :\n{feedback_input}"
-                    start_resp = await client.post(_GOOGLE_INTERACTIONS_URL, headers=headers, json=payload)
+                    _, headers, _ = await get_interactions_request_params(settings)
+                    start_resp = await client.post(base_url, headers=headers, json=payload)
 
             elif ("not yet complete" in err_text or "not complete" in err_text) and payload.get("previous_interaction_id"):
                 _logger.info("Interaction préalable non complétée lors du POST, attente brève...")
@@ -1033,6 +1025,7 @@ async def stream_google_deep_research(
                     for _ in range(5):
                         await asyncio.sleep(2.0)
                         try:
+                            _, headers, _ = await get_interactions_request_params(settings)
                             c_resp = await client.get(chk_url, headers=headers)
                             if c_resp.status_code == 200 and str(c_resp.json().get("status") or "").lower() == "completed":
                                 wait_success = True
@@ -1040,13 +1033,15 @@ async def stream_google_deep_research(
                         except Exception:
                             pass
                 if wait_success:
-                    start_resp = await client.post(_GOOGLE_INTERACTIONS_URL, headers=headers, json=payload)
+                    _, headers, _ = await get_interactions_request_params(settings)
+                    start_resp = await client.post(base_url, headers=headers, json=payload)
                 if start_resp.status_code >= 400 and ("not yet complete" in start_resp.text or "not complete" in start_resp.text):
                     # Si Google tarde toujours, bascule autonome infaillible avec le plan validé complet
                     _logger.warning("Bascule vers exécution autonome avec le plan complet validé (interaction précédente non complétée)")
                     payload.pop("previous_interaction_id", None)
                     payload["input"] = f"{full_input}\n\nPLAN D'INVESTIGATION VALIDÉ ET AXES PRIORITAIRES :\n{feedback_input}"
-                    start_resp = await client.post(_GOOGLE_INTERACTIONS_URL, headers=headers, json=payload)
+                    _, headers, _ = await get_interactions_request_params(settings)
+                    start_resp = await client.post(base_url, headers=headers, json=payload)
 
         if start_resp.status_code >= 400:
             err_detail = start_resp.text[:400]
@@ -1057,10 +1052,7 @@ async def stream_google_deep_research(
         if not active_interaction_id:
             raise ProviderError("Google Interactions API n'a renvoyé aucun identifiant d'interaction.")
 
-        if active_interaction_id.startswith("interactions/"):
-            poll_url = f"https://generativelanguage.googleapis.com/v1beta/{active_interaction_id}"
-        else:
-            poll_url = f"{_GOOGLE_INTERACTIONS_URL}/{active_interaction_id}"
+        poll_url = build_interaction_url(base_url, str(active_interaction_id))
 
         status_messages = [
             f"{display_agent_name} · Planification et analyse des axes d'investigation…",
@@ -1083,6 +1075,7 @@ async def stream_google_deep_research(
             poll_count += 1
 
             try:
+                _, headers, _ = await get_interactions_request_params(settings)
                 poll_resp = await client.get(poll_url, headers=headers)
             except Exception as exc:
                 _logger.warning("Erreur transitoire de polling Google Interactions: %s", exc)

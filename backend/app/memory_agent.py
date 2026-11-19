@@ -7,6 +7,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import sessionmaker
 
 from .config import Settings
+from .google_cloud import can_fallback_to_model, has_llm_access, post_chat_completion
 from .models import Memory, now
 from .serializers import stamp
 
@@ -177,11 +178,9 @@ async def analyze_memories_with_agent(
     auto_memory_enabled: bool = True,
 ) -> dict[str, list[str]]:
     """Analyze the user turn with an auxiliary LLM to detect memories to store or delete."""
-    key = settings.llm_api_key.get_secret_value() if hasattr(settings.llm_api_key, "get_secret_value") else str(settings.llm_api_key)
-    if not key or settings.demo_mode:
-        return fallback_memory_analysis(user_text, existing_memories, auto_memory_enabled=auto_memory_enabled)
-
     model = getattr(settings, "memory_agent_model", None) or getattr(settings, "web_search_decision_model", None) or getattr(settings, "search_query_model", "google/gemini-3.5-flash-lite")
+    if settings.demo_mode or not has_llm_access(settings, model):
+        return fallback_memory_analysis(user_text, existing_memories, auto_memory_enabled=auto_memory_enabled)
 
     payload_data = {
         "user_message": (user_text or "")[:1500],
@@ -197,30 +196,30 @@ async def analyze_memories_with_agent(
 
     try:
         async with httpx.AsyncClient(timeout=10.0, follow_redirects=False) as client:
-            resp = await client.post(
-                settings.llm_base_url.rstrip("/") + "/chat/completions",
-                headers={"Authorization": f"Bearer {key}"},
-                json={
+            resp = await post_chat_completion(
+                settings,
+                {
                     "model": model,
                     "messages": messages,
                     "stream": False,
                     "temperature": 0.1,
                     "max_tokens": 400,
                 },
+                client=client,
             )
             if resp.status_code in (400, 404, 422):
                 alt_model = getattr(settings, "default_model", "mistralai/mistral-small-3.2-24b-instruct")
-                if alt_model and alt_model != model:
-                    resp = await client.post(
-                        settings.llm_base_url.rstrip("/") + "/chat/completions",
-                        headers={"Authorization": f"Bearer {key}"},
-                        json={
+                if alt_model and alt_model != model and can_fallback_to_model(settings, model, alt_model):
+                    resp = await post_chat_completion(
+                        settings,
+                        {
                             "model": alt_model,
                             "messages": messages,
                             "stream": False,
                             "temperature": 0.1,
                             "max_tokens": 400,
                         },
+                        client=client,
                     )
             if resp.status_code >= 400:
                 _logger.warning("Échec HTTP agent mémoire (%s): %s", resp.status_code, resp.text[:200])

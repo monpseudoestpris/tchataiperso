@@ -33,6 +33,7 @@ from ..multi_agent import execute_multi_agent_contradictory_debate, execute_mult
 from ..deps import check_model, claim, current_user, get_conversation, get_sessions, get_settings, get_upload_dir
 from ..documents import extraction_text
 from ..finance import process_message_finance_inquiries
+from ..google_cloud import has_llm_access
 from ..memory_agent import process_memory_turn
 from ..models import (
     Attachment,
@@ -87,8 +88,14 @@ async def send_message(
     sessions: sessionmaker = Depends(get_sessions),
 ):
     upload_dir = get_upload_dir(request)
-    if not settings.demo_mode and not settings.enabled(settings.llm_api_key):
-        raise HTTPException(503, "Configurez LLM_API_KEY ou activez explicitement DEMO_MODE pour une simulation")
+    has_google_dr_key = bool(
+        body.model
+        and "google" in body.model.lower()
+        and "deep-research" in body.model.lower()
+        and settings.enabled(settings.google_api_key)
+    )
+    if not settings.demo_mode and not (has_llm_access(settings, (body.model or "").strip() or None) or has_google_dr_key):
+        raise HTTPException(503, "Configurez LLM_API_KEY ou Google Cloud, ou activez explicitement DEMO_MODE pour une simulation")
     if not body.content.strip() and not body.attachment_ids:
         raise HTTPException(422, "Écrivez un message ou joignez un document")
     is_direct_research = (
@@ -245,7 +252,7 @@ async def send_message(
                             previous_finance_targets.remove(sym)
                         previous_finance_targets.insert(0, sym)
             entity_resolver = None
-            if not settings.demo_mode and settings.enabled(settings.llm_api_key) and not body.deep_search and not body.learn_mode:
+            if not settings.demo_mode and has_llm_access(settings) and not body.deep_search and not body.learn_mode:
                 async def entity_resolver(text: str, previous: list[str]) -> list[str]:
                     return await providers.extract_finance_targets(settings, text, previous, recent_turns[-4:])
             finance_failures: list[str] = []
@@ -1296,7 +1303,7 @@ async def send_message(
             if needs_classification:
                 use_real_classifier = (
                     not settings.demo_mode
-                    and settings.enabled(settings.llm_api_key)
+                    and has_llm_access(settings)
                     and (
                         providers.stream_chat is _DEFAULT_STREAM_CHAT
                         or providers.classify_conversation is not _DEFAULT_CLASSIFY_CONVERSATION
@@ -1478,8 +1485,14 @@ async def plan_conversation_deep_search(
     settings: Settings = Depends(get_settings),
     sessions: sessionmaker = Depends(get_sessions),
 ):
-    if not settings.demo_mode and not settings.enabled(settings.llm_api_key):
-        raise HTTPException(503, "Configurez LLM_API_KEY ou activez explicitement DEMO_MODE pour une simulation")
+    has_google_dr_key = bool(
+        body.model
+        and "google" in body.model.lower()
+        and "deep-research" in body.model.lower()
+        and settings.enabled(settings.google_api_key)
+    )
+    if not settings.demo_mode and not (has_llm_access(settings, (body.model or "").strip() or None) or has_google_dr_key):
+        raise HTTPException(503, "Configurez LLM_API_KEY ou Google Cloud, ou activez explicitement DEMO_MODE pour une simulation")
     if not settings.web_search_enabled:
         raise HTTPException(503, "La recherche web nécessite SearXNG, BRAVE_API_KEY ou DUCKDUCKGO_ENABLED en mode IA réel")
 
@@ -1534,8 +1547,14 @@ async def plan_direct_deep_search(
     user: User = Depends(current_user),
     settings: Settings = Depends(get_settings),
 ):
-    if not settings.demo_mode and not settings.enabled(settings.llm_api_key):
-        raise HTTPException(503, "Configurez LLM_API_KEY ou activez explicitement DEMO_MODE pour une simulation")
+    has_google_dr_key = bool(
+        body.model
+        and "google" in body.model.lower()
+        and "deep-research" in body.model.lower()
+        and settings.enabled(settings.google_api_key)
+    )
+    if not settings.demo_mode and not (has_llm_access(settings, (body.model or "").strip() or None) or has_google_dr_key):
+        raise HTTPException(503, "Configurez LLM_API_KEY ou Google Cloud, ou activez explicitement DEMO_MODE pour une simulation")
     if not settings.web_search_enabled:
         raise HTTPException(503, "La recherche web nécessite SearXNG, BRAVE_API_KEY ou DUCKDUCKGO_ENABLED en mode IA réel")
 
@@ -1781,8 +1800,14 @@ async def plan_conversation_learn_mode(
     settings: Settings = Depends(get_settings),
     sessions: sessionmaker = Depends(get_sessions),
 ):
-    if not settings.demo_mode and not settings.enabled(settings.llm_api_key):
-        raise HTTPException(503, "Configurez LLM_API_KEY ou activez explicitement DEMO_MODE pour une simulation")
+    has_google_dr_key = bool(
+        body.model
+        and "google" in body.model.lower()
+        and "deep-research" in body.model.lower()
+        and settings.enabled(settings.google_api_key)
+    )
+    if not settings.demo_mode and not (has_llm_access(settings, (body.model or "").strip() or None) or has_google_dr_key):
+        raise HTTPException(503, "Configurez LLM_API_KEY ou Google Cloud, ou activez explicitement DEMO_MODE pour une simulation")
     if not settings.web_search_enabled:
         raise HTTPException(503, "La recherche web nécessite SearXNG, BRAVE_API_KEY ou DUCKDUCKGO_ENABLED en mode IA réel")
 
@@ -1837,8 +1862,14 @@ async def plan_direct_learn_mode(
     user: User = Depends(current_user),
     settings: Settings = Depends(get_settings),
 ):
-    if not settings.demo_mode and not settings.enabled(settings.llm_api_key):
-        raise HTTPException(503, "Configurez LLM_API_KEY ou activez explicitement DEMO_MODE pour une simulation")
+    has_google_dr_key = bool(
+        body.model
+        and "google" in body.model.lower()
+        and "deep-research" in body.model.lower()
+        and settings.enabled(settings.google_api_key)
+    )
+    if not settings.demo_mode and not (has_llm_access(settings, (body.model or "").strip() or None) or has_google_dr_key):
+        raise HTTPException(503, "Configurez LLM_API_KEY ou Google Cloud, ou activez explicitement DEMO_MODE pour une simulation")
     if not settings.web_search_enabled:
         raise HTTPException(503, "La recherche web nécessite SearXNG, BRAVE_API_KEY ou DUCKDUCKGO_ENABLED en mode IA réel")
 

@@ -440,7 +440,8 @@ async def generate_finance_expert_opinion(
     question: str | None = None,
 ) -> dict[str, Any]:
     """Génère et mémorise l'avis d'un expert financier célèbre basé sur les chiffres complets du dossier."""
-    from .providers import ProviderError, _check_response, _json, _key
+    from .google_cloud import can_fallback_to_model, has_llm_access, post_chat_completion
+    from .providers import ProviderError, _check_response, _json
 
     expert = get_expert_persona(expert_id)
     if not expert:
@@ -506,7 +507,7 @@ async def generate_finance_expert_opinion(
         if a.get("title") and a.get("url")
     ]
 
-    if settings.demo_mode or not settings.enabled(settings.llm_api_key):
+    if settings.demo_mode or not has_llm_access(settings, chosen_model):
         md = _build_demo_expert_markdown(expert, dossier, facts_context, clean_q)
         return _finalize_and_save_expert_opinion(
             db_path,
@@ -567,24 +568,18 @@ Points de vigilance chiffrés (Trap Score, dettes, accruals, Beneish/Dechow/Mont
 DONNÉES VÉRIFIÉES COMPLÈTES DU DOSSIER ({canonical}) :
 {context_json}"""
 
-    api_key = _key(settings, "llm_api_key", "du fournisseur IA")
-    base_url = settings.llm_base_url.rstrip("/")
-
     async def _call_model(target_model: str) -> str:
         async with httpx.AsyncClient(timeout=90.0) as client:
-            resp = await client.post(
-                f"{base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                    "HTTP-Referer": "https://clair.app",
-                },
-                json={
+            resp = await post_chat_completion(
+                settings,
+                {
                     "model": target_model,
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0.35,
                     "max_tokens": 8192,
                 },
+                client=client,
+                extra_headers={"HTTP-Referer": "https://clair.app"},
             )
             _check_response(resp, "Fournisseur IA")
             data = _json(resp, "Fournisseur IA")
@@ -598,7 +593,7 @@ DONNÉES VÉRIFIÉES COMPLÈTES DU DOSSIER ({canonical}) :
         md = await _call_model(chosen_model)
     except Exception as primary_exc:
         fallback = (settings.default_model or "").strip()
-        if fallback and fallback != chosen_model:
+        if fallback and fallback != chosen_model and can_fallback_to_model(settings, chosen_model, fallback):
             _logger.warning(
                 "Échec avis expert (%s) avec %s (%s), repli sur %s",
                 expert["id"],

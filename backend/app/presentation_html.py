@@ -23,8 +23,9 @@ from typing import Any
 
 import httpx
 
-from .source_registry import CITATION_RE, citation_numbers, is_document
 from .deep_search_html import extract_domain, slugify
+from .google_cloud import can_fallback_to_model, has_llm_access, post_chat_completion
+from .source_registry import CITATION_RE, citation_numbers, is_document
 
 _logger = logging.getLogger("uvicorn.error")
 
@@ -276,20 +277,6 @@ async def generate_ai_presentation_slides(
     clean_title = (title or "").strip() or "Présentation cLAIr"
     clean_topic = (topic or "").strip() or clean_title
 
-    raw_key = getattr(settings, "llm_api_key", None)
-    key = ""
-    if hasattr(raw_key, "get_secret_value"):
-        key = raw_key.get_secret_value().strip()
-    elif isinstance(raw_key, str):
-        key = raw_key.strip()
-    if len(key) >= 2 and key[0] == key[-1] and key[0] in ("'", '"'):
-        key = key[1:-1].strip()
-    if key.lower().startswith("bearer "):
-        key = key[7:].strip()
-
-    if getattr(settings, "demo_mode", False) or not key:
-        return fallback_ai_slides(content, clean_title, clean_topic, model, created_at_str, sources)
-
     configured_pres_model = getattr(settings, "presentation_model", "").strip() if settings else ""
     default_model = getattr(settings, "default_model", "openai/gpt-4o-mini") if settings else "openai/gpt-4o-mini"
     is_virtual_label = model in ("DeepSearch", "cLAIr Apprendre", "Sonar Deep Research", "")
@@ -300,6 +287,9 @@ async def generate_ai_presentation_slides(
         chosen_model = model
     else:
         chosen_model = default_model
+
+    if not settings or getattr(settings, "demo_mode", False) or not has_llm_access(settings, chosen_model):
+        return fallback_ai_slides(content, clean_title, clean_topic, model, created_at_str, sources)
 
     system_prompt = (
         "Tu es un expert mondial en conception de présentations exécutives (style Apple Keynote / McKinsey).\n"
@@ -394,31 +384,31 @@ async def generate_ai_presentation_slides(
     try:
         timeout = getattr(settings, "llm_timeout", 45.0)
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
-            resp = await client.post(
-                settings.llm_base_url.rstrip("/") + "/chat/completions",
-                headers={"Authorization": f"Bearer {key}"},
-                json={
+            resp = await post_chat_completion(
+                settings,
+                {
                     "model": chosen_model,
                     "messages": messages,
                     "stream": False,
                     "temperature": 0.2,
                     "max_tokens": 3000,
                 },
+                client=client,
             )
             if resp.status_code in (400, 404, 422):
                 alt_model = getattr(settings, "default_model", "")
-                if alt_model and alt_model != chosen_model:
+                if alt_model and alt_model != chosen_model and can_fallback_to_model(settings, chosen_model, alt_model):
                     _logger.warning("Modèle %s non pris en charge (%d). Repli vers alt_model : %s", chosen_model, resp.status_code, alt_model)
-                    resp = await client.post(
-                        settings.llm_base_url.rstrip("/") + "/chat/completions",
-                        headers={"Authorization": f"Bearer {key}"},
-                        json={
+                    resp = await post_chat_completion(
+                        settings,
+                        {
                             "model": alt_model,
                             "messages": messages,
                             "stream": False,
                             "temperature": 0.2,
                             "max_tokens": 3000,
                         },
+                        client=client,
                     )
 
             if resp.status_code == 200:

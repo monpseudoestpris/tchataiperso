@@ -4,6 +4,7 @@ from sqlalchemy.orm import sessionmaker
 
 from ..config import Settings
 from ..deps import get_sessions, get_settings
+from ..google_cloud import has_llm_access
 from ..sampling import PARAMETER_CATALOG
 from ..schemas import CONVERSATION_THEMES
 
@@ -38,8 +39,10 @@ def config(settings: Settings = Depends(get_settings)):
         "skill_prompt_model": settings.skill_prompt_model,
         "image_models": settings.available_image_models,
         "default_image_model": settings.effective_default_image_model,
+        "google_cloud_mode": settings.active_google_cloud_mode or "disabled",
         "features": {
-            "chat": settings.demo_mode or settings.enabled(settings.llm_api_key),
+            "chat": settings.demo_mode or has_llm_access(settings),
+            "google_cloud": settings.google_cloud_enabled,
             "web_search": settings.web_search_enabled,
             "ocr": settings.enabled(settings.mistral_api_key),
             "image_generation": bool(settings.available_image_models),

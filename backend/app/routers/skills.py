@@ -5,6 +5,7 @@ from sqlalchemy.orm import sessionmaker
 from .. import providers
 from ..config import Settings
 from ..deps import current_user, get_conversation, get_sessions, get_settings
+from ..google_cloud import has_llm_access
 from ..models import ConversationSkill, Skill, User, now
 from ..schemas import CreateSkill, ImproveSkillPrompt, SetConversationSkills, UpdateSkill
 from ..serializers import MAX_SKILL_COUNT, MAX_SKILL_CONTEXT_CHARS, skill_json
@@ -54,14 +55,14 @@ async def improve_skill(
     user: User = Depends(current_user),
     settings: Settings = Depends(get_settings),
 ):
-    if settings.demo_mode or not settings.enabled(settings.llm_api_key):
-        raise HTTPException(503, "L'amélioration des compétences nécessite une clé LLM_API_KEY et le mode IA réel")
     model = (
         (body.model.strip() if body.model and body.model.strip() else None)
         or settings.skill_prompt_model
         or "google/gemini-4-argon"
         or settings.default_model
     )
+    if settings.demo_mode or not has_llm_access(settings, model):
+        raise HTTPException(503, "L'amélioration des compétences nécessite une clé LLM_API_KEY ou Google Cloud et le mode IA réel")
     try:
         prompt = await providers.improve_skill_prompt(settings, model, body.prompt)
     except providers.ProviderError as exc:

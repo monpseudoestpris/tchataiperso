@@ -10,6 +10,7 @@ from sqlalchemy.orm import sessionmaker
 from .. import providers
 from ..config import Settings
 from ..deps import claim, current_user, get_conversation, get_sessions, get_settings, get_upload_dir
+from ..google_cloud import has_llm_access
 from ..models import Attachment, GeneratedImage, Message, User, now
 from ..schemas import CreateImage, ImproveImagePrompt
 from ..serializers import (IMAGE_ASPECT_RATIOS, MAX_GENERATED_IMAGES,
@@ -157,17 +158,17 @@ async def improve_image(
     settings: Settings = Depends(get_settings),
     sessions: sessionmaker = Depends(get_sessions),
 ):
-    if settings.demo_mode or not settings.enabled(settings.llm_api_key):
-        raise HTTPException(503, "L'amélioration du prompt nécessite une clé LLM_API_KEY et le mode IA réel")
-    upload_dir = get_upload_dir(request)
-    reference_image = _resolve_reference_image(
-        body.reference_image_data, body.source_image_id, upload_dir, user, sessions
-    )
     model = (
         (body.model.strip() if body.model and body.model.strip() else None)
         or settings.image_prompt_model
         or "google/gemini-4-argon"
         or settings.default_model
+    )
+    if settings.demo_mode or not has_llm_access(settings, model):
+        raise HTTPException(503, "L'amélioration du prompt nécessite une clé LLM_API_KEY ou Google Cloud et le mode IA réel")
+    upload_dir = get_upload_dir(request)
+    reference_image = _resolve_reference_image(
+        body.reference_image_data, body.source_image_id, upload_dir, user, sessions
     )
     improve_kwargs: dict = {}
     if reference_image is not None:
@@ -206,8 +207,8 @@ async def create_studio_image(
     is_ideogram = providers.is_ideogram_model(body.model)
     if is_ideogram and not settings.enabled(settings.ideogram_api_key):
         raise HTTPException(503, "La génération d'image avec Ideogram nécessite IDEOGRAM_API_KEY et un mode IA réel")
-    if not is_ideogram and not settings.enabled(settings.llm_api_key):
-        raise HTTPException(503, "La génération d'image avec ce modèle nécessite LLM_API_KEY et un mode IA réel")
+    if not is_ideogram and not has_llm_access(settings, body.model):
+        raise HTTPException(503, "La génération d'image avec ce modèle nécessite LLM_API_KEY ou Google Cloud et un mode IA réel")
     if body.aspect_ratio not in IMAGE_ASPECT_RATIOS:
         raise HTTPException(422, "Ratio d'image non pris en charge")
     reference_image = _resolve_reference_image(
@@ -332,8 +333,8 @@ async def create_image(
     is_ideogram = providers.is_ideogram_model(body.model)
     if is_ideogram and not settings.enabled(settings.ideogram_api_key):
         raise HTTPException(503, "La génération d'image avec Ideogram nécessite IDEOGRAM_API_KEY et un mode IA réel")
-    if not is_ideogram and not settings.enabled(settings.llm_api_key):
-        raise HTTPException(503, "La génération d'image avec ce modèle nécessite LLM_API_KEY et un mode IA réel")
+    if not is_ideogram and not has_llm_access(settings, body.model):
+        raise HTTPException(503, "La génération d'image avec ce modèle nécessite LLM_API_KEY ou Google Cloud et un mode IA réel")
     if body.aspect_ratio not in IMAGE_ASPECT_RATIOS:
         raise HTTPException(422, "Ratio d'image non pris en charge")
     reference_image = _resolve_reference_image(

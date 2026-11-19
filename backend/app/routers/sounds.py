@@ -9,6 +9,7 @@ from sqlalchemy.orm import sessionmaker
 from .. import providers
 from ..config import Settings
 from ..deps import claim, current_user, get_sessions, get_settings, get_upload_dir
+from ..google_cloud import has_llm_access
 from ..models import GeneratedSound, User
 from ..schemas import CreateSound, ImproveSoundPrompt
 from ..serializers import (MAX_GENERATED_SOUNDS, MUSIC_MODELS, SOUND_OUTPUT_FORMATS,
@@ -51,13 +52,13 @@ async def improve_sound(
     user: User = Depends(current_user),
     settings: Settings = Depends(get_settings),
 ):
-    if settings.demo_mode or not settings.enabled(settings.llm_api_key):
-        raise HTTPException(503, "L'amélioration du prompt nécessite une clé LLM_API_KEY et le mode IA réel")
     model = (
         (body.model.strip() if body.model and body.model.strip() else None)
         or settings.image_prompt_model
         or settings.default_model
     )
+    if settings.demo_mode or not has_llm_access(settings, model):
+        raise HTTPException(503, "L'amélioration du prompt nécessite une clé LLM_API_KEY ou Google Cloud et le mode IA réel")
     try:
         if body.sound_type == "music":
             prompt = await providers.improve_music_prompt(
@@ -88,8 +89,8 @@ async def translate_sound(
     user: User = Depends(current_user),
     settings: Settings = Depends(get_settings),
 ):
-    if settings.demo_mode or not settings.enabled(settings.llm_api_key):
-        raise HTTPException(503, "La traduction nécessite une clé LLM_API_KEY et le mode IA réel")
+    if settings.demo_mode or not has_llm_access(settings):
+        raise HTTPException(503, "La traduction nécessite une clé LLM_API_KEY ou Google Cloud et le mode IA réel")
     try:
         if body.sound_type == "music":
             prompt = await providers.translate_music_prompt_to_english(settings, body.prompt)

@@ -10,12 +10,12 @@ from urllib.parse import parse_qs, urljoin, urlsplit
 import httpx
 
 from .config import Settings
+from .google_cloud import can_fallback_to_model, has_llm_access, post_chat_completion
 from .youtube import extract_youtube_video_id
 from .providers import (
     ProviderError,
     _check_response,
     _json,
-    _key,
     _safe_web_url,
     _web_sources,
     merge_web_sources,
@@ -93,9 +93,9 @@ async def get_international_queries(settings: Settings, topic_prompt: str) -> li
     queries = [clean_topic]
 
     # If real LLM mode, ask LLM for 1 French and 1-2 English global queries
-    if not settings.demo_mode and settings.enabled(settings.llm_api_key):
+    query_model = getattr(settings, "blog_model", None) or settings.search_query_model or "google/gemini-3.5-flash-lite"
+    if not settings.demo_mode and has_llm_access(settings, query_model):
         try:
-            key = _key(settings, "llm_api_key", "du fournisseur IA")
             messages = [
                 {"role": "system", "content": (
                     "Génère 2 requêtes web concises pour trouver les dernières actualités mondiales sur ce sujet : "
@@ -104,12 +104,11 @@ async def get_international_queries(settings: Settings, topic_prompt: str) -> li
                 )},
                 {"role": "user", "content": clean_topic},
             ]
-            query_model = getattr(settings, "blog_model", None) or settings.search_query_model or "google/gemini-3.5-flash-lite"
             async with httpx.AsyncClient(timeout=6.0, follow_redirects=False) as client:
-                res = await client.post(
-                    settings.llm_base_url.rstrip("/") + "/chat/completions",
-                    headers={"Authorization": f"Bearer {key}"},
-                    json={"model": query_model, "messages": messages, "temperature": 0.1, "max_tokens": 80},
+                res = await post_chat_completion(
+                    settings,
+                    {"model": query_model, "messages": messages, "temperature": 0.1, "max_tokens": 80},
+                    client=client,
                 )
                 if res.status_code == 200:
                     raw = res.json()["choices"][0]["message"]["content"]
@@ -1167,7 +1166,8 @@ async def generate_blog_edition(
         edition_suffix = f"Magazine Mixte du {date_formatted}"
 
     # 1. Demo Mode or missing LLM key: simulated high quality cards (minimum 10)
-    if settings.demo_mode or not settings.enabled(settings.llm_api_key):
+    synth_model = getattr(settings, "blog_model", None) or "google/gemini-3.5-flash-lite"
+    if settings.demo_mode or not has_llm_access(settings, synth_model):
         title = f"{display_topic} · {edition_suffix}"
         summary = (
             f"L'actualité sur {clean_topic} est marquée par une série d'évolutions significatives couvrant les volets "
@@ -1337,43 +1337,44 @@ async def generate_blog_edition(
         f"Génère maintenant au minimum 10 encarts répartis entre les catégories demandées au format JSON strict."
     )
 
-    key = _key(settings, "llm_api_key", "du fournisseur IA")
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_message},
     ]
 
-    synth_model = getattr(settings, "blog_model", None) or "google/gemini-3.5-flash-lite"
-
     try:
         async with httpx.AsyncClient(timeout=60.0, follow_redirects=False) as client:
-            response = await client.post(
-                settings.llm_base_url.rstrip("/") + "/chat/completions",
-                headers={"Authorization": f"Bearer {key}"},
-                json={
+            response = await post_chat_completion(
+                settings,
+                {
                     "model": synth_model,
                     "messages": messages,
                     "stream": False,
                     "temperature": 0.2,
                     "max_tokens": 4200,
                 },
+                client=client,
             )
             # Repli automatique sur le modèle par défaut si le modèle rapide est indisponible
-            if response.status_code != 200 and synth_model != settings.default_model:
+            if (
+                response.status_code != 200
+                and synth_model != settings.default_model
+                and can_fallback_to_model(settings, synth_model, settings.default_model)
+            ):
                 _logger.warning(
                     "Modèle blog rapide %s indisponible (code %s). Repli sur %s.",
                     synth_model, response.status_code, settings.default_model,
                 )
-                response = await client.post(
-                    settings.llm_base_url.rstrip("/") + "/chat/completions",
-                    headers={"Authorization": f"Bearer {key}"},
-                    json={
+                response = await post_chat_completion(
+                    settings,
+                    {
                         "model": settings.default_model,
                         "messages": messages,
                         "stream": False,
                         "temperature": 0.2,
                         "max_tokens": 4200,
                     },
+                    client=client,
                 )
         _check_response(response, "Fournisseur IA")
         payload = _json(response, "Fournisseur IA")

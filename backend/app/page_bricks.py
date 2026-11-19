@@ -16,7 +16,8 @@ import httpx
 from fastapi import HTTPException
 
 from .config import Settings
-from .providers import ProviderError, _check_response, _json, _key, search_web
+from .google_cloud import can_fallback_to_model, has_llm_access, post_chat_completion
+from .providers import ProviderError, _check_response, _json, search_web
 
 _logger = logging.getLogger("uvicorn.error")
 _TIMEOUT = httpx.Timeout(90.0, connect=15.0, pool=15.0)
@@ -429,16 +430,8 @@ async def execute_page_brick(
     out_spec = spec["output_spec"]
     out_format = out_spec["format"]
 
-    # Mode démonstration ou absence de clé API -> réponse structurée propre
-    has_llm_key = False
-    try:
-        if not getattr(settings, "demo_mode", False):
-            _key(settings, "llm_api_key", "du fournisseur IA")
-            has_llm_key = True
-    except ProviderError:
-        has_llm_key = False
-
-    if not has_llm_key or getattr(settings, "demo_mode", False):
+    # Mode démonstration ou absence d'accès fournisseur -> réponse structurée propre
+    if getattr(settings, "demo_mode", False) or not has_llm_access(settings, target_model):
         demo_out, demo_raw = _build_demo_output(spec, cleaned_inputs)
         return {
             "brick_id": spec["id"],
@@ -519,7 +512,6 @@ async def execute_page_brick(
                 f"[{idx}] {src.get('title', 'Source')} ({src.get('url', '')})\n{src.get('snippet', '')}"
             )
 
-    key = _key(settings, "llm_api_key", "du fournisseur IA")
     llm_messages: list[dict[str, str]] = [
         {"role": "system", "content": "\n\n".join(sys_parts)},
         *history_messages,
@@ -537,29 +529,22 @@ async def execute_page_brick(
 
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=False) as client:
-            response = await client.post(
-                settings.llm_base_url.rstrip("/") + "/chat/completions",
-                headers={"Authorization": f"Bearer {key}"},
-                json=request_payload,
-            )
+            response = await post_chat_completion(settings, request_payload, client=client)
             if response.status_code in (400, 422) and "response_format" in request_payload:
                 # Certains modèles/routeurs n'acceptent pas response_format
                 retry_payload = {k: v for k, v in request_payload.items() if k != "response_format"}
-                response = await client.post(
-                    settings.llm_base_url.rstrip("/") + "/chat/completions",
-                    headers={"Authorization": f"Bearer {key}"},
-                    json=retry_payload,
-                )
+                response = await post_chat_completion(settings, retry_payload, client=client)
             default_m = getattr(settings, "default_model", "")
-            if response.status_code in (400, 404, 422) and default_m and default_m != target_model:
+            if (
+                response.status_code in (400, 404, 422)
+                and default_m
+                and default_m != target_model
+                and can_fallback_to_model(settings, target_model, default_m)
+            ):
                 target_model = default_m
                 retry_payload = {**request_payload, "model": target_model}
                 retry_payload.pop("response_format", None)
-                response = await client.post(
-                    settings.llm_base_url.rstrip("/") + "/chat/completions",
-                    headers={"Authorization": f"Bearer {key}"},
-                    json=retry_payload,
-                )
+                response = await post_chat_completion(settings, retry_payload, client=client)
             _check_response(response, "Fournisseur IA")
             payload = _json(response, "Fournisseur IA")
             raw_text = str(payload["choices"][0]["message"]["content"] or "").strip()
@@ -1574,15 +1559,7 @@ async def propose_app_diagram(
     clean_prompt = (prompt or "").strip()
     target_model = model or getattr(settings, "page_model", None) or getattr(settings, "default_model", None) or "openai/gpt-4o-mini"
 
-    has_llm_key = False
-    try:
-        if not getattr(settings, "demo_mode", False):
-            _key(settings, "llm_api_key", "du fournisseur IA")
-            has_llm_key = True
-    except ProviderError:
-        has_llm_key = False
-
-    if not has_llm_key or getattr(settings, "demo_mode", False) or not clean_prompt:
+    if getattr(settings, "demo_mode", False) or not has_llm_access(settings, target_model) or not clean_prompt:
         return _build_fallback_diagram(clean_prompt, title)
 
 
@@ -1728,18 +1705,9 @@ async def interview_app_diagram(
     user_turns = sum(1 for m in clean_msgs if m["role"] == "user")
     target_model = model or getattr(settings, "page_model", None) or getattr(settings, "default_model", None) or "openai/gpt-4o-mini"
 
-    has_llm_key = False
-    try:
-        if not getattr(settings, "demo_mode", False):
-            _key(settings, "llm_api_key", "du fournisseur IA")
-            has_llm_key = True
-    except ProviderError:
-        has_llm_key = False
-
-    if not has_llm_key or getattr(settings, "demo_mode", False):
+    if getattr(settings, "demo_mode", False) or not has_llm_access(settings, target_model):
         return _build_fallback_interview(clean_msgs, force_finalize=force_finalize)
 
-    key = _key(settings, "llm_api_key", "du fournisseur IA")
     catalog_summary = ""
     if available_templates:
         catalog_lines = [
@@ -1772,18 +1740,10 @@ async def interview_app_diagram(
 
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=False) as client:
-            response = await client.post(
-                settings.llm_base_url.rstrip("/") + "/chat/completions",
-                headers={"Authorization": f"Bearer {key}"},
-                json=request_payload,
-            )
+            response = await post_chat_completion(settings, request_payload, client=client)
             if response.status_code in (400, 422):
                 retry = {k: v for k, v in request_payload.items() if k != "response_format"}
-                response = await client.post(
-                    settings.llm_base_url.rstrip("/") + "/chat/completions",
-                    headers={"Authorization": f"Bearer {key}"},
-                    json=retry,
-                )
+                response = await post_chat_completion(settings, retry, client=client)
             _check_response(response, "Fournisseur IA")
             payload = _json(response, "Fournisseur IA")
             raw_text = str(payload["choices"][0]["message"]["content"] or "").strip()
@@ -1832,7 +1792,6 @@ async def interview_app_diagram(
 
     return _build_fallback_interview(clean_msgs, force_finalize=force_finalize)
 
-    key = _key(settings, "llm_api_key", "du fournisseur IA")
     user_content = f"Idée d'application à architecturer :\n{clean_prompt}"
     if title:
         user_content += f"\n\nTitre souhaité : {title}"
@@ -1851,18 +1810,10 @@ async def interview_app_diagram(
 
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=False) as client:
-            response = await client.post(
-                settings.llm_base_url.rstrip("/") + "/chat/completions",
-                headers={"Authorization": f"Bearer {key}"},
-                json=request_payload,
-            )
+            response = await post_chat_completion(settings, request_payload, client=client)
             if response.status_code in (400, 422):
                 retry = {k: v for k, v in request_payload.items() if k != "response_format"}
-                response = await client.post(
-                    settings.llm_base_url.rstrip("/") + "/chat/completions",
-                    headers={"Authorization": f"Bearer {key}"},
-                    json=retry,
-                )
+                response = await post_chat_completion(settings, retry, client=client)
             _check_response(response, "Fournisseur IA")
             payload = _json(response, "Fournisseur IA")
             raw_text = str(payload["choices"][0]["message"]["content"] or "").strip()
@@ -2017,18 +1968,9 @@ async def interview_app_diagram(
     user_turns = sum(1 for m in clean_msgs if m["role"] == "user")
     target_model = model or getattr(settings, "page_model", None) or getattr(settings, "default_model", None) or "openai/gpt-4o-mini"
 
-    has_llm_key = False
-    try:
-        if not getattr(settings, "demo_mode", False):
-            _key(settings, "llm_api_key", "du fournisseur IA")
-            has_llm_key = True
-    except ProviderError:
-        has_llm_key = False
-
-    if not has_llm_key or getattr(settings, "demo_mode", False):
+    if getattr(settings, "demo_mode", False) or not has_llm_access(settings, target_model):
         return _build_fallback_interview(clean_msgs, force_finalize=force_finalize)
 
-    key = _key(settings, "llm_api_key", "du fournisseur IA")
     catalog_summary = ""
     if available_templates:
         catalog_lines = [
@@ -2061,18 +2003,10 @@ async def interview_app_diagram(
 
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=False) as client:
-            response = await client.post(
-                settings.llm_base_url.rstrip("/") + "/chat/completions",
-                headers={"Authorization": f"Bearer {key}"},
-                json=request_payload,
-            )
+            response = await post_chat_completion(settings, request_payload, client=client)
             if response.status_code in (400, 422):
                 retry = {k: v for k, v in request_payload.items() if k != "response_format"}
-                response = await client.post(
-                    settings.llm_base_url.rstrip("/") + "/chat/completions",
-                    headers={"Authorization": f"Bearer {key}"},
-                    json=retry,
-                )
+                response = await post_chat_completion(settings, retry, client=client)
             _check_response(response, "Fournisseur IA")
             payload = _json(response, "Fournisseur IA")
             raw_text = str(payload["choices"][0]["message"]["content"] or "").strip()

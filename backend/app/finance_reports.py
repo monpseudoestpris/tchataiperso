@@ -21,6 +21,7 @@ import httpx
 from pypdf import PdfReader
 
 from .config import Settings
+from .google_cloud import has_llm_access, post_chat_completion
 from .providers import _check_response, _json, _key
 
 _logger = logging.getLogger("uvicorn.error")
@@ -648,18 +649,16 @@ def _parse_report_analysis_response(
 
 async def _post_llm_chat(
     client: httpx.AsyncClient,
-    url: str,
-    headers: dict[str, str],
+    settings: Settings,
     model: str,
     system_prompt: str,
     user_prompt: str,
     max_tokens: int,
     temperature: float = 0.15,
 ) -> str:
-    response = await client.post(
-        url,
-        headers=headers,
-        json={
+    response = await post_chat_completion(
+        settings,
+        {
             "model": model,
             "messages": [
                 {"role": "system", "content": system_prompt},
@@ -669,6 +668,7 @@ async def _post_llm_chat(
             "temperature": temperature,
             "max_tokens": max_tokens,
         },
+        client=client,
     )
     _check_response(response, "Fournisseur IA")
     payload = _json(response, "Fournisseur IA")
@@ -708,13 +708,10 @@ async def analyze_quarterly_report(
     - via un pipeline Map-Reduce par lots de pages au-delà afin de ne perdre aucun tableau ni page.
     """
     heuristic_metrics = _extract_heuristic_metrics(text)
-    if settings.demo_mode or not settings.enabled(settings.llm_api_key):
+    model = settings.summary_model or settings.default_model
+    if settings.demo_mode or not has_llm_access(settings, model):
         return _fallback_report_summary(symbol, company_name, title, period_label, text, heuristic_metrics), heuristic_metrics
 
-    key = _key(settings, "llm_api_key", "du fournisseur IA")
-    model = settings.summary_model or settings.default_model
-    url = settings.llm_base_url.rstrip("/") + "/chat/completions"
-    headers = {"Authorization": f"Bearer {key}"}
     label = f"{company_name} ({symbol})" if company_name and company_name != symbol else symbol
     synthesis_prompt = _build_synthesis_system_prompt()
 
@@ -728,7 +725,7 @@ async def analyze_quarterly_report(
                     f"Contenu intégral du rapport :\n{text}"
                 )
                 raw = await _post_llm_chat(
-                    client, url, headers, model, synthesis_prompt, user_prompt, max_tokens=4096, temperature=0.15,
+                    client, settings, model, synthesis_prompt, user_prompt, max_tokens=4096, temperature=0.15,
                 )
                 parsed = _parse_report_analysis_response(raw, heuristic_metrics)
                 if parsed:
@@ -755,7 +752,7 @@ async def analyze_quarterly_report(
                     async with sem:
                         try:
                             out = await _post_llm_chat(
-                                client, url, headers, model, map_system_prompt, map_user, max_tokens=2800, temperature=0.1,
+                                client, settings, model, map_system_prompt, map_user, max_tokens=2800, temperature=0.1,
                             )
                             if out.strip():
                                 return out.strip()
@@ -784,7 +781,7 @@ async def analyze_quarterly_report(
                     f"Relevés exhaustifs par lots de pages (à consolider intégralement dans le JSON final) :\n\n{combined_notes}"
                 )
                 raw = await _post_llm_chat(
-                    client, url, headers, model, synthesis_prompt, reduce_user, max_tokens=4096, temperature=0.15,
+                    client, settings, model, synthesis_prompt, reduce_user, max_tokens=4096, temperature=0.15,
                 )
                 parsed = _parse_report_analysis_response(raw, heuristic_metrics)
                 if parsed:

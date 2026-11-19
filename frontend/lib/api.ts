@@ -78,12 +78,14 @@ export type Config = {
   themes?: string[];
   features: {
     chat: boolean;
+    google_cloud?: boolean;
     web_search: boolean;
     ocr: boolean;
     image_generation: boolean;
     sound_effects?: boolean;
     music_generation?: boolean;
   };
+  google_cloud_mode?: string;
   search_providers?: string[];
   demo_mode: boolean;
 };

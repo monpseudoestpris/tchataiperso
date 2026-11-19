@@ -20,6 +20,7 @@ from typing import Any, AsyncIterator
 
 from . import providers
 from .config import Settings
+from .google_cloud import has_llm_access, post_chat_completion
 
 _logger = logging.getLogger("clair.multi_agent")
 
@@ -766,7 +767,7 @@ async def generate_ai_persona(settings: Settings, name_or_concept: str, model: s
     target_model = resolve_model(settings, model)
 
     # Repli démo si pas de clé API ou mode démo activé
-    if settings.demo_mode or not settings.enabled(settings.llm_api_key):
+    if getattr(settings, "demo_mode", False) or not has_llm_access(settings, target_model):
         return _fallback_generated_persona(name_clean)
 
     prompt_system = (
@@ -794,20 +795,19 @@ async def generate_ai_persona(settings: Settings, name_or_concept: str, model: s
 
     try:
         import httpx
-        from .providers import _TIMEOUT, _check_response, _json, _key
+        from .providers import _TIMEOUT, _check_response, _json
 
-        key = _key(settings, "llm_api_key", "du fournisseur IA")
         async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=False) as client:
-            response = await client.post(
-                settings.llm_base_url.rstrip("/") + "/chat/completions",
-                headers={"Authorization": f"Bearer {key}"},
-                json={
+            response = await post_chat_completion(
+                settings,
+                {
                     "model": target_model,
                     "messages": messages,
                     "stream": False,
                     "temperature": 0.1,
                     "max_tokens": 800,
                 },
+                client=client,
             )
             _check_response(response, "Fournisseur IA")
             payload = _json(response, "Fournisseur IA")
@@ -1027,7 +1027,7 @@ async def execute_multi_agent_synthesis(
     yield {"type": "status", "message": f"Conseil Multi-Agents · Consultation de {total} experts en parallèle…"}
 
     # Mode démonstration ou sans clé API
-    if getattr(settings, "demo_mode", False) or not settings.enabled(getattr(settings, "llm_api_key", None)):
+    if getattr(settings, "demo_mode", False) or not has_llm_access(settings):
         await asyncio.sleep(0.4)
         contributions = []
         for a in agents:
@@ -1206,7 +1206,7 @@ async def execute_multi_agent_debate(
     debate_history_text: list[str] = []
 
     # Simulation démo ou sans clé
-    if getattr(settings, "demo_mode", False) or not settings.enabled(getattr(settings, "llm_api_key", None)):
+    if getattr(settings, "demo_mode", False) or not has_llm_access(settings):
         for round_idx in range(rounds):
             for i, agent in enumerate(agents):
                 agent_name = agent.get("name", f"Intervenant #{i + 1}")
@@ -1350,7 +1350,7 @@ async def execute_multi_agent_contradictory_debate(
         return ag.get("model") or selected_model or settings.default_model
 
     # Simulation démo ou hors-ligne
-    if getattr(settings, "demo_mode", False) or not settings.enabled(getattr(settings, "llm_api_key", None)):
+    if getattr(settings, "demo_mode", False) or not has_llm_access(settings):
         q_snippet = (query.strip() or "le sujet")[:65]
 
         # Acte 1 : Thèse

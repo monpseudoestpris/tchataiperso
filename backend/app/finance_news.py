@@ -11,7 +11,8 @@ from typing import Any
 import httpx
 
 from .config import Settings
-from .providers import _check_response, _json, _key, _safe_web_url, search_web
+from .google_cloud import has_llm_access, post_chat_completion
+from .providers import _check_response, _json, _safe_web_url, search_web
 
 _logger = logging.getLogger("uvicorn.error")
 
@@ -204,10 +205,9 @@ async def _summarize_news_with_llm(
     focus_query: str,
     articles: list[dict[str, str]],
 ) -> str | None:
-    if settings.demo_mode or not settings.enabled(settings.llm_api_key) or not articles:
-        return None
-    key = _key(settings, "llm_api_key", "du fournisseur IA")
     model = settings.summary_model or settings.default_model
+    if settings.demo_mode or not has_llm_access(settings, model) or not articles:
+        return None
     context_lines = []
     for idx, art in enumerate(articles[:10], start=1):
         context_lines.append(
@@ -237,10 +237,10 @@ async def _summarize_news_with_llm(
     ]
     try:
         async with httpx.AsyncClient(timeout=25.0, follow_redirects=False) as client:
-            response = await client.post(
-                settings.llm_base_url.rstrip("/") + "/chat/completions",
-                headers={"Authorization": f"Bearer {key}"},
-                json={"model": model, "messages": messages, "stream": False, "temperature": 0.2, "max_tokens": 1100},
+            response = await post_chat_completion(
+                settings,
+                {"model": model, "messages": messages, "stream": False, "temperature": 0.2, "max_tokens": 1100},
+                client=client,
             )
         _check_response(response, "Fournisseur IA")
         payload = _json(response, "Fournisseur IA")

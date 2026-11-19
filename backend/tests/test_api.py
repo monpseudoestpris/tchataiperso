@@ -72,7 +72,7 @@ def test_config_and_disabled_credentials(client):
     config = client.get("/api/config").json()
     assert config["demo_mode"] is True
     assert config["features"] == {
-        "chat": True, "web_search": False, "ocr": False, "image_generation": False,
+        "chat": True, "google_cloud": False, "web_search": False, "ocr": False, "image_generation": False,
         "sound_effects": False, "music_generation": False,
     }
     assert "api_key" not in json.dumps(config).lower()

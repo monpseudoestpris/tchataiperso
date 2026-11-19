@@ -240,6 +240,78 @@ DEFAULT_IMAGE_MODELS: list[dict[str, Any]] = [
 ]
 
 
+DEFAULT_GOOGLE_CLOUD_MODELS: list[dict[str, Any]] = [
+    {
+        "id": "google/gemini-2.5-flash-lite",
+        "name": "Google: Gemini 2.5 Flash Lite (Google Cloud)",
+        "vision": True,
+        "provider": "google",
+        "reasoning": False,
+        "context_length": 1000000,
+        "supported_parameters": ["temperature", "top_p", "seed"],
+    },
+    {
+        "id": "google/gemini-2.5-flash",
+        "name": "Google: Gemini 2.5 Flash (Google Cloud)",
+        "vision": True,
+        "provider": "google",
+        "reasoning": True,
+        "context_length": 1000000,
+        "supported_parameters": ["temperature", "top_p", "seed", "reasoning_effort"],
+    },
+    {
+        "id": "google/gemini-2.5-pro",
+        "name": "Google: Gemini 2.5 Pro (Google Cloud)",
+        "vision": True,
+        "provider": "google",
+        "reasoning": True,
+        "context_length": 1000000,
+        "supported_parameters": ["temperature", "top_p", "seed", "reasoning_effort"],
+    },
+    {
+        "id": "google/gemini-3.5-flash-lite",
+        "name": "Google: Gemini 3.5 Flash Lite (Google Cloud)",
+        "vision": True,
+        "provider": "google",
+        "reasoning": False,
+        "context_length": 1000000,
+        "supported_parameters": ["temperature", "top_p", "seed"],
+    },
+    {
+        "id": "google/gemini-3.8-flash",
+        "name": "Google: Gemini 3.8 Flash (Google Cloud)",
+        "vision": True,
+        "provider": "google",
+        "reasoning": True,
+        "context_length": 1000000,
+        "supported_parameters": ["temperature", "top_p", "seed", "reasoning_effort"],
+    },
+    {
+        "id": "google/gemini-4-argon",
+        "name": "Google: Gemini 4 Argon (Google Cloud)",
+        "vision": True,
+        "provider": "google",
+        "reasoning": True,
+        "context_length": 1000000,
+        "supported_parameters": ["temperature", "top_p", "seed", "reasoning_effort"],
+    },
+    {
+        "id": "google/gemini-4-hydrogen",
+        "name": "Google: Gemini 4 Hydrogen (Google Cloud)",
+        "vision": True,
+        "provider": "google",
+        "reasoning": True,
+        "context_length": 1000000,
+        "supported_parameters": ["temperature", "top_p", "seed", "reasoning_effort"],
+    },
+]
+
+
+_GOOGLE_CLOUD_MODES = {"auto", "vertex_oauth", "vertex_api_key", "gemini_api", "disabled"}
+_GCP_PROJECT_ID_RE = re.compile(r"^[a-z][a-z0-9-]{4,29}$")
+_GCP_LOCATION_RE = re.compile(r"^[a-z0-9-]{2,40}$")
+
+
 def _clean_api_key(value: str | SecretStr | None) -> str:
     if isinstance(value, SecretStr):
         raw = value.get_secret_value()
@@ -297,6 +369,13 @@ class Settings(BaseSettings):
     eleven_labs_key: SecretStr = SecretStr("")
     eleven_labs_model_id: str = "eleven_text_to_sound_v2"
     google_api_key: SecretStr = SecretStr("")
+    google_cloud_mode: str = "auto"
+    google_cloud_project: str = ""
+    google_cloud_location: str = "global"
+    google_application_credentials: str = ""
+    vertex_api_key: SecretStr = SecretStr("")
+    google_cloud_fallback_openrouter: bool = False
+    google_cloud_model_map: str = ""
     cors_origins: str = "http://localhost:3001,http://127.0.0.1:3001"
     session_cookie_name: str = "tchat_session"
     session_cookie_secure: bool = False
@@ -339,7 +418,7 @@ class Settings(BaseSettings):
     hermes_default_model: str = "nousresearch/hermes-3-llama-3.1-405b"
     hermes_max_cost_usd: float = 0.25
 
-    @field_validator("llm_api_key", "brave_api_key", "mistral_api_key", "ideogram_api_key", "eod_historical_data_key", "eleven_labs_key", "google_api_key", "hermes_api_key", mode="before")
+    @field_validator("llm_api_key", "brave_api_key", "mistral_api_key", "ideogram_api_key", "eod_historical_data_key", "eleven_labs_key", "google_api_key", "vertex_api_key", "hermes_api_key", mode="before")
     @classmethod
     def sanitize_secret_keys(cls, value):
         if isinstance(value, SecretStr):
@@ -347,6 +426,57 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return _clean_api_key(value)
         return value
+
+    @field_validator("google_cloud_mode")
+    @classmethod
+    def valid_google_cloud_mode(cls, value: str) -> str:
+        norm = (value or "auto").strip().lower() or "auto"
+        if norm not in _GOOGLE_CLOUD_MODES:
+            raise ValueError(
+                "GOOGLE_CLOUD_MODE doit être auto, vertex_oauth, vertex_api_key, gemini_api ou disabled"
+            )
+        return norm
+
+    @field_validator("google_cloud_project")
+    @classmethod
+    def valid_google_cloud_project(cls, value: str) -> str:
+        cleaned = (value or "").strip()
+        if cleaned and not _GCP_PROJECT_ID_RE.fullmatch(cleaned):
+            raise ValueError("GOOGLE_CLOUD_PROJECT doit être un ID de projet GCP valide (ex. mon-projet-123)")
+        return cleaned
+
+    @field_validator("google_cloud_location")
+    @classmethod
+    def valid_google_cloud_location(cls, value: str) -> str:
+        cleaned = (value or "global").strip().lower() or "global"
+        if not _GCP_LOCATION_RE.fullmatch(cleaned):
+            raise ValueError("GOOGLE_CLOUD_LOCATION doit être une région GCP valide (ex. global, europe-west1, us-central1)")
+        return cleaned
+
+    @field_validator("google_application_credentials")
+    @classmethod
+    def valid_google_application_credentials(cls, value: str) -> str:
+        cleaned = (value or "").strip()
+        if any(ch in cleaned for ch in ("\r", "\n", "\x00")):
+            raise ValueError("GOOGLE_APPLICATION_CREDENTIALS contient des caractères interdits")
+        return cleaned
+
+    @field_validator("google_cloud_model_map")
+    @classmethod
+    def valid_google_cloud_model_map(cls, value: str) -> str:
+        cleaned = (value or "").strip()
+        if not cleaned:
+            return ""
+        try:
+            parsed = json.loads(cleaned)
+        except ValueError as exc:
+            raise ValueError("GOOGLE_CLOUD_MODEL_MAP doit être un objet JSON clé->modèle valide") from exc
+        if not isinstance(parsed, dict) or any(
+            not isinstance(k, str) or not k.strip() or not isinstance(v, str) or not v.strip()
+            for k, v in parsed.items()
+        ):
+            raise ValueError("GOOGLE_CLOUD_MODEL_MAP doit être un dictionnaire JSON {source: cible} de chaînes non vides")
+        return cleaned
 
     @model_validator(mode="after")
     def valid_auth_lifetimes(self):
@@ -523,7 +653,10 @@ class Settings(BaseSettings):
                 if item.get("id") == mid and item.get("supported_parameters") is not None:
                     return list(item["supported_parameters"])
         if self.demo_mode or not self.enabled(self.llm_api_key):
-            for item in self.configured_models:
+            candidates = list(self.configured_models)
+            if not self.demo_mode and self.google_cloud_enabled:
+                candidates.extend(DEFAULT_GOOGLE_CLOUD_MODELS)
+            for item in candidates:
                 if item.get("id") == mid and item.get("supported_parameters") is not None:
                     return list(item["supported_parameters"])
             return list(DEFAULT_SUPPORTED_PARAMETERS)
@@ -539,7 +672,19 @@ class Settings(BaseSettings):
     def get_models(self, force_refresh: bool = False) -> list[dict[str, Any]]:
         self.refresh_from_env_file()
         fallback = self.configured_models
-        if self.demo_mode or not self.enabled(self.llm_api_key):
+        if self.demo_mode:
+            return fallback
+        has_openrouter = self.enabled(self.llm_api_key)
+        has_gc = self.google_cloud_enabled
+        if not has_openrouter:
+            if has_gc:
+                merged = [dict(item) for item in DEFAULT_GOOGLE_CLOUD_MODELS]
+                seen = {m["id"] for m in merged}
+                for item in fallback:
+                    if item["id"] not in seen:
+                        merged.append(item)
+                        seen.add(item["id"])
+                return merged
             return fallback
 
         from .openrouter import fetch_openrouter_models
@@ -547,11 +692,24 @@ class Settings(BaseSettings):
         dynamic = fetch_openrouter_models(api_key=key, base_url=self.llm_base_url, force_refresh=force_refresh)
         if dynamic:
             known_ids = {m["id"] for m in dynamic}
+            if has_gc:
+                for item in DEFAULT_GOOGLE_CLOUD_MODELS:
+                    if item["id"] not in known_ids:
+                        dynamic.append(dict(item))
+                        known_ids.add(item["id"])
             if self.default_model and self.default_model not in known_ids:
                 fallback_entry = next((m for m in fallback if m["id"] == self.default_model), None)
                 if fallback_entry:
                     dynamic.insert(0, fallback_entry)
             return dynamic
+        if has_gc:
+            merged = [dict(item) for item in DEFAULT_GOOGLE_CLOUD_MODELS]
+            seen = {m["id"] for m in merged}
+            for item in fallback:
+                if item["id"] not in seen:
+                    merged.append(item)
+                    seen.add(item["id"])
+            return merged
         return fallback
 
     @property
@@ -564,6 +722,7 @@ class Settings(BaseSettings):
             return []
         has_ideogram = self.enabled(self.ideogram_api_key)
         has_openrouter = self.enabled(self.llm_api_key)
+        has_google_cloud = self.google_cloud_enabled
 
         # Check explicit custom override in env first
         if self.image_models.strip():
@@ -573,11 +732,12 @@ class Settings(BaseSettings):
                     filtered = []
                     for item in parsed:
                         prov = item.get("provider", "openrouter")
+                        is_google_img = str(item.get("id", "")).lower().startswith("google/")
                         if prov == "ideogram" and not has_ideogram:
                             continue
-                        if prov == "openrouter" and not has_openrouter:
+                        if prov == "openrouter" and not has_openrouter and not (has_google_cloud and is_google_img):
                             continue
-                        filtered.append({
+                        entry = {
                             "id": str(item["id"]),
                             "name": str(item.get("name", item["id"])),
                             "provider": prov,
@@ -587,7 +747,10 @@ class Settings(BaseSettings):
                             "supported_resolutions": item.get("supported_resolutions", []),
                             "supports_image_editing": prov == "ideogram",
                             "is_top": bool(item.get("is_top", False)),
-                        })
+                        }
+                        if has_google_cloud and is_google_img:
+                            entry["routed_via"] = "google_cloud"
+                        filtered.append(entry)
                     return filtered
             except Exception:
                 pass
@@ -608,7 +771,15 @@ class Settings(BaseSettings):
                 force_refresh=force_refresh,
             )
             if dynamic:
-                results.extend(dynamic)
+                if has_google_cloud:
+                    results.extend(
+                        {**m, "routed_via": "google_cloud"}
+                        if str(m.get("id", "")).lower().startswith("google/")
+                        else m
+                        for m in dynamic
+                    )
+                else:
+                    results.extend(dynamic)
                 return results
 
         # 3. Fallback to default catalog if dynamic fetch is empty or offline
@@ -616,9 +787,13 @@ class Settings(BaseSettings):
             prov = item.get("provider", "openrouter")
             if prov == "ideogram":
                 continue
-            if prov == "openrouter" and not has_openrouter:
+            is_google_img = str(item.get("id", "")).lower().startswith("google/")
+            if prov == "openrouter" and not has_openrouter and not (has_google_cloud and is_google_img):
                 continue
-            results.append(item)
+            if has_google_cloud and is_google_img:
+                results.append({**item, "routed_via": "google_cloud"})
+            else:
+                results.append(item)
 
         return results
 
@@ -663,7 +838,17 @@ class Settings(BaseSettings):
             return
         self._env_mtime_ns = mtime_ns
         parsed = dotenv_values(env_path)
-        secret_fields = ("llm_api_key", "brave_api_key", "mistral_api_key", "ideogram_api_key", "eod_historical_data_key", "eleven_labs_key", "google_api_key", "hermes_api_key")
+        secret_fields = (
+            "llm_api_key",
+            "brave_api_key",
+            "mistral_api_key",
+            "ideogram_api_key",
+            "eod_historical_data_key",
+            "eleven_labs_key",
+            "google_api_key",
+            "vertex_api_key",
+            "hermes_api_key",
+        )
         for field_name in secret_fields:
             if field_name in self._explicit_fields:
                 continue
@@ -673,18 +858,66 @@ class Settings(BaseSettings):
                 raw_val = parsed.get("ELEVENLABS_API_KEY") or parsed.get("ELEVEN_LABS_API_KEY")
             elif field_name == "google_api_key" and raw_val is None:
                 raw_val = parsed.get("GOOGLE_API_KEY") or parsed.get("GEMINI_API_KEY")
+            elif field_name == "vertex_api_key" and raw_val is None:
+                raw_val = parsed.get("VERTEX_API_KEY") or parsed.get("GOOGLE_CLOUD_API_KEY")
             if raw_val is not None:
                 cleaned = _clean_api_key(raw_val)
                 if cleaned or force is False:
                     setattr(self, field_name, SecretStr(cleaned))
-        str_fields = ("llm_base_url", "ocr_model", "vision_model", "default_model", "llm_models", "summary_model", "search_query_model", "web_search_decision_model", "deep_search_plan_model", "deep_search_synthesis_model", "deep_search_engine", "deep_search_model", "blog_model", "page_model", "presentation_model", "image_prompt_model", "skill_prompt_model", "image_models", "default_image_model", "hermes_default_model")
+        str_fields = (
+            "llm_base_url",
+            "ocr_model",
+            "vision_model",
+            "default_model",
+            "llm_models",
+            "summary_model",
+            "search_query_model",
+            "web_search_decision_model",
+            "deep_search_plan_model",
+            "deep_search_synthesis_model",
+            "deep_search_engine",
+            "deep_search_model",
+            "blog_model",
+            "page_model",
+            "presentation_model",
+            "image_prompt_model",
+            "skill_prompt_model",
+            "image_models",
+            "default_image_model",
+            "hermes_default_model",
+            "google_cloud_mode",
+            "google_cloud_project",
+            "google_cloud_location",
+            "google_application_credentials",
+            "google_cloud_model_map",
+        )
+        clearable_fields = {"google_cloud_project", "google_application_credentials", "google_cloud_model_map"}
         for field_name in str_fields:
             if field_name in self._explicit_fields:
                 continue
             env_name = field_name.upper()
             raw_val = parsed.get(env_name)
-            if isinstance(raw_val, str) and raw_val.strip():
+            if field_name == "google_cloud_project" and raw_val is None:
+                raw_val = parsed.get("VERTEX_PROJECT_ID")
+            elif field_name == "google_cloud_location" and raw_val is None:
+                raw_val = parsed.get("VERTEX_LOCATION")
+            if isinstance(raw_val, str):
                 val = raw_val.strip()
+                if not val and (field_name not in clearable_fields or force):
+                    continue
+                try:
+                    if field_name == "google_cloud_mode":
+                        val = self.valid_google_cloud_mode(val)
+                    elif field_name == "google_cloud_project":
+                        val = self.valid_google_cloud_project(val)
+                    elif field_name == "google_cloud_location":
+                        val = self.valid_google_cloud_location(val)
+                    elif field_name == "google_application_credentials":
+                        val = self.valid_google_application_credentials(val)
+                    elif field_name == "google_cloud_model_map":
+                        val = self.valid_google_cloud_model_map(val)
+                except ValueError:
+                    continue
                 setattr(self, field_name, val)
         if "demo_mode" not in self._explicit_fields and isinstance(parsed.get("DEMO_MODE"), str):
             val = parsed["DEMO_MODE"].strip().lower()
@@ -702,6 +935,10 @@ class Settings(BaseSettings):
             val = parsed["HERMES_ENABLED"].strip().lower()
             if val in ("true", "1", "yes", "false", "0", "no"):
                 self.hermes_enabled = val in ("true", "1", "yes")
+        if "google_cloud_fallback_openrouter" not in self._explicit_fields and isinstance(parsed.get("GOOGLE_CLOUD_FALLBACK_OPENROUTER"), str):
+            val = parsed["GOOGLE_CLOUD_FALLBACK_OPENROUTER"].strip().lower()
+            if val in ("true", "1", "yes", "false", "0", "no"):
+                self.google_cloud_fallback_openrouter = val in ("true", "1", "yes")
         if "hermes_max_cost_usd" not in self._explicit_fields and isinstance(parsed.get("HERMES_MAX_COST_USD"), str):
             try:
                 budget = float(parsed["HERMES_MAX_COST_USD"].strip())
@@ -709,6 +946,31 @@ class Settings(BaseSettings):
                     self.hermes_max_cost_usd = budget
             except ValueError:
                 pass
+
+    @property
+    def active_google_cloud_mode(self) -> str | None:
+        self.refresh_from_env_file()
+        if self.demo_mode:
+            return None
+        mode = (self.google_cloud_mode or "auto").strip().lower()
+        if mode == "disabled":
+            return None
+        if mode in {"vertex_oauth", "vertex_api_key", "gemini_api"}:
+            return mode
+        if mode == "auto":
+            if (self.google_cloud_project or "").strip():
+                return "vertex_oauth"
+            if _clean_api_key(self.vertex_api_key):
+                return "vertex_api_key"
+        return None
+
+    @property
+    def google_cloud_enabled(self) -> bool:
+        return not self.demo_mode and self.active_google_cloud_mode is not None
+
+    def has_llm_for_model(self, model: str | None = None) -> bool:
+        from .google_cloud import has_llm_access
+        return has_llm_access(self, model)
 
     def enabled(self, key: SecretStr) -> bool:
         self.refresh_from_env_file()

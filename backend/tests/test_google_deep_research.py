@@ -7,7 +7,7 @@ from app.config import Settings
 
 
 def test_stream_google_deep_research_demo_mode():
-    settings = Settings(demo_mode=True)
+    settings = Settings(_env_file=None, demo_mode=True)
     events = []
 
     async def run():
@@ -30,7 +30,7 @@ def test_stream_google_deep_research_demo_mode():
 
 
 def test_stream_google_deep_research_learn_mode_demo():
-    settings = Settings(demo_mode=True)
+    settings = Settings(_env_file=None, demo_mode=True)
     events = []
 
     async def run():
@@ -49,7 +49,7 @@ def test_stream_google_deep_research_learn_mode_demo():
 
 
 def test_stream_google_deep_research_polling_flow(monkeypatch):
-    settings = Settings(demo_mode=False, google_api_key="test-google-key")
+    settings = Settings(_env_file=None, demo_mode=False, google_api_key="test-google-key")
     events = []
 
     poll_calls = 0
@@ -121,7 +121,7 @@ def test_stream_google_deep_research_polling_flow(monkeypatch):
 
 
 def test_stream_google_deep_research_max_agent_selection(monkeypatch):
-    settings = Settings(demo_mode=False, google_api_key="test-google-key")
+    settings = Settings(_env_file=None, demo_mode=False, google_api_key="test-google-key")
     posted_agent = None
 
     def mock_post(url, headers, json):
@@ -156,7 +156,7 @@ def test_stream_google_deep_research_max_agent_selection(monkeypatch):
 
 
 def test_plan_google_deep_research_and_collaborative_execution(monkeypatch):
-    settings = Settings(demo_mode=False, google_api_key="test-google-key")
+    settings = Settings(_env_file=None, demo_mode=False, google_api_key="test-google-key")
     captured_planning_payload = None
     captured_execution_payload = None
 
@@ -221,7 +221,7 @@ def test_plan_google_deep_research_and_collaborative_execution(monkeypatch):
 
 def test_plan_google_deep_research_refinement_step_2(monkeypatch):
     """Vérifie l'Étape 2 d'affinement du plan multitours avec previous_interaction_id."""
-    settings = Settings(demo_mode=False, google_api_key="test-google-key")
+    settings = Settings(_env_file=None, demo_mode=False, google_api_key="test-google-key")
     captured_payload = None
 
     def mock_post(url, headers, json):
@@ -436,7 +436,7 @@ def test_agent_mismatch_fallback_recovery(monkeypatch):
     from app.config import Settings
     from app.google_deep_research import stream_google_deep_research
 
-    settings = Settings()
+    settings = Settings(_env_file=None)
     settings.google_api_key = "fake-key"
     settings.demo_mode = False
 
@@ -553,7 +553,7 @@ def test_previous_interaction_not_yet_complete_fallback(monkeypatch):
     from app.config import Settings
     from app.google_deep_research import stream_google_deep_research
 
-    settings = Settings()
+    settings = Settings(_env_file=None)
     settings.google_api_key = "fake-key"
     settings.demo_mode = False
 
@@ -630,6 +630,98 @@ def test_previous_interaction_not_yet_complete_fallback(monkeypatch):
     assert len(post_calls) >= 2
     assert "previous_interaction_id" not in post_calls[-1]
     assert "PLAN D'INVESTIGATION VALIDÉ" in post_calls[-1]["input"]
+
+
+def test_vertex_oauth_google_deep_research_routing(monkeypatch):
+    """Vérifie que Vertex AI OAuth2 route Deep Research (plan + execution) vers aiplatform.googleapis.com."""
+    settings = Settings(
+        _env_file=None,
+        demo_mode=False,
+        google_cloud_mode="vertex_oauth",
+        google_cloud_project="mon-projet-gcp",
+        google_cloud_location="europe-west1",
+    )
+    token_calls = 0
+
+    async def fake_token(_settings):
+        nonlocal token_calls
+        token_calls += 1
+        return f"ya29.token-{token_calls}", "mon-projet-gcp"
+
+    monkeypatch.setattr("app.google_cloud.get_google_cloud_access_token", fake_token)
+
+    recorded_posts = []
+    recorded_gets = []
+
+    class MockAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def post(self, url, headers=None, json=None):
+            recorded_posts.append((str(url), dict(headers or {}), dict(json or {})))
+            if json.get("agent_config", {}).get("collaborative_planning"):
+                return httpx.Response(200, json={
+                    "id": "projects/mon-projet-gcp/locations/global/interactions/v-plan-1",
+                    "status": "completed",
+                    "outputs": [{"text": "1. Axe Vertex AI"}],
+                })
+            return httpx.Response(200, json={
+                "id": "projects/mon-projet-gcp/locations/global/interactions/v-exec-2",
+                "status": "in_progress",
+            })
+
+        async def get(self, url, headers=None):
+            recorded_gets.append((str(url), dict(headers or {})))
+            return httpx.Response(200, json={
+                "id": "projects/mon-projet-gcp/locations/global/interactions/v-exec-2",
+                "status": "completed",
+                "outputs": [{"text": "# Rapport Vertex AI Deep Research\n\nContenu vérifié."}],
+            })
+
+    monkeypatch.setattr(httpx, "AsyncClient", MockAsyncClient)
+    monkeypatch.setattr(httpx, "get", lambda url, headers=None, timeout=10.0: httpx.Response(
+        200,
+        json={"id": "projects/mon-projet-gcp/locations/global/interactions/v-plan-1", "agent": "deep-research-preview-04-2026", "status": "completed"},
+    ))
+    real_sleep = asyncio.sleep
+    monkeypatch.setattr(asyncio, "sleep", lambda d: real_sleep(0.001))
+
+    plan_res = asyncio.run(google_deep_research.plan_google_deep_research(
+        settings=settings,
+        query="Architecture Vertex AI",
+        model="google/deep-research-preview-04-2026",
+    ))
+    assert plan_res["interaction_id"] == "projects/mon-projet-gcp/locations/global/interactions/v-plan-1"
+
+    events = []
+
+    async def run():
+        async for ev in google_deep_research.stream_google_deep_research(
+            settings=settings,
+            query="Architecture Vertex AI",
+            model="google/deep-research-preview-04-2026",
+            interaction_id=plan_res["interaction_id"],
+            plan_feedback="Valider",
+        ):
+            events.append(ev)
+
+    asyncio.run(run())
+    assert any(ev.get("type") == "done" for ev in events)
+    assert len(recorded_posts) == 2
+    for post_url, post_headers, _ in recorded_posts:
+        assert post_url == "https://aiplatform.googleapis.com/v1beta1/projects/mon-projet-gcp/locations/global/interactions"
+        assert post_headers["Authorization"].startswith("Bearer ya29.token-")
+        assert "x-goog-api-key" not in post_headers
+    assert len(recorded_gets) >= 1
+    assert recorded_gets[0][0] == "https://aiplatform.googleapis.com/v1beta1/projects/mon-projet-gcp/locations/global/interactions/v-exec-2"
+    assert recorded_gets[0][1]["Authorization"].startswith("Bearer ya29.token-")
+
 
 
 

@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
 from .config import Settings
+from .google_cloud import has_llm_access, post_chat_completion
 from .models import TopicEvent, TopicMemory, TopicSpace, now
 
 _logger = logging.getLogger("uvicorn.error")
@@ -159,10 +160,9 @@ async def process_topic_turn(
         current_resume = topic.current_resume_context
 
     analysis: dict[str, Any] = {}
-    api_key = settings.openrouter_api_key or ""
+    model = settings.default_model
 
-    if api_key:
-        model = settings.default_model
+    if not getattr(settings, "demo_mode", False) and has_llm_access(settings, model):
         payload_data = {
             "topic_title": topic_title,
             "topic_type": topic_type,
@@ -175,15 +175,9 @@ async def process_topic_turn(
 
         try:
             async with httpx.AsyncClient(timeout=25.0) as client:
-                res = await client.post(
-                    "https://openrouter.ai/api/v1/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        "Content-Type": "application/json",
-                        "HTTP-Referer": "https://clair.local",
-                        "X-Title": "cLAIr Topic Memory Agent",
-                    },
-                    json={
+                res = await post_chat_completion(
+                    settings,
+                    {
                         "model": model,
                         "messages": [
                             {"role": "system", "content": TOPIC_ANALYZER_PROMPT},
@@ -191,6 +185,11 @@ async def process_topic_turn(
                         ],
                         "temperature": 0.2,
                         "response_format": {"type": "json_object"},
+                    },
+                    client=client,
+                    extra_headers={
+                        "HTTP-Referer": "https://clair.local",
+                        "X-Title": "cLAIr Topic Memory Agent",
                     },
                 )
                 if res.status_code == 200:

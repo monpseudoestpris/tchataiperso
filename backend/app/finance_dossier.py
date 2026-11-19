@@ -2092,7 +2092,8 @@ async def generate_dossier_ai_analysis(
     model_id: str | None = None,
 ) -> dict[str, Any]:
     """Génère et sauvegarde une analyse fondamentale complète basée sur tous les résultats du dossier (modèle Gemini Hydrogen)."""
-    from .providers import ProviderError, _check_response, _json, _key
+    from .google_cloud import can_fallback_to_model, has_llm_access, post_chat_completion
+    from .providers import ProviderError, _check_response, _json
 
     dossier = await get_financial_dossier(settings, symbol, refresh=False)
     canonical = dossier["symbol"]
@@ -2103,7 +2104,7 @@ async def generate_dossier_ai_analysis(
     facts_context, period_label = build_dossier_facts_context(dossier)
 
     chosen_model = _resolve_gemini_hydrogen_model(settings, model_id)
-    if settings.demo_mode or not settings.enabled(settings.llm_api_key):
+    if settings.demo_mode or not has_llm_access(settings, chosen_model):
         md = (
             f"### Synthèse fondamentale — {hdr['name']} ({canonical})\n\n"
             f"- **Positionnement** : {hdr['sector'] or 'N/A'} ({hdr['industry'] or 'N/A'}), capitalisation **{hdr['cap_category']}**.\n"
@@ -2389,24 +2390,18 @@ Recherche systématiquement (et indique « RAS », « Alerte » ou « Données i
 DONNÉES COMPLÈTES VÉRIFIÉES DU DOSSIER ({canonical}) :
 {context_json}"""
 
-    api_key = _key(settings, "llm_api_key", "du fournisseur IA")
-    base_url = settings.llm_base_url.rstrip("/")
-
     async def _call_model(target_model: str) -> str:
         async with httpx.AsyncClient(timeout=90.0) as client:
-            resp = await client.post(
-                f"{base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                    "HTTP-Referer": "https://clair.app",
-                },
-                json={
+            resp = await post_chat_completion(
+                settings,
+                {
                     "model": target_model,
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0.25,
                     "max_tokens": 16384,
                 },
+                client=client,
+                extra_headers={"HTTP-Referer": "https://clair.app"},
             )
             _check_response(resp, "Fournisseur IA")
             data = _json(resp, "Fournisseur IA")
@@ -2420,7 +2415,7 @@ DONNÉES COMPLÈTES VÉRIFIÉES DU DOSSIER ({canonical}) :
         md = await _call_model(chosen_model)
     except Exception as primary_exc:
         fallback = (settings.default_model or "").strip()
-        if fallback and fallback != chosen_model:
+        if fallback and fallback != chosen_model and can_fallback_to_model(settings, chosen_model, fallback):
             _logger.warning(
                 "Échec analyse dossier avec %s (%s), repli sur %s", chosen_model, primary_exc, fallback
             )
