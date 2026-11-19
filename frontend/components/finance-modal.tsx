@@ -20,6 +20,15 @@ import {
   BAR_INTERVAL_LABELS,
   type BarInterval,
 } from "@/lib/bar-aggregation";
+import type { IndicatorFillConfig } from "@/lib/chart-zone-fills";
+import {
+  DEFAULT_INDICATOR_PARAMS,
+  loadCustomIndicatorFills,
+  loadIndicatorParams,
+  type ConfigurableIndicatorKey,
+  type IndicatorKey,
+  type IndicatorParamsMap,
+} from "@/lib/indicator-params";
 import { FinanceMoatPanel } from "@/components/finance-moat-panel";
 import { FinanceNewsPanel } from "@/components/finance-news-panel";
 import { FinanceReportsPanel } from "@/components/finance-reports-panel";
@@ -33,7 +42,6 @@ import {
   Award,
   BarChart3,
   Building2,
-  Calendar,
   Check,
   ChevronRight,
   ClipboardList,
@@ -50,6 +58,7 @@ import {
   Newspaper,
   PanelRightClose,
   PanelRightOpen,
+  Pencil,
   Plus,
   RefreshCw,
   Search,
@@ -112,18 +121,19 @@ type FinanceModalProps = {
   onInsertIntoChat?: (text: string) => void;
 };
 
+type MainTab = "search_indices" | "fundamentals" | "chart_tech";
+
 type ActiveTab =
   | "dossier"
-  | "experts"
-  | "ai_history"
   | "valuation"
   | "profitability"
   | "balance_sheet"
   | "fundamentals"
   | "analysts"
-  | "history"
   | "profile"
   | "moat"
+  | "experts"
+  | "ai_history"
   | "news"
   | "reports";
 
@@ -131,6 +141,160 @@ const WATCHLIST_SEED_STORAGE_KEY = "clair_watchlist_seeded_v1";
 const WATCHLIST_ACTIVE_LIST_KEY = "clair_active_watchlist_id_v1";
 const WATCHLIST_SIDEBAR_OPEN_KEY = "clair_finance_wl_sidebar_open_v1";
 const WATCHLIST_SIDEBAR_WIDE_KEY = "clair_finance_wl_sidebar_wide_v1";
+const CHART_TABS_STORAGE_KEY = "clair_finance_chart_tabs_v1";
+const ACTIVE_CHART_TAB_STORAGE_KEY = "clair_finance_active_chart_tab_v1";
+
+type DailyFinanceRange = Exclude<FinanceRange, "1d" | "1w">;
+
+type ChartTabConfig = {
+  id: string;
+  name: string;
+  barInterval: BarInterval;
+  timeframe: FinanceRange;
+  chartView: "advanced" | "line";
+  activeNative: IndicatorKey[];
+  activeCustomIds: string[];
+  indicatorParams: IndicatorParamsMap;
+  customFills: Record<string, IndicatorFillConfig>;
+};
+
+const DAILY_RANGE_ORDER: DailyFinanceRange[] = ["1m", "3m", "6m", "1y", "2y", "5y", "10y", "max"];
+const DAILY_RANGE_BAR_LIMITS: Record<DailyFinanceRange, number> = {
+  "1m": 30,
+  "3m": 66,
+  "6m": 132,
+  "1y": 260,
+  "2y": 520,
+  "5y": 1300,
+  "10y": 2600,
+  max: 7500,
+};
+
+function isDailyRange(tf: FinanceRange): tf is DailyFinanceRange {
+  return tf !== "1d" && tf !== "1w";
+}
+
+function getDailyRangeRank(tf: DailyFinanceRange): number {
+  return DAILY_RANGE_ORDER.indexOf(tf);
+}
+
+function getWidestDailyRange(tabs: ChartTabConfig[]): DailyFinanceRange {
+  let bestRank = getDailyRangeRank("1y");
+  for (const t of tabs) {
+    if (isDailyRange(t.timeframe)) {
+      const r = getDailyRangeRank(t.timeframe);
+      if (r > bestRank) bestRank = r;
+    }
+  }
+  return DAILY_RANGE_ORDER[bestRank] || "1y";
+}
+
+function normalizeIndicatorParams(raw: unknown): IndicatorParamsMap {
+  const merged: IndicatorParamsMap = { ...DEFAULT_INDICATOR_PARAMS };
+  if (!raw || typeof raw !== "object") return merged;
+  const parsed = raw as Record<string, unknown>;
+  for (const k of Object.keys(DEFAULT_INDICATOR_PARAMS) as ConfigurableIndicatorKey[]) {
+    const entry = parsed[k] as ({ fill?: Partial<IndicatorFillConfig> } & Record<string, unknown>) | undefined;
+    if (entry && typeof entry === "object") {
+      const def = DEFAULT_INDICATOR_PARAMS[k];
+      merged[k] = {
+        ...def,
+        ...entry,
+        fill: {
+          ...def.fill,
+          ...(entry.fill && typeof entry.fill === "object" ? entry.fill : {}),
+        },
+      } as never;
+    }
+  }
+  return merged;
+}
+
+function createDefaultChartTabs(): ChartTabConfig[] {
+  const baseFills = loadCustomIndicatorFills();
+  return [
+    {
+      id: "tab-daily",
+      name: "Journalier",
+      barInterval: "day",
+      timeframe: "6m",
+      chartView: "advanced",
+      activeNative: ["sma20", "volume", "rsi"],
+      activeCustomIds: [],
+      indicatorParams: loadIndicatorParams(),
+      customFills: { ...baseFills },
+    },
+    {
+      id: "tab-weekly",
+      name: "Hebdomadaire",
+      barInterval: "week",
+      timeframe: "5y",
+      chartView: "advanced",
+      activeNative: ["sma20", "sma50", "volume", "macd"],
+      activeCustomIds: [],
+      indicatorParams: loadIndicatorParams(),
+      customFills: { ...baseFills },
+    },
+    {
+      id: "tab-monthly",
+      name: "Mensuel",
+      barInterval: "month",
+      timeframe: "10y",
+      chartView: "advanced",
+      activeNative: ["sma20", "supertrend", "volume", "rsi"],
+      activeCustomIds: [],
+      indicatorParams: loadIndicatorParams(),
+      customFills: { ...baseFills },
+    },
+  ];
+}
+
+function loadSavedChartTabs(): ChartTabConfig[] {
+  if (typeof window === "undefined") return createDefaultChartTabs();
+  try {
+    const raw = window.localStorage.getItem(CHART_TABS_STORAGE_KEY);
+    if (!raw) return createDefaultChartTabs();
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed) || parsed.length === 0) return createDefaultChartTabs();
+    const validRanges = new Set<FinanceRange>(["1d", "1w", "1m", "3m", "6m", "1y", "2y", "5y", "10y", "max"]);
+    const validIntervals = new Set<BarInterval>(Object.keys(BAR_INTERVAL_LABELS) as BarInterval[]);
+    const restored: ChartTabConfig[] = [];
+    for (let i = 0; i < parsed.length; i += 1) {
+      const item = parsed[i];
+      if (!item || typeof item !== "object") continue;
+      const obj = item as Partial<ChartTabConfig>;
+      const id = typeof obj.id === "string" && obj.id.trim() ? obj.id : `tab-${i + 1}`;
+      const name = typeof obj.name === "string" && obj.name.trim() ? obj.name.trim() : `Vue ${i + 1}`;
+      const barInterval = obj.barInterval && validIntervals.has(obj.barInterval) ? obj.barInterval : "day";
+      const timeframe = obj.timeframe && validRanges.has(obj.timeframe) ? obj.timeframe : "6m";
+      const chartView = obj.chartView === "line" ? "line" : "advanced";
+      const activeNative = Array.isArray(obj.activeNative)
+        ? obj.activeNative.filter((k): k is IndicatorKey => typeof k === "string")
+        : (["sma20", "volume", "rsi"] as IndicatorKey[]);
+      const activeCustomIds = Array.isArray(obj.activeCustomIds)
+        ? obj.activeCustomIds.filter((idStr): idStr is string => typeof idStr === "string")
+        : [];
+      const customFills =
+        obj.customFills && typeof obj.customFills === "object"
+          ? (obj.customFills as Record<string, IndicatorFillConfig>)
+          : {};
+      restored.push({
+        id,
+        name,
+        barInterval,
+        timeframe,
+        chartView,
+        activeNative,
+        activeCustomIds,
+        indicatorParams: normalizeIndicatorParams(obj.indicatorParams),
+        customFills,
+      });
+    }
+    return restored.length > 0 ? restored : createDefaultChartTabs();
+  } catch {
+    return createDefaultChartTabs();
+  }
+}
 
 const QUICK_SUGGESTIONS = [
   "Air Liquide",
@@ -191,13 +355,26 @@ export function FinanceModal({
   const [data, setData] = useState<FinancialDashboardData | null>(initialData || null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<ActiveTab>("valuation");
-  const [timeframe, setTimeframe] = useState<FinanceRange>("1m");
-  const [barInterval, setBarInterval] = useState<BarInterval>("day");
+  const [mainTab, setMainTab] = useState<MainTab>("fundamentals");
+  const [prevOpenSessionKey, setPrevOpenSessionKey] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<ActiveTab>("dossier");
+  const [chartTabs, setChartTabs] = useState<ChartTabConfig[]>(() => loadSavedChartTabs());
+  const [activeChartTabId, setActiveChartTabId] = useState<string>(() => {
+    if (typeof window === "undefined") return "tab-daily";
+    return window.localStorage.getItem(ACTIVE_CHART_TAB_STORAGE_KEY) || "tab-daily";
+  });
+  const [dailyBars, setDailyBars] = useState<EodBar[]>(() => initialData?.eod_bars || []);
+  const [loadedDailyRange, setLoadedDailyRange] = useState<DailyFinanceRange>("1m");
+  const [intradayBarsByRange, setIntradayBarsByRange] = useState<Partial<Record<"1d" | "1w", EodBar[]>>>({});
+  const [renamingChartTabId, setRenamingChartTabId] = useState<string | null>(null);
+  const [renamingChartTabValue, setRenamingChartTabValue] = useState<string>("");
   const [rangeLoading, setRangeLoading] = useState(false);
-  const [chartView, setChartView] = useState<"line" | "advanced">("line");
   const [chartFullscreen, setChartFullscreen] = useState(false);
   const [hoveredBarIndex, setHoveredBarIndex] = useState<number | null>(null);
+  const activeChartTab = useMemo(
+    () => chartTabs.find(t => t.id === activeChartTabId) ?? chartTabs[0],
+    [chartTabs, activeChartTabId],
+  );
   const [copied, setCopied] = useState(false);
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>([]);
   const [watchlists, setWatchlists] = useState<FinanceWatchlistMeta[]>([]);
@@ -290,6 +467,28 @@ export function FinanceModal({
     }
   }
 
+  const currentOpenSessionKey = isOpen ? `${initialQuery ?? ""}::${initialData?.symbol ?? ""}` : null;
+  if (currentOpenSessionKey !== prevOpenSessionKey) {
+    setPrevOpenSessionKey(currentOpenSessionKey);
+    if (isOpen) {
+      if (initialData || (initialQuery || "").trim()) {
+        setMainTab("fundamentals");
+      } else if (!data) {
+        setMainTab("search_indices");
+      }
+    }
+  }
+
+  function switchMainTab(next: MainTab) {
+    setMainTab(next);
+    if (next === "chart_tech" && data) {
+      void ensureBarsForTab(activeChartTab, data);
+    }
+    window.requestAnimationFrame(() => {
+      modalBodyRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+    });
+  }
+
   // Synchronize when opening modal
   useEffect(() => {
     if (!isOpen) return;
@@ -306,6 +505,9 @@ export function FinanceModal({
 
     if (initialData) {
       setData(initialData);
+      setDailyBars(initialData.eod_bars || []);
+      setLoadedDailyRange("1m");
+      setIntradayBarsByRange({});
       setQuery(initialData.short_name || initialData.symbol);
       setError(null);
       return;
@@ -518,6 +720,13 @@ export function FinanceModal({
         }));
         if (cachedPerfRes.warehouse) setWarehouseStats(cachedPerfRes.warehouse);
       }
+      if (
+        compRes.constituents.length > 0 &&
+        compRes.constituents.length <= 120 &&
+        (cachedPerfRes?.summary.loaded_count ?? 0) < compRes.constituents.length
+      ) {
+        void handleLoadIndexPerformances(code, false);
+      }
     } catch (err: any) {
       setIndexError(err?.message || "Impossible de charger la composition de l'indice.");
     } finally {
@@ -548,7 +757,16 @@ export function FinanceModal({
               },
               constituents: prev.constituents.map(c => {
                 const match = res.items.find(it => it.symbol === c.symbol);
-                return match ? { ...c, cached_in_warehouse: match.cached_in_warehouse } : c;
+                return match
+                  ? {
+                      ...c,
+                      cached_in_warehouse: match.cached_in_warehouse,
+                      price: match.price,
+                      currency: match.currency,
+                      change_1d_pct: match.change_1d_pct,
+                      sparkline: match.sparkline ?? c.sparkline,
+                    }
+                  : c;
               }),
             }
           : prev,
@@ -626,16 +844,90 @@ export function FinanceModal({
     await handleAddWatchlistStock(target, targetListId);
   }
 
+  function persistChartTabs(nextTabs: ChartTabConfig[], nextActiveId?: string) {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(CHART_TABS_STORAGE_KEY, JSON.stringify(nextTabs));
+      if (nextActiveId !== undefined) {
+        window.localStorage.setItem(ACTIVE_CHART_TAB_STORAGE_KEY, nextActiveId);
+      }
+    } catch {
+      // Ignore storage quota errors
+    }
+  }
+
+  function updateChartTab(tabIdToUpdate: string, updater: (prev: ChartTabConfig) => ChartTabConfig) {
+    setChartTabs(prev => {
+      const next = prev.map(t => (t.id === tabIdToUpdate ? updater(t) : t));
+      persistChartTabs(next);
+      return next;
+    });
+  }
+
+  async function ensureBarsForTab(tab: ChartTabConfig, targetData: FinancialDashboardData | null = data) {
+    if (!targetData) return;
+    const symbolTarget = targetData.eod_ticker || targetData.yahoo_symbol || targetData.symbol;
+    if (!symbolTarget) return;
+    const tf = tab.timeframe;
+    if (tf === "1d" || tf === "1w") {
+      if (intradayBarsByRange[tf]) return;
+      setRangeLoading(true);
+      try {
+        const res = await fetchFinanceDetails(symbolTarget, tf);
+        setIntradayBarsByRange(prev => ({ ...prev, [tf]: res.eod_bars || [] }));
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : "Impossible de charger cette durée intraday.");
+      } finally {
+        setRangeLoading(false);
+      }
+      return;
+    }
+    const widestDaily = getWidestDailyRange(chartTabs);
+    const fetchRange = getDailyRangeRank(tf) > getDailyRangeRank(widestDaily) ? tf : widestDaily;
+    if (
+      getDailyRangeRank(tf) <= getDailyRangeRank(loadedDailyRange) &&
+      (dailyBars.length > 0 || loadedDailyRange === fetchRange)
+    ) {
+      return;
+    }
+    setRangeLoading(true);
+    try {
+      const res = await fetchFinanceDetails(symbolTarget, fetchRange);
+      setDailyBars(res.eod_bars || []);
+      setLoadedDailyRange(fetchRange);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Impossible de charger cette durée d'affichage.");
+    } finally {
+      setRangeLoading(false);
+    }
+  }
+
   async function loadDetails(searchTarget: string) {
     const q = searchTarget.trim();
     if (!q) return;
     setLoading(true);
     setError(null);
+    setHoveredBarIndex(null);
     try {
-      const res = await fetchFinanceDetails(q, timeframe);
-      setData(res);
-    } catch (err: any) {
-      setError(err?.message || "Impossible de charger les données financières pour cette action.");
+      const widestDaily = getWidestDailyRange(chartTabs);
+      const activeTf = activeChartTab.timeframe;
+      const needsIntraday = activeTf === "1d" || activeTf === "1w";
+      const [dailyRes, intradayRes] = await Promise.all([
+        fetchFinanceDetails(q, widestDaily),
+        needsIntraday ? fetchFinanceDetails(q, activeTf).catch(() => null) : Promise.resolve(null),
+      ]);
+      setData(dailyRes);
+      setDailyBars(dailyRes.eod_bars || []);
+      setLoadedDailyRange(widestDaily);
+      setIntradayBarsByRange(
+        needsIntraday && intradayRes?.eod_bars ? { [activeTf]: intradayRes.eod_bars } : {},
+      );
+    } catch (err: unknown) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Impossible de charger les données financières pour cette action.",
+      );
     } finally {
       setLoading(false);
     }
@@ -644,10 +936,12 @@ export function FinanceModal({
   async function handleSelectWatchlistStock(item: WatchlistItem) {
     const target = item.eod_ticker || item.yahoo_symbol || item.symbol;
     setQuery(item.name || item.symbol);
-    setChartView("advanced");
+    if (mainTab === "search_indices") {
+      setMainTab("fundamentals");
+    }
     await loadDetails(target);
     window.requestAnimationFrame(() => {
-      chartSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      modalBodyRef.current?.scrollTo({ top: 0, behavior: "smooth" });
     });
   }
 
@@ -752,12 +1046,29 @@ export function FinanceModal({
         enabled_by_default: payload.enabled_by_default,
       });
       setCustomIndicators(prev => [...prev, created]);
+      if (created.enabled_by_default) {
+        updateChartTab(activeChartTab.id, prev => ({
+          ...prev,
+          activeCustomIds: prev.activeCustomIds.includes(created.id)
+            ? prev.activeCustomIds
+            : [...prev.activeCustomIds, created.id],
+        }));
+      }
     }
   }
 
   async function handleDeleteCustomIndicator(indicatorId: string) {
     await deleteCustomIndicator(indicatorId);
     setCustomIndicators(prev => prev.filter(item => item.id !== indicatorId));
+    setChartTabs(prev => {
+      const next = prev.map(t =>
+        t.activeCustomIds.includes(indicatorId)
+          ? { ...t, activeCustomIds: t.activeCustomIds.filter(id => id !== indicatorId) }
+          : t,
+      );
+      persistChartTabs(next);
+      return next;
+    });
   }
 
   function handleSearchSubmit(e: React.FormEvent) {
@@ -767,28 +1078,139 @@ export function FinanceModal({
     }
   }
 
-  // Filter & aggregate bars according to selected timeframe and bar interval
-  const filteredBars = useMemo(() => {
-    if (!data?.eod_bars || data.eod_bars.length === 0) return [];
-    return aggregateBars(data.eod_bars, barInterval);
-  }, [data?.eod_bars, barInterval]);
-
-  // Recharge uniquement la courbe quand la durée d'affichage change
-  async function changeTimeframe(tf: FinanceRange) {
-    if (tf === timeframe || !data) return;
-    const previous = timeframe;
-    setTimeframe(tf);
+  function handleSelectChartTab(nextTabId: string) {
+    const nextTab = chartTabs.find(t => t.id === nextTabId);
+    if (!nextTab) return;
+    setActiveChartTabId(nextTabId);
     setHoveredBarIndex(null);
-    setRangeLoading(true);
-    try {
-      const res = await fetchFinanceDetails(data.yahoo_symbol || data.symbol, tf);
-      setData(prev => (prev ? { ...prev, eod_bars: res.eod_bars } : res));
-    } catch (err: any) {
-      setTimeframe(previous);
-      setError(err?.message || "Impossible de charger cette durée d'affichage.");
-    } finally {
-      setRangeLoading(false);
+    persistChartTabs(chartTabs, nextTabId);
+    void ensureBarsForTab(nextTab);
+  }
+
+  function handleAddChartTab() {
+    const newId = `tab-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const newTab: ChartTabConfig = {
+      id: newId,
+      name: `Vue ${chartTabs.length + 1}`,
+      barInterval: "day",
+      timeframe: "1y",
+      chartView: "advanced",
+      activeNative: ["sma20", "volume", "rsi"],
+      activeCustomIds: [],
+      indicatorParams: loadIndicatorParams(),
+      customFills: loadCustomIndicatorFills(),
+    };
+    setChartTabs(prev => {
+      const next = [...prev, newTab];
+      persistChartTabs(next, newId);
+      return next;
+    });
+    setActiveChartTabId(newId);
+    setHoveredBarIndex(null);
+    void ensureBarsForTab(newTab);
+  }
+
+  function handleDuplicateChartTab(sourceId: string) {
+    const source = chartTabs.find(t => t.id === sourceId);
+    if (!source) return;
+    const newId = `tab-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const copyTab: ChartTabConfig = {
+      ...source,
+      id: newId,
+      name: `${source.name} (copie)`,
+      activeNative: [...source.activeNative],
+      activeCustomIds: [...source.activeCustomIds],
+      indicatorParams: normalizeIndicatorParams(source.indicatorParams),
+      customFills: { ...source.customFills },
+    };
+    setChartTabs(prev => {
+      const idx = prev.findIndex(t => t.id === sourceId);
+      const next =
+        idx >= 0 ? [...prev.slice(0, idx + 1), copyTab, ...prev.slice(idx + 1)] : [...prev, copyTab];
+      persistChartTabs(next, newId);
+      return next;
+    });
+    setActiveChartTabId(newId);
+    setHoveredBarIndex(null);
+    void ensureBarsForTab(copyTab);
+  }
+
+  function handleDeleteChartTab(targetId: string) {
+    if (chartTabs.length <= 1) return;
+    const idx = chartTabs.findIndex(t => t.id === targetId);
+    const nextTabs = chartTabs.filter(t => t.id !== targetId);
+    let nextActive = activeChartTabId;
+    if (activeChartTabId === targetId) {
+      const fallback = nextTabs[Math.max(0, Math.min(idx, nextTabs.length - 1))] ?? nextTabs[0];
+      nextActive = fallback.id;
+      setActiveChartTabId(nextActive);
+      setHoveredBarIndex(null);
+      void ensureBarsForTab(fallback);
     }
+    setChartTabs(nextTabs);
+    persistChartTabs(nextTabs, nextActive);
+  }
+
+  function commitRenameChartTab() {
+    if (!renamingChartTabId) return;
+    const trimmed = renamingChartTabValue.trim();
+    if (trimmed) {
+      updateChartTab(renamingChartTabId, prev => ({ ...prev, name: trimmed }));
+    }
+    setRenamingChartTabId(null);
+    setRenamingChartTabValue("");
+  }
+
+  function handleChangeBarInterval(interval: BarInterval) {
+    setHoveredBarIndex(null);
+    let nextTf = activeChartTab.timeframe;
+    if (interval === "week") {
+      if (nextTf === "1d" || nextTf === "1w" || nextTf === "1m" || nextTf === "3m") {
+        nextTf = "2y";
+      }
+    } else if (interval === "month" || interval === "quarter") {
+      if (!isDailyRange(nextTf) || getDailyRangeRank(nextTf) < getDailyRangeRank("5y")) {
+        nextTf = "5y";
+      }
+    }
+    const updatedTab: ChartTabConfig = {
+      ...activeChartTab,
+      barInterval: interval,
+      timeframe: nextTf,
+    };
+    updateChartTab(activeChartTab.id, () => updatedTab);
+    if (nextTf !== activeChartTab.timeframe) {
+      void ensureBarsForTab(updatedTab);
+    }
+  }
+
+  // Filter & aggregate bars according to active chart tab timeframe and bar interval
+  const rawTabBars = useMemo(() => {
+    if (!data) return [];
+    const tf = activeChartTab.timeframe;
+    if (tf === "1d" || tf === "1w") {
+      return intradayBarsByRange[tf] ?? [];
+    }
+    const sourceDaily = dailyBars.length > 0 ? dailyBars : data.eod_bars || [];
+    const limit = DAILY_RANGE_BAR_LIMITS[tf];
+    return sourceDaily.length > limit ? sourceDaily.slice(-limit) : sourceDaily;
+  }, [data, activeChartTab.timeframe, intradayBarsByRange, dailyBars]);
+
+  const filteredBars = useMemo(() => {
+    if (rawTabBars.length === 0) return [];
+    return aggregateBars(rawTabBars, activeChartTab.barInterval);
+  }, [rawTabBars, activeChartTab.barInterval]);
+
+  // Recharge la durée sélectionnée sur l'onglet actif si elle dépasse la profondeur déjà en mémoire
+  async function changeTimeframe(tf: FinanceRange) {
+    if (tf === activeChartTab.timeframe || !data) return;
+    setHoveredBarIndex(null);
+    const updatedTab: ChartTabConfig = {
+      ...activeChartTab,
+      timeframe: tf,
+    };
+    updateChartTab(activeChartTab.id, () => updatedTab);
+    await ensureBarsForTab(updatedTab);
   }
 
   // Timeframe stats calculation
@@ -851,6 +1273,221 @@ export function FinanceModal({
 
   if (!isOpen) return null;
 
+  function renderHeroBanner(showTabShortcuts = false) {
+    if (!data) return null;
+    return (
+      <div className="finance-hero-banner">
+        <div className="finance-hero-left">
+          {/* Nom de l'action affichée + tickers */}
+          <div className="finance-hero-identity">
+            <div className="finance-hero-title-row">
+              <h3 className="finance-hero-company-name">
+                {data.long_name || data.short_name || data.symbol}
+              </h3>
+              <div className="finance-hero-tags">
+                <span className="finance-symbol-tag" title="Symbole boursier principal">
+                  {data.symbol}
+                </span>
+                {data.yahoo_symbol && data.yahoo_symbol !== data.symbol && (
+                  <span className="finance-symbol-tag is-alt" title="Ticker Yahoo Finance">
+                    Yahoo: {data.yahoo_symbol}
+                  </span>
+                )}
+                {data.exchange && (
+                  <span className="finance-exchange-tag" title="Place boursière">
+                    {data.exchange}
+                  </span>
+                )}
+                {data.isin && (
+                  <span className="finance-isin-tag" title="Code ISIN">
+                    ISIN: {data.isin}
+                  </span>
+                )}
+                {(() => {
+                  const targetListId = heroFollowListId || activeListId;
+                  const isFollowedInActive =
+                    (!targetListId || targetListId === activeListId) &&
+                    watchlist.some(w => {
+                      const curSet = new Set(
+                        [data.symbol, data.yahoo_symbol, data.eod_ticker]
+                          .filter(Boolean)
+                          .map(s => String(s).toUpperCase()),
+                      );
+                      return (
+                        curSet.has(w.symbol.toUpperCase()) ||
+                        curSet.has(w.yahoo_symbol.toUpperCase()) ||
+                        curSet.has(w.eod_ticker.toUpperCase())
+                      );
+                    });
+                  return (
+                    <span className="finance-hero-follow-group">
+                      {watchlists.length > 1 && (
+                        <select
+                          className="finance-hero-follow-select"
+                          value={targetListId || ""}
+                          onChange={e => setHeroFollowListId(e.target.value)}
+                          aria-label="Choisir la liste cible"
+                          title="Liste dans laquelle ajouter l'action"
+                        >
+                          {watchlists.map(wl => (
+                            <option key={wl.id} value={wl.id}>
+                              {wl.name}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                      <button
+                        type="button"
+                        className={`finance-hero-follow-btn ${isFollowedInActive ? "is-followed" : ""}`}
+                        onClick={() => void handleHeroFollowCurrent()}
+                        disabled={heroFollowBusy}
+                        title={
+                          isFollowedInActive
+                            ? "Action déjà suivie dans cette liste"
+                            : "Ajouter cette action à la liste de suivi"
+                        }
+                      >
+                        {heroFollowBusy ? (
+                          <LoaderCircle size={13} className="spin" />
+                        ) : isFollowedInActive ? (
+                          <Check size={13} />
+                        ) : (
+                          <Plus size={13} />
+                        )}
+                        <span>{isFollowedInActive ? "Suivie" : "Suivre"}</span>
+                      </button>
+                    </span>
+                  );
+                })()}
+              </div>
+            </div>
+            {data.short_name && data.long_name && data.short_name !== data.long_name && (
+              <p className="finance-hero-company-sub">{data.short_name}</p>
+            )}
+          </div>
+
+          <div className="finance-price-row">
+            <span className="finance-hero-price">
+              {data.price != null ? data.price.toFixed(2) : "N/A"}{" "}
+              <small className="finance-hero-curr">{data.currency}</small>
+            </span>
+            {data.change_percent != null && (
+              <span
+                className={`finance-hero-change ${data.change_percent >= 0 ? "is-up" : "is-down"}`}
+              >
+                {data.change_percent >= 0 ? (
+                  <ArrowUpRight size={18} />
+                ) : (
+                  <ArrowDownRight size={18} />
+                )}
+                <span>
+                  {data.change ? `${data.change >= 0 ? "+" : ""}${data.change.toFixed(2)} ` : ""}
+                  ({data.change_percent >= 0 ? "+" : ""}
+                  {data.change_percent.toFixed(2)}%)
+                </span>
+              </span>
+            )}
+          </div>
+          <div className="finance-hero-sub-stats">
+            <span>
+              Ouv. : <strong>{data.open != null ? data.open.toFixed(2) : "-"}</strong>
+            </span>
+            <span>·</span>
+            <span>
+              Haut : <strong>{data.high != null ? data.high.toFixed(2) : "-"}</strong>
+            </span>
+            <span>·</span>
+            <span>
+              Bas : <strong>{data.low != null ? data.low.toFixed(2) : "-"}</strong>
+            </span>
+            <span>·</span>
+            <span>
+              Volume :{" "}
+              <strong>
+                {data.volume != null ? data.volume.toLocaleString("fr-FR") : "-"}
+              </strong>
+            </span>
+            <span>·</span>
+            <span>
+              Clôt. veille :{" "}
+              <strong>
+                {data.previous_close != null ? data.previous_close.toFixed(2) : "-"}
+              </strong>
+            </span>
+          </div>
+        </div>
+
+        <div className="finance-hero-right">
+          {(() => {
+            const recInfo = formatAnalystRecommendation(data.financial_stats.analysts.recommendation);
+            const rawTarget = data.financial_stats.analysts.target_mean;
+            const hasValidTarget = rawTarget && rawTarget !== "N/A" && rawTarget.trim() !== "";
+            const hasOpinions = !!data.financial_stats.analysts.opinions_count;
+            return (
+              <div className="finance-analyst-badge-hero">
+                <div className="finance-analyst-hero-header">
+                  <span className="finance-analyst-hero-label">Consensus Analystes</span>
+                  {hasOpinions && (
+                    <span className="finance-analyst-hero-count">
+                      ({data.financial_stats.analysts.opinions_count} avis)
+                    </span>
+                  )}
+                </div>
+                <div className="finance-analyst-hero-body">
+                  <span className={`finance-rec-pill tone-${recInfo.tone}`}>
+                    {recInfo.label}
+                  </span>
+                  {hasValidTarget ? (
+                    <div className="finance-analyst-hero-target-wrap">
+                      <span className="finance-analyst-hero-target">
+                        Obj. moyen : <strong>{data.financial_stats.analysts.target_mean} {data.currency}</strong>
+                      </span>
+                      {data.financial_stats.analysts.upside_potential_pct != null && (
+                        <span
+                          className={`finance-upside-chip ${
+                            data.financial_stats.analysts.upside_potential_pct >= 0 ? "is-up" : "is-down"
+                          }`}
+                        >
+                          {data.financial_stats.analysts.upside_potential_pct >= 0 ? "+" : ""}
+                          {data.financial_stats.analysts.upside_potential_pct.toFixed(1)}%
+                        </span>
+                      )}
+                    </div>
+                  ) : (
+                    <span className="finance-analyst-hero-no-target">Objectif non renseigné</span>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
+
+          {showTabShortcuts && (
+            <div className="finance-hero-tab-shortcuts">
+              <button
+                type="button"
+                className="finance-hero-shortcut-btn"
+                onClick={() => switchMainTab("fundamentals")}
+              >
+                <ClipboardList size={13} />
+                <span>Fondamentaux &amp; Ratios</span>
+                <ChevronRight size={13} />
+              </button>
+              <button
+                type="button"
+                className="finance-hero-shortcut-btn is-primary"
+                onClick={() => switchMainTab("chart_tech")}
+              >
+                <LineChart size={13} />
+                <span>Cours &amp; Indicateurs techniques</span>
+                <ChevronRight size={13} />
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="modal-backdrop finance-modal-backdrop" onClick={onClose} role="dialog" aria-modal="true">
       <div
@@ -860,463 +1497,451 @@ export function FinanceModal({
       >
         {/* Header */}
         <div className="finance-modal-header">
-          <div className="finance-modal-title-wrap">
-            <span className="finance-modal-badge-icon">
-              <LineChart size={20} />
-            </span>
-            <div>
-              <div className="finance-modal-title-row">
-                <h2>{data?.short_name || "Analyse Boursière"}</h2>
-                {data?.symbol && <span className="finance-symbol-tag">{data.symbol}</span>}
-                <div className="finance-source-pills">
-                  <span className="finance-live-pill is-eod" title="Cotations en direct et historique de marché">
-                    EOD Historical Data
-                  </span>
-                  <span className="finance-live-pill is-yahoo" title="États financiers, valorisation et consensus">
-                    Yahoo Finance
-                  </span>
+          <div className="finance-modal-header-top">
+            <div className="finance-modal-title-wrap">
+              <span className="finance-modal-badge-icon">
+                <LineChart size={20} />
+              </span>
+              <div>
+                <div className="finance-modal-title-row">
+                  <h2>{data?.short_name || "Analyse Boursière"}</h2>
+                  {data?.symbol && <span className="finance-symbol-tag">{data.symbol}</span>}
+                  <div className="finance-source-pills">
+                    <span className="finance-live-pill is-eod" title="Cotations en direct et historique de marché">
+                      EOD Historical Data
+                    </span>
+                    <span className="finance-live-pill is-yahoo" title="États financiers, valorisation et consensus">
+                      Yahoo Finance
+                    </span>
+                  </div>
                 </div>
+                <p className="finance-modal-sub">
+                  {data?.long_name
+                    ? `${data.long_name} · Marché : ${data.exchange}${data.isin ? ` · ISIN : ${data.isin}` : ""}`
+                    : "Cours de bourse en temps réel & données financières complètes"}
+                </p>
               </div>
-              <p className="finance-modal-sub">
-                {data?.long_name
-                  ? `${data.long_name} · Marché : ${data.exchange}${data.isin ? ` · ISIN : ${data.isin}` : ""}`
-                  : "Cours de bourse en temps réel & données financières complètes"}
-              </p>
+            </div>
+
+            <div className="finance-modal-header-actions">
+              <button
+                type="button"
+                className={`finance-help-btn finance-wl-toggle-btn ${watchlistSidebarOpen ? "active" : ""}`}
+                onClick={() => toggleWatchlistSidebar()}
+                aria-expanded={watchlistSidebarOpen}
+                title={
+                  watchlistSidebarOpen
+                    ? "Rétracter la barre des listes de suivi à droite"
+                    : "Déplier la barre des listes de suivi à droite"
+                }
+              >
+                {watchlistSidebarOpen ? <PanelRightClose size={15} /> : <PanelRightOpen size={15} />}
+                <span>Listes ({watchlist.length})</span>
+              </button>
+              <FinanceThemeSwitcher />
+              <button
+                type="button"
+                className="finance-help-btn"
+                onClick={() => openHelpGuide("intrinsic")}
+                aria-label="Aide — Formules et Scores Uncle Stock"
+                title="Guides détaillés : Valeurs intrinsèques (20 chapitres) & Scores Uncle Stock (36 chapitres)"
+              >
+                <HelpCircle size={16} />
+                <span>Aide · Formules &amp; Scores</span>
+              </button>
+              <button
+                type="button"
+                className="finance-modal-close-btn"
+                onClick={onClose}
+                aria-label="Fermer la fenêtre Marchés Financiers"
+                title="Fermer (Échap)"
+              >
+                <X size={20} />
+              </button>
             </div>
           </div>
 
-          <div className="finance-modal-header-actions">
+          <nav
+            className="finance-main-tabs-nav"
+            role="tablist"
+            aria-label="Sections principales Finances"
+          >
             <button
               type="button"
-              className={`finance-help-btn finance-wl-toggle-btn ${watchlistSidebarOpen ? "active" : ""}`}
-              onClick={() => toggleWatchlistSidebar()}
-              aria-expanded={watchlistSidebarOpen}
-              title={
-                watchlistSidebarOpen
-                  ? "Rétracter la barre des listes de suivi à droite"
-                  : "Déplier la barre des listes de suivi à droite"
-              }
+              role="tab"
+              aria-selected={mainTab === "search_indices"}
+              className={`finance-main-tab-btn ${mainTab === "search_indices" ? "active" : ""}`}
+              onClick={() => switchMainTab("search_indices")}
             >
-              {watchlistSidebarOpen ? <PanelRightClose size={15} /> : <PanelRightOpen size={15} />}
-              <span>Listes ({watchlist.length})</span>
-            </button>
-            <FinanceThemeSwitcher />
-            <button
-              type="button"
-              className="finance-help-btn"
-              onClick={() => openHelpGuide("intrinsic")}
-              aria-label="Aide — Formules et Scores Uncle Stock"
-              title="Guides détaillés : Valeurs intrinsèques (20 chapitres) & Scores Uncle Stock (36 chapitres)"
-            >
-              <HelpCircle size={16} />
-              <span>Aide · Formules &amp; Scores</span>
+              <span className="finance-main-tab-num">1</span>
+              <Search size={15} />
+              <span className="finance-main-tab-label">Recherche &amp; Indices</span>
+              <span className="finance-main-tab-meta">
+                {activeIndexCode || (indices.length > 0 ? `${indices.length} indices` : "Actions · Fonds")}
+              </span>
             </button>
             <button
               type="button"
-              className="finance-modal-close-btn"
-              onClick={onClose}
-              aria-label="Fermer la fenêtre Marchés Financiers"
-              title="Fermer (Échap)"
+              role="tab"
+              aria-selected={mainTab === "fundamentals"}
+              className={`finance-main-tab-btn ${mainTab === "fundamentals" ? "active" : ""}`}
+              onClick={() => switchMainTab("fundamentals")}
             >
-              <X size={20} />
+              <span className="finance-main-tab-num">2</span>
+              <ClipboardList size={15} />
+              <span className="finance-main-tab-label">Fondamentaux &amp; Ratios</span>
+              {data?.symbol && (
+                <span className="finance-main-tab-meta">{data.symbol}</span>
+              )}
             </button>
-          </div>
-        </div>
-
-        {/* Search & Suggestions Bar */}
-        <div className="finance-modal-search-bar">
-          <div className="finance-search-autocomplete-wrap">
-            <form className="finance-search-form" onSubmit={handleSearchSubmit}>
-              <Search size={16} className="finance-search-icon" />
-              <input
-                type="text"
-                className="finance-search-input"
-                placeholder="Rechercher une action, un fonds EUFUND, un ISIN ou ticker (ex. Air Liquide, NVDA, FR0013202132.EUFUND)..."
-                value={query}
-                onChange={e => setQuery(e.target.value)}
-                onFocus={() => setSearchFocused(true)}
-                onBlur={() => {
-                  window.setTimeout(() => setSearchFocused(false), 180);
-                }}
-                disabled={loading}
-              />
-              <button type="submit" className="finance-search-submit" disabled={loading || !query.trim()}>
-                {loading ? <LoaderCircle size={15} className="spin" /> : "Rechercher"}
-              </button>
-            </form>
-            {searchFocused && catalogMatches.length > 0 && (
-              <div className="finance-search-dropdown" role="listbox" aria-label="Suggestions catalogue et entrepôt">
-                {catalogMatches.map(m => (
-                  <button
-                    key={`${m.eod_ticker}-${m.index_code ?? ""}`}
-                    type="button"
-                    className="finance-search-dropdown-item"
-                    onMouseDown={e => {
-                      e.preventDefault();
-                      setQuery(m.name || m.eod_ticker);
-                      setSearchFocused(false);
-                      void loadDetails(m.eod_ticker || m.yahoo_symbol || m.symbol);
-                    }}
-                  >
-                    <span className="finance-symbol-tag">{m.eod_ticker || m.yahoo_symbol || m.symbol}</span>
-                    <strong className="finance-search-dropdown-name">{m.name}</strong>
-                    {m.sector && <small className="finance-search-dropdown-meta">{m.sector}</small>}
-                    {(m.index_code || m.exchange) && (
-                      <span className="finance-search-dropdown-idx">{m.index_code || m.exchange}</span>
-                    )}
-                    {m.cached && <span className="finance-cached-dot" title="Déjà en entrepôt local" />}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div className="finance-quick-chips">
-            <span className="finance-chips-label">Suggestions :</span>
-            {QUICK_SUGGESTIONS.map(name => (
-              <button
-                key={name}
-                type="button"
-                className={`finance-chip ${data?.short_name?.toLowerCase().includes(name.toLowerCase()) ? "active" : ""}`}
-                onClick={() => {
-                  setQuery(name);
-                  void loadDetails(name);
-                }}
-                disabled={loading}
-              >
-                {name}
-              </button>
-            ))}
-          </div>
-
-          <FinanceIndicesStrip
-            indices={indices}
-            warehouse={warehouseStats}
-            activeCode={activeIndexCode}
-            loadingIndex={indexLoading}
-            catalogOpen={indxCatalogOpen}
-            eufundCatalogOpen={eufundCatalogOpen}
-            syncOpen={syncPanelOpen}
-            onToggleIndex={code => void handleToggleIndex(code)}
-            onToggleCatalog={() => {
-              setEufundCatalogOpen(false);
-              setSyncPanelOpen(false);
-              setIndxCatalogOpen(prev => {
-                const next = !prev;
-                if (next) {
-                  window.requestAnimationFrame(() => {
-                    modalBodyRef.current?.scrollTo({ top: 0, behavior: "smooth" });
-                  });
-                }
-                return next;
-              });
-              setActiveIndexCode(null);
-            }}
-            onToggleEufundCatalog={() => {
-              setIndxCatalogOpen(false);
-              setSyncPanelOpen(false);
-              setActiveIndexCode(null);
-              setEufundCatalogOpen(prev => {
-                const next = !prev;
-                if (next) {
-                  window.requestAnimationFrame(() => {
-                    modalBodyRef.current?.scrollTo({ top: 0, behavior: "smooth" });
-                  });
-                }
-                return next;
-              });
-            }}
-            onToggleSync={() => {
-              setIndxCatalogOpen(false);
-              setEufundCatalogOpen(false);
-              setActiveIndexCode(null);
-              setSyncPanelOpen(prev => {
-                const next = !prev;
-                if (next) {
-                  window.requestAnimationFrame(() => {
-                    modalBodyRef.current?.scrollTo({ top: 0, behavior: "smooth" });
-                  });
-                }
-                return next;
-              });
-            }}
-            onOpenMinorTier={handleOpenMinorTier}
-          />
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mainTab === "chart_tech"}
+              className={`finance-main-tab-btn ${mainTab === "chart_tech" ? "active" : ""}`}
+              onClick={() => switchMainTab("chart_tech")}
+            >
+              <span className="finance-main-tab-num">3</span>
+              <LineChart size={15} />
+              <span className="finance-main-tab-label">Cours &amp; Indicateurs techniques</span>
+              {data?.price != null && (
+                <span className="finance-main-tab-meta">
+                  {data.price.toFixed(2)} {data.currency}
+                </span>
+              )}
+            </button>
+          </nav>
         </div>
 
         {/* Workspace : contenu principal à gauche + barre rétractable des listes à droite */}
         <div className="finance-modal-workspace">
           <div className="finance-modal-body" ref={modalBodyRef}>
-            {indxCatalogOpen && (
-              <FinanceEodhdIndxBrowser
-                activeCode={activeIndexCode}
-                onSelectIndexCode={eodTicker => void handleToggleIndex(eodTicker)}
-                onClose={() => setIndxCatalogOpen(false)}
-              />
-            )}
-
-            {eufundCatalogOpen && (
-              <FinanceEufundBrowser
-                selectedSymbol={data?.eod_ticker || data?.yahoo_symbol || data?.symbol || null}
-                watchlists={watchlists}
-                activeListId={activeListId}
-                onSelectFund={item => void handleSelectEufund(item)}
-                onAddWatchlist={handleAddEufundToWatchlist}
-                onClose={() => setEufundCatalogOpen(false)}
-              />
-            )}
-
-            {syncPanelOpen && (
-              <FinanceSyncPanel
-                onSynced={() => {
-                  void loadWorkspaceData(false);
-                }}
-                onClose={() => setSyncPanelOpen(false)}
-              />
-            )}
-
-            {activeIndexCode && (
-              <FinanceIndexCompositionDrawer
-                key={activeIndexCode}
-                composition={
-                  indexComposition &&
-                  (indexComposition.index.code === activeIndexCode ||
-                    indexComposition.index.eod_ticker === activeIndexCode)
-                    ? indexComposition
-                    : null
-                }
-                performances={activeIndexPerformances}
-                performancesLoading={indexPerfLoading}
-                importingWatchlist={indexImportBusy}
-                importBanner={indexImportBanner}
-                loading={indexLoading}
-                error={indexError}
-                selectedSymbol={data?.eod_ticker || data?.yahoo_symbol || data?.symbol || null}
-                onSelectStock={item => void handleSelectIndexStock(item)}
-                onAddWatchlist={handleAddIndexStockToWatchlist}
-                onLoadPerformances={forceRefresh => handleLoadIndexPerformances(activeIndexCode, Boolean(forceRefresh))}
-                onImportToWatchlist={() => handleImportIndexToWatchlist(activeIndexCode)}
-                onRefresh={() => void handleToggleIndex(activeIndexCode, true)}
-                onClose={() => {
-                  setActiveIndexCode(null);
-                  setIndexComposition(null);
-                  setIndexImportBanner(null);
-                  setIndexError(null);
-                }}
-              />
-            )}
-
             {error && (
-            <div className="finance-modal-error" role="alert">
-              <span>⚠️ {error}</span>
-              <button type="button" onClick={() => void loadDetails(query)}>
-                <RefreshCw size={14} /> Réessayer
-              </button>
-            </div>
-          )}
+              <div className="finance-modal-error" role="alert">
+                <span>⚠️ {error}</span>
+                <button type="button" onClick={() => void loadDetails(query)}>
+                  <RefreshCw size={14} /> Réessayer
+                </button>
+              </div>
+            )}
 
-          {loading && !data && (
-            <div className="finance-modal-loading">
-              <LoaderCircle size={36} className="spin text-emerald" />
-              <p>Téléchargement des cours live (EOD) et des états financiers (Yahoo Finance)…</p>
-            </div>
-          )}
+            {/* ONGLET 1 : Recherche, Suggestions, Indices & Catalogues */}
+            {mainTab === "search_indices" && (
+              <>
+                <div className="finance-modal-search-bar">
+                  <div className="finance-search-autocomplete-wrap">
+                    <form className="finance-search-form" onSubmit={handleSearchSubmit}>
+                      <Search size={16} className="finance-search-icon" />
+                      <input
+                        type="text"
+                        className="finance-search-input"
+                        placeholder="Rechercher une action, un fonds EUFUND, un ISIN ou ticker (ex. Air Liquide, NVDA, FR0013202132.EUFUND)..."
+                        value={query}
+                        onChange={e => setQuery(e.target.value)}
+                        onFocus={() => setSearchFocused(true)}
+                        onBlur={() => {
+                          window.setTimeout(() => setSearchFocused(false), 180);
+                        }}
+                        disabled={loading}
+                      />
+                      <button type="submit" className="finance-search-submit" disabled={loading || !query.trim()}>
+                        {loading ? <LoaderCircle size={15} className="spin" /> : "Rechercher"}
+                      </button>
+                    </form>
+                    {searchFocused && catalogMatches.length > 0 && (
+                      <div className="finance-search-dropdown" role="listbox" aria-label="Suggestions catalogue et entrepôt">
+                        {catalogMatches.map(m => (
+                          <button
+                            key={`${m.eod_ticker}-${m.index_code ?? ""}`}
+                            type="button"
+                            className="finance-search-dropdown-item"
+                            onMouseDown={e => {
+                              e.preventDefault();
+                              setQuery(m.name || m.eod_ticker);
+                              setSearchFocused(false);
+                              void loadDetails(m.eod_ticker || m.yahoo_symbol || m.symbol);
+                            }}
+                          >
+                            <span className="finance-symbol-tag">{m.eod_ticker || m.yahoo_symbol || m.symbol}</span>
+                            <strong className="finance-search-dropdown-name">{m.name}</strong>
+                            {m.sector && <small className="finance-search-dropdown-meta">{m.sector}</small>}
+                            {(m.index_code || m.exchange) && (
+                              <span className="finance-search-dropdown-idx">{m.index_code || m.exchange}</span>
+                            )}
+                            {m.cached && <span className="finance-cached-dot" title="Déjà en entrepôt local" />}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
 
-          {data && (
-            <>
-              {/* Live Quote Hero Banner */}
-              <div className="finance-hero-banner">
-                <div className="finance-hero-left">
-                  {/* Nom de l'action affichée + tickers */}
-                  <div className="finance-hero-identity">
-                    <div className="finance-hero-title-row">
-                      <h3 className="finance-hero-company-name">
-                        {data.long_name || data.short_name || data.symbol}
-                      </h3>
-                      <div className="finance-hero-tags">
-                        <span className="finance-symbol-tag" title="Symbole boursier principal">
-                          {data.symbol}
-                        </span>
-                        {data.yahoo_symbol && data.yahoo_symbol !== data.symbol && (
-                          <span className="finance-symbol-tag is-alt" title="Ticker Yahoo Finance">
-                            Yahoo: {data.yahoo_symbol}
-                          </span>
-                        )}
-                        {data.exchange && (
-                          <span className="finance-exchange-tag" title="Place boursière">
-                            {data.exchange}
-                          </span>
-                        )}
-                        {data.isin && (
-                          <span className="finance-isin-tag" title="Code ISIN">
-                            ISIN: {data.isin}
-                          </span>
-                        )}
-                        {(() => {
-                          const targetListId = heroFollowListId || activeListId;
-                          const isFollowedInActive =
-                            (!targetListId || targetListId === activeListId) &&
-                            watchlist.some(w => {
-                              const curSet = new Set(
-                                [data.symbol, data.yahoo_symbol, data.eod_ticker]
-                                  .filter(Boolean)
-                                  .map(s => String(s).toUpperCase()),
-                              );
-                              return (
-                                curSet.has(w.symbol.toUpperCase()) ||
-                                curSet.has(w.yahoo_symbol.toUpperCase()) ||
-                                curSet.has(w.eod_ticker.toUpperCase())
-                              );
-                            });
-                          return (
-                            <span className="finance-hero-follow-group">
-                              {watchlists.length > 1 && (
-                                <select
-                                  className="finance-hero-follow-select"
-                                  value={targetListId || ""}
-                                  onChange={e => setHeroFollowListId(e.target.value)}
-                                  aria-label="Choisir la liste cible"
-                                  title="Liste dans laquelle ajouter l'action"
-                                >
-                                  {watchlists.map(wl => (
-                                    <option key={wl.id} value={wl.id}>
-                                      {wl.name}
-                                    </option>
-                                  ))}
-                                </select>
-                              )}
+                  <div className="finance-quick-chips">
+                    <span className="finance-chips-label">Suggestions :</span>
+                    {QUICK_SUGGESTIONS.map(name => (
+                      <button
+                        key={name}
+                        type="button"
+                        className={`finance-chip ${data?.short_name?.toLowerCase().includes(name.toLowerCase()) ? "active" : ""}`}
+                        onClick={() => {
+                          setQuery(name);
+                          void loadDetails(name);
+                        }}
+                        disabled={loading}
+                      >
+                        {name}
+                      </button>
+                    ))}
+                  </div>
+
+                  <FinanceIndicesStrip
+                    indices={indices}
+                    warehouse={warehouseStats}
+                    activeCode={activeIndexCode}
+                    loadingIndex={indexLoading}
+                    catalogOpen={indxCatalogOpen}
+                    eufundCatalogOpen={eufundCatalogOpen}
+                    syncOpen={syncPanelOpen}
+                    onToggleIndex={code => void handleToggleIndex(code)}
+                    onToggleCatalog={() => {
+                      setEufundCatalogOpen(false);
+                      setSyncPanelOpen(false);
+                      setIndxCatalogOpen(prev => {
+                        const next = !prev;
+                        if (next) {
+                          window.requestAnimationFrame(() => {
+                            modalBodyRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+                          });
+                        }
+                        return next;
+                      });
+                      setActiveIndexCode(null);
+                    }}
+                    onToggleEufundCatalog={() => {
+                      setIndxCatalogOpen(false);
+                      setSyncPanelOpen(false);
+                      setActiveIndexCode(null);
+                      setEufundCatalogOpen(prev => {
+                        const next = !prev;
+                        if (next) {
+                          window.requestAnimationFrame(() => {
+                            modalBodyRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+                          });
+                        }
+                        return next;
+                      });
+                    }}
+                    onToggleSync={() => {
+                      setIndxCatalogOpen(false);
+                      setEufundCatalogOpen(false);
+                      setActiveIndexCode(null);
+                      setSyncPanelOpen(prev => {
+                        const next = !prev;
+                        if (next) {
+                          window.requestAnimationFrame(() => {
+                            modalBodyRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+                          });
+                        }
+                        return next;
+                      });
+                    }}
+                    onOpenMinorTier={handleOpenMinorTier}
+                  />
+                </div>
+
+                {data && renderHeroBanner(true)}
+
+                {indxCatalogOpen && (
+                  <FinanceEodhdIndxBrowser
+                    activeCode={activeIndexCode}
+                    onSelectIndexCode={eodTicker => void handleToggleIndex(eodTicker)}
+                    onClose={() => setIndxCatalogOpen(false)}
+                  />
+                )}
+
+                {eufundCatalogOpen && (
+                  <FinanceEufundBrowser
+                    selectedSymbol={data?.eod_ticker || data?.yahoo_symbol || data?.symbol || null}
+                    watchlists={watchlists}
+                    activeListId={activeListId}
+                    onSelectFund={item => void handleSelectEufund(item)}
+                    onAddWatchlist={handleAddEufundToWatchlist}
+                    onClose={() => setEufundCatalogOpen(false)}
+                  />
+                )}
+
+                {syncPanelOpen && (
+                  <FinanceSyncPanel
+                    onSynced={() => {
+                      void loadWorkspaceData(false);
+                    }}
+                    onClose={() => setSyncPanelOpen(false)}
+                  />
+                )}
+
+                {activeIndexCode && (
+                  <FinanceIndexCompositionDrawer
+                    key={activeIndexCode}
+                    composition={
+                      indexComposition &&
+                      (indexComposition.index.code === activeIndexCode ||
+                        indexComposition.index.eod_ticker === activeIndexCode)
+                        ? indexComposition
+                        : null
+                    }
+                    performances={activeIndexPerformances}
+                    performancesLoading={indexPerfLoading}
+                    importingWatchlist={indexImportBusy}
+                    importBanner={indexImportBanner}
+                    loading={indexLoading}
+                    error={indexError}
+                    selectedSymbol={data?.eod_ticker || data?.yahoo_symbol || data?.symbol || null}
+                    onSelectStock={item => void handleSelectIndexStock(item)}
+                    onAddWatchlist={handleAddIndexStockToWatchlist}
+                    onLoadPerformances={forceRefresh => handleLoadIndexPerformances(activeIndexCode, Boolean(forceRefresh))}
+                    onImportToWatchlist={() => handleImportIndexToWatchlist(activeIndexCode)}
+                    onRefresh={() => void handleToggleIndex(activeIndexCode, true)}
+                    onClose={() => {
+                      setActiveIndexCode(null);
+                      setIndexComposition(null);
+                      setIndexImportBanner(null);
+                      setIndexError(null);
+                    }}
+                  />
+                )}
+
+                {!activeIndexCode && !indxCatalogOpen && !eufundCatalogOpen && !syncPanelOpen && (
+                  <div className="finance-search-tab-hint">
+                    <Search size={16} />
+                    <div>
+                      <strong>Explorer les marchés, indices et fonds</strong>
+                      <p>
+                        Cliquez sur un indice ci-dessus (ex. CAC 40, S&amp;P 500, NASDAQ 100) ou ouvrez un
+                        catalogue (.INDX, .EUFUND, PA, US) pour afficher sa composition, charger le tableau
+                        de performances de toutes ses actions et les importer en liste de suivi.
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+
+            {mainTab !== "search_indices" && loading && !data && (
+              <div className="finance-modal-loading">
+                <LoaderCircle size={36} className="spin text-emerald" />
+                <p>Téléchargement des cours live (EOD) et des états financiers (Yahoo Finance)…</p>
+              </div>
+            )}
+
+            {/* ONGLET 3 : Cours & Indicateurs techniques */}
+            {mainTab === "chart_tech" && data && (
+              <>
+                {renderHeroBanner(false)}
+                <div
+                  className={`finance-chart-section${chartFullscreen ? " is-fullscreen" : ""}`}
+                  ref={chartSectionRef}
+                >
+                <div className="finance-chart-tabs-bar" role="tablist" aria-label="Onglets graphiques personnalisés">
+                  <div className="finance-chart-tabs-list">
+                    {chartTabs.map(tab => {
+                      const isTabActive = tab.id === activeChartTab.id;
+                      const isRenaming = renamingChartTabId === tab.id;
+                      const indCount = tab.activeNative.length + tab.activeCustomIds.length;
+                      return (
+                        <div
+                          key={tab.id}
+                          className={`finance-chart-tab-item ${isTabActive ? "active" : ""}`}
+                        >
+                          {isRenaming ? (
+                            <input
+                              type="text"
+                              className="finance-chart-tab-rename-input"
+                              value={renamingChartTabValue}
+                              autoFocus
+                              onChange={e => setRenamingChartTabValue(e.target.value)}
+                              onBlur={commitRenameChartTab}
+                              onKeyDown={e => {
+                                if (e.key === "Enter") {
+                                  e.preventDefault();
+                                  commitRenameChartTab();
+                                } else if (e.key === "Escape") {
+                                  e.preventDefault();
+                                  setRenamingChartTabId(null);
+                                  setRenamingChartTabValue("");
+                                }
+                              }}
+                              aria-label="Nom de l'onglet graphique"
+                            />
+                          ) : (
+                            <button
+                              type="button"
+                              role="tab"
+                              aria-selected={isTabActive}
+                              className="finance-chart-tab-select"
+                              onClick={() => handleSelectChartTab(tab.id)}
+                              onDoubleClick={() => {
+                                setRenamingChartTabId(tab.id);
+                                setRenamingChartTabValue(tab.name);
+                              }}
+                              title="Cliquer pour afficher · Double-cliquer pour renommer"
+                            >
+                              <span className="finance-chart-tab-name">{tab.name}</span>
+                              <span className="finance-chart-tab-badge">
+                                {BAR_INTERVAL_LABELS[tab.barInterval]} · {TIMEFRAME_LABELS[tab.timeframe]}
+                              </span>
+                              <span className="finance-chart-tab-ind-count" title={`${indCount} indicateur(s) actif(s)`}>
+                                {indCount} ind.
+                              </span>
+                            </button>
+                          )}
+                          <span className="finance-chart-tab-actions">
+                            <button
+                              type="button"
+                              className="finance-chart-tab-icon-btn"
+                              onClick={() => {
+                                setRenamingChartTabId(tab.id);
+                                setRenamingChartTabValue(tab.name);
+                              }}
+                              title="Renommer cet onglet"
+                              aria-label={`Renommer ${tab.name}`}
+                            >
+                              <Pencil size={11} />
+                            </button>
+                            <button
+                              type="button"
+                              className="finance-chart-tab-icon-btn"
+                              onClick={() => handleDuplicateChartTab(tab.id)}
+                              title="Dupliquer cet onglet"
+                              aria-label={`Dupliquer ${tab.name}`}
+                            >
+                              <Copy size={11} />
+                            </button>
+                            {chartTabs.length > 1 && (
                               <button
                                 type="button"
-                                className={`finance-hero-follow-btn ${isFollowedInActive ? "is-followed" : ""}`}
-                                onClick={() => void handleHeroFollowCurrent()}
-                                disabled={heroFollowBusy}
-                                title={
-                                  isFollowedInActive
-                                    ? "Action déjà suivie dans cette liste"
-                                    : "Ajouter cette action à la liste de suivi"
-                                }
+                                className="finance-chart-tab-icon-btn is-danger"
+                                onClick={() => handleDeleteChartTab(tab.id)}
+                                title="Supprimer cet onglet"
+                                aria-label={`Supprimer ${tab.name}`}
                               >
-                                {heroFollowBusy ? (
-                                  <LoaderCircle size={13} className="spin" />
-                                ) : isFollowedInActive ? (
-                                  <Check size={13} />
-                                ) : (
-                                  <Plus size={13} />
-                                )}
-                                <span>{isFollowedInActive ? "Suivie" : "Suivre"}</span>
+                                <X size={11} />
                               </button>
-                            </span>
-                          );
-                        })()}
-                      </div>
-                    </div>
-                    {data.short_name && data.long_name && data.short_name !== data.long_name && (
-                      <p className="finance-hero-company-sub">{data.short_name}</p>
-                    )}
-                  </div>
-
-                  <div className="finance-price-row">
-                    <span className="finance-hero-price">
-                      {data.price != null ? data.price.toFixed(2) : "N/A"}{" "}
-                      <small className="finance-hero-curr">{data.currency}</small>
-                    </span>
-                    {data.change_percent != null && (
-                      <span
-                        className={`finance-hero-change ${data.change_percent >= 0 ? "is-up" : "is-down"}`}
-                      >
-                        {data.change_percent >= 0 ? (
-                          <ArrowUpRight size={18} />
-                        ) : (
-                          <ArrowDownRight size={18} />
-                        )}
-                        <span>
-                          {data.change ? `${data.change >= 0 ? "+" : ""}${data.change.toFixed(2)} ` : ""}
-                          ({data.change_percent >= 0 ? "+" : ""}
-                          {data.change_percent.toFixed(2)}%)
-                        </span>
-                      </span>
-                    )}
-                  </div>
-                  <div className="finance-hero-sub-stats">
-                    <span>
-                      Ouv. : <strong>{data.open != null ? data.open.toFixed(2) : "-"}</strong>
-                    </span>
-                    <span>·</span>
-                    <span>
-                      Haut : <strong>{data.high != null ? data.high.toFixed(2) : "-"}</strong>
-                    </span>
-                    <span>·</span>
-                    <span>
-                      Bas : <strong>{data.low != null ? data.low.toFixed(2) : "-"}</strong>
-                    </span>
-                    <span>·</span>
-                    <span>
-                      Volume :{" "}
-                      <strong>
-                        {data.volume != null ? data.volume.toLocaleString("fr-FR") : "-"}
-                      </strong>
-                    </span>
-                    <span>·</span>
-                    <span>
-                      Clôt. veille :{" "}
-                      <strong>
-                        {data.previous_close != null ? data.previous_close.toFixed(2) : "-"}
-                      </strong>
-                    </span>
-                  </div>
-                </div>
-
-                <div className="finance-hero-right">
-                  {(() => {
-                    const recInfo = formatAnalystRecommendation(data.financial_stats.analysts.recommendation);
-                    const rawTarget = data.financial_stats.analysts.target_mean;
-                    const hasValidTarget = rawTarget && rawTarget !== "N/A" && rawTarget.trim() !== "";
-                    const hasOpinions = !!data.financial_stats.analysts.opinions_count;
-                    return (
-                      <div className="finance-analyst-badge-hero">
-                        <div className="finance-analyst-hero-header">
-                          <span className="finance-analyst-hero-label">Consensus Analystes</span>
-                          {hasOpinions && (
-                            <span className="finance-analyst-hero-count">
-                              ({data.financial_stats.analysts.opinions_count} avis)
-                            </span>
-                          )}
-                        </div>
-                        <div className="finance-analyst-hero-body">
-                          <span className={`finance-rec-pill tone-${recInfo.tone}`}>
-                            {recInfo.label}
+                            )}
                           </span>
-                          {hasValidTarget ? (
-                            <div className="finance-analyst-hero-target-wrap">
-                              <span className="finance-analyst-hero-target">
-                                Obj. moyen : <strong>{data.financial_stats.analysts.target_mean} {data.currency}</strong>
-                              </span>
-                              {data.financial_stats.analysts.upside_potential_pct != null && (
-                                <span
-                                  className={`finance-upside-chip ${
-                                    data.financial_stats.analysts.upside_potential_pct >= 0 ? "is-up" : "is-down"
-                                  }`}
-                                >
-                                  {data.financial_stats.analysts.upside_potential_pct >= 0 ? "+" : ""}
-                                  {data.financial_stats.analysts.upside_potential_pct.toFixed(1)}%
-                                </span>
-                              )}
-                            </div>
-                          ) : (
-                            <span className="finance-analyst-hero-no-target">Objectif non renseigné</span>
-                          )}
                         </div>
-                      </div>
-                    );
-                  })()}
+                      );
+                    })}
+                  </div>
+                  <button
+                    type="button"
+                    className="finance-chart-tab-add-btn"
+                    onClick={handleAddChartTab}
+                    title="Ajouter un nouvel onglet graphique avec son propre pas et ses propres indicateurs"
+                  >
+                    <Plus size={13} />
+                    <span>Nouvel onglet</span>
+                  </button>
                 </div>
-              </div>
 
-              {/* Section 1: Courbe interactive du cours via EOD */}
-              <div
-                className={`finance-chart-section${chartFullscreen ? " is-fullscreen" : ""}`}
-                ref={chartSectionRef}
-              >
                 <div className="finance-chart-header">
                   <div className="finance-chart-title">
                     <span className="chart-icon-wrap">
@@ -1324,11 +1949,11 @@ export function FinanceModal({
                     </span>
                     <div>
                       <strong>
-                        {data.long_name || data.short_name || data.symbol} ({data.symbol})
+                        {data.long_name || data.short_name || data.symbol} ({data.symbol}) — {activeChartTab.name}
                       </strong>
                       <small>
-                        {filteredBars.length} points · {TIMEFRAME_LABELS[timeframe]} · Barres :{" "}
-                        {BAR_INTERVAL_LABELS[barInterval]} ·{" "}
+                        {filteredBars.length} points · {TIMEFRAME_LABELS[activeChartTab.timeframe]} · Barres :{" "}
+                        {BAR_INTERVAL_LABELS[activeChartTab.barInterval]} ·{" "}
                         {timeframeStats ? (
                           <span className={timeframeStats.isPositive ? "text-emerald" : "text-rose"}>
                             {timeframeStats.diff >= 0 ? "+" : ""}
@@ -1346,12 +1971,14 @@ export function FinanceModal({
                   <div className="finance-chart-header-controls">
                     {chartFullscreen && (
                       <div className="finance-timeframe-selector finance-chart-view-toggle is-inline">
-                        {(["line", "advanced"] as const).map(v => (
+                        {(["advanced", "line"] as const).map(v => (
                           <button
                             key={v}
                             type="button"
-                            className={`finance-tf-btn ${chartView === v ? "active" : ""}`}
-                            onClick={() => setChartView(v)}
+                            className={`finance-tf-btn ${activeChartTab.chartView === v ? "active" : ""}`}
+                            onClick={() =>
+                              updateChartTab(activeChartTab.id, prev => ({ ...prev, chartView: v }))
+                            }
                           >
                             {v === "line" ? "Courbe" : "Analyse technique"}
                           </button>
@@ -1364,11 +1991,8 @@ export function FinanceModal({
                         <button
                           key={interval}
                           type="button"
-                          className={`finance-tf-btn ${barInterval === interval ? "active" : ""}`}
-                          onClick={() => {
-                            setBarInterval(interval);
-                            setHoveredBarIndex(null);
-                          }}
+                          className={`finance-tf-btn ${activeChartTab.barInterval === interval ? "active" : ""}`}
+                          onClick={() => handleChangeBarInterval(interval)}
                         >
                           {BAR_INTERVAL_LABELS[interval]}
                         </button>
@@ -1381,7 +2005,7 @@ export function FinanceModal({
                           key={tf}
                           type="button"
                           disabled={rangeLoading}
-                          className={`finance-tf-btn ${timeframe === tf ? "active" : ""}`}
+                          className={`finance-tf-btn ${activeChartTab.timeframe === tf ? "active" : ""}`}
                           onClick={() => void changeTimeframe(tf)}
                         >
                           {TIMEFRAME_LABELS[tf]}
@@ -1408,12 +2032,14 @@ export function FinanceModal({
 
                 {!chartFullscreen && (
                   <div className="finance-timeframe-selector finance-chart-view-toggle">
-                    {(["line", "advanced"] as const).map(v => (
+                    {(["advanced", "line"] as const).map(v => (
                       <button
                         key={v}
                         type="button"
-                        className={`finance-tf-btn ${chartView === v ? "active" : ""}`}
-                        onClick={() => setChartView(v)}
+                        className={`finance-tf-btn ${activeChartTab.chartView === v ? "active" : ""}`}
+                        onClick={() =>
+                          updateChartTab(activeChartTab.id, prev => ({ ...prev, chartView: v }))
+                        }
                       >
                         {v === "line" ? "Courbe" : "Analyse technique"}
                       </button>
@@ -1421,13 +2047,30 @@ export function FinanceModal({
                   </div>
                 )}
 
-                {chartView === "advanced" && (
+                {activeChartTab.chartView === "advanced" && (
                   <FinanceTvChart
                     bars={filteredBars}
                     symbol={data.symbol}
+                    tabId={activeChartTab.id}
                     dark={theme.mode === "dark"}
                     fullscreen={chartFullscreen}
                     customIndicators={customIndicators}
+                    activeNativeKeys={activeChartTab.activeNative}
+                    onChangeActiveNativeKeys={keys =>
+                      updateChartTab(activeChartTab.id, prev => ({ ...prev, activeNative: keys }))
+                    }
+                    activeCustomIds={activeChartTab.activeCustomIds}
+                    onChangeActiveCustomIds={ids =>
+                      updateChartTab(activeChartTab.id, prev => ({ ...prev, activeCustomIds: ids }))
+                    }
+                    indicatorParams={activeChartTab.indicatorParams}
+                    onChangeIndicatorParams={nextParams =>
+                      updateChartTab(activeChartTab.id, prev => ({ ...prev, indicatorParams: nextParams }))
+                    }
+                    customFills={activeChartTab.customFills}
+                    onChangeCustomFills={nextFills =>
+                      updateChartTab(activeChartTab.id, prev => ({ ...prev, customFills: nextFills }))
+                    }
                     onOpenIndicatorEditor={ind => {
                       setEditingIndicator(ind ?? null);
                       setIndicatorModalOpen(true);
@@ -1437,7 +2080,7 @@ export function FinanceModal({
                 )}
 
                 {/* SVG Price Chart */}
-                <div className="finance-svg-chart-container" hidden={chartView === "advanced"}>
+                <div className="finance-svg-chart-container" hidden={activeChartTab.chartView === "advanced"}>
                   {filteredBars.length >= 2 ? (
                     <InteractivePriceChart
                       bars={filteredBars}
@@ -1475,115 +2118,112 @@ export function FinanceModal({
                   )}
                 </div>
               </div>
+              </>
+            )}
 
-              {/* Section 2: Navigation par onglets des statistiques financières complètes */}
-              <div className="finance-stats-section">
-                <div className="finance-tabs-nav">
-                  <button
-                    type="button"
-                    className={`finance-tab-btn ${activeTab === "dossier" ? "active" : ""}`}
-                    onClick={() => setActiveTab("dossier")}
-                  >
-                    <ClipboardList size={15} />
-                    <span>Fiche Complète</span>
-                  </button>
-                  <button
-                    type="button"
-                    className={`finance-tab-btn ${activeTab === "experts" ? "active" : ""}`}
-                    onClick={() => setActiveTab("experts")}
-                  >
-                    <Award size={15} />
-                    <span>Avis de l&apos;expert</span>
-                  </button>
-                  <button
-                    type="button"
-                    className={`finance-tab-btn ${activeTab === "ai_history" ? "active" : ""}`}
-                    onClick={() => setActiveTab("ai_history")}
-                  >
-                    <History size={15} />
-                    <span>Archives IA</span>
-                  </button>
-                  <button
-                    type="button"
-                    className={`finance-tab-btn ${activeTab === "valuation" ? "active" : ""}`}
-                    onClick={() => setActiveTab("valuation")}
-                  >
-                    <Target size={15} />
-                    <span>Valorisation & Multiples</span>
-                  </button>
-                  <button
-                    type="button"
-                    className={`finance-tab-btn ${activeTab === "profitability" ? "active" : ""}`}
-                    onClick={() => setActiveTab("profitability")}
-                  >
-                    <TrendingUp size={15} />
-                    <span>Rentabilité & CA</span>
-                  </button>
-                  <button
-                    type="button"
-                    className={`finance-tab-btn ${activeTab === "balance_sheet" ? "active" : ""}`}
-                    onClick={() => setActiveTab("balance_sheet")}
-                  >
-                    <Wallet size={15} />
-                    <span>Bilan & Trésorerie</span>
-                  </button>
-                  <button
-                    type="button"
-                    className={`finance-tab-btn ${activeTab === "fundamentals" ? "active" : ""}`}
-                    onClick={() => setActiveTab("fundamentals")}
-                  >
-                    <BarChart3 size={15} />
-                    <span>Fondamentaux (Historique)</span>
-                  </button>
-                  <button
-                    type="button"
-                    className={`finance-tab-btn ${activeTab === "analysts" ? "active" : ""}`}
-                    onClick={() => setActiveTab("analysts")}
-                  >
-                    <Sparkles size={15} />
-                    <span>Consensus Analystes</span>
-                  </button>
-                  <button
-                    type="button"
-                    className={`finance-tab-btn ${activeTab === "history" ? "active" : ""}`}
-                    onClick={() => setActiveTab("history")}
-                  >
-                    <Calendar size={15} />
-                    <span>Séances EOD ({data.eod_bars.length})</span>
-                  </button>
-                  <button
-                    type="button"
-                    className={`finance-tab-btn ${activeTab === "profile" ? "active" : ""}`}
-                    onClick={() => setActiveTab("profile")}
-                  >
-                    <Building2 size={15} />
-                    <span>Profil Entreprise</span>
-                  </button>
-                  <button
-                    type="button"
-                    className={`finance-tab-btn ${activeTab === "moat" ? "active" : ""}`}
-                    onClick={() => setActiveTab("moat")}
-                  >
-                    <ShieldCheck size={15} />
-                    <span>MOAT</span>
-                  </button>
-                  <button
-                    type="button"
-                    className={`finance-tab-btn ${activeTab === "news" ? "active" : ""}`}
-                    onClick={() => setActiveTab("news")}
-                  >
-                    <Newspaper size={15} />
-                    <span>Actualités &amp; Veille</span>
-                  </button>
-                  <button
-                    type="button"
-                    className={`finance-tab-btn ${activeTab === "reports" ? "active" : ""}`}
-                    onClick={() => setActiveTab("reports")}
-                  >
-                    <FileText size={15} />
-                    <span>Rapports trimestriels</span>
-                  </button>
-                </div>
+            {/* ONGLET 2 : Fondamentaux & Ratios classés par type */}
+            {mainTab === "fundamentals" && data && (
+              <>
+                {renderHeroBanner(false)}
+                <div className="finance-stats-section">
+                  <div className="finance-tabs-nav">
+                    <button
+                      type="button"
+                      className={`finance-tab-btn ${activeTab === "dossier" ? "active" : ""}`}
+                      onClick={() => setActiveTab("dossier")}
+                    >
+                      <ClipboardList size={15} />
+                      <span>Fiche Complète</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`finance-tab-btn ${activeTab === "valuation" ? "active" : ""}`}
+                      onClick={() => setActiveTab("valuation")}
+                    >
+                      <Target size={15} />
+                      <span>Valorisation &amp; Multiples</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`finance-tab-btn ${activeTab === "profitability" ? "active" : ""}`}
+                      onClick={() => setActiveTab("profitability")}
+                    >
+                      <TrendingUp size={15} />
+                      <span>Rentabilité &amp; CA</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`finance-tab-btn ${activeTab === "balance_sheet" ? "active" : ""}`}
+                      onClick={() => setActiveTab("balance_sheet")}
+                    >
+                      <Wallet size={15} />
+                      <span>Bilan &amp; Trésorerie</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`finance-tab-btn ${activeTab === "fundamentals" ? "active" : ""}`}
+                      onClick={() => setActiveTab("fundamentals")}
+                    >
+                      <BarChart3 size={15} />
+                      <span>Fondamentaux (Historique)</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`finance-tab-btn ${activeTab === "analysts" ? "active" : ""}`}
+                      onClick={() => setActiveTab("analysts")}
+                    >
+                      <Sparkles size={15} />
+                      <span>Consensus Analystes</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`finance-tab-btn ${activeTab === "profile" ? "active" : ""}`}
+                      onClick={() => setActiveTab("profile")}
+                    >
+                      <Building2 size={15} />
+                      <span>Profil Entreprise</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`finance-tab-btn ${activeTab === "moat" ? "active" : ""}`}
+                      onClick={() => setActiveTab("moat")}
+                    >
+                      <ShieldCheck size={15} />
+                      <span>MOAT</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`finance-tab-btn ${activeTab === "experts" ? "active" : ""}`}
+                      onClick={() => setActiveTab("experts")}
+                    >
+                      <Award size={15} />
+                      <span>Avis de l&apos;expert</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`finance-tab-btn ${activeTab === "ai_history" ? "active" : ""}`}
+                      onClick={() => setActiveTab("ai_history")}
+                    >
+                      <History size={15} />
+                      <span>Archives IA</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`finance-tab-btn ${activeTab === "news" ? "active" : ""}`}
+                      onClick={() => setActiveTab("news")}
+                    >
+                      <Newspaper size={15} />
+                      <span>Actualités &amp; Veille</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`finance-tab-btn ${activeTab === "reports" ? "active" : ""}`}
+                      onClick={() => setActiveTab("reports")}
+                    >
+                      <FileText size={15} />
+                      <span>Rapports trimestriels</span>
+                    </button>
+                  </div>
 
                 {/* Tab 0: Fiche Complète (Investisseur Institutionnel) */}
                 {activeTab === "dossier" && (
@@ -1616,6 +2256,7 @@ export function FinanceModal({
                     <FinanceAiHistoryPanel
                       symbol={data.eod_ticker || data.yahoo_symbol || data.symbol}
                       onSelectSymbol={sym => {
+                        setMainTab("fundamentals");
                         setActiveTab("dossier");
                         void loadDetails(sym);
                       }}
@@ -1883,59 +2524,6 @@ export function FinanceModal({
                         </strong>
                         <small className="card-kpi-hint">Hypothèse baissière minimale</small>
                       </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Tab 5: Historique des séances EOD */}
-                {activeTab === "history" && (
-                  <div className="finance-tab-content">
-                    <div className="finance-table-wrapper">
-                      <table className="finance-data-table finance-history-table">
-                        <thead>
-                          <tr>
-                            <th>Date séance</th>
-                            <th><FinanceMetricLabel termKey="close_adj" label="Clôture aj." /></th>
-                            <th><FinanceMetricLabel termKey="var_day" label="Variation" /></th>
-                            <th><FinanceMetricLabel termKey="open_adj" label="Ouverture aj." /></th>
-                            <th><FinanceMetricLabel termKey="high_adj" label="Plus haut aj." /></th>
-                            <th><FinanceMetricLabel termKey="low_adj" label="Plus bas aj." /></th>
-                            <th><FinanceMetricLabel termKey="volume" label="Volume d'échanges" /></th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {data.eod_bars.length === 0 ? (
-                            <tr>
-                              <td colSpan={7} className="text-center">Aucun historique disponible</td>
-                            </tr>
-                          ) : (
-                            data.eod_bars.slice(-60).reverse().map((bar, idx, arr) => {
-                              const prevClose = idx + 1 < arr.length ? arr[idx + 1].close : null;
-                              const diff = bar.close != null && prevClose != null ? bar.close - prevClose : null;
-                              const diffPct = diff != null && prevClose ? (diff / prevClose) * 100 : null;
-                              return (
-                                <tr key={bar.date}>
-                                  <td><strong>{bar.date}</strong></td>
-                                  <td><strong>{bar.close?.toFixed(2)} {data.currency}</strong></td>
-                                  <td>
-                                    {diffPct != null ? (
-                                      <span className={diffPct >= 0 ? "text-emerald" : "text-rose"}>
-                                        {diffPct >= 0 ? "+" : ""}{diffPct.toFixed(2)}%
-                                      </span>
-                                    ) : (
-                                      "—"
-                                    )}
-                                  </td>
-                                  <td>{bar.open?.toFixed(2) || "-"}</td>
-                                  <td>{bar.high?.toFixed(2) || "-"}</td>
-                                  <td>{bar.low?.toFixed(2) || "-"}</td>
-                                  <td>{bar.volume != null ? bar.volume.toLocaleString("fr-FR") : "-"}</td>
-                                </tr>
-                              );
-                            })
-                          )}
-                        </tbody>
-                      </table>
                     </div>
                   </div>
                 )}

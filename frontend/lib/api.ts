@@ -1816,6 +1816,10 @@ export type IndexConstituent = {
   weight_pct: number | null;
   position: number;
   cached_in_warehouse: boolean;
+  currency?: string | null;
+  price?: number | null;
+  change_1d_pct?: number | null;
+  sparkline?: number[];
 };
 
 export type IndexCompositionResponse = {
@@ -2390,20 +2394,32 @@ export async function deleteStockNews(newsId: string): Promise<void> {
   return api<void>(`/finance/news/${newsId}`, { method: "DELETE" });
 }
 
+export type QuarterlyReportTable = {
+  index: number;
+  page: number;
+  title: string;
+  markdown: string;
+  rows_count: number;
+  cols_count: number;
+};
+
 export type QuarterlyReport = {
   id: string;
   symbol: string;
   company_name: string;
   title: string;
   period_label: string;
-  source_type: "pdf" | "docx" | "text";
+  source_type: "pdf" | "pdf-ocr" | "docx" | "text" | string;
   filename: string;
   extracted_chars: number;
+  page_count?: number;
+  tables_count?: number;
   summary_markdown: string;
   key_metrics: Record<string, string>;
   has_file: boolean;
   created_at: string;
   extracted_text?: string;
+  extracted_tables?: QuarterlyReportTable[];
 };
 
 export async function fetchQuarterlyReports(symbol?: string): Promise<QuarterlyReport[]> {

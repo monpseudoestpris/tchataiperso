@@ -4,6 +4,7 @@ import unicodedata
 from datetime import timezone
 
 from .blog import parse_cards_from_content, parse_trends_from_content
+from .finance_reports import count_report_pages, extract_markdown_tables
 from .models import (
     AgentPersona,
     AgentTeam,
@@ -506,6 +507,8 @@ def stock_news_json(item: FinanceStockNews) -> dict:
 
 
 def quarterly_report_json(item: FinanceQuarterlyReport, include_extracted: bool = False) -> dict:
+    extracted = item.extracted_text or ""
+    tables = extract_markdown_tables(extracted)
     data = {
         "id": item.id,
         "symbol": item.symbol,
@@ -514,14 +517,17 @@ def quarterly_report_json(item: FinanceQuarterlyReport, include_extracted: bool 
         "period_label": item.period_label or "",
         "source_type": item.source_type or "pdf",
         "filename": item.filename or "",
-        "extracted_chars": len(item.extracted_text or ""),
+        "extracted_chars": len(extracted),
+        "page_count": count_report_pages(extracted),
+        "tables_count": len(tables),
         "summary_markdown": item.summary_markdown or "",
         "key_metrics": item.key_metrics if isinstance(item.key_metrics, dict) else {},
         "has_file": bool(item.storage_name),
         "created_at": stamp(item.created_at),
     }
     if include_extracted:
-        data["extracted_text"] = item.extracted_text or ""
+        data["extracted_text"] = extracted
+        data["extracted_tables"] = tables
     return data
 
 

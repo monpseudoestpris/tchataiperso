@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowDown, ArrowUp, BarChart2, CalendarClock, Check, ChevronDown, ChevronUp, Database, FolderPlus, Globe2, LayoutGrid, LoaderCircle, Plus, RefreshCw, Search, Table2, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 
 import {
   fetchEodhdIndxCatalog,
@@ -330,6 +330,135 @@ function IndexPerfCell({ value }: { value: number | null | undefined }) {
   );
 }
 
+function buildSmoothSparklinePath(coords: Array<{ x: number; y: number }>): string {
+  if (coords.length === 0) return "";
+  if (coords.length === 1) return `M ${coords[0].x.toFixed(1)} ${coords[0].y.toFixed(1)}`;
+  let d = `M ${coords[0].x.toFixed(1)} ${coords[0].y.toFixed(1)}`;
+  for (let i = 1; i < coords.length - 1; i += 1) {
+    const xc = ((coords[i].x + coords[i + 1].x) / 2).toFixed(1);
+    const yc = ((coords[i].y + coords[i + 1].y) / 2).toFixed(1);
+    d += ` Q ${coords[i].x.toFixed(1)} ${coords[i].y.toFixed(1)} ${xc} ${yc}`;
+  }
+  const last = coords[coords.length - 1];
+  d += ` L ${last.x.toFixed(1)} ${last.y.toFixed(1)}`;
+  return d;
+}
+
+function IndexStockSparkline({
+  symbol,
+  points,
+  changePct,
+  compact = false,
+  loading = false,
+}: {
+  symbol: string;
+  points?: number[];
+  changePct?: number | null;
+  compact?: boolean;
+  loading?: boolean;
+}) {
+  const rawGradId = useId();
+  const gradId = `idx-spark-${rawGradId.replace(/[^a-zA-Z0-9_-]/g, "")}`;
+
+  const validPoints = useMemo(
+    () => (points ?? []).filter((v): v is number => typeof v === "number" && Number.isFinite(v) && v > 0),
+    [points],
+  );
+
+  if (validPoints.length < 2) {
+    return (
+      <div
+        className={`finance-sparkline-wrap is-empty ${compact ? "is-compact" : ""}`}
+        title={loading ? `Chargement du cours de ${symbol}…` : `Historique miniature indisponible pour ${symbol}`}
+      >
+        {loading ? (
+          <LoaderCircle size={12} className="spin text-emerald" />
+        ) : (
+          <span className="finance-sparkline-empty">—</span>
+        )}
+      </div>
+    );
+  }
+
+  const width = compact ? 108 : 132;
+  const height = compact ? 28 : 36;
+  const padX = 3;
+  const padY = 4;
+  const plotW = width - padX * 2;
+  const plotH = height - padY * 2;
+
+  const firstVal = validPoints[0];
+  const lastVal = validPoints[validPoints.length - 1];
+  const minVal = Math.min(...validPoints);
+  const maxVal = Math.max(...validPoints);
+  const span = maxVal - minVal;
+
+  const coords = validPoints.map((val, idx) => {
+    const x = padX + (idx / (validPoints.length - 1)) * plotW;
+    const y =
+      span > 0
+        ? padY + (1 - (val - minVal) / span) * plotH
+        : padY + plotH / 2;
+    return { x, y };
+  });
+
+  const baselineY = coords[0].y;
+  const lineD = buildSmoothSparklinePath(coords);
+  const areaD = `${lineD} L ${coords[coords.length - 1].x.toFixed(1)} ${(height - padY).toFixed(1)} L ${coords[0].x.toFixed(1)} ${(height - padY).toFixed(1)} Z`;
+
+  const isUp = lastVal >= firstVal;
+  const stroke = isUp ? "#10b981" : "#f43f5e";
+  const periodPct = firstVal > 0 ? ((lastVal - firstVal) / firstVal) * 100 : 0;
+  const lastCoord = coords[coords.length - 1];
+
+  const dayHint =
+    changePct != null && Number.isFinite(changePct)
+      ? ` · Jour ${changePct >= 0 ? "+" : ""}${changePct.toFixed(2)}%`
+      : "";
+  const tooltip = `Tendance 3M (${symbol}) : ${periodPct >= 0 ? "+" : ""}${periodPct.toFixed(2)}%${dayHint} · Bas ${minVal.toFixed(2)} · Haut ${maxVal.toFixed(2)} · Dernier ${lastVal.toFixed(2)}`;
+
+  return (
+    <div
+      className={`finance-sparkline-wrap ${compact ? "is-compact" : ""} ${isUp ? "is-up" : "is-down"}`}
+      title={tooltip}
+    >
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        className="finance-sparkline-svg"
+        role="img"
+        aria-label={tooltip}
+      >
+        <defs>
+          <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={stroke} stopOpacity="0.3" />
+            <stop offset="100%" stopColor={stroke} stopOpacity="0.02" />
+          </linearGradient>
+        </defs>
+        <line
+          x1={padX}
+          y1={baselineY}
+          x2={width - padX}
+          y2={baselineY}
+          stroke={stroke}
+          strokeOpacity="0.35"
+          strokeWidth="1"
+          strokeDasharray="2 2"
+        />
+        <path d={areaD} fill={`url(#${gradId})`} />
+        <path
+          d={lineD}
+          fill="none"
+          stroke={stroke}
+          strokeWidth={compact ? "1.6" : "1.8"}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        <circle cx={lastCoord.x} cy={lastCoord.y} r={compact ? "2.1" : "2.4"} fill={stroke} />
+      </svg>
+    </div>
+  );
+}
+
 export function FinanceIndexCompositionDrawer({
   composition,
   performances,
@@ -377,7 +506,31 @@ export function FinanceIndexCompositionDrawer({
     if (effectiveViewMode === "table" && performances?.items?.length) {
       return performances.items;
     }
-    return composition?.constituents || [];
+    const base = composition?.constituents || [];
+    if (!performances?.items?.length) {
+      return base;
+    }
+    const perfByKey = new Map<string, IndexPerformanceItem>();
+    for (const p of performances.items) {
+      if (p.symbol) perfByKey.set(p.symbol.toUpperCase(), p);
+      if (p.eod_ticker) perfByKey.set(p.eod_ticker.toUpperCase(), p);
+      if (p.yahoo_symbol) perfByKey.set(p.yahoo_symbol.toUpperCase(), p);
+    }
+    return base.map(c => {
+      const match =
+        perfByKey.get((c.symbol || "").toUpperCase()) ||
+        perfByKey.get((c.eod_ticker || "").toUpperCase()) ||
+        perfByKey.get((c.yahoo_symbol || "").toUpperCase());
+      if (!match) return c;
+      return {
+        ...c,
+        currency: match.currency ?? c.currency,
+        price: match.price ?? c.price,
+        change_1d_pct: match.change_1d_pct ?? c.change_1d_pct,
+        sparkline: match.sparkline?.length ? match.sparkline : c.sparkline,
+        cached_in_warehouse: match.cached_in_warehouse || c.cached_in_warehouse,
+      };
+    });
   }, [effectiveViewMode, performances, composition]);
 
   const filtered = useMemo(() => {
@@ -705,6 +858,7 @@ export function FinanceIndexCompositionDrawer({
                         Cours {renderSortIcon("price")}
                       </button>
                     </th>
+                    <th className="finance-sparkline-col">Courbe (3M)</th>
                     <th className="is-num">
                       <button type="button" className="finance-sort-btn" onClick={() => toggleSort("change_1d_pct")}>
                         Jour {renderSortIcon("change_1d_pct")}
@@ -774,6 +928,15 @@ export function FinanceIndexCompositionDrawer({
                           ) : (
                             <span className="finance-perf-na">—</span>
                           )}
+                        </td>
+                        <td className="finance-sparkline-cell">
+                          <IndexStockSparkline
+                            symbol={item.symbol}
+                            points={item.sparkline}
+                            changePct={item.change_1d_pct}
+                            compact
+                            loading={performancesLoading}
+                          />
                         </td>
                         <td className="is-num"><IndexPerfCell value={item.change_1d_pct} /></td>
                         <td className="is-num"><IndexPerfCell value={item.change_1w_pct} /></td>
@@ -862,6 +1025,25 @@ export function FinanceIndexCompositionDrawer({
                     </div>
                   </div>
                   <strong className="finance-index-stock-name">{item.name}</strong>
+                  <div className="finance-index-stock-spark-row">
+                    <div className="finance-index-stock-price-block">
+                      {item.price != null ? (
+                        <strong className="finance-index-stock-price">
+                          {item.price.toFixed(2)}{" "}
+                          <small>{item.currency || composition?.index.currency || ""}</small>
+                        </strong>
+                      ) : (
+                        <span className="finance-perf-na">—</span>
+                      )}
+                      <IndexPerfCell value={item.change_1d_pct} />
+                    </div>
+                    <IndexStockSparkline
+                      symbol={item.symbol}
+                      points={item.sparkline}
+                      changePct={item.change_1d_pct}
+                      loading={performancesLoading}
+                    />
+                  </div>
                   {(item.sector || item.weight_pct != null) && (
                     <small className="finance-index-stock-meta">
                       {item.sector || item.exchange}

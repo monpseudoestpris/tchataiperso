@@ -98,9 +98,18 @@ function pick(times: Time[], values: Num[]) {
 type FinanceTvChartProps = {
   bars: EodBar[];
   symbol?: string;
+  tabId?: string;
   dark: boolean;
   fullscreen?: boolean;
   customIndicators?: CustomIndicator[];
+  activeNativeKeys?: IndicatorKey[];
+  onChangeActiveNativeKeys?: (keys: IndicatorKey[]) => void;
+  activeCustomIds?: string[];
+  onChangeActiveCustomIds?: (ids: string[]) => void;
+  indicatorParams?: IndicatorParamsMap;
+  onChangeIndicatorParams?: (params: IndicatorParamsMap) => void;
+  customFills?: Record<string, IndicatorFillConfig>;
+  onChangeCustomFills?: (fills: Record<string, IndicatorFillConfig>) => void;
   onOpenIndicatorEditor?: (indicator?: CustomIndicator | null) => void;
   onDeleteCustomIndicator?: (id: string) => void;
 };
@@ -134,9 +143,18 @@ type MeasuredPane = PaneBinding & {
 export function FinanceTvChart({
   bars,
   symbol,
+  tabId,
   dark,
   fullscreen = false,
   customIndicators = [],
+  activeNativeKeys,
+  onChangeActiveNativeKeys,
+  activeCustomIds,
+  onChangeActiveCustomIds,
+  indicatorParams,
+  onChangeIndicatorParams,
+  customFills: controlledCustomFills,
+  onChangeCustomFills,
   onOpenIndicatorEditor,
   onDeleteCustomIndicator,
 }: FinanceTvChartProps) {
@@ -146,22 +164,55 @@ export function FinanceTvChart({
   const candlesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const paneBindingsRef = useRef<PaneBinding[]>([]);
   const rowsRef = useRef<EodBar[]>([]);
-  const [active, setActive] = useState<Set<IndicatorKey>>(new Set(["sma20", "volume", "rsi"]));
-  const [activeCustom, setActiveCustom] = useState<Set<string>>(new Set());
-  const [params, setParams] = useState<IndicatorParamsMap>(() => loadIndicatorParams());
-  const [customFills, setCustomFills] = useState<Record<string, IndicatorFillConfig>>(() => loadCustomIndicatorFills());
+  const [internalActive, setInternalActive] = useState<Set<IndicatorKey>>(new Set(["sma20", "volume", "rsi"]));
+  const [internalActiveCustom, setInternalActiveCustom] = useState<Set<string>>(new Set());
+  const [internalParams, setInternalParams] = useState<IndicatorParamsMap>(() => loadIndicatorParams());
+  const [internalCustomFills, setInternalCustomFills] = useState<Record<string, IndicatorFillConfig>>(() => loadCustomIndicatorFills());
   const [editingParamKey, setEditingParamKey] = useState<ConfigurableIndicatorKey | null>(null);
   const [editingCustomId, setEditingCustomId] = useState<string | null>(null);
   const [toolbarsCollapsed, setToolbarsCollapsed] = useState(false);
-  const seenCustomIdsRef = useRef<Set<string>>(new Set());
+  const [prevTabId, setPrevTabId] = useState<string | undefined>(tabId);
+  const [prevSymbol, setPrevSymbol] = useState<string | undefined>(symbol);
+  const [knownCustomIds, setKnownCustomIds] = useState<string[]>([]);
 
-  useEffect(() => {
-    saveIndicatorParams(params);
-  }, [params]);
+  const active = useMemo(
+    () => (activeNativeKeys !== undefined ? new Set(activeNativeKeys) : internalActive),
+    [activeNativeKeys, internalActive],
+  );
+  const activeCustom = useMemo(
+    () => (activeCustomIds !== undefined ? new Set(activeCustomIds) : internalActiveCustom),
+    [activeCustomIds, internalActiveCustom],
+  );
+  const params = indicatorParams ?? internalParams;
+  const customFills = controlledCustomFills ?? internalCustomFills;
 
-  useEffect(() => {
-    saveCustomIndicatorFills(customFills);
-  }, [customFills]);
+  if (tabId !== prevTabId) {
+    setPrevTabId(tabId);
+    setEditingParamKey(null);
+    setEditingCustomId(null);
+  }
+
+  function updateParams(updater: (prev: IndicatorParamsMap) => IndicatorParamsMap) {
+    const next = updater(params);
+    if (onChangeIndicatorParams) {
+      onChangeIndicatorParams(next);
+    } else {
+      setInternalParams(next);
+    }
+    saveIndicatorParams(next);
+  }
+
+  function updateCustomFills(
+    updater: (prev: Record<string, IndicatorFillConfig>) => Record<string, IndicatorFillConfig>,
+  ) {
+    const next = updater(customFills);
+    if (onChangeCustomFills) {
+      onChangeCustomFills(next);
+    } else {
+      setInternalCustomFills(next);
+    }
+    saveCustomIndicatorFills(next);
+  }
 
   // Drawing state
   const [tool, setTool] = useState<DrawingTool>("none");
@@ -175,35 +226,42 @@ export function FinanceTvChart({
   const [projectedDraft, setProjectedDraft] = useState<ProjectedDrawing | null>(null);
 
   // Sync drawings when symbol changes
-  useEffect(() => {
+  if (symbol !== prevSymbol) {
+    setPrevSymbol(symbol);
     setDrawings(loadChartDrawings(symbol));
     setDraft(null);
     setSelectedId(null);
-  }, [symbol]);
+  }
 
   useEffect(() => {
     saveChartDrawings(symbol, drawings);
   }, [symbol, drawings]);
 
-  // Active automatiquement tout nouvel indicateur personnalisé ayant enabled_by_default
-  useEffect(() => {
+  // En mode non contrôlé, active automatiquement tout nouvel indicateur personnalisé ayant enabled_by_default
+  if (activeCustomIds === undefined) {
     const newIds: string[] = [];
+    const nextKnown = new Set(knownCustomIds);
+    let addedKnown = false;
     for (const ind of customIndicators) {
-      if (!seenCustomIdsRef.current.has(ind.id)) {
-        seenCustomIdsRef.current.add(ind.id);
+      if (!nextKnown.has(ind.id)) {
+        nextKnown.add(ind.id);
+        addedKnown = true;
         if (ind.enabled_by_default) {
           newIds.push(ind.id);
         }
       }
     }
-    if (newIds.length > 0) {
-      setActiveCustom(prev => {
-        const next = new Set(prev);
-        for (const id of newIds) next.add(id);
-        return next;
-      });
+    if (addedKnown) {
+      setKnownCustomIds(Array.from(nextKnown));
+      if (newIds.length > 0) {
+        setInternalActiveCustom(prev => {
+          const next = new Set(prev);
+          for (const id of newIds) next.add(id);
+          return next;
+        });
+      }
     }
-  }, [customIndicators]);
+  }
 
   const customResults = useMemo(() => {
     const rows = bars.filter(
@@ -969,21 +1027,25 @@ export function FinanceTvChart({
   }
 
   function toggle(key: IndicatorKey) {
-    setActive(prev => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
+    const next = new Set(active);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    if (onChangeActiveNativeKeys) {
+      onChangeActiveNativeKeys(Array.from(next));
+    } else {
+      setInternalActive(next);
+    }
   }
 
   function toggleCustom(id: string) {
-    setActiveCustom(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+    const next = new Set(activeCustom);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    if (onChangeActiveCustomIds) {
+      onChangeActiveCustomIds(Array.from(next));
+    } else {
+      setInternalActiveCustom(next);
+    }
   }
 
   const customOverlays = customIndicators.filter(ind => ind.pane === "overlay");
@@ -1141,7 +1203,7 @@ export function FinanceTvChart({
 
   const updateEditingFill = (patch: Partial<IndicatorFillConfig>) => {
     if (editingParamKey) {
-      setParams(prev => ({
+      updateParams(prev => ({
         ...prev,
         [editingParamKey]: {
           ...prev[editingParamKey],
@@ -1152,7 +1214,7 @@ export function FinanceTvChart({
         },
       }));
     } else if (editingCustomInd && editingFill) {
-      setCustomFills(prev => ({
+      updateCustomFills(prev => ({
         ...prev,
         [editingCustomInd.id]: {
           ...editingFill,
@@ -1250,16 +1312,16 @@ export function FinanceTvChart({
                             <span>{f.label}</span>
                             <select
                               value={String(editingValues[f.field] ?? f.options[0])}
-                              onChange={e => {
-                                const val = e.target.value;
-                                setParams(prev => ({
-                                  ...prev,
-                                  [editingParamKey]: {
-                                    ...prev[editingParamKey],
-                                    [f.field]: val,
-                                  },
-                                }));
-                              }}
+                                onChange={e => {
+                                  const val = e.target.value;
+                                  updateParams(prev => ({
+                                    ...prev,
+                                    [editingParamKey]: {
+                                      ...prev[editingParamKey],
+                                      [f.field]: val,
+                                    },
+                                  }));
+                                }}
                             >
                               {f.options.map(opt => (
                                 <option key={opt} value={opt}>
@@ -1278,7 +1340,7 @@ export function FinanceTvChart({
                               checked={Boolean(editingValues[f.field])}
                               onChange={e => {
                                 const checked = e.target.checked;
-                                setParams(prev => ({
+                                updateParams(prev => ({
                                   ...prev,
                                   [editingParamKey]: {
                                     ...prev[editingParamKey],
@@ -1304,7 +1366,7 @@ export function FinanceTvChart({
                               const raw = Number(e.target.value);
                               if (!Number.isFinite(raw)) return;
                               const clamped = Math.max(f.min, Math.min(f.max, raw));
-                              setParams(prev => ({
+                              updateParams(prev => ({
                                 ...prev,
                                 [editingParamKey]: {
                                   ...prev[editingParamKey],
@@ -1413,12 +1475,12 @@ export function FinanceTvChart({
                   className="finance-tf-btn finance-draw-btn"
                   onClick={() => {
                     if (editingParamKey) {
-                      setParams(prev => ({
+                      updateParams(prev => ({
                         ...prev,
                         [editingParamKey]: DEFAULT_INDICATOR_PARAMS[editingParamKey],
                       }));
                     } else if (editingCustomInd) {
-                      setCustomFills(prev => ({
+                      updateCustomFills(prev => ({
                         ...prev,
                         [editingCustomInd.id]: resolveDefaultCustomFill(
                           editingCustomInd.pane,

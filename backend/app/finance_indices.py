@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import logging
+import math
 import urllib.parse
 from typing import Any
 
@@ -1424,6 +1425,29 @@ def _resolve_dynamic_index_defn(db_path: Any, code: str) -> dict[str, Any] | Non
     return None
 
 
+def _extract_sparkline(
+    bars: list[dict[str, Any]] | None,
+    max_points: int = 30,
+    window_bars: int = 66,
+) -> list[float]:
+    """Extrait une série miniature chronologique des derniers cours de clôture."""
+    if not bars or max_points < 2:
+        return []
+    window = bars[-window_bars:] if window_bars > 0 else bars
+    closes: list[float] = []
+    for bar in window:
+        raw_close = _safe_float(bar.get("close"))
+        if raw_close is not None and math.isfinite(raw_close) and raw_close > 0:
+            closes.append(round(raw_close, 2))
+    if len(closes) <= max_points:
+        return closes
+    step = (len(closes) - 1) / float(max_points - 1)
+    sampled = [closes[min(len(closes) - 1, round(i * step))] for i in range(max_points)]
+    sampled[0] = closes[0]
+    sampled[-1] = closes[-1]
+    return sampled
+
+
 async def get_index_composition(
     settings: Settings,
     index_code: str,
@@ -1485,16 +1509,34 @@ async def get_index_composition(
         eod_t = str(item.get("eod_ticker") or sym).upper()
         y_t = str(item.get("yahoo_symbol") or sym).upper()
         is_cached = sym in cached_syms or eod_t in cached_syms or y_t in cached_syms
+        extra_quote: dict[str, Any] = {"sparkline": []}
         if is_cached:
             cached_count += 1
-        if is_cached:
-            sync_info = get_instrument_eod_sync_info(db_path, resolve_canonical_symbol(db_path, eod_t or sym))
+            canonical = resolve_canonical_symbol(db_path, eod_t or sym)
+            sync_info = get_instrument_eod_sync_info(db_path, canonical)
             if sync_info.get("eod_synced_date") == today_iso:
                 synced_today_count += 1
+            stored_bars = get_stored_eod_bars(db_path, canonical, limit=66)
+            if stored_bars:
+                closes_raw = [
+                    val
+                    for val in (_safe_float(b.get("close")) for b in stored_bars)
+                    if val is not None and math.isfinite(val) and val > 0
+                ]
+                extra_quote["sparkline"] = _extract_sparkline(stored_bars)
+                if closes_raw:
+                    last_close = closes_raw[-1]
+                    extra_quote["price"] = round(last_close, 2)
+                    extra_quote["currency"] = defn.get("currency") or "EUR"
+                    if len(closes_raw) >= 2 and closes_raw[-2] > 0:
+                        extra_quote["change_1d_pct"] = round(
+                            ((last_close - closes_raw[-2]) / closes_raw[-2]) * 100.0,
+                            2,
+                        )
         sec = str(item.get("sector") or "").strip()
         if sec:
             sectors.add(sec)
-        enriched.append({**item, "cached_in_warehouse": is_cached})
+        enriched.append({**item, **extra_quote, "cached_in_warehouse": is_cached})
 
     return {
         "index": {
@@ -1725,6 +1767,7 @@ async def get_index_performances(
             "change_1y_pct": returns["change_1y_pct"],
             "as_of": as_of,
             "bars_count": len(bars),
+            "sparkline": _extract_sparkline(bars),
             "eod_synced_date": sync_info.get("eod_synced_date"),
             "eod_synced_at": sync_info.get("eod_synced_at"),
             "loaded_from_cache": loaded_from_cache,

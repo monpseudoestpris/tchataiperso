@@ -95,6 +95,8 @@ def test_principal_indices_and_cac40_fallback_with_cached_flags(tmp_path: Path) 
     assert cac["index"]["cached_count"] >= 1
     air_liquide = next(c for c in cac["constituents"] if c["symbol"] == "AI.PA")
     assert air_liquide["cached_in_warehouse"] is True
+    assert air_liquide["sparkline"] == [171.0]
+    assert air_liquide["price"] == 171.0
 
     matches = search_finance_catalog(s, "LVMH", limit=10)
     assert any(m["eod_ticker"] == "MC.PA" for m in matches)
@@ -230,7 +232,15 @@ def test_load_index_performances_and_import_to_watchlist(tmp_path: Path) -> None
             assert body["summary"]["avg_1y_pct"] == 31.25
             assert body["items"][0]["price"] == 105.0
             assert body["items"][0]["change_1d_pct"] == 5.0
+            assert body["items"][0]["sparkline"] == [80.0, 100.0, 105.0]
             assert body["warehouse"]["instruments_count"] == 40
+
+        res_comp = client.get("/api/finance/indices/CAC40")
+        assert res_comp.status_code == 200
+        comp_body = res_comp.json()
+        assert comp_body["constituents"][0]["sparkline"] == [80.0, 100.0, 105.0]
+        assert comp_body["constituents"][0]["price"] == 105.0
+        assert comp_body["constituents"][0]["change_1d_pct"] == 5.0
 
         res_imp = client.post("/api/finance/indices/CAC40/watchlist", json={})
         assert res_imp.status_code == 201
