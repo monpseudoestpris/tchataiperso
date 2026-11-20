@@ -85,10 +85,17 @@ class Conversation(Base):
     skill_links: Mapped[list["ConversationSkill"]] = relationship(
         back_populates="conversation", cascade="all, delete-orphan", order_by="ConversationSkill.position",
     )
+    visual_doc_links: Mapped[list["ConversationVisualDoc"]] = relationship(
+        back_populates="conversation", cascade="all, delete-orphan", order_by="ConversationVisualDoc.position",
+    )
 
     @property
     def skills(self) -> list["Skill"]:
         return [link.skill for link in self.skill_links]
+
+    @property
+    def visual_docs(self) -> list["VisualDocument"]:
+        return [link.visual_doc for link in self.visual_doc_links if link.visual_doc is not None]
 
 
 class ChatSite(Base):
@@ -492,6 +499,45 @@ class FinanceStockMoat(Base):
     quantitative_signals: Mapped[list] = mapped_column(JSON, default=list)
     summary_markdown: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class VisualDocument(Base):
+    """Document illustré (PDF ou série d'images) compilé en Markdown avec schémas WebP et pages de secours."""
+    __tablename__ = "visual_documents"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    slug: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    title: Mapped[str] = mapped_column(String(200))
+    filename: Mapped[str] = mapped_column(String(255))
+    source_type: Mapped[str] = mapped_column(String(20), default="pdf")  # pdf | images
+    ocr_model: Mapped[str] = mapped_column(String(120), default="")
+    vision_enriched: Mapped[bool] = mapped_column(Boolean, default=False)
+    page_count: Mapped[int] = mapped_column(Integer, default=0)
+    figure_count: Mapped[int] = mapped_column(Integer, default=0)
+    compiled_markdown: Mapped[str] = mapped_column(Text, default="")
+    pages_meta: Mapped[list] = mapped_column(JSON, default=list)
+    warnings: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+    conversation_links: Mapped[list["ConversationVisualDoc"]] = relationship(
+        back_populates="visual_doc", cascade="all, delete-orphan",
+    )
+
+
+class ConversationVisualDoc(Base):
+    """Liaison ordonnée entre une conversation et ses documents illustrés compilés."""
+    __tablename__ = "conversation_visual_docs"
+    __table_args__ = (UniqueConstraint("conversation_id", "position", name="uq_conversation_visual_docs_position"),)
+
+    conversation_id: Mapped[str] = mapped_column(ForeignKey("conversations.id", ondelete="CASCADE"), primary_key=True)
+    visual_doc_id: Mapped[str] = mapped_column(ForeignKey("visual_documents.id", ondelete="CASCADE"), primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    conversation: Mapped[Conversation] = relationship(back_populates="visual_doc_links")
+    visual_doc: Mapped[VisualDocument] = relationship(back_populates="conversation_links")
+
 
 
 

@@ -29,6 +29,7 @@ from .models import (
     TopicResource,
     TopicSpace,
     User,
+    VisualDocument,
     WebPage,
     WebPageVersion,
 )
@@ -262,9 +263,33 @@ def blog_json(item: Blog, include_posts: bool = False) -> dict:
     return result
 
 
+def visual_doc_json(item: VisualDocument, detail: bool = False) -> dict:
+    data = {
+        "id": item.id,
+        "slug": item.slug,
+        "title": item.title,
+        "filename": item.filename,
+        "source_type": item.source_type or "pdf",
+        "ocr_model": item.ocr_model or "",
+        "vision_enriched": bool(item.vision_enriched),
+        "page_count": int(item.page_count or 0),
+        "figure_count": int(item.figure_count or 0),
+        "cover_url": f"/api/docs/{item.slug}/page_1.webp" if (item.page_count or 0) > 0 else None,
+        "compiled_chars": len(item.compiled_markdown or ""),
+        "warnings": item.warnings if isinstance(item.warnings, list) else [],
+        "created_at": stamp(item.created_at),
+        "updated_at": stamp(item.updated_at),
+    }
+    if detail:
+        data["compiled_markdown"] = item.compiled_markdown or ""
+        data["pages"] = item.pages_meta if isinstance(item.pages_meta, list) else []
+    return data
+
+
 def conversation_json(item: Conversation, detail: bool = False) -> dict:
     raw_keywords = item.keywords if isinstance(item.keywords, list) else []
     keywords = [str(k).strip() for k in raw_keywords if isinstance(k, str) and str(k).strip()][:5]
+    visual_docs = [visual_doc_json(doc, detail=False) for doc in getattr(item, "visual_docs", []) or []]
     result = {
         "id": item.id,
         "title": item.title,
@@ -277,6 +302,7 @@ def conversation_json(item: Conversation, detail: bool = False) -> dict:
         "created_at": stamp(item.created_at),
         "updated_at": stamp(item.updated_at),
         "summary": item.summary,
+        "visual_docs": visual_docs,
     }
     if detail:
         result["messages"] = [message_json(message) for message in item.messages]

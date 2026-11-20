@@ -7,6 +7,7 @@ from ..deps import get_sessions, get_settings
 from ..google_cloud import has_llm_access
 from ..sampling import PARAMETER_CATALOG
 from ..schemas import CONVERSATION_THEMES
+from ..voice import GOOGLE_TTS_VOICES, has_stt_access, has_tts_access, resolve_stt_provider, resolve_voice_name
 
 
 router = APIRouter(tags=["system"])
@@ -48,6 +49,13 @@ def config(settings: Settings = Depends(get_settings)):
             "image_generation": bool(settings.available_image_models),
             "sound_effects": settings.enabled(settings.eleven_labs_key),
             "music_generation": settings.enabled(settings.eleven_labs_key),
+            "tts": has_tts_access(settings),
+            "stt": has_stt_access(settings),
+        },
+        "voice": {
+            "voices": GOOGLE_TTS_VOICES,
+            "default_voice": resolve_voice_name(settings),
+            "stt_provider": resolve_stt_provider(settings),
         },
     }
 

@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  BookOpen,
   Bot,
   Brain,
   Code2,
@@ -36,8 +37,10 @@ export interface ToolsModalProps {
   onOpenFinance: () => void;
   onOpenWebPages?: () => void;
   onOpenHermes?: () => void;
+  onOpenVisualDocs?: () => void;
   // Tool state badges
   canvasFilesCount: number;
+  visualDocsCount?: number;
   isMultiAgentActive: boolean;
   // Memory toggle
   autoMemoryEnabled: boolean;
@@ -58,7 +61,9 @@ export function ToolsModal({
   onOpenFinance,
   onOpenWebPages,
   onOpenHermes,
+  onOpenVisualDocs,
   canvasFilesCount,
+  visualDocsCount = 0,
   isMultiAgentActive,
   autoMemoryEnabled,
   onToggleAutoMemory,
@@ -154,6 +159,37 @@ export function ToolsModal({
           <div>
             <h3 className={styles.sectionTitle}>Studios & Espaces Dédiés</h3>
             <div className={styles.grid}>
+              {/* Documents Illustrés (Mistral OCR + Schémas WebP) */}
+              {onOpenVisualDocs && (
+                <button
+                  type="button"
+                  className={styles.toolCard}
+                  onClick={() => handleSelect(onOpenVisualDocs)}
+                  title="Ingérer un PDF ou une série d'images (règles de jeu, manuels) avec Mistral OCR et schémas WebP"
+                >
+                  <div className={styles.toolCardHeader}>
+                    <div className={styles.toolIconWrap} style={{ background: "#e0e7ff", color: "#4f46e5" }}>
+                      <BookOpen size={19} />
+                    </div>
+                    {visualDocsCount > 0 ? (
+                      <span className={`${styles.toolTag} ${styles.active}`}>
+                        {visualDocsCount} actif{visualDocsCount > 1 ? "s" : ""}
+                      </span>
+                    ) : (
+                      <span className={styles.toolTag}>Mistral OCR · WebP</span>
+                    )}
+                  </div>
+                  <h4 className={styles.toolTitle}>Documents Illustrés</h4>
+                  <p className={styles.toolDesc}>
+                    Ingérez un PDF ou des photos de livret (règles de jeu, manuels) : réponses illustrées en direct avec schémas et pages cliquables [p. X].
+                  </p>
+                  <div className={styles.toolActionRow}>
+                    <span>Ingérer ou interroger</span>
+                    <ArrowRight size={14} />
+                  </div>
+                </button>
+              )}
+
               {/* Hermes Agent */}
               {onOpenHermes && (
                 <button

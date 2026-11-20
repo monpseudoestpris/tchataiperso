@@ -84,6 +84,13 @@ export type Config = {
     image_generation: boolean;
     sound_effects?: boolean;
     music_generation?: boolean;
+    tts?: boolean;
+    stt?: boolean;
+  };
+  voice?: {
+    voices: { id: string; name: string; tone: string }[];
+    default_voice: string;
+    stt_provider: string | null;
   };
   google_cloud_mode?: string;
   search_providers?: string[];
@@ -472,6 +479,7 @@ export type Conversation = {
   summary?: string | null;
   messages?: Message[];
   skills?: Skill[];
+  visual_docs?: VisualDocSummary[];
 };
 export type TopicType = "learning" | "project" | "interest" | "personal";
 export type TopicMemoryStatus = "discussed" | "in_progress" | "needs_review" | "provisional_mastery" | "validated";
@@ -665,6 +673,7 @@ export async function streamMessage(
     multi_agent_config?: MultiAgentConfig;
     attachment_ids: string[];
     skill_ids?: string[];
+    visual_doc_ids?: string[];
     interaction_id?: string;
     plan_feedback?: string;
     auto_memory_enabled?: boolean;
@@ -2827,4 +2836,107 @@ export async function streamHermesRun(
     await reader.cancel().catch(() => undefined);
     reader.releaseLock();
   }
+}
+
+
+export type VisualDocFigure = {
+  id: string;
+  ocr_id?: string;
+  filename: string;
+  url: string;
+  short_title: string;
+  alt: string;
+  image_type?: string;
+  visible_text?: string;
+  width?: number;
+  height?: number;
+};
+
+export type VisualDocPage = {
+  page: number;
+  page_image: string;
+  page_image_url: string;
+  compiled_markdown?: string;
+  figures: VisualDocFigure[];
+};
+
+export type VisualDocSummary = {
+  id: string;
+  slug: string;
+  title: string;
+  filename: string;
+  source_type: "pdf" | "images" | string;
+  ocr_model?: string;
+  vision_enriched?: boolean;
+  page_count: number;
+  figure_count: number;
+  cover_url?: string | null;
+  compiled_chars?: number;
+  warnings?: string[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type VisualDocDetail = VisualDocSummary & {
+  compiled_markdown: string;
+  pages: VisualDocPage[];
+};
+
+export async function listVisualDocs(): Promise<VisualDocSummary[]> {
+  return api<VisualDocSummary[]>("/visual-docs");
+}
+
+export async function getVisualDoc(docId: string): Promise<VisualDocDetail> {
+  return api<VisualDocDetail>(`/visual-docs/${docId}`);
+}
+
+export async function ingestVisualDoc(params: {
+  files: File[];
+  title?: string;
+  enrichVision?: boolean;
+}): Promise<VisualDocDetail> {
+  const form = new FormData();
+  for (const file of params.files) {
+    form.append("files", file);
+  }
+  if (params.title?.trim()) {
+    form.append("title", params.title.trim());
+  }
+  form.append("enrich_vision", params.enrichVision === false ? "false" : "true");
+  return api<VisualDocDetail>("/visual-docs", {
+    method: "POST",
+    body: form,
+  });
+}
+
+export async function updateVisualDoc(
+  docId: string,
+  body: { title?: string; compiled_markdown?: string },
+): Promise<VisualDocDetail> {
+  return api<VisualDocDetail>(`/visual-docs/${docId}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function deleteVisualDoc(docId: string): Promise<void> {
+  return api<void>(`/visual-docs/${docId}`, { method: "DELETE" });
+}
+
+export async function attachVisualDocToConversation(
+  conversationId: string,
+  docId: string,
+): Promise<Conversation> {
+  return api<Conversation>(`/conversations/${conversationId}/visual-docs/${docId}`, {
+    method: "POST",
+  });
+}
+
+export async function detachVisualDocFromConversation(
+  conversationId: string,
+  docId: string,
+): Promise<Conversation> {
+  return api<Conversation>(`/conversations/${conversationId}/visual-docs/${docId}`, {
+    method: "DELETE",
+  });
 }

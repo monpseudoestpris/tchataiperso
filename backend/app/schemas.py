@@ -167,6 +167,7 @@ class CreateConversation(BaseModel):
     topic_space_id: str | None = None
     creativity: float | None = Field(default=None, ge=0.0, le=1.0)
     sampling_params: SamplingParameters | None = None
+    visual_doc_ids: list[str] = Field(default_factory=list, max_length=5)
 
 
 class UpdateConversation(BaseModel):
@@ -306,6 +307,7 @@ class SendMessage(BaseModel):
     multi_agent_config: MultiAgentConfig | None = None
     attachment_ids: list[str] = Field(default_factory=list, max_length=5)
     skill_ids: list[str] = Field(default_factory=list, max_length=10)
+    visual_doc_ids: list[str] = Field(default_factory=list, max_length=5)
     deep_search_queries: list[str] | None = Field(default=None)
     learn_mode_queries: list[str] | None = Field(default=None)
     detail_level: int | None = Field(default=None, ge=1, le=10)
@@ -330,6 +332,13 @@ class SendMessage(BaseModel):
     def no_duplicate_skills(cls, values: list[str]) -> list[str]:
         if len(values) != len(set(values)):
             raise ValueError("Compétences dupliquées")
+        return values
+
+    @field_validator("visual_doc_ids")
+    @classmethod
+    def no_duplicate_visual_docs(cls, values: list[str]) -> list[str]:
+        if len(values) != len(set(values)):
+            raise ValueError("Documents illustrés dupliqués")
         return values
 
     @field_validator("deep_search_queries", "learn_mode_queries")
@@ -1332,6 +1341,22 @@ class AnalyzeStockMoatRequest(BaseModel):
         if not cleaned:
             raise ValueError("Le symbole boursier est requis.")
         return cleaned
+
+
+class UpdateVisualDocumentRequest(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    compiled_markdown: str | None = Field(default=None, max_length=2_000_000)
+
+    @field_validator("title")
+    @classmethod
+    def trim_visual_doc_title(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Le titre du document ne peut pas être vide.")
+        return cleaned
+
 
 
 

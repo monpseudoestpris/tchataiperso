@@ -368,6 +368,11 @@ class Settings(BaseSettings):
     eod_historical_data_key: SecretStr = SecretStr("")
     eleven_labs_key: SecretStr = SecretStr("")
     eleven_labs_model_id: str = "eleven_text_to_sound_v2"
+    tts_model: str = "gemini-2.5-flash-tts"
+    tts_default_voice: str = "Aoede"
+    stt_provider: str = "auto"
+    stt_mistral_model: str = "voxtral-mini-latest"
+    stt_google_model: str = "gemini-2.5-flash"
     google_api_key: SecretStr = SecretStr("")
     google_cloud_mode: str = "auto"
     google_cloud_project: str = ""
@@ -898,6 +903,11 @@ class Settings(BaseSettings):
             "google_cloud_location",
             "google_application_credentials",
             "google_cloud_model_map",
+            "tts_model",
+            "tts_default_voice",
+            "stt_provider",
+            "stt_mistral_model",
+            "stt_google_model",
         )
         clearable_fields = {"google_cloud_project", "google_application_credentials", "google_cloud_model_map"}
         for field_name in str_fields:

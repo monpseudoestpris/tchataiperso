@@ -11,7 +11,7 @@ from ..presentation_html import generate_chat_presentation_html
 from ..config import Settings
 from ..deps import check_model, current_user, get_conversation, get_sessions, get_settings, get_upload_dir
 from ..google_cloud import has_llm_access
-from ..models import ChatSite, Conversation, User, now
+from ..models import ChatSite, Conversation, ConversationVisualDoc, User, VisualDocument, now
 from ..schemas import (
     ClassifyConversationRequest,
     CreateConversation,
@@ -87,7 +87,22 @@ def new_conversation(
             sampling_params=clean_params,
         )
         db.add(item)
+        db.flush()
+        if body.visual_doc_ids:
+            seen_docs: set[str] = set()
+            pos = 0
+            for doc_id in body.visual_doc_ids:
+                if doc_id in seen_docs:
+                    continue
+                seen_docs.add(doc_id)
+                vdoc = db.scalar(
+                    select(VisualDocument).where(VisualDocument.id == doc_id, VisualDocument.user_id == user.id)
+                )
+                if vdoc:
+                    db.add(ConversationVisualDoc(conversation_id=item.id, visual_doc_id=vdoc.id, position=pos))
+                    pos += 1
         db.commit()
+        db.refresh(item)
         return conversation_json(item, True)
 
 

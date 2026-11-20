@@ -38,7 +38,12 @@ import { ChatAttachedSites } from "@/components/chat-attached-sites";
 import { CreativityControl, formatCreativityBadge } from "@/components/creativity-control";
 import { SidebarCreativityPotentiometer } from "@/components/sidebar-creativity-potentiometer";
 import { WebPageModal } from "@/components/web-page-modal";
-import { ApiError, api, attachUrl, createLearnReportFromMessage, createReportFromMessage, errorMessage, fetchTopics, linkConversationToTopic, unlinkConversationFromTopic, skillToSlug, streamMessage, type Attachment, type AuthUser, type Config, type Conversation, type DocumentExtraction, type FamilyGroupInfo, type FinancialDashboardData, type GeneratedSound, type Memory, type Message, type Model, type MultiAgentConfig, type PageBrick, type SamplingParameters, type Skill, type Source, type StageModelsConfig, type TopicSpace, type WebPage } from "@/lib/api";
+import { VisualDocModal } from "@/components/visual-doc-modal";
+import { VoiceRecorderButton } from "@/components/voice-recorder-button";
+import { VoiceSettingsMenu } from "@/components/voice-settings-menu";
+import { synthesizeSpeech } from "@/lib/voice-api";
+import { ApiError, api, attachUrl, attachVisualDocToConversation, createLearnReportFromMessage, createReportFromMessage, detachVisualDocFromConversation, errorMessage, fetchTopics, linkConversationToTopic, unlinkConversationFromTopic, skillToSlug, streamMessage, type Attachment, type AuthUser, type Config, type Conversation, type DocumentExtraction, type FamilyGroupInfo, type FinancialDashboardData, type GeneratedSound, type Memory, type Message, type Model, type MultiAgentConfig, type PageBrick, type SamplingParameters, type Skill, type Source, type StageModelsConfig, type TopicSpace, type VisualDocSummary, type WebPage } from "@/lib/api";
+import { extractDocMetaFromImageSrc, isIncompleteLocalDocImage, isLocalVisualDocImage, linkifyPageCitations, parsePageCitationHref, prepareStreamingVisualMarkdown } from "@/lib/visual-doc-markdown";
 import { collectConversationCanvasFiles, createZipBlob, extractCanvasFiles, hasExplicitCanvasFiles, triggerBlobDownload, type CanvasFile } from "@/lib/code-canvas";
 import { hasInteractiveLearnModules, stripInteractiveModulesForBody } from "@/lib/learn-parser";
 import { useModelFavorites } from "@/lib/model-favorites";
@@ -347,6 +352,10 @@ type LightboxImageInfo = {
   pageUrl?: string;
   domain?: string;
   resolution?: string;
+  docSlug?: string;
+  docTitle?: string;
+  docPage?: number;
+  docPageCount?: number;
 };
 
 function safeHostname(url?: string): string {
@@ -362,14 +371,23 @@ function MarkdownInlineImage({
   src,
   alt,
   imageSources,
+  visualDocs,
   onOpenLightbox,
 }: {
   src?: string;
   alt?: string;
   imageSources: Source[];
+  visualDocs?: VisualDocSummary[];
   onOpenLightbox: (info: LightboxImageInfo) => void;
 }) {
   const rawSrc = typeof src === "string" ? src.trim() : "";
+  const isIncomplete = isIncompleteLocalDocImage(rawSrc);
+  const isLocalDoc = isLocalVisualDocImage(rawSrc);
+  const docMeta = useMemo(() => extractDocMetaFromImageSrc(rawSrc), [rawSrc]);
+  const matchedVisualDoc = useMemo(
+    () => (docMeta && visualDocs ? visualDocs.find(d => d.slug === docMeta.slug) : undefined),
+    [docMeta, visualDocs],
+  );
   const matched = useMemo(
     () =>
       imageSources.find(
@@ -395,47 +413,56 @@ function MarkdownInlineImage({
     setFailed(false);
   }, [primarySrc]);
 
+  // 1. Anti-clignotement pendant le streaming :
+  // Tant que le LLM n'a pas fini d'écrire ".webp", on affiche un placeholder propre
+  if (isIncomplete) {
+    return (
+      <span className="markdown-inline-placeholder" role="status" aria-live="polite">
+        <LoaderCircle size={15} className="spin" />
+        <span>Chargement du schéma…</span>
+      </span>
+    );
+  }
+
+  // 2. Sécurité : si le LLM hallucine une URL inexistante, on masque proprement
   if (!activeSrc || failed) return null;
 
   const caption = (alt && alt.trim() && alt.trim() !== "Image" ? alt.trim() : matched?.title) || "";
-  const pageUrl = matched?.url || primarySrc;
-  const domain = matched?.image_source || safeHostname(pageUrl);
+  const pageUrl = isLocalDoc ? undefined : (matched?.url || primarySrc);
+  const domain = isLocalDoc ? undefined : (matched?.image_source || safeHostname(pageUrl));
+
+  const lightboxPayload: LightboxImageInfo = {
+    src: activeSrc,
+    fallbackSrc,
+    title: caption || (isLocalDoc ? "Illustration de la règle" : "Illustration Web"),
+    pageUrl,
+    domain,
+    resolution: matched?.resolution,
+    docSlug: docMeta?.slug,
+    docTitle: matchedVisualDoc?.title,
+    docPage: docMeta?.isFullPage ? docMeta.page : undefined,
+    docPageCount: matchedVisualDoc?.page_count,
+  };
 
   return (
-    <span className="markdown-inline-figure">
+    <span className={`markdown-inline-figure ${isLocalDoc ? "is-visual-doc" : ""}`}>
       <span
         className="markdown-inline-img-wrap"
         role="button"
         tabIndex={0}
-        title="Cliquer pour agrandir l’image"
-        onClick={() =>
-          onOpenLightbox({
-            src: activeSrc,
-            fallbackSrc,
-            title: caption || "Illustration Web",
-            pageUrl,
-            domain,
-            resolution: matched?.resolution,
-          })
-        }
+        title="Cliquer pour agrandir le schéma"
+        onClick={() => onOpenLightbox(lightboxPayload)}
         onKeyDown={e => {
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
-            onOpenLightbox({
-              src: activeSrc,
-              fallbackSrc,
-              title: caption || "Illustration Web",
-              pageUrl,
-              domain,
-              resolution: matched?.resolution,
-            });
+            onOpenLightbox(lightboxPayload);
           }
         }}
       >
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={activeSrc}
-          alt={caption || "Illustration web"}
+          alt={caption || (isLocalDoc ? "Illustration de la règle" : "Illustration web")}
           loading="lazy"
           className="markdown-inline-img"
           onError={() => {
@@ -452,9 +479,30 @@ function MarkdownInlineImage({
           <span>Agrandir</span>
         </span>
       </span>
-      {(caption || domain) && (
+      {(caption || domain || (isLocalDoc && docMeta)) && (
         <span className="markdown-inline-caption">
           {caption && <span className="markdown-inline-caption-text">{caption}</span>}
+          {isLocalDoc && docMeta && !docMeta.isFullPage && (
+            <button
+              type="button"
+              className="vdoc-page-citation-pill"
+              title={`Voir la page ${docMeta.page} complète d’origine`}
+              onClick={e => {
+                e.stopPropagation();
+                onOpenLightbox({
+                  src: `/api/docs/${docMeta.slug}/page_${docMeta.page}.webp`,
+                  title: `${matchedVisualDoc?.title || "Livret"} — Page ${docMeta.page}`,
+                  docSlug: docMeta.slug,
+                  docTitle: matchedVisualDoc?.title,
+                  docPage: docMeta.page,
+                  docPageCount: matchedVisualDoc?.page_count,
+                });
+              }}
+            >
+              <BookOpen size={11} />
+              <span>Page {docMeta.page}</span>
+            </button>
+          )}
           {pageUrl && domain && (
             <a
               href={pageUrl}
@@ -534,6 +582,7 @@ function SourceImageThumb({
 const MessageView = memo(function MessageView({
   message,
   streaming,
+  visualDocs,
   onOpenCanvas,
   onOpenDeepSearchReport,
   onOpenLearnReport,
@@ -542,9 +591,14 @@ const MessageView = memo(function MessageView({
   onSelectFollowUp,
   researchActivity,
   onOpenResearchActivity,
+  ttsEnabled,
+  isSpeaking,
+  isLoadingTts,
+  onToggleSpeak,
 }: {
   message: Message;
   streaming?: boolean;
+  visualDocs?: VisualDocSummary[];
   onOpenCanvas?: (messageId: string, filePath?: string, forceUnnamed?: boolean) => void;
   onOpenDeepSearchReport?: (message: Message) => void;
   onOpenLearnReport?: (message: Message) => void;
@@ -553,13 +607,55 @@ const MessageView = memo(function MessageView({
   onSelectFollowUp?: (question: string) => void;
   researchActivity?: ResearchRun;
   onOpenResearchActivity?: (messageId: string) => void;
+  ttsEnabled?: boolean;
+  isSpeaking?: boolean;
+  isLoadingTts?: boolean;
+  onToggleSpeak?: (message: Message) => void;
 }) {
   const [copied, setCopied] = useState(false);
   const [zipDownloaded, setZipDownloaded] = useState(false);
   const [showAllSources, setShowAllSources] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [lightboxImage, setLightboxImage] = useState<LightboxImageInfo | null>(null);
+  const [lightboxZoomed, setLightboxZoomed] = useState(false);
   const exportRef = useRef<HTMLDivElement>(null);
+
+  function openLightbox(info: LightboxImageInfo) {
+    setLightboxZoomed(false);
+    setLightboxImage(info);
+  }
+
+  useEffect(() => {
+    if (!lightboxImage) return;
+    function onKey(e: globalThis.KeyboardEvent) {
+      if (e.key === "Escape") {
+        setLightboxZoomed(false);
+        setLightboxImage(null);
+      } else if (lightboxImage?.docSlug && lightboxImage.docPage && lightboxImage.docPageCount) {
+        if (e.key === "ArrowLeft" && lightboxImage.docPage > 1) {
+          const prevPage = lightboxImage.docPage - 1;
+          setLightboxZoomed(false);
+          setLightboxImage({
+            ...lightboxImage,
+            docPage: prevPage,
+            src: `/api/docs/${lightboxImage.docSlug}/page_${prevPage}.webp`,
+            title: `${lightboxImage.docTitle || "Livret"} — Page ${prevPage}`,
+          });
+        } else if (e.key === "ArrowRight" && lightboxImage.docPage < lightboxImage.docPageCount) {
+          const nextPage = lightboxImage.docPage + 1;
+          setLightboxZoomed(false);
+          setLightboxImage({
+            ...lightboxImage,
+            docPage: nextPage,
+            src: `/api/docs/${lightboxImage.docSlug}/page_${nextPage}.webp`,
+            title: `${lightboxImage.docTitle || "Livret"} — Page ${nextPage}`,
+          });
+        }
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [lightboxImage]);
 
   useEffect(() => {
     if (!exportOpen) return;
@@ -601,7 +697,14 @@ const MessageView = memo(function MessageView({
   const parsed = useMemo(() => extractThoughtAndContent(contentForParsing), [contentForParsing]);
   const effectiveThought = message.thought || parsed.thought;
   const mainContent = parsed.cleanContent;
-  const displayContent = streaming ? mainContent.replace(/!\[[^\]]*\]\([^)]*$/, "") : mainContent;
+  const streamingSafeContent = useMemo(
+    () => prepareStreamingVisualMarkdown(mainContent, Boolean(streaming)),
+    [mainContent, streaming],
+  );
+  const displayContent = useMemo(
+    () => (!isUser && visualDocs?.length ? linkifyPageCitations(streamingSafeContent, visualDocs) : streamingSafeContent),
+    [isUser, visualDocs, streamingSafeContent],
+  );
   const followUpQuestions = followUpData.questions;
   const visibleSources = showAllSources ? textSources : textSources.slice(0, 8);
   const explicitCanvasFiles = useMemo(
@@ -676,13 +779,40 @@ const MessageView = memo(function MessageView({
     ) : null}
     {displayContent ? <div className={`markdown ${streaming ? "is-streaming" : ""}`}><ReactMarkdown urlTransform={url => url} remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins} components={{
       p: ({ children }) => <p>{isUser ? renderNodeWithMentions(children) : children}</p>,
-      a: ({ children, href }) => <a href={href} target="_blank" rel="noreferrer">{children}</a>,
+      a: ({ children, href }) => {
+        const citation = parsePageCitationHref(href);
+        if (citation) {
+          const matchedDoc = visualDocs?.find(d => d.slug === citation.slug);
+          return (
+            <button
+              type="button"
+              className="vdoc-page-citation-pill"
+              title={`Voir la page ${citation.page} originale${matchedDoc ? ` (${matchedDoc.title})` : ""}`}
+              onClick={() =>
+                openLightbox({
+                  src: `/api/docs/${citation.slug}/page_${citation.page}.webp`,
+                  title: `${matchedDoc?.title || "Livret"} — Page ${citation.page}`,
+                  docSlug: citation.slug,
+                  docTitle: matchedDoc?.title,
+                  docPage: citation.page,
+                  docPageCount: matchedDoc?.page_count,
+                })
+              }
+            >
+              <BookOpen size={11} />
+              <span>{children}</span>
+            </button>
+          );
+        }
+        return <a href={href} target="_blank" rel="noreferrer">{children}</a>;
+      },
       img: ({ src, alt }) => (
         <MarkdownInlineImage
           src={typeof src === "string" ? src : undefined}
           alt={alt}
           imageSources={imageSources}
-          onOpenLightbox={setLightboxImage}
+          visualDocs={visualDocs}
+          onOpenLightbox={openLightbox}
         />
       ),
       pre: ({ children }) => {
@@ -888,7 +1018,59 @@ const MessageView = memo(function MessageView({
               </div>
             </div>
             <div className="web-image-lightbox-actions">
-              {lightboxImage.pageUrl && (
+              {lightboxImage.docSlug && lightboxImage.docPage && lightboxImage.docPageCount && lightboxImage.docPageCount > 1 && (
+                <div className="vdoc-lightbox-pager">
+                  <button
+                    type="button"
+                    className="web-image-lightbox-source-btn"
+                    disabled={lightboxImage.docPage <= 1}
+                    onClick={() => {
+                      const prevPage = lightboxImage.docPage! - 1;
+                      setLightboxImage({
+                        ...lightboxImage,
+                        docPage: prevPage,
+                        src: `/api/docs/${lightboxImage.docSlug}/page_${prevPage}.webp`,
+                        title: `${lightboxImage.docTitle || "Livret"} — Page ${prevPage}`,
+                      });
+                    }}
+                    title="Page précédente (←)"
+                  >
+                    <ChevronLeft size={13} />
+                    <span>p. {lightboxImage.docPage - 1}</span>
+                  </button>
+                  <span className="web-image-lightbox-domain">
+                    {lightboxImage.docPage} / {lightboxImage.docPageCount}
+                  </span>
+                  <button
+                    type="button"
+                    className="web-image-lightbox-source-btn"
+                    disabled={lightboxImage.docPage >= lightboxImage.docPageCount}
+                    onClick={() => {
+                      const nextPage = lightboxImage.docPage! + 1;
+                      setLightboxImage({
+                        ...lightboxImage,
+                        docPage: nextPage,
+                        src: `/api/docs/${lightboxImage.docSlug}/page_${nextPage}.webp`,
+                        title: `${lightboxImage.docTitle || "Livret"} — Page ${nextPage}`,
+                      });
+                    }}
+                    title="Page suivante (→)"
+                  >
+                    <span>p. {lightboxImage.docPage + 1}</span>
+                    <ChevronRight size={13} />
+                  </button>
+                </div>
+              )}
+              <button
+                type="button"
+                className="web-image-lightbox-source-btn"
+                onClick={() => setLightboxZoomed(z => !z)}
+                title={lightboxZoomed ? "Réduire à la taille de l'écran" : "Zoomer 2× pour lire les petits détails"}
+              >
+                <Search size={13} />
+                <span>{lightboxZoomed ? "Zoom 1×" : "Zoom 2×"}</span>
+              </button>
+              {lightboxImage.pageUrl && /^https?:\/\//i.test(lightboxImage.pageUrl) && (
                 <a
                   href={lightboxImage.pageUrl}
                   target="_blank"
@@ -910,11 +1092,13 @@ const MessageView = memo(function MessageView({
               </button>
             </div>
           </div>
-          <div className="web-image-lightbox-body">
+          <div className={`web-image-lightbox-body ${lightboxZoomed ? "is-zoomed" : ""}`}>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={lightboxImage.src}
               alt={lightboxImage.title}
+              onClick={() => setLightboxZoomed(z => !z)}
+              style={{ cursor: lightboxZoomed ? "zoom-out" : "zoom-in" }}
               onError={e => {
                 const target = e.currentTarget;
                 if (lightboxImage.fallbackSrc && target.src !== lightboxImage.fallbackSrc) {
@@ -954,6 +1138,28 @@ const MessageView = memo(function MessageView({
           {copied ? <Check size={14} /> : <Copy size={14} />}
           {copied ? "Copié" : "Copier"}
         </button>
+        {ttsEnabled && onToggleSpeak && (
+          <>
+            <span className="message-action-separator" />
+            <button
+              type="button"
+              className={`message-speak-btn ${isSpeaking ? "is-speaking" : ""}`}
+              onClick={() => onToggleSpeak(message)}
+              disabled={Boolean(isLoadingTts)}
+              aria-label={isSpeaking ? "Arrêter la lecture vocale" : "Écouter cette réponse à voix haute"}
+              title={isSpeaking ? "Arrêter la lecture" : "Lire la réponse à voix haute (voix Google, filtrée)"}
+            >
+              {isLoadingTts ? (
+                <LoaderCircle size={14} className="spin" />
+              ) : isSpeaking ? (
+                <Square size={12} fill="currentColor" />
+              ) : (
+                <Volume2 size={14} />
+              )}
+              {isLoadingTts ? "Synthèse…" : isSpeaking ? "Arrêter" : "Écouter"}
+            </button>
+          </>
+        )}
         <span className="message-action-separator" />
         <div className="message-export-wrapper" ref={exportRef}>
           <button
@@ -1207,6 +1413,10 @@ export function ChatApp() {
   const [webPagesModalTab, setWebPagesModalTab] = useState<"pages" | "apps">("pages");
   const [webPagesInitialPageId, setWebPagesInitialPageId] = useState<string | null>(null);
   const [hermesModalOpen, setHermesModalOpen] = useState(false);
+  const [visualDocModalOpen, setVisualDocModalOpen] = useState(false);
+  const [visualDocModalTab, setVisualDocModalTab] = useState<"library" | "ingest">("library");
+  const [visualDocModalInitialId, setVisualDocModalInitialId] = useState<string | null>(null);
+  const [pendingVisualDocs, setPendingVisualDocs] = useState<VisualDocSummary[]>([]);
   const [topics, setTopics] = useState<TopicSpace[]>([]);
   const [topicModalOpen, setTopicModalOpen] = useState(false);
   const [topicModalId, setTopicModalId] = useState<string | null>(null);
@@ -1262,6 +1472,179 @@ export function ChatApp() {
   const [memoryNotice, setMemoryNotice] = useState<string | null>(null);
   const [topicNotice, setTopicNotice] = useState<string | null>(null);
   const [toolsModalOpen, setToolsModalOpen] = useState(false);
+  const [ttsVoice, setTtsVoice] = useState<string>(() => {
+    if (typeof window !== "undefined") {
+      return window.localStorage.getItem("clair_tts_voice") || "Aoede";
+    }
+    return "Aoede";
+  });
+  const [autoReadEnabled, setAutoReadEnabled] = useState<boolean>(() => {
+    if (typeof window !== "undefined") {
+      return window.localStorage.getItem("clair_tts_auto_read") === "1";
+    }
+    return false;
+  });
+  const autoReadEnabledRef = useRef(autoReadEnabled);
+  autoReadEnabledRef.current = autoReadEnabled;
+  const ttsVoiceRef = useRef(ttsVoice);
+  ttsVoiceRef.current = ttsVoice;
+  const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null);
+  const [loadingTtsMessageId, setLoadingTtsMessageId] = useState<string | null>(null);
+  const activeAudioRef = useRef<HTMLAudioElement | null>(null);
+  const ttsAbortRef = useRef<AbortController | null>(null);
+  const ttsCacheRef = useRef<Map<string, string>>(new Map());
+
+  function stopSpeech() {
+    if (ttsAbortRef.current) {
+      ttsAbortRef.current.abort();
+      ttsAbortRef.current = null;
+    }
+    if (activeAudioRef.current) {
+      activeAudioRef.current.pause();
+      activeAudioRef.current.currentTime = 0;
+      activeAudioRef.current = null;
+    }
+    setSpeakingMessageId(null);
+    setLoadingTtsMessageId(null);
+  }
+
+  async function speakMessageContent(messageId: string, rawContent: string) {
+    const cleanBody = extractThoughtAndContent(rawContent).cleanContent;
+    if (!cleanBody.trim()) return;
+    stopSpeech();
+
+    const voiceId = ttsVoiceRef.current || config?.voice?.default_voice || "Aoede";
+    const cacheKey = `${messageId}:${voiceId}`;
+    const cachedUrl = ttsCacheRef.current.get(cacheKey);
+    if (cachedUrl) {
+      const audio = new Audio(cachedUrl);
+      activeAudioRef.current = audio;
+      setSpeakingMessageId(messageId);
+      audio.onended = () => {
+        if (activeAudioRef.current === audio) {
+          activeAudioRef.current = null;
+          setSpeakingMessageId(null);
+        }
+      };
+      audio.onerror = () => {
+        if (activeAudioRef.current === audio) {
+          activeAudioRef.current = null;
+          setSpeakingMessageId(null);
+        }
+      };
+      try {
+        await audio.play();
+      } catch (err) {
+        setSpeakingMessageId(null);
+        setError(errorMessage(err));
+      }
+      return;
+    }
+
+    const controller = new AbortController();
+    ttsAbortRef.current = controller;
+    setLoadingTtsMessageId(messageId);
+    try {
+      const blob = await synthesizeSpeech(cleanBody, voiceId, controller.signal);
+      if (ttsAbortRef.current !== controller) return;
+      const objectUrl = URL.createObjectURL(blob);
+      // Limiter le cache client à 15 pistes audio récentes
+      if (ttsCacheRef.current.size >= 15) {
+        const oldestKey = ttsCacheRef.current.keys().next().value;
+        if (oldestKey) {
+          const oldUrl = ttsCacheRef.current.get(oldestKey);
+          if (oldUrl) URL.revokeObjectURL(oldUrl);
+          ttsCacheRef.current.delete(oldestKey);
+        }
+      }
+      ttsCacheRef.current.set(cacheKey, objectUrl);
+      const audio = new Audio(objectUrl);
+      activeAudioRef.current = audio;
+      setLoadingTtsMessageId(null);
+      setSpeakingMessageId(messageId);
+      audio.onended = () => {
+        if (activeAudioRef.current === audio) {
+          activeAudioRef.current = null;
+          setSpeakingMessageId(null);
+        }
+      };
+      audio.onerror = () => {
+        if (activeAudioRef.current === audio) {
+          activeAudioRef.current = null;
+          setSpeakingMessageId(null);
+        }
+      };
+      await audio.play();
+    } catch (err) {
+      const aborted = err instanceof DOMException && err.name === "AbortError";
+      if (!aborted) {
+        setError(errorMessage(err));
+      }
+      setLoadingTtsMessageId(null);
+      setSpeakingMessageId(null);
+    } finally {
+      if (ttsAbortRef.current === controller) {
+        ttsAbortRef.current = null;
+      }
+    }
+  }
+
+  function handleToggleSpeakMessage(msg: Message) {
+    if (speakingMessageId === msg.id || loadingTtsMessageId === msg.id) {
+      stopSpeech();
+      return;
+    }
+    void speakMessageContent(msg.id, msg.content);
+  }
+
+  function handleSelectVoice(nextVoice: string) {
+    setTtsVoice(nextVoice);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("clair_tts_voice", nextVoice);
+    }
+  }
+
+  function handleToggleAutoRead() {
+    setAutoReadEnabled((prev) => {
+      const next = !prev;
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem("clair_tts_auto_read", next ? "1" : "0");
+      }
+      if (!next) stopSpeech();
+      return next;
+    });
+  }
+
+  function handleVoiceTranscript(transcript: string) {
+    const clean = transcript.trim();
+    if (!clean) return;
+    setDraft((prev) => {
+      if (!prev.trim()) return clean;
+      return `${prev.trimEnd()} ${clean}`;
+    });
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (el) {
+        el.focus();
+        el.style.height = "auto";
+        el.style.height = `${Math.min(Math.max(el.scrollHeight, 48), 180)}px`;
+      }
+    });
+  }
+
+  useEffect(() => {
+    const cache = ttsCacheRef.current;
+    return () => {
+      if (ttsAbortRef.current) ttsAbortRef.current.abort();
+      if (activeAudioRef.current) {
+        activeAudioRef.current.pause();
+        activeAudioRef.current = null;
+      }
+      cache.forEach((url) => URL.revokeObjectURL(url));
+      cache.clear();
+    };
+  }, []);
+
   const autoMemoryActive = user?.auto_memory_enabled ?? true;
 
   async function toggleAutoMemory() {
@@ -1427,6 +1810,10 @@ export function ChatApp() {
   }, [conversation?.messages, streamingId]);
 
   const messages = useMemo(() => conversation?.messages ?? [], [conversation?.messages]);
+  const activeVisualDocs = useMemo(
+    () => (conversation ? (conversation.visual_docs ?? []) : pendingVisualDocs),
+    [conversation, pendingVisualDocs],
+  );
   const researchActivityMessage = messages.find(message => message.id === researchActivityMessageId);
   const isCurrentStreaming = Boolean(conversation?.id && streamingConversationIds.includes(conversation.id));
   const working = busy !== null && busy !== "send";
@@ -2062,10 +2449,15 @@ export function ChatApp() {
         if (activeTopicSpaceId) postData.topic_space_id = activeTopicSpaceId;
         if (pendingCreativity !== null) postData.creativity = pendingCreativity;
         if (pendingSamplingParams !== null) postData.sampling_params = pendingSamplingParams;
+        if (pendingVisualDocs.length > 0) {
+          postData.visual_doc_ids = pendingVisualDocs.map(d => d.id);
+          postData.title = pendingVisualDocs[0].title;
+        }
         const created = await api<Conversation>("/conversations", { method: "POST", body: JSON.stringify(postData), signal: controller.signal });
         activeId = created.id;
         conversationIdRef.current = activeId;
         setConversation({ ...created, messages: created.messages ?? [] });
+        if (pendingVisualDocs.length > 0) setPendingVisualDocs([]);
       }
       streamControllersRef.current.set(activeId, controller);
       setStreamingConversationIds(old => (old.includes(activeId!) ? old : [...old, activeId!]));
@@ -2126,6 +2518,7 @@ export function ChatApp() {
               : undefined,
           attachment_ids: files.map(item => item.id),
           skill_ids: messageSkillIds,
+          visual_doc_ids: activeVisualDocs.length > 0 ? activeVisualDocs.map(d => d.id) : undefined,
           interaction_id: interactionId,
           plan_feedback: planFeedback,
           auto_memory_enabled: autoMemoryActive,
@@ -2211,8 +2604,17 @@ export function ChatApp() {
               setConversation(old => (old && old.id === activeId ? {
                 ...event.data.conversation,
                 skills: event.data.conversation.skills ?? old.skills ?? [],
+                visual_docs: event.data.conversation.visual_docs ?? old.visual_docs ?? [],
                 messages: event.data.conversation.messages ?? (old.messages ?? []).map(item => item.id === assistantId ? event.data.message : item)
               } : old));
+              if (
+                autoReadEnabledRef.current
+                && config?.features?.tts
+                && event.data.message?.id
+                && event.data.message?.content
+              ) {
+                void speakMessageContent(event.data.message.id, event.data.message.content);
+              }
             }
             if (event.data.memories) {
               setMemories(event.data.memories);
@@ -3302,7 +3704,7 @@ export function ChatApp() {
               })() : (
                 <div className="welcome"><div className="welcome-eyebrow"><span /> UN PEU DE CLARTÉ, BEAUCOUP DE POSSIBILITÉS</div><BrandMark /><h1>Qu’avez-vous en tête<span> aujourd’hui ?</span></h1><p>Un espace pour vos questions, vos idées et vos projets.<br />Commencez quelque part. On avance ensemble.</p><div className="suggestions">{suggestions.map((item, index) => <button type="button" className="suggestion" key={item.title} disabled={working} onClick={() => { if (index === 3) { openImageStudio(item.prompt); } else if (index === 1) { openBlogModal(item.prompt); } else { setDraft(item.prompt); textareaRef.current?.focus(); } }}><span className={`suggestion-icon suggestion-icon-${index}`}><item.icon size={19} strokeWidth={1.6} /></span><strong>{item.title}</strong><span>{item.description}</span><ChevronRight size={15} className="suggestion-arrow" /></button>)}</div><div className="welcome-note"><Brain size={14} /><span>Les souvenirs que vous choisissez gardent le fil d’une conversation à l’autre.</span></div></div>
               )
-            ) : busy === "switch" ? <div className="loading-conversation"><LoaderCircle size={23} className="spin" />Ouverture de votre conversation…</div> : <div className="messages"><div className="conversation-heading"><div className="conversation-heading-top"><span>CONVERSATION</span>{conversation?.topic_space_id && (() => { const curTopic = topics.find(t => t.id === conversation.topic_space_id); if (!curTopic) return null; return <button type="button" className="conversation-topic-badge" onClick={() => { setTopicModalId(curTopic.id); setTopicModalOpen(true); }} title={`Espace : ${curTopic.title} (cliquer pour voir la synthèse et mémoire)`}><span>{curTopic.icon || "📌"}</span><span>{curTopic.title}</span></button>; })()}{conversation?.theme && <button type="button" className={`conversation-theme-badge tone-${themeTone(conversation.theme)}`} onClick={() => { setGroupMode("theme"); setSelectedTheme(old => (old === conversation.theme ? "" : (conversation.theme ?? ""))); setSidebarOpen(true); }} title={`Voir toutes les discussions du thème « ${conversation.theme} »`}>{conversation.theme}</button>}<div className="conversation-heading-actions">{conversation && <button type="button" className="conversation-meta-btn" disabled={working} onClick={() => setLinkTopicDialogOpen(true)} title="Associer ou détacher cette discussion d'un espace thématique"><FolderKanban size={12} /><span>{conversation.topic_space_id ? "Espace lié" : "Lier à un espace"}</span></button>}{conversation && <button type="button" className="conversation-meta-btn conversation-page-btn" disabled={working} onClick={() => openWebPagesModal()} title="Générer une page web autonome (HTML5 + SVG + JS) à partir de cette conversation"><Globe size={12} /><span>Page Web</span></button>}{conversation && <button type="button" className="conversation-meta-btn conversation-study-btn" disabled={working} onClick={() => openStudyModal("all")} title="Réviser les notions de cette discussion : Flashcards 3D, Quizz QCM et Phrases à trous"><GraduationCap size={12} /><span>Réviser</span></button>}{conversation && <button type="button" className="conversation-meta-btn" disabled={working} onClick={() => openEditDialog(conversation)} title="Modifier le titre, le thème et les mots-clés"><Pencil size={12} /><span>Éditer</span></button>}{conversation && <button type="button" className="conversation-meta-btn" disabled={working} onClick={() => void classifyConversation(conversation.id, true)} title="Régénérer le titre, le thème et les mots-clés automatiquement (Mistral Small)">{busy === "classify" ? <LoaderCircle size={12} className="spin" /> : <WandSparkles size={12} />}<span>Auto-tags IA</span></button>}</div></div><h1>{conversation?.title}</h1>{!!conversation?.keywords?.length && <div className="conversation-keywords-row" aria-label="Mots-clés de la discussion">{conversation.keywords.map(kw => <button key={kw} type="button" className={`conversation-keyword-chip ${selectedKeyword.toLocaleLowerCase("fr") === kw.toLocaleLowerCase("fr") ? "is-active" : ""}`} onClick={() => { toggleKeywordFilter(kw); setSidebarOpen(true); }} title={`Filtrer les discussions avec #${kw}`}>#{kw}</button>)}</div>}</div>{conversation && <ChatAttachedSites key={conversation.id} conversationId={conversation.id} />}{messages.map(message => <MessageView key={message.id} message={message} streaming={streamingId === message.id} onOpenCanvas={openCanvasForMessage} onOpenDeepSearchReport={handleOpenDeepSearchReport} researchActivity={researchRuns[message.id]} onOpenResearchActivity={setResearchActivityMessageId} onOpenLearnReport={handleOpenLearnReport} onOpenFinanceModal={openFinanceModal} onRegenerateExercise={prompt => void send(undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, prompt)} onSelectFollowUp={q => void send(undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, q)} />)}<div ref={bottomRef} /></div>}
+            ) : busy === "switch" ? <div className="loading-conversation"><LoaderCircle size={23} className="spin" />Ouverture de votre conversation…</div> : <div className="messages"><div className="conversation-heading"><div className="conversation-heading-top"><span>CONVERSATION</span>{conversation?.topic_space_id && (() => { const curTopic = topics.find(t => t.id === conversation.topic_space_id); if (!curTopic) return null; return <button type="button" className="conversation-topic-badge" onClick={() => { setTopicModalId(curTopic.id); setTopicModalOpen(true); }} title={`Espace : ${curTopic.title} (cliquer pour voir la synthèse et mémoire)`}><span>{curTopic.icon || "📌"}</span><span>{curTopic.title}</span></button>; })()}{conversation?.theme && <button type="button" className={`conversation-theme-badge tone-${themeTone(conversation.theme)}`} onClick={() => { setGroupMode("theme"); setSelectedTheme(old => (old === conversation.theme ? "" : (conversation.theme ?? ""))); setSidebarOpen(true); }} title={`Voir toutes les discussions du thème « ${conversation.theme} »`}>{conversation.theme}</button>}<div className="conversation-heading-actions">{conversation && <button type="button" className="conversation-meta-btn" disabled={working} onClick={() => setLinkTopicDialogOpen(true)} title="Associer ou détacher cette discussion d'un espace thématique"><FolderKanban size={12} /><span>{conversation.topic_space_id ? "Espace lié" : "Lier à un espace"}</span></button>}{conversation && <button type="button" className="conversation-meta-btn conversation-page-btn" disabled={working} onClick={() => openWebPagesModal()} title="Générer une page web autonome (HTML5 + SVG + JS) à partir de cette conversation"><Globe size={12} /><span>Page Web</span></button>}{conversation && <button type="button" className="conversation-meta-btn conversation-study-btn" disabled={working} onClick={() => openStudyModal("all")} title="Réviser les notions de cette discussion : Flashcards 3D, Quizz QCM et Phrases à trous"><GraduationCap size={12} /><span>Réviser</span></button>}{conversation && <button type="button" className="conversation-meta-btn" disabled={working} onClick={() => openEditDialog(conversation)} title="Modifier le titre, le thème et les mots-clés"><Pencil size={12} /><span>Éditer</span></button>}{conversation && <button type="button" className="conversation-meta-btn" disabled={working} onClick={() => void classifyConversation(conversation.id, true)} title="Régénérer le titre, le thème et les mots-clés automatiquement (Mistral Small)">{busy === "classify" ? <LoaderCircle size={12} className="spin" /> : <WandSparkles size={12} />}<span>Auto-tags IA</span></button>}</div></div><h1>{conversation?.title}</h1>{!!conversation?.keywords?.length && <div className="conversation-keywords-row" aria-label="Mots-clés de la discussion">{conversation.keywords.map(kw => <button key={kw} type="button" className={`conversation-keyword-chip ${selectedKeyword.toLocaleLowerCase("fr") === kw.toLocaleLowerCase("fr") ? "is-active" : ""}`} onClick={() => { toggleKeywordFilter(kw); setSidebarOpen(true); }} title={`Filtrer les discussions avec #${kw}`}>#{kw}</button>)}</div>}</div>{conversation && <ChatAttachedSites key={conversation.id} conversationId={conversation.id} />}{messages.map(message => <MessageView key={message.id} message={message} streaming={streamingId === message.id} visualDocs={activeVisualDocs} onOpenCanvas={openCanvasForMessage} onOpenDeepSearchReport={handleOpenDeepSearchReport} researchActivity={researchRuns[message.id]} onOpenResearchActivity={setResearchActivityMessageId} onOpenLearnReport={handleOpenLearnReport} onOpenFinanceModal={openFinanceModal} onRegenerateExercise={prompt => void send(undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, prompt)} onSelectFollowUp={q => void send(undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, q)} ttsEnabled={Boolean(config?.features?.tts)} isSpeaking={speakingMessageId === message.id} isLoadingTts={loadingTtsMessageId === message.id} onToggleSpeak={handleToggleSpeakMessage} />)}<div ref={bottomRef} /></div>}
           </div>
           {!atBottom && !!messages.length && <IconButton className="scroll-bottom" label="Aller aux derniers messages" onClick={() => { atBottomRef.current = true; setAtBottom(true); messagesRef.current?.scrollTo({ top: messagesRef.current.scrollHeight, behavior: "smooth" }); }}><ArrowDown size={18} /></IconButton>}
 
@@ -3522,6 +3924,52 @@ export function ChatApp() {
                   </button>
                 </div>
               )}
+              {activeVisualDocs.length > 0 && (
+                <div className="vdoc-active-bar" role="region" aria-label="Documents illustrés actifs">
+                  <span className="vdoc-active-bar-title">
+                    <BookOpen size={14} />
+                    <strong>Document{activeVisualDocs.length > 1 ? "s" : ""} illustré{activeVisualDocs.length > 1 ? "s" : ""}</strong>
+                  </span>
+                  <div className="vdoc-active-chips">
+                    {activeVisualDocs.map(doc => (
+                      <span key={doc.id} className="vdoc-active-chip">
+                        <button
+                          type="button"
+                          className="vdoc-active-chip-open"
+                          onClick={() => {
+                            setVisualDocModalInitialId(doc.id);
+                            setVisualDocModalTab("library");
+                            setVisualDocModalOpen(true);
+                          }}
+                          title={`Inspecter ${doc.title} (${doc.page_count} p. · ${doc.figure_count} schémas)`}
+                        >
+                          <span>{doc.title}</span>
+                          <small>{doc.page_count} p. · {doc.figure_count} fig.</small>
+                        </button>
+                        <button
+                          type="button"
+                          className="vdoc-active-chip-remove"
+                          aria-label={`Détacher ${doc.title}`}
+                          onClick={async () => {
+                            if (conversation) {
+                              try {
+                                const updated = await detachVisualDocFromConversation(conversation.id, doc.id);
+                                setConversation(updated);
+                              } catch (err) {
+                                setError(errorMessage(err));
+                              }
+                            } else {
+                              setPendingVisualDocs(prev => prev.filter(item => item.id !== doc.id));
+                            }
+                          }}
+                        >
+                          <X size={12} />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
               {!!attachments.length && <div className="pending-attachments">{attachments.map(item => {
                 const isYoutube = item.filename.startsWith("🎬") || item.mime_type.includes("youtube");
                 const isFinance = item.filename.startsWith("📈") || item.mime_type.includes("finance");
@@ -3551,13 +3999,13 @@ export function ChatApp() {
                   }
                 }}
                 onKeyDown={composerKeyDown}
-                placeholder={financeMode ? "Posez une question sur une entreprise, un ticker ou un indice (ex. Stellantis, Apple, LVMH, CAC 40)…" : codeMode ? "Décrivez l’application, le script ou le projet multi-fichiers à coder dans le Canvas…" : deepSearch ? "Quel sujet voulez-vous explorer en profondeur avec SearXNG ?" : learnMode ? "Sur quel sujet ou compétence souhaitez-vous concevoir un cours complet ?" : "Une question, une idée, ou tapez @ (ex. @prof, @feynman)…"}
+                placeholder={activeVisualDocs.length > 0 ? `Posez une question sur « ${activeVisualDocs[0].title} » (symbole, carte, mise en place, exception de règle)…` : financeMode ? "Posez une question sur une entreprise, un ticker ou un indice (ex. Stellantis, Apple, LVMH, CAC 40)…" : codeMode ? "Décrivez l’application, le script ou le projet multi-fichiers à coder dans le Canvas…" : deepSearch ? "Quel sujet voulez-vous explorer en profondeur avec SearXNG ?" : learnMode ? "Sur quel sujet ou compétence souhaitez-vous concevoir un cours complet ?" : "Une question, une idée, ou tapez @ (ex. @prof, @feynman)…"}
                 rows={2}
                 maxLength={20000}
                 disabled={working || !config}
                 aria-describedby="composer-hint"
               />
-              <div className="composer-toolbar"><div className="composer-tools"><div className="composer-attach-wrapper" ref={attachMenuRef}><input className="sr-only" type="file" ref={docInputRef} multiple accept=".txt,.md,.csv,.json,.pdf,.docx,image/png,image/jpeg,image/webp" onChange={event => void uploadFiles(event.target.files, "ocr")} tabIndex={-1} /><input className="sr-only" type="file" ref={visionInputRef} multiple accept="image/png,image/jpeg,image/webp" onChange={event => void uploadFiles(event.target.files, "vision")} tabIndex={-1} /><IconButton label="Joindre un document ou analyser une image" aria-expanded={attachMenuOpen} aria-haspopup="menu" disabled={working || !config} onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); setAttachMenuOpen(prev => !prev); }}><Paperclip size={19} /></IconButton>{attachMenuOpen && <div className="composer-attach-popover" role="menu" onMouseDown={e => e.stopPropagation()}><div className="attach-popover-header"><span className="attach-popover-title">Joindre une pièce</span></div><button type="button" className="attach-popover-item" role="menuitem" onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); docInputRef.current?.click(); setAttachMenuOpen(false); }}><span className="attach-popover-icon is-doc"><FileText size={17} /></span><div className="attach-popover-text"><span className="attach-item-title">Document (Mistral OCR)</span><span className="attach-item-desc">PDF, Word, scans, tableaux — extraction structurée & fidèle</span></div></button><button type="button" className="attach-popover-item" role="menuitem" onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); visionInputRef.current?.click(); setAttachMenuOpen(false); }}><span className="attach-popover-icon is-vision"><Eye size={17} /></span><div className="attach-popover-text"><span className="attach-item-title">Image (Vision IA détaillée)</span><span className="attach-item-desc">Photos, infographies, schémas — analyse visuelle exhaustive</span></div></button></div>}</div><IconButton label="Analyser un lien web ou vidéo YouTube (URL)" disabled={working || !config} onClick={() => { setUrlError(""); setUrlInputValue(""); setShowUrlModal(true); }}><Link2 size={19} /></IconButton><span className="tool-divider" /><button type="button" className={`tool-button web-trigger ${effectiveWebMode !== "off" && !deepSearch && !learnMode ? "active" : ""} ${effectiveWebMode === "auto" && !deepSearch && !learnMode ? "web-auto" : ""} ${effectiveWebMode === "always" && !deepSearch && !learnMode ? "web-always" : ""} ${effectiveWebMode === "off" && !deepSearch && !learnMode ? "web-off" : ""}`} disabled={working || !isWebSearchAvailable} aria-pressed={effectiveWebMode !== "off" && !deepSearch && !learnMode} title={webSearchTooltip} aria-describedby={showDuckDuckGoNotice ? "web-search-hint" : undefined} onClick={() => { if (deepSearch || learnMode) { setDeepSearch(false); setLearnMode(false); setWebSearchMode("auto"); return; } setWebSearchMode(current => { if (current === "auto") return "always"; if (current === "always") return "off"; return "auto"; }); }}><Globe2 size={16} /><span>Web</span>{effectiveWebMode === "auto" && !deepSearch && !learnMode && <span className="auto-badge" title="Décision automatique par agent rapide">Auto</span>}{effectiveWebMode === "always" && !deepSearch && !learnMode && <Check size={12} />}</button><button type="button" className={`tool-button deepsearch-trigger ${deepSearch ? "active" : ""}`} disabled={working || !isWebSearchAvailable} aria-pressed={deepSearch} title={isWebSearchAvailable ? "DeepSearch : recherche large multi-requêtes via SearXNG et grand rapport d’analyse approfondi" : webSearchTooltip} onClick={() => { setDeepSearch(old => { if (!old) setLearnMode(false); return !old; }); }}><Compass size={16} /><span>DeepSearch</span>{deepSearch && <Check size={12} />}</button><button type="button" className={`tool-button learn-trigger ${learnMode ? "active" : ""}`} disabled={working || !isWebSearchAvailable} aria-pressed={learnMode} title={isWebSearchAvailable ? "Mode Apprendre : conception d'un cours complet et adapté au sujet avec plan pédagogique et supports" : webSearchTooltip} onClick={() => { setLearnMode(old => { if (!old) setDeepSearch(false); return !old; }); }}><GraduationCap size={16} /><span>Apprendre</span>{learnMode && <Check size={12} />}</button><button type="button" className={`tool-button codecanvas-trigger ${codeMode ? "active" : ""}`} disabled={working || !config} aria-pressed={codeMode} title="Mode Code Canvas : générer une application ou un projet multi-fichiers dans l’éditeur interactif avec téléchargement .zip" onClick={toggleCodeMode}><Code2 size={16} /><span>Code · Canvas</span>{codeMode && <Check size={12} />}</button><button type="button" className={`tool-button finance-trigger ${financeMode ? "active" : ""}`} disabled={working} aria-pressed={financeMode} title="Mode Finances & Bourse : télécharger automatiquement les cotations en direct (EOD) et les données financières (Yahoo Finance)" onClick={() => setFinanceMode(old => !old)}><TrendingUp size={16} /><span>Finances</span>{financeMode && <Check size={12} />}</button><button type="button" className="tool-button finance-chart-trigger" disabled={working} title="Ouvrir le tableau de bord boursier : courbe du cours EOD et statistiques financières complètes Yahoo" onClick={() => openFinanceModal()}><LineChart size={16} /><span>Courbe & Stats</span></button><button type="button" className={`tool-button multiagent-trigger ${multiAgentActive ? "active" : ""}`} disabled={working || !config} aria-pressed={multiAgentActive} title="Conseil Multi-Agents : orchestrer plusieurs modèles avec des personas dédiés (Synthèse d'experts ou Débat)" onClick={() => setShowMultiAgentModal(true)}><Users size={16} /><span>Conseil IA</span>{multiAgentActive && <Check size={12} />}</button><button type="button" className={`tool-button hermes-trigger ${hermesModalOpen ? "active" : ""}`} disabled={working || !config} aria-pressed={hermesModalOpen} title="Hermes Agent (Nous Research) : agent autonome à boucle d'outils, mémoire persistante et auto-création de compétences" onClick={() => setHermesModalOpen(true)}><Bot size={16} /><span>Hermes</span></button><button type="button" className="tool-button studio-trigger" disabled={working} title="Ouvrir le Studio Image dédié (Ideogram, amélioration de prompt, visualisation et galerie)" onClick={() => openImageStudio(draft.trim())}><ImagePlus size={16} /><span>Studio Image</span></button><button type="button" className="tool-button sound-trigger" disabled={working} title="Ouvrir le Studio Son & Musique dédié (ElevenLabs Sound Effects & Eleven Music)" onClick={() => openSoundStudio(draft.trim())}><Volume2 size={16} /><span>Sons & Musique</span></button><button type="button" className={`tool-button study-trigger ${studyModalOpen ? "active" : ""}`} disabled={working} title="Mode Réviser : révisez avec Flashcards 3D, Quizz interactif et Phrases à trous à partir de vos cours" onClick={() => openStudyModal("all")}><GraduationCap size={16} /><span>Réviser</span></button><button type="button" className={`tool-button followup-trigger ${followupQuestionsEnabled ? "active" : ""}`} disabled={working || !config} aria-pressed={followupQuestionsEnabled} title="Relances auto : proposer en fin de message au moins 5 questions, affirmations ou réponses pour continuer (désactivé par défaut)" onClick={() => setFollowupQuestionsEnabled(old => !old)}><Sparkles size={16} /><span>Relances</span>{followupQuestionsEnabled && <Check size={12} />}</button></div><div className="composer-submit"><span className="enter-hint">↵ pour envoyer</span>{isCurrentStreaming ? <button className="send-button stop-button" type="button" onClick={stopCurrentStream} aria-label="Interrompre la génération" title="Interrompre la génération"><Square size={14} fill="currentColor" /></button> : <button className="send-button" type="submit" disabled={!canSend} aria-label="Envoyer le message">{busy === "upload" ? <LoaderCircle size={19} className="spin" /> : <ArrowUp size={20} />}</button>}</div></div>
+              <div className="composer-toolbar"><div className="composer-tools"><div className="composer-attach-wrapper" ref={attachMenuRef}><input className="sr-only" type="file" ref={docInputRef} multiple accept=".txt,.md,.csv,.json,.pdf,.docx,image/png,image/jpeg,image/webp" onChange={event => void uploadFiles(event.target.files, "ocr")} tabIndex={-1} /><input className="sr-only" type="file" ref={visionInputRef} multiple accept="image/png,image/jpeg,image/webp" onChange={event => void uploadFiles(event.target.files, "vision")} tabIndex={-1} /><IconButton label="Joindre un document ou analyser une image" aria-expanded={attachMenuOpen} aria-haspopup="menu" disabled={working || !config} onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); setAttachMenuOpen(prev => !prev); }}><Paperclip size={19} /></IconButton>{attachMenuOpen && <div className="composer-attach-popover" role="menu" onMouseDown={e => e.stopPropagation()}><div className="attach-popover-header"><span className="attach-popover-title">Joindre une pièce</span></div><button type="button" className="attach-popover-item" role="menuitem" onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); docInputRef.current?.click(); setAttachMenuOpen(false); }}><span className="attach-popover-icon is-doc"><FileText size={17} /></span><div className="attach-popover-text"><span className="attach-item-title">Document (Mistral OCR)</span><span className="attach-item-desc">PDF, Word, scans, tableaux — extraction structurée & fidèle</span></div></button><button type="button" className="attach-popover-item" role="menuitem" onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); visionInputRef.current?.click(); setAttachMenuOpen(false); }}><span className="attach-popover-icon is-vision"><Eye size={17} /></span><div className="attach-popover-text"><span className="attach-item-title">Image (Vision IA détaillée)</span><span className="attach-item-desc">Photos, infographies, schémas — analyse visuelle exhaustive</span></div></button><button type="button" className="attach-popover-item" role="menuitem" onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); setAttachMenuOpen(false); setVisualDocModalInitialId(null); setVisualDocModalTab("ingest"); setVisualDocModalOpen(true); }}><span className="attach-popover-icon is-doc"><BookOpen size={17} /></span><div className="attach-popover-text"><span className="attach-item-title">Document illustré (Règle / Manuel)</span><span className="attach-item-desc">PDF ou photos — Mistral OCR + schémas WebP &amp; citations [p. X]</span></div></button></div>}</div><IconButton label="Analyser un lien web ou vidéo YouTube (URL)" disabled={working || !config} onClick={() => { setUrlError(""); setUrlInputValue(""); setShowUrlModal(true); }}><Link2 size={19} /></IconButton><span className="tool-divider" /><button type="button" className={`tool-button web-trigger ${effectiveWebMode !== "off" && !deepSearch && !learnMode ? "active" : ""} ${effectiveWebMode === "auto" && !deepSearch && !learnMode ? "web-auto" : ""} ${effectiveWebMode === "always" && !deepSearch && !learnMode ? "web-always" : ""} ${effectiveWebMode === "off" && !deepSearch && !learnMode ? "web-off" : ""}`} disabled={working || !isWebSearchAvailable} aria-pressed={effectiveWebMode !== "off" && !deepSearch && !learnMode} title={webSearchTooltip} aria-describedby={showDuckDuckGoNotice ? "web-search-hint" : undefined} onClick={() => { if (deepSearch || learnMode) { setDeepSearch(false); setLearnMode(false); setWebSearchMode("auto"); return; } setWebSearchMode(current => { if (current === "auto") return "always"; if (current === "always") return "off"; return "auto"; }); }}><Globe2 size={16} /><span>Web</span>{effectiveWebMode === "auto" && !deepSearch && !learnMode && <span className="auto-badge" title="Décision automatique par agent rapide">Auto</span>}{effectiveWebMode === "always" && !deepSearch && !learnMode && <Check size={12} />}</button><button type="button" className={`tool-button deepsearch-trigger ${deepSearch ? "active" : ""}`} disabled={working || !isWebSearchAvailable} aria-pressed={deepSearch} title={isWebSearchAvailable ? "DeepSearch : recherche large multi-requêtes via SearXNG et grand rapport d’analyse approfondi" : webSearchTooltip} onClick={() => { setDeepSearch(old => { if (!old) setLearnMode(false); return !old; }); }}><Compass size={16} /><span>DeepSearch</span>{deepSearch && <Check size={12} />}</button><button type="button" className={`tool-button codecanvas-trigger ${codeMode ? "active" : ""}`} disabled={working || !config} aria-pressed={codeMode} title="Mode Code Canvas : générer une application ou un projet multi-fichiers dans l’éditeur interactif avec téléchargement .zip" onClick={toggleCodeMode}><Code2 size={16} /><span>Code · Canvas</span>{codeMode && <Check size={12} />}</button><button type="button" className={`tool-button followup-trigger ${followupQuestionsEnabled ? "active" : ""}`} disabled={working || !config} aria-pressed={followupQuestionsEnabled} title="Relances auto : proposer en fin de message au moins 5 questions, affirmations ou réponses pour continuer (désactivé par défaut)" onClick={() => setFollowupQuestionsEnabled(old => !old)}><Sparkles size={16} /><span>Relances</span>{followupQuestionsEnabled && <Check size={12} />}</button></div><div className="composer-submit"><VoiceSettingsMenu disabled={!config} ttsEnabled={Boolean(config?.features?.tts)} voices={config?.voice?.voices ?? []} selectedVoice={ttsVoice} autoReadEnabled={autoReadEnabled} isSpeaking={Boolean(speakingMessageId)} onSelectVoice={handleSelectVoice} onToggleAutoRead={handleToggleAutoRead} onStopSpeaking={stopSpeech} /><VoiceRecorderButton disabled={working || !config} sttEnabled={Boolean(config?.features?.stt)} sttProvider={config?.voice?.stt_provider} onTranscribed={handleVoiceTranscript} onError={setError} /><span className="enter-hint">↵ pour envoyer</span>{isCurrentStreaming ? <button className="send-button stop-button" type="button" onClick={stopCurrentStream} aria-label="Interrompre la génération" title="Interrompre la génération"><Square size={14} fill="currentColor" /></button> : <button className="send-button" type="submit" disabled={!canSend} aria-label="Envoyer le message">{busy === "upload" ? <LoaderCircle size={19} className="spin" /> : <ArrowUp size={20} />}</button>}</div></div>
             </form>
             <div className="composer-footnote" id="composer-hint"><span>cLAIr peut se tromper. Gardez un regard critique sur les réponses.</span><span>Maj + Entrée pour un saut de ligne</span></div>
           </div>
@@ -3790,7 +4238,13 @@ export function ChatApp() {
       onOpenFinance={() => openFinanceModal()}
       onOpenWebPages={() => openWebPagesModal()}
       onOpenHermes={() => setHermesModalOpen(true)}
+      onOpenVisualDocs={() => {
+        setVisualDocModalInitialId(activeVisualDocs[0]?.id ?? null);
+        setVisualDocModalTab("library");
+        setVisualDocModalOpen(true);
+      }}
       canvasFilesCount={canvasFiles.length}
+      visualDocsCount={activeVisualDocs.length}
       isMultiAgentActive={multiAgentActive}
       autoMemoryEnabled={autoMemoryActive}
       onToggleAutoMemory={() => void toggleAutoMemory()}
@@ -3872,6 +4326,39 @@ export function ChatApp() {
         }}
       />
     )}
+
+    <VisualDocModal
+      isOpen={visualDocModalOpen}
+      onClose={() => setVisualDocModalOpen(false)}
+      activeConversationId={conversation?.id ?? null}
+      attachedDocIds={activeVisualDocs.map(d => d.id)}
+      initialDocId={visualDocModalInitialId}
+      initialTab={visualDocModalTab}
+      ocrEnabled={Boolean(config?.features.ocr)}
+      demoMode={Boolean(config?.demo_mode)}
+      onAttachToConversation={async (doc) => {
+        if (conversation) {
+          const updated = await attachVisualDocToConversation(conversation.id, doc.id);
+          setConversation(updated);
+        } else {
+          setPendingVisualDocs(prev => (prev.some(item => item.id === doc.id) ? prev : [...prev, doc]));
+        }
+      }}
+      onDetachFromConversation={async (docId) => {
+        if (conversation) {
+          const updated = await detachVisualDocFromConversation(conversation.id, docId);
+          setConversation(updated);
+        } else {
+          setPendingVisualDocs(prev => prev.filter(item => item.id !== docId));
+        }
+      }}
+      onStartChatWithDoc={async (doc) => {
+        setConversation(null);
+        setPendingVisualDocs([doc]);
+        setDraft("");
+        setTimeout(() => textareaRef.current?.focus(), 60);
+      }}
+    />
 
     {linkTopicDialogOpen && conversation && (
       <div className="modal-backdrop" onClick={e => { if (e.target === e.currentTarget && !working) setLinkTopicDialogOpen(false); }}>

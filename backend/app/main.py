@@ -31,6 +31,8 @@ from .routers import (
     sounds,
     system,
     topics,
+    visual_docs,
+    voice,
 )
 from .serializers import (
     IMAGE_ASPECT_RATIOS,
@@ -300,6 +302,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(pages.router)
     app.include_router(hermes.router)
     app.include_router(hermes_mcp.router)
+    app.include_router(visual_docs.router)
+    app.include_router(voice.router)
     app.include_router(finance_router.router, prefix="/api/finance", tags=["finance"])
 
     return app

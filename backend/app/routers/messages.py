@@ -38,6 +38,7 @@ from ..memory_agent import process_memory_turn
 from ..models import (
     Attachment,
     Conversation,
+    ConversationVisualDoc,
     DeepSearchReport,
     LearnReport,
     Message,
@@ -46,6 +47,7 @@ from ..models import (
     TopicMemory,
     TopicSpace,
     User,
+    VisualDocument,
     now,
 )
 from ..schemas import DeepSearchPlanResponse, LearnModePlanResponse, PlanDeepSearch, PlanLearnMode, SendMessage
@@ -195,6 +197,19 @@ async def send_message(
             db.flush()
             for item in attachments:
                 item.message_id = message.id
+            if body.visual_doc_ids:
+                existing_vdoc_ids = {link.visual_doc_id for link in conversation.visual_doc_links}
+                next_vpos = max((link.position for link in conversation.visual_doc_links), default=-1) + 1
+                for vdoc_id in body.visual_doc_ids:
+                    if vdoc_id in existing_vdoc_ids:
+                        continue
+                    vdoc = db.scalar(
+                        select(VisualDocument).where(VisualDocument.id == vdoc_id, VisualDocument.user_id == user.id)
+                    )
+                    if vdoc:
+                        db.add(ConversationVisualDoc(conversation_id=conversation.id, visual_doc_id=vdoc.id, position=next_vpos))
+                        existing_vdoc_ids.add(vdoc.id)
+                        next_vpos += 1
 
             # Auto-parse any web URLs contained directly in the message text
             raw_urls = re.findall(r'https?://[^\s<>"]+', body.content)
@@ -845,6 +860,18 @@ async def send_message(
                     for item in conversation.messages[conversation.summary_through:]
                 ]
                 summary = conversation.summary
+                visual_docs_payload = [
+                    {
+                        "id": vdoc.id,
+                        "slug": vdoc.slug,
+                        "title": vdoc.title,
+                        "page_count": vdoc.page_count,
+                        "figure_count": vdoc.figure_count,
+                        "compiled_markdown": vdoc.compiled_markdown,
+                        "pages_meta": vdoc.pages_meta if isinstance(vdoc.pages_meta, list) else [],
+                    }
+                    for vdoc in conversation.visual_docs
+                ]
             if use_direct_research:
                 # La recherche directe (Sonar ou Google Deep Research) a directement investigué, rédigé et diffusé le document complet.
                 pass
@@ -944,6 +971,18 @@ async def send_message(
                         "L'historique, les pièces jointes et les souvenirs fonctionnent localement. "
                         "Configurez une clé LLM et désactivez DEMO_MODE pour obtenir de vraies réponses."
                     )
+                    if visual_docs_payload:
+                        first_doc = visual_docs_payload[0]
+                        sample_img = f"/api/docs/{first_doc['slug']}/page_1.webp"
+                        for p_item in first_doc.get("pages_meta") or []:
+                            figs = p_item.get("figures") or []
+                            if figs and figs[0].get("url"):
+                                sample_img = figs[0]["url"]
+                                break
+                        response += (
+                            f"\n\nDocument illustré actif : **{first_doc['title']}** [p. 1] :\n\n"
+                            f"![Aperçu de {first_doc['title']}]({sample_img})"
+                        )
                     if body.followup_questions:
                         response += (
                             "\n\n### 💡 Questions connexes\n"
@@ -988,6 +1027,7 @@ async def send_message(
                     creativity=effective_creativity,
                     followup_questions=body.followup_questions,
                     canvas_files=[item.model_dump() for item in body.canvas_files] if body.canvas_files else None,
+                    visual_docs=visual_docs_payload or None,
                 )
                 use_two_step_section_writer = (
                     (body.deep_search or body.learn_mode)

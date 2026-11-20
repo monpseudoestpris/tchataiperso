@@ -62,6 +62,7 @@ def prepare_schema(settings: Settings) -> None:
         "0024_add_finance_watchlists",
         "0025_add_watchlist_item_note",
         "0026_add_finance_report_extracts",
+        "0027_add_visual_documents",
     }:
         raise SystemExit(f"Révision de base non reconnue : {current}")
 
