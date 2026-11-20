@@ -7,7 +7,7 @@ from ..deps import get_sessions, get_settings
 from ..google_cloud import has_llm_access
 from ..sampling import PARAMETER_CATALOG
 from ..schemas import CONVERSATION_THEMES
-from ..voice import GOOGLE_TTS_VOICES, has_stt_access, has_tts_access, resolve_stt_provider, resolve_voice_name
+from ..voice import GOOGLE_TTS_TONES, GOOGLE_TTS_VOICES, has_stt_access, has_tts_access, resolve_stt_provider, resolve_voice_name
 
 
 router = APIRouter(tags=["system"])
@@ -54,7 +54,9 @@ def config(settings: Settings = Depends(get_settings)):
         },
         "voice": {
             "voices": GOOGLE_TTS_VOICES,
+            "tones": [{"id": t["id"], "label": t["label"]} for t in GOOGLE_TTS_TONES],
             "default_voice": resolve_voice_name(settings),
+            "default_tone": "natural",
             "stt_provider": resolve_stt_provider(settings),
         },
     }

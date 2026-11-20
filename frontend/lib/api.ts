@@ -89,7 +89,9 @@ export type Config = {
   };
   voice?: {
     voices: { id: string; name: string; tone: string }[];
+    tones?: { id: string; label: string }[];
     default_voice: string;
+    default_tone?: string;
     stt_provider: string | null;
   };
   google_cloud_mode?: string;
@@ -2506,6 +2508,12 @@ export async function fetchQuarterlyReports(symbol?: string): Promise<QuarterlyR
 
 export async function fetchQuarterlyReport(reportId: string): Promise<QuarterlyReport> {
   return api<QuarterlyReport>(`/finance/reports/${reportId}`);
+}
+
+export async function ensureVisualDocFromFinanceReport(reportId: string): Promise<VisualDocDetail> {
+  return api<VisualDocDetail>(`/finance/reports/${reportId}/visual-doc`, {
+    method: "POST",
+  });
 }
 
 export async function importQuarterlyReport(formData: FormData): Promise<QuarterlyReport> {

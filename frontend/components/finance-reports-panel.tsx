@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
+  AudioLines,
+  BookOpen,
   Check,
   Copy,
   Download,
@@ -30,6 +32,7 @@ type FinanceReportsPanelProps = {
   symbol: string;
   companyName: string;
   onInsertIntoChat?: (text: string) => void;
+  onOpenReportAsDoc?: (report: QuarterlyReport, openVoiceFullscreen?: boolean) => Promise<void> | void;
 };
 
 const METRIC_LABELS: Record<string, string> = {
@@ -45,8 +48,14 @@ const METRIC_LABELS: Record<string, string> = {
   guidance: "Guidance / Perspectives",
 };
 
-export function FinanceReportsPanel({ symbol, companyName, onInsertIntoChat }: FinanceReportsPanelProps) {
+export function FinanceReportsPanel({
+  symbol,
+  companyName,
+  onInsertIntoChat,
+  onOpenReportAsDoc,
+}: FinanceReportsPanelProps) {
   const [reports, setReports] = useState<QuarterlyReport[]>([]);
+  const [openingReportId, setOpeningReportId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [importing, setImporting] = useState(false);
   const [inputMode, setInputMode] = useState<"file" | "text">("file");
@@ -364,20 +373,49 @@ export function FinanceReportsPanel({ symbol, companyName, onInsertIntoChat }: F
                         <span>Source</span>
                       </a>
                     )}
-                    {onInsertIntoChat && (
-                      <button
-                        type="button"
-                        className="finance-copy-btn"
-                        onClick={() =>
-                          onInsertIntoChat(
-                            `Analyse ce résumé de rapport (${report.period_label || report.title}) pour **${report.company_name} (${report.symbol})** :\n\n${report.summary_markdown}`,
-                          )
-                        }
-                        title="Approfondir dans le chat"
-                      >
-                        <MessageSquarePlus size={13} />
-                        <span>Discuter</span>
-                      </button>
+                    {onOpenReportAsDoc && (
+                      <>
+                        <button
+                          type="button"
+                          className="finance-copy-btn"
+                          disabled={openingReportId === report.id}
+                          onClick={async () => {
+                            setOpeningReportId(report.id);
+                            setError(null);
+                            try {
+                              await onOpenReportAsDoc(report, false);
+                            } catch (err: unknown) {
+                              setError(err instanceof Error ? err.message : "Impossible d'ouvrir ce rapport dans le tchat.");
+                            } finally {
+                              setOpeningReportId(null);
+                            }
+                          }}
+                          title="Attacher tout le rapport (pages, tableaux & citations [p. X]) dans le tchat comme un Document Illustré"
+                        >
+                          {openingReportId === report.id ? <LoaderCircle size={13} className="spin" /> : <BookOpen size={13} />}
+                          <span>Interagir (Doc)</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="finance-copy-btn"
+                          disabled={openingReportId === report.id}
+                          onClick={async () => {
+                            setOpeningReportId(report.id);
+                            setError(null);
+                            try {
+                              await onOpenReportAsDoc(report, true);
+                            } catch (err: unknown) {
+                              setError(err instanceof Error ? err.message : "Impossible de lancer le mode vocal.");
+                            } finally {
+                              setOpeningReportId(null);
+                            }
+                          }}
+                          title="Attacher tout le rapport et ouvrir le Mode Vocal Plein Écran (mains-libres + clavier)"
+                        >
+                          {openingReportId === report.id ? <LoaderCircle size={13} className="spin" /> : <AudioLines size={13} />}
+                          <span>Vocal Plein Écran</span>
+                        </button>
+                      </>
                     )}
                     <button
                       type="button"

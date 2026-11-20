@@ -73,6 +73,11 @@ _TABLE_SEP_RE = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(?:\|\s*:?-{2,}:?\s*)+\|?\s*$
 # Caractères décoratifs / tracés ASCII non parlés
 _DECORATIVE_CHARS_RE = re.compile(r"[─━│┃┌┐└┘├┤┬┴┼═║╔╗╚╝╠╣╦╩╬■□▪▫●○◆◇★☆✓✔✗✘]+")
 
+# Élisions françaises dont l'apostrophe a pu être séparée par un espace (ex: "l' **écouteur**" -> "l' écouteur")
+_FRENCH_ELISION_SPACE_RE = re.compile(
+    r"\b([ldjmnstcLDJMNSTC]|[qQ]u|[jJ]usqu|[lL]orsqu|[pP]uisqu|[qQ]uoiqu|[aA]ujourd)\s*'\s+([A-Za-zÀ-ÿ0-9œŒæÆ])"
+)
+
 
 def _strip_markdown_tables(text: str) -> str:
     """Remplace les blocs de tableaux Markdown par une courte indication parlée."""
@@ -173,6 +178,8 @@ def prepare_text_for_speech(markdown: str, *, max_chars: int = 8000) -> str:
     # 8. Nettoyer le formatage Markdown (titres, gras, italique, code inline, puces, quotes)
     text = _HR_LINE_RE.sub("\n", text)
     text = _INLINE_CODE_RE.sub(_clean_inline_code, text)
+    # Supprimer tout backtick résiduel (évite que le TTS prononce "guillemet simple inversé")
+    text = text.replace("`", "")
 
     def _heading_to_sentence(match: re.Match[str]) -> str:
         heading = match.group(1).strip()
@@ -197,14 +204,22 @@ def prepare_text_for_speech(markdown: str, *, max_chars: int = 8000) -> str:
     text = re.sub(r"\(\s*[,;:\-–]*\s*\)", "", text)
     text = re.sub(r"\[\s*[,;:\-–]*\s*\]", "", text)
 
-    # Caractères décoratifs et flèches simples
+    # Caractères décoratifs, apostrophes typographiques, guillemets et symboles techniques non parlés
+    text = text.replace("\u2019", "'").replace("\u2018", "'").replace("\u02bc", "'").replace("\u2032", "'")
+    text = re.sub(r'[«»“”„‹›"]', " ", text)
     text = _DECORATIVE_CHARS_RE.sub(" ", text)
     text = text.replace("→", " vers ").replace("⇒", " donc ")
+    text = re.sub(r"[#*_~|\\^<>\[\]{}]", " ", text)
 
     # Normaliser les lignes et paragraphes en phrases fluides
     cleaned_lines: list[str] = []
     for raw_line in text.splitlines():
         line = re.sub(r"\s+", " ", raw_line).strip()
+        # Recoller les élisions françaises séparées par le nettoyage Markdown ("l' écouteur" -> "l'écouteur")
+        line = _FRENCH_ELISION_SPACE_RE.sub(r"\1'\2", line)
+        # Retirer les guillemets simples isolés ('mot' -> mot) tout en gardant les apostrophes intra-mots (l'écouteur)
+        line = re.sub(r"(?<![A-Za-zÀ-ÿ0-9œŒæÆ])'|'(?![A-Za-zÀ-ÿ0-9œŒæÆ])", " ", line)
+        line = re.sub(r"\s+", " ", line).strip()
         # Corriger les espaces avant ponctuation simple créée par les suppressions
         line = re.sub(r"\s+([,.;:!?])", r"\1", line)
         line = re.sub(r"([,;:])\1+", r"\1", line)

@@ -6,6 +6,11 @@ export type VoiceOption = {
   tone: string;
 };
 
+export type ToneOption = {
+  id: string;
+  label: string;
+};
+
 export type TranscribeResult = {
   text: string;
   provider: string;
@@ -17,13 +22,18 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "/api";
 export async function synthesizeSpeech(
   text: string,
   voice?: string,
+  tone?: string,
   signal?: AbortSignal,
 ): Promise<Blob> {
   const response = await fetch(`${API_BASE}/voice/tts`, {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text, voice: voice || undefined }),
+    body: JSON.stringify({
+      text,
+      voice: voice || undefined,
+      tone: tone && tone !== "natural" ? tone : undefined,
+    }),
     signal,
   });
 

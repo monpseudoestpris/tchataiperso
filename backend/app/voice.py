@@ -31,14 +31,50 @@ _DEFAULT_SAMPLE_RATE = 24000
 _RATE_RE = re.compile(r"rate=(\d+)", flags=re.IGNORECASE)
 
 GOOGLE_TTS_VOICES: list[dict[str, str]] = [
-    {"id": "Aoede", "name": "Aoede", "tone": "Chaleureuse & naturelle"},
-    {"id": "Kore", "name": "Kore", "tone": "Claire & posée"},
-    {"id": "Leda", "name": "Leda", "tone": "Douce & fluide"},
+    {"id": "Aoede", "name": "Aoede", "tone": "Légère & naturelle"},
+    {"id": "Kore", "name": "Kore", "tone": "Ferme & claire"},
+    {"id": "Zephyr", "name": "Zephyr", "tone": "Lumineuse & enjouée"},
     {"id": "Puck", "name": "Puck", "tone": "Vive & dynamique"},
-    {"id": "Charon", "name": "Charon", "tone": "Grave & calme"},
-    {"id": "Fenrir", "name": "Fenrir", "tone": "Expressive & profonde"},
-    {"id": "Orus", "name": "Orus", "tone": "Neutre & professionnelle"},
+    {"id": "Charon", "name": "Charon", "tone": "Grave & informative"},
+    {"id": "Fenrir", "name": "Fenrir", "tone": "Expressive & intense"},
+    {"id": "Leda", "name": "Leda", "tone": "Jeune & fluide"},
+    {"id": "Orus", "name": "Orus", "tone": "Posée & professionnelle"},
+    {"id": "Sulafat", "name": "Sulafat", "tone": "Chaleureuse & douce"},
+    {"id": "Callirrhoe", "name": "Callirrhoe", "tone": "Décontractée & aisée"},
+    {"id": "Autonoe", "name": "Autonoe", "tone": "Claire & lumineuse"},
+    {"id": "Enceladus", "name": "Enceladus", "tone": "Soufflée & apaisante"},
+    {"id": "Iapetus", "name": "Iapetus", "tone": "Nette & articulée"},
+    {"id": "Umbriel", "name": "Umbriel", "tone": "Détendue & naturelle"},
+    {"id": "Algieba", "name": "Algieba", "tone": "Veloutée & fluide"},
+    {"id": "Despina", "name": "Despina", "tone": "Douce & harmonieuse"},
+    {"id": "Erinome", "name": "Erinome", "tone": "Précise & cristalline"},
+    {"id": "Algenib", "name": "Algenib", "tone": "Rauque & profonde"},
+    {"id": "Rasalgethi", "name": "Rasalgethi", "tone": "Posée & didactique"},
+    {"id": "Laomedeia", "name": "Laomedeia", "tone": "Rythmée & enthousiaste"},
+    {"id": "Achernar", "name": "Achernar", "tone": "Tendre & délicate"},
+    {"id": "Alnilam", "name": "Alnilam", "tone": "Assurée & directe"},
+    {"id": "Schedar", "name": "Schedar", "tone": "Régulière & équilibrée"},
+    {"id": "Gacrux", "name": "Gacrux", "tone": "Mature & posée"},
+    {"id": "Pulcherrima", "name": "Pulcherrima", "tone": "Franche & engagée"},
+    {"id": "Achird", "name": "Achird", "tone": "Amicale & chaleureuse"},
+    {"id": "Zubenelgenubi", "name": "Zubenelgenubi", "tone": "Simple & familière"},
+    {"id": "Vindemiatrix", "name": "Vindemiatrix", "tone": "Bienveillante & calme"},
+    {"id": "Sadachbia", "name": "Sadachbia", "tone": "Alerte & vivante"},
+    {"id": "Sadaltager", "name": "Sadaltager", "tone": "Érudite & structurée"},
 ]
+
+GOOGLE_TTS_TONES: list[dict[str, str]] = [
+    {"id": "natural", "label": "Naturel", "prompt": ""},
+    {"id": "warm", "label": "Chaleureux", "prompt": "Say warmly, smiling, and naturally in French"},
+    {"id": "enthusiastic", "label": "Dynamique", "prompt": "Say with an energetic, enthusiastic, and lively tone in French"},
+    {"id": "calm", "label": "Calme", "prompt": "Say in a calm, slow, soothing, and reassuring tone in French"},
+    {"id": "teacher", "label": "Pédagogue", "prompt": "Explain clearly, patiently, and articulately like a friendly teacher in French"},
+    {"id": "storyteller", "label": "Conteur", "prompt": "Narrate like an expressive, engaging storyteller in French"},
+    {"id": "podcast", "label": "Podcast", "prompt": "Speak like a lively, charismatic French podcast host"},
+    {"id": "whisper", "label": "Chuchoté", "prompt": "Say softly in a gentle whisper in French"},
+]
+
+_TONE_PROMPTS: dict[str, str] = {t["id"]: t["prompt"] for t in GOOGLE_TTS_TONES}
 
 _VALID_VOICE_IDS = {v["id"] for v in GOOGLE_TTS_VOICES}
 
@@ -317,11 +353,27 @@ def _parse_sample_rate(mime_type: str) -> int:
     return _DEFAULT_SAMPLE_RATE
 
 
+def _build_tone_prefix(tone: str | None) -> str:
+    """Construit le préfixe d'intention vocale pour Gemini TTS (vide si naturel)."""
+    raw = " ".join((tone or "").replace("\n", " ").replace("\r", " ").split()).strip()
+    if not raw or raw.lower() == "natural":
+        return ""
+    preset = _TONE_PROMPTS.get(raw.lower())
+    if preset is not None:
+        return f"{preset}: " if preset else ""
+    # Ton libre utilisateur : nettoyer les caractères de contrôle / ponctuation excessive
+    safe_custom = re.sub(r"[`\"<>\{\}\[\]]", "", raw)[:120].strip()
+    if not safe_custom:
+        return ""
+    return f"Speak in French with this tone ({safe_custom}): "
+
+
 async def synthesize_speech_google(
     settings: Any,
     text: str,
     *,
     voice: str | None = None,
+    tone: str | None = None,
     client: httpx.AsyncClient | None = None,
 ) -> tuple[bytes, str]:
     """Filtre le texte Markdown et génère un audio WAV via Google Gemini TTS."""
@@ -333,6 +385,7 @@ async def synthesize_speech_google(
         return _demo_wav_bytes(), "audio/wav"
 
     voice_name = resolve_voice_name(settings, voice)
+    tone_prefix = _build_tone_prefix(tone)
     tts_model = str(getattr(settings, "tts_model", "gemini-2.5-flash-tts") or "gemini-2.5-flash-tts").strip()
     targets = await _resolve_google_native_endpoints(settings, tts_model, is_tts=True)
     chunks = split_speech_chunks(clean_text, max_chunk_chars=1600)
@@ -345,8 +398,23 @@ async def synthesize_speech_google(
     http_client = client or httpx.AsyncClient(timeout=httpx.Timeout(connect=20.0, read=120.0, write=30.0, pool=30.0))
     try:
         for chunk in chunks:
-            gemini_body = {
-                "contents": [{"parts": [{"text": chunk}]}],
+            gemini_text = f"{tone_prefix}{chunk}" if tone_prefix else chunk
+            gemini_ga_body = {
+                "contents": [{"parts": [{"text": gemini_text}]}],
+                "generationConfig": {
+                    "responseModalities": ["AUDIO"],
+                    "speechConfig": {
+                        "languageCode": "fr-FR",
+                        "voiceConfig": {
+                            "prebuiltVoiceConfig": {
+                                "voiceName": voice_name,
+                            }
+                        },
+                    },
+                },
+            }
+            gemini_preview_body = {
+                "contents": [{"parts": [{"text": gemini_text}]}],
                 "generationConfig": {
                     "responseModalities": ["AUDIO"],
                     "speechConfig": {
@@ -376,7 +444,12 @@ async def synthesize_speech_google(
             attempt_errors: list[str] = []
 
             for url, headers, kind in candidates_to_try:
-                req_body = cloud_tts_body if kind == "cloud_tts" else gemini_body
+                is_preview_url = "-preview-tts" in url
+                req_body = (
+                    cloud_tts_body
+                    if kind == "cloud_tts"
+                    else (gemini_preview_body if is_preview_url else gemini_ga_body)
+                )
                 short_target = "cloud-tts" if kind == "cloud_tts" else url.split("//", 1)[-1].split("/projects/", 1)[0] + ":" + url.rsplit("/models/", 1)[-1]
                 try:
                     resp = await http_client.post(url, headers=headers, json=req_body)

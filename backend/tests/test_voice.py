@@ -94,6 +94,21 @@ Formule : $$E = mc^2$$ et bonus $2 \\times 3$.
     assert "Voir le tableau affiché." in cleaned
     assert "2 fois 3" in cleaned
 
+    # Élisions françaises et apostrophes typographiques (ex: "l' **écouteur**" ou "l’écouteur")
+    elision_cleaned = prepare_text_for_speech("Branchez l’ **écouteur** sur d' `autres` prises qu’ il choisit.")
+    assert "l'écouteur" in elision_cleaned
+    assert "d'autres" in elision_cleaned
+    assert "qu'il" in elision_cleaned
+
+    # Backticks orphelins et guillemets ne doivent jamais atteindre le moteur TTS
+    quotes_cleaned = prepare_text_for_speech("Texte avec `backtick orphelin, « guillemets », 'citation' et l'écouteur.")
+    assert "`" not in quotes_cleaned
+    assert "«" not in quotes_cleaned
+    assert "»" not in quotes_cleaned
+    assert "'citation'" not in quotes_cleaned
+    assert "citation" in quotes_cleaned
+    assert "l'écouteur" in quotes_cleaned
+
 
 def test_split_speech_chunks_respects_sentence_boundaries():
     text = "\n".join(f"Phrase numéro {i} avec un contenu clair." for i in range(40))
@@ -141,7 +156,7 @@ def test_voice_endpoints_in_demo_mode(tmp_path: Path):
         assert cfg["features"]["tts"] is True
         assert cfg["features"]["stt"] is True
         assert cfg["voice"]["default_voice"] == "Aoede"
-        assert len(cfg["voice"]["voices"]) >= 5
+        assert len(cfg["voice"]["voices"]) == 30
 
         tts_resp = client.post(
             "/api/voice/tts",
@@ -216,7 +231,7 @@ def test_voice_tts_and_stt_real_mode_mocked(tmp_path: Path):
         with patch("httpx.AsyncClient.post", new=AsyncMock(return_value=fake_tts_response)) as mock_tts:
             r = client.post(
                 "/api/voice/tts",
-                json={"text": "Bonjour **monde** [p. 1]", "voice": "Aoede"},
+                json={"text": "Bonjour **monde** [p. 1]", "voice": "Aoede", "tone": "warm"},
                 headers={"origin": "http://localhost:3001"},
             )
             assert r.status_code == 200
@@ -224,6 +239,9 @@ def test_voice_tts_and_stt_real_mode_mocked(tmp_path: Path):
             assert mock_tts.await_count == 1
             called_url = mock_tts.await_args.args[0]
             assert "gemini-2.5-flash-tts:generateContent" in called_url
+            sent_text = mock_tts.await_args.kwargs["json"]["contents"][0]["parts"][0]["text"]
+            assert sent_text.startswith("Say warmly, smiling, and naturally in French: ")
+            assert "Bonjour monde." in sent_text
 
         with patch("httpx.AsyncClient.post", new=AsyncMock(return_value=fake_stt_response)) as mock_stt:
             r = client.post(

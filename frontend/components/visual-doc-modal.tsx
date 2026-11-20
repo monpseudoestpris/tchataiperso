@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDown,
   ArrowUp,
+  AudioLines,
   BookOpen,
   Check,
   CircleAlert,
@@ -43,6 +44,7 @@ export interface VisualDocModalProps {
   onAttachToConversation?: (doc: VisualDocSummary) => Promise<void> | void;
   onDetachFromConversation?: (docId: string) => Promise<void> | void;
   onStartChatWithDoc: (doc: VisualDocSummary) => Promise<void> | void;
+  onStartVoiceWithDoc?: (doc: VisualDocSummary) => Promise<void> | void;
   initialDocId?: string | null;
   initialTab?: "library" | "ingest";
   ocrEnabled?: boolean;
@@ -63,6 +65,7 @@ export function VisualDocModal({
   onAttachToConversation,
   onDetachFromConversation,
   onStartChatWithDoc,
+  onStartVoiceWithDoc,
   initialDocId = null,
   initialTab = "library",
   ocrEnabled = true,
@@ -646,6 +649,26 @@ export function VisualDocModal({
                           <MessageSquare size={14} />
                           <span>Poser des questions</span>
                         </button>
+                        {onStartVoiceWithDoc && (
+                          <button
+                            type="button"
+                            className={styles.secondaryBtn}
+                            disabled={busyAction}
+                            title="Interagir avec ce document en Mode Vocal Plein Écran (mains-libres + clavier)"
+                            onClick={async () => {
+                              setBusyAction(true);
+                              try {
+                                await onStartVoiceWithDoc(activeDetail);
+                                onClose();
+                              } finally {
+                                setBusyAction(false);
+                              }
+                            }}
+                          >
+                            <AudioLines size={14} />
+                            <span>Vocal Plein Écran</span>
+                          </button>
+                        )}
                         {activeConversationId && onAttachToConversation && onDetachFromConversation && (
                           <button
                             type="button"

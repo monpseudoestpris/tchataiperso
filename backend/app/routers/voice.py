@@ -28,6 +28,7 @@ _logger = logging.getLogger("uvicorn.error")
 class TTSRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=25000)
     voice: str | None = Field(default=None, max_length=40)
+    tone: str | None = Field(default=None, max_length=160)
 
 
 @router.post("/api/voice/tts")
@@ -46,6 +47,7 @@ async def tts_endpoint(
             settings,
             body.text,
             voice=body.voice,
+            tone=body.tone,
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc

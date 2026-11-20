@@ -343,3 +343,72 @@ def test_build_context_injects_visual_doc_system_prompt():
     )
     assert VISUAL_DOC_SYSTEM_PROMPT in ctx[0]["content"]
     assert any("/api/docs/catan-112233/p6_fig1.webp" in str(m.get("content", "")) for m in ctx)
+
+
+def test_finance_report_bridge_to_visual_doc_and_conversation(tmp_path):
+    settings = Settings(_env_file=None, app_data_dir=tmp_path, demo_mode=True)
+    app = _create_app_with_users(settings)
+    from app.models import FinanceQuarterlyReport
+
+    upload_dir = tmp_path / "uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    (upload_dir / "finrep-test.pdf").write_bytes(_make_pdf_bytes(2))
+
+    with app.state.sessions() as db:
+        owner = db.scalar(select(User).where(User.username == "alice"))
+        assert owner is not None
+        report = FinanceQuarterlyReport(
+            user_id=owner.id,
+            symbol="MC.PA",
+            company_name="LVMH",
+            title="Résultats S1 2026",
+            period_label="S1 2026",
+            source_type="pdf-ocr",
+            filename="lvmh-s1-2026.pdf",
+            storage_name="finrep-test.pdf",
+            extracted_text=(
+                "[Page 1]\nChiffre d'affaires S1 2026 : 42,5 Md€ (+6%).\n\n"
+                "[Page 2]\n| Division | CA (Md€) |\n| --- | --- |\n| Mode & Maroquinerie | 21,2 |"
+            ),
+            extracted_tables=[
+                {
+                    "index": 1,
+                    "page": 2,
+                    "title": "CA par division",
+                    "rows_count": 2,
+                    "cols_count": 2,
+                    "markdown": "| Division | CA (Md€) |\n| --- | --- |\n| Mode & Maroquinerie | 21,2 |",
+                }
+            ],
+            summary_markdown="Croissance organique solide portée par la Mode & Maroquinerie.",
+            key_metrics={"revenue": "42,5 Md€", "operating_margin": "25,8 %"},
+        )
+        db.add(report)
+        db.commit()
+        report_id = report.id
+
+    with _login(app, settings, "alice") as client:
+        resp1 = client.post(f"/api/finance/reports/{report_id}/visual-doc")
+        assert resp1.status_code == 200
+        vdoc1 = resp1.json()
+        assert vdoc1["page_count"] == 2
+        assert "LVMH" in vdoc1["title"]
+        assert "42,5 Md€" in vdoc1["compiled_markdown"]
+        assert "Mode & Maroquinerie" in vdoc1["compiled_markdown"]
+        assert f"/api/docs/{vdoc1['slug']}/page_1.webp" in vdoc1["compiled_markdown"]
+
+        # Vérifie que la page WebP rendue est bien servie de manière sécurisée
+        page_img = client.get(f"/api/docs/{vdoc1['slug']}/page_1.webp")
+        assert page_img.status_code == 200
+        assert page_img.headers["content-type"] == "image/webp"
+
+        # Idempotence : un second appel retourne exactement le même VisualDocument
+        resp2 = client.post(f"/api/finance/reports/{report_id}/visual-doc")
+        assert resp2.status_code == 200
+        assert resp2.json()["id"] == vdoc1["id"]
+
+        # Liaison à une conversation comme tout Document Illustré
+        conv = client.post("/api/conversations", json={"title": "Analyse LVMH"}).json()
+        attached = client.post(f"/api/conversations/{conv['id']}/visual-docs/{vdoc1['id']}")
+        assert attached.status_code == 200
+        assert any(d["id"] == vdoc1["id"] for d in attached.json()["visual_docs"])

@@ -53,15 +53,20 @@ charge, une seconde tentative utilise le modèle par défaut du tchat. **Beau PD
 l’export documentaire existant. Le rendu exact et la fidélité de la synthèse restent
 à relire, comme pour toute sortie générative.
 
-## Démarrer avec Docker
+## Démarrer avec Docker (ou installer sur un nouveau PC)
 
-Prérequis : Docker Engine avec Compose v2 et Python 3 pour le petit script d'installation.
+Le script d'installation prépare un PC neuf de bout en bout (Linux `apt`/`dnf`/`pacman`/`zypper`, WSL2 ou macOS `brew`) : il vérifie et propose d'installer automatiquement les prérequis manquants (Docker Engine + Compose v2, Python 3.12+, Node.js 24, `curl`, `git`, `acl`), crée `.env` en mode `600` avec secrets aléatoires et assistant interactif facultatif pour vos clés API, prépare le fichier Google Cloud ADC (`~/.config/gcloud/application_default_credentials.json`) et ses permissions UID `10001`, télécharge les banques SVG locales, initialise la base, crée le premier administrateur et démarre toute la stack.
 
 ```bash
-./scripts/install.sh
+./scripts/install.sh            # Installation complète avec Docker (recommandé)
+./scripts/install.sh --all      # Docker + environnement de développement local (venv + Node)
+./scripts/install.sh --local    # Installation locale seule (SQLite + Next.js dev)
+./scripts/install.sh --lan      # Installe et expose sur le réseau local (http://<IP-LAN>:3001)
+./scripts/install.sh --check    # Diagnostic des prérequis sans rien modifier
+./scripts/install.sh --help     # Toutes les options (--yes, --skip-system, --skip-gcloud, --skip-smoke)
 ```
 
-Le script crée `.env` s'il n'existe pas, avec un mot de passe PostgreSQL aléatoire, démarre la base et prépare le schéma. Il vous demande l'identifiant du premier administrateur et son mot de passe (saisie masquée); vous choisissez aussi explicitement le propriétaire des anciennes données s'il y en a. Il démarre ensuite les services et exécute un smoke test authentifié. Le mot de passe n'est jamais écrit dans `.env`, qui est conservé s'il existe. Les ports sont liés à l'interface locale : `clair-web` **3001**, `clair-api` **8001** ; PostgreSQL (`clair-db`) reste sur le réseau Docker interne.
+Le script est idempotent : il conserve toujours un `.env` existant, ne recrée pas l'administrateur s'il existe déjà, et n'écrit jamais le mot de passe administrateur dans `.env`. Les ports sont liés à l'interface locale : `clair-web` **3001**, `clair-api` **8001**, `clair-searxng` **8080**, `clair-hermes` **8642** ; PostgreSQL (`clair-db`) reste sur le réseau Docker interne.
 
 ```bash
 ./scripts/compose.sh up --build -d --wait  # démarrer / reconstruire
@@ -213,7 +218,8 @@ backend/app/          API, authentification, modèles SQLAlchemy, contexte et fo
 backend/migrations/   Migrations versionnées et reprise des données existantes
 backend/tests/        Tests API, persistance et fournisseurs simulés
 compose.yaml          Frontend + backend + PostgreSQL avec contrôles de santé
-scripts/install.sh    Installation Docker ou dépendances locales
+scripts/install.sh    Installation complète sur un nouveau PC (Docker, local, --all, --check)
+scripts/install_lib/  Modules de l'installeur (prérequis système, .env sécurisé, Google Cloud ADC)
 scripts/compose.sh    Compose avec prise en charge du proxy TLS cloud
 scripts/dev.sh        Démarrage local des deux serveurs
 scripts/smoke.py      Parcours de validation via le proxy frontend

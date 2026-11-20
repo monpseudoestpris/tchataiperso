@@ -803,6 +803,154 @@ async def ingest_visual_document(
         raise
 
 
+_FINANCE_PAGE_HEADER_RE = re.compile(r"^\[Page\s+(\d+)\]\s*$", flags=re.IGNORECASE)
+
+
+def _split_finance_report_pages(extracted_text: str) -> list[tuple[int, str]]:
+    """Découpe le texte OCR d'un rapport financier selon les marqueurs `[Page N]`."""
+    raw = (extracted_text or "").replace("\r\n", "\n").strip()
+    if not raw:
+        return []
+    pages: list[tuple[int, list[str]]] = []
+    current_page = 1
+    current_lines: list[str] = []
+    saw_header = False
+
+    for line in raw.splitlines():
+        m = _FINANCE_PAGE_HEADER_RE.match(line.strip())
+        if m:
+            if saw_header or any(l.strip() for l in current_lines):
+                pages.append((current_page, current_lines))
+            current_page = max(1, int(m.group(1)))
+            current_lines = []
+            saw_header = True
+        else:
+            current_lines.append(line)
+
+    if saw_header or any(l.strip() for l in current_lines):
+        pages.append((current_page, current_lines))
+
+    return [(p, "\n".join(lines).strip()) for p, lines in pages if "\n".join(lines).strip()]
+
+
+def compile_finance_report_to_visual_doc(
+    *,
+    app_data_dir: Path,
+    doc_id: str,
+    slug: str,
+    title: str,
+    symbol: str,
+    company_name: str,
+    period_label: str,
+    extracted_text: str,
+    summary_markdown: str = "",
+    key_metrics: dict[str, Any] | None = None,
+    extracted_tables: list[dict[str, Any]] | None = None,
+    pdf_bytes: bytes | None = None,
+) -> dict[str, Any]:
+    """Compile un rapport financier archivé en `VisualDocument` interactif (pages `[p. N]`, tableaux & WebP)."""
+    doc_dir = get_visual_doc_dir(app_data_dir, doc_id)
+    warnings_list: list[str] = []
+    rendered_pages: list[str] = []
+    local_pdf_texts: list[str] = []
+
+    try:
+        if pdf_bytes and pdf_bytes.startswith(b"%PDF-"):
+            try:
+                _pcount, rendered_pages, local_pdf_texts = render_pdf_pages_to_webp(pdf_bytes, doc_dir)
+            except Exception as exc:
+                warnings_list.append(
+                    f"Rendu visuel des pages PDF ignoré ({getattr(exc, 'detail', str(exc))}) — texte OCR et tableaux conservés."
+                )
+
+        parsed_pages = _split_finance_report_pages(extracted_text)
+        page_text_map: dict[int, str] = {}
+        for pnum, ptext in parsed_pages:
+            if pnum in page_text_map:
+                page_text_map[pnum] = f"{page_text_map[pnum]}\n\n{ptext}"
+            else:
+                page_text_map[pnum] = ptext
+
+        total_pages = max(
+            len(rendered_pages),
+            max(page_text_map.keys(), default=0),
+            1,
+        )
+
+        # Préambule synthétique (KPIs + résumé exécutif) injecté en tête du document
+        kpi_lines: list[str] = []
+        if isinstance(key_metrics, dict):
+            for k, v in key_metrics.items():
+                if v is not None and str(v).strip():
+                    kpi_lines.append(f"- **{k}** : {str(v).strip()}")
+
+        preface_parts = [
+            f"Société : **{company_name or symbol}** ({symbol})"
+            + (f" · Période : **{period_label}**" if period_label else ""),
+        ]
+        if kpi_lines:
+            preface_parts.append("### Indicateurs clés extraits\n" + "\n".join(kpi_lines))
+        if (summary_markdown or "").strip():
+            preface_parts.append("### Synthèse analytique du rapport\n" + summary_markdown.strip()[:6000])
+        if extracted_tables:
+            preface_parts.append(
+                f"*{len(extracted_tables)} tableau(x) financier(s) structuré(s) extrait(s) dans les pages ci-dessous.*"
+            )
+        preface_block = "\n\n".join(preface_parts)
+
+        pages_meta: list[dict[str, Any]] = []
+        sections: list[str] = [
+            f"# {title}\n",
+            (
+                f"> Rapport financier compilé ({company_name or symbol} · {symbol}"
+                + (f" · {period_label}" if period_label else "")
+                + f" · {total_pages} page{'s' if total_pages > 1 else ''}). "
+                f"Cite toujours les pages exactes `[p. N]` pour chaque chiffre ou tableau."
+            ),
+            preface_block,
+        ]
+
+        for page_num in range(1, total_pages + 1):
+            has_webp = page_num <= len(rendered_pages)
+            page_file = rendered_pages[page_num - 1] if has_webp else ""
+            page_url = f"/api/docs/{slug}/{page_file}" if has_webp else ""
+            body_text = page_text_map.get(page_num, "")
+            if not body_text and page_num <= len(local_pdf_texts):
+                body_text = local_pdf_texts[page_num - 1]
+
+            page_lines = [f"## [p. {page_num}]"]
+            if page_url:
+                page_lines.append(f"> Page originale complète : `{page_url}`")
+            if body_text:
+                page_lines.append(body_text)
+            elif page_num == 1 and not parsed_pages:
+                page_lines.append(extracted_text.strip() or summary_markdown.strip())
+
+            compiled_page = "\n\n".join(page_lines).strip()
+            sections.append(compiled_page)
+            pages_meta.append({
+                "page": page_num,
+                "page_image": page_file,
+                "page_image_url": page_url,
+                "compiled_markdown": compiled_page,
+                "figures": [],
+            })
+
+        return {
+            "source_type": "pdf" if rendered_pages else "finance",
+            "ocr_model": "finance-report",
+            "vision_enriched": False,
+            "page_count": total_pages,
+            "figure_count": 0,
+            "compiled_markdown": "\n\n---\n\n".join(s for s in sections if s),
+            "pages_meta": pages_meta,
+            "warnings": warnings_list,
+        }
+    except Exception:
+        remove_visual_doc_dir(app_data_dir, doc_id)
+        raise
+
+
 def _tokenize_query(text: str) -> set[str]:
     norm = unicodedata.normalize("NFKD", (text or "").lower()).encode("ascii", "ignore").decode("ascii")
     return {tok for tok in re.findall(r"[a-z0-9]{3,}", norm)}

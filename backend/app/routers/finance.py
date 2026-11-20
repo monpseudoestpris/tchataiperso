@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 import logging
 from pathlib import Path
@@ -67,6 +68,7 @@ from ..models import (
     FinanceWatchlist,
     FinanceWatchlistItem,
     User,
+    VisualDocument,
 )
 from ..schemas import (
     AddWatchlistItemRequest,
@@ -83,9 +85,11 @@ from ..serializers import (
     quarterly_report_json,
     stock_moat_json,
     stock_news_json,
+    visual_doc_json,
     watchlist_item_json,
     watchlist_json,
 )
+from ..visual_documents import compile_finance_report_to_visual_doc, remove_visual_doc_dir
 
 _logger = logging.getLogger("uvicorn.error")
 
@@ -1556,6 +1560,112 @@ async def import_and_analyze_quarterly_report(
     except Exception:
         if stored_path is not None:
             stored_path.unlink(missing_ok=True)
+        raise
+
+
+@router.post("/reports/{report_id}/visual-doc")
+async def ensure_visual_doc_from_finance_report(
+    report_id: str,
+    request: Request,
+    user: User = Depends(current_user),
+    settings: Settings = Depends(get_settings),
+    sessions: sessionmaker = Depends(get_sessions),
+) -> dict[str, Any]:
+    """Convertit (ou récupère) un rapport financier archivé en `VisualDocument` interactif attachable au tchat / mode vocal."""
+    upload_dir = get_upload_dir(request)
+    with sessions() as db:
+        report = db.scalar(
+            select(FinanceQuarterlyReport).where(
+                FinanceQuarterlyReport.id == report_id,
+                FinanceQuarterlyReport.user_id == user.id,
+            )
+        )
+        if not report:
+            raise HTTPException(404, "Rapport financier introuvable.")
+
+        deterministic_slug = f"finrep-{report.id.replace('-', '')[:12].lower()}"
+        existing = db.scalar(
+            select(VisualDocument).where(
+                VisualDocument.slug == deterministic_slug,
+                VisualDocument.user_id == user.id,
+            )
+        )
+        if existing is not None:
+            return visual_doc_json(existing, detail=True)
+
+        report_snapshot = {
+            "id": report.id,
+            "symbol": report.symbol,
+            "company_name": report.company_name,
+            "title": report.title,
+            "period_label": report.period_label,
+            "filename": report.filename or f"{report.symbol}-rapport.pdf",
+            "storage_name": report.storage_name,
+            "extracted_text": report.extracted_text or "",
+            "summary_markdown": report.summary_markdown or "",
+            "key_metrics": report.key_metrics if isinstance(report.key_metrics, dict) else {},
+            "extracted_tables": report.extracted_tables if isinstance(report.extracted_tables, list) else [],
+        }
+
+    pdf_bytes: bytes | None = None
+    storage_name = report_snapshot["storage_name"]
+    if storage_name:
+        candidate_path = (upload_dir / storage_name).resolve()
+        try:
+            if candidate_path.parent == upload_dir.resolve() and candidate_path.is_file():
+                raw = candidate_path.read_bytes()
+                if raw.startswith(b"%PDF-"):
+                    pdf_bytes = raw
+        except OSError:
+            pdf_bytes = None
+
+    title_parts = [report_snapshot["company_name"] or report_snapshot["symbol"]]
+    if report_snapshot["period_label"]:
+        title_parts.append(report_snapshot["period_label"])
+    elif report_snapshot["title"]:
+        title_parts.append(report_snapshot["title"])
+    doc_title = " — ".join(title_parts)[:200]
+    doc_id = str(uuid4())
+
+    compiled = await asyncio.to_thread(
+        compile_finance_report_to_visual_doc,
+        app_data_dir=settings.app_data_dir,
+        doc_id=doc_id,
+        slug=deterministic_slug,
+        title=doc_title,
+        symbol=report_snapshot["symbol"],
+        company_name=report_snapshot["company_name"],
+        period_label=report_snapshot["period_label"],
+        extracted_text=report_snapshot["extracted_text"],
+        summary_markdown=report_snapshot["summary_markdown"],
+        key_metrics=report_snapshot["key_metrics"],
+        extracted_tables=report_snapshot["extracted_tables"],
+        pdf_bytes=pdf_bytes,
+    )
+
+    try:
+        with sessions() as db:
+            vdoc = VisualDocument(
+                id=doc_id,
+                user_id=user.id,
+                slug=deterministic_slug,
+                title=doc_title,
+                filename=report_snapshot["filename"][:255],
+                source_type=compiled["source_type"],
+                ocr_model=compiled["ocr_model"],
+                vision_enriched=compiled["vision_enriched"],
+                page_count=compiled["page_count"],
+                figure_count=compiled["figure_count"],
+                compiled_markdown=compiled["compiled_markdown"],
+                pages_meta=compiled["pages_meta"],
+                warnings=compiled["warnings"],
+            )
+            db.add(vdoc)
+            db.commit()
+            db.refresh(vdoc)
+            return visual_doc_json(vdoc, detail=True)
+    except Exception:
+        remove_visual_doc_dir(settings.app_data_dir, doc_id)
         raise
 
 

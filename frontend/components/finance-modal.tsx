@@ -106,6 +106,7 @@ import {
   type IndexPerformancesResponse,
   type Model,
   type PrincipalIndexInfo,
+  type QuarterlyReport,
   type WarehouseOverview,
   type WatchlistItem,
 } from "@/lib/api";
@@ -119,6 +120,7 @@ type FinanceModalProps = {
   defaultModel?: string;
   onRefreshModels?: () => Promise<void>;
   onInsertIntoChat?: (text: string) => void;
+  onOpenReportAsDoc?: (report: QuarterlyReport, openVoiceFullscreen?: boolean) => Promise<void> | void;
 };
 
 type MainTab = "search_indices" | "fundamentals" | "chart_tech";
@@ -345,6 +347,7 @@ export function FinanceModal({
   defaultModel: propDefaultModel,
   onRefreshModels,
   onInsertIntoChat,
+  onOpenReportAsDoc,
 }: FinanceModalProps) {
   const theme = useInterfaceTheme();
   const [fallbackModels, setFallbackModels] = useState<Model[]>([]);
@@ -2606,6 +2609,7 @@ export function FinanceModal({
                       symbol={data.yahoo_symbol || data.symbol}
                       companyName={data.long_name || data.short_name || data.symbol}
                       onInsertIntoChat={onInsertIntoChat}
+                      onOpenReportAsDoc={onOpenReportAsDoc}
                     />
                   </div>
                 )}

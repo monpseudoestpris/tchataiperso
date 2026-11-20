@@ -25757,7 +25757,7 @@ thead .finance-stmt-sticky-col {
   position: absolute;
   right: 0;
   bottom: calc(100% + 8px);
-  width: 268px;
+  width: 288px;
   padding: 10px;
   border-radius: 14px;
   border: 1px solid var(--line);
@@ -25765,6 +25765,53 @@ thead .finance-stmt-sticky-col {
   color: var(--ink);
   box-shadow: 0 14px 36px rgba(15, 23, 42, 0.18);
   z-index: 60;
+}
+
+.voice-tone-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-bottom: 8px;
+}
+
+.voice-tone-pill {
+  padding: 4px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink);
+  font-size: 0.72rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+}
+
+.voice-tone-pill:hover {
+  background: var(--soft);
+}
+
+.voice-tone-pill.is-selected {
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
+  border-color: color-mix(in srgb, var(--primary) 45%, transparent);
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.voice-tone-custom-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 9px;
+  margin-bottom: 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--soft);
+  color: var(--ink);
+  font-size: 0.74rem;
+}
+
+.voice-tone-custom-input:focus {
+  outline: none;
+  border-color: var(--primary);
 }
 
 :root[data-theme="dark"] .voice-menu-popover {
@@ -25923,5 +25970,65 @@ thead .finance-stmt-sticky-col {
   color: var(--primary) !important;
   border-color: color-mix(in srgb, var(--primary) 40%, var(--line)) !important;
   background: color-mix(in srgb, var(--primary) 10%, transparent) !important;
+}
+
+.voice-playback-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 34px;
+  padding: 0 5px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--primary) 40%, var(--line));
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+}
+
+.voice-playback-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  transition: background 0.14s ease;
+}
+
+.voice-playback-btn.is-toggle {
+  color: var(--primary);
+}
+
+.voice-playback-btn.is-stop {
+  color: #dc2626;
+}
+
+.voice-playback-btn:hover {
+  background: var(--soft);
+}
+
+.voice-playback-speed {
+  height: 24px;
+  padding: 0 6px;
+  border-radius: 7px;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  font-size: 0.72rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.voice-playback-speed:hover {
+  background: var(--soft);
+}
+
+.voice-menu-empty {
+  padding: 10px 6px;
+  text-align: center;
+  font-size: 0.74rem;
+  color: var(--muted);
 }
 

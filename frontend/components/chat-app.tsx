@@ -1,10 +1,10 @@
 "use client";
 
 import {
-  ArrowDown, ArrowRightLeft, ArrowUp, Bookmark, BookmarkCheck, BookOpen, Bot, Brain, Check, ChevronDown, ChevronLeft, ChevronRight,
+  ArrowDown, ArrowRightLeft, ArrowUp, AudioLines, Bookmark, BookmarkCheck, BookOpen, Bot, Brain, Check, ChevronDown, ChevronLeft, ChevronRight,
   CircleAlert, Code2, Compass, Copy, Download, ExternalLink, Eye, FileCode2, FileText, FolderArchive, FolderKanban,
   Globe, Globe2, GraduationCap, ImagePlus, LayoutGrid, LineChart, Link2, LoaderCircle, LogOut, Menu, MessageCircle, Newspaper, PanelLeftClose, Paperclip,
-  Pencil, Plus, Presentation, Search, RefreshCw, Settings, Share2, Shield, Sliders, Sparkles, Square, SquarePlay, Star, Target, Trash2, TrendingUp, Unlink, Users, UsersRound, Volume2, WandSparkles, X,
+  Pause, Pencil, Play, Plus, Presentation, Search, RefreshCw, Settings, Share2, Shield, Sliders, Sparkles, Square, SquarePlay, Star, Target, Trash2, TrendingUp, Unlink, Users, UsersRound, Volume2, WandSparkles, X,
 } from "lucide-react";
 import { isValidElement, memo, useEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
@@ -39,10 +39,11 @@ import { CreativityControl, formatCreativityBadge } from "@/components/creativit
 import { SidebarCreativityPotentiometer } from "@/components/sidebar-creativity-potentiometer";
 import { WebPageModal } from "@/components/web-page-modal";
 import { VisualDocModal } from "@/components/visual-doc-modal";
+import { VoiceFullscreenModal } from "@/components/voice-fullscreen-modal";
 import { VoiceRecorderButton } from "@/components/voice-recorder-button";
 import { VoiceSettingsMenu } from "@/components/voice-settings-menu";
 import { synthesizeSpeech } from "@/lib/voice-api";
-import { ApiError, api, attachUrl, attachVisualDocToConversation, createLearnReportFromMessage, createReportFromMessage, detachVisualDocFromConversation, errorMessage, fetchTopics, linkConversationToTopic, unlinkConversationFromTopic, skillToSlug, streamMessage, type Attachment, type AuthUser, type Config, type Conversation, type DocumentExtraction, type FamilyGroupInfo, type FinancialDashboardData, type GeneratedSound, type Memory, type Message, type Model, type MultiAgentConfig, type PageBrick, type SamplingParameters, type Skill, type Source, type StageModelsConfig, type TopicSpace, type VisualDocSummary, type WebPage } from "@/lib/api";
+import { ApiError, api, attachUrl, attachVisualDocToConversation, createLearnReportFromMessage, createReportFromMessage, detachVisualDocFromConversation, ensureVisualDocFromFinanceReport, errorMessage, fetchTopics, linkConversationToTopic, unlinkConversationFromTopic, skillToSlug, streamMessage, type Attachment, type AuthUser, type Config, type Conversation, type DocumentExtraction, type FamilyGroupInfo, type FinancialDashboardData, type GeneratedSound, type Memory, type Message, type Model, type MultiAgentConfig, type PageBrick, type QuarterlyReport, type SamplingParameters, type Skill, type Source, type StageModelsConfig, type TopicSpace, type VisualDocSummary, type WebPage } from "@/lib/api";
 import { extractDocMetaFromImageSrc, isIncompleteLocalDocImage, isLocalVisualDocImage, linkifyPageCitations, parsePageCitationHref, prepareStreamingVisualMarkdown } from "@/lib/visual-doc-markdown";
 import { collectConversationCanvasFiles, createZipBlob, extractCanvasFiles, hasExplicitCanvasFiles, triggerBlobDownload, type CanvasFile } from "@/lib/code-canvas";
 import { hasInteractiveLearnModules, stripInteractiveModulesForBody } from "@/lib/learn-parser";
@@ -593,8 +594,10 @@ const MessageView = memo(function MessageView({
   onOpenResearchActivity,
   ttsEnabled,
   isSpeaking,
+  isSpeechPaused,
   isLoadingTts,
   onToggleSpeak,
+  onStopSpeak,
 }: {
   message: Message;
   streaming?: boolean;
@@ -609,8 +612,10 @@ const MessageView = memo(function MessageView({
   onOpenResearchActivity?: (messageId: string) => void;
   ttsEnabled?: boolean;
   isSpeaking?: boolean;
+  isSpeechPaused?: boolean;
   isLoadingTts?: boolean;
   onToggleSpeak?: (message: Message) => void;
+  onStopSpeak?: () => void;
 }) {
   const [copied, setCopied] = useState(false);
   const [zipDownloaded, setZipDownloaded] = useState(false);
@@ -1146,18 +1151,38 @@ const MessageView = memo(function MessageView({
               className={`message-speak-btn ${isSpeaking ? "is-speaking" : ""}`}
               onClick={() => onToggleSpeak(message)}
               disabled={Boolean(isLoadingTts)}
-              aria-label={isSpeaking ? "Arrêter la lecture vocale" : "Écouter cette réponse à voix haute"}
-              title={isSpeaking ? "Arrêter la lecture" : "Lire la réponse à voix haute (voix Google, filtrée)"}
+              aria-label={
+                isSpeaking
+                  ? (isSpeechPaused ? "Reprendre la lecture vocale" : "Mettre en pause la lecture vocale")
+                  : "Écouter cette réponse à voix haute"
+              }
+              title={
+                isSpeaking
+                  ? (isSpeechPaused ? "Reprendre la lecture" : "Mettre en pause")
+                  : "Lire la réponse à voix haute (voix Google, filtrée)"
+              }
             >
               {isLoadingTts ? (
                 <LoaderCircle size={14} className="spin" />
               ) : isSpeaking ? (
-                <Square size={12} fill="currentColor" />
+                isSpeechPaused ? <Play size={13} fill="currentColor" /> : <Pause size={13} fill="currentColor" />
               ) : (
                 <Volume2 size={14} />
               )}
-              {isLoadingTts ? "Synthèse…" : isSpeaking ? "Arrêter" : "Écouter"}
+              {isLoadingTts ? "Synthèse…" : isSpeaking ? (isSpeechPaused ? "Reprendre" : "Pause") : "Écouter"}
             </button>
+            {isSpeaking && onStopSpeak && (
+              <button
+                type="button"
+                className="message-speak-btn"
+                onClick={onStopSpeak}
+                aria-label="Arrêter la lecture vocale"
+                title="Arrêter la lecture"
+              >
+                <Square size={11} fill="currentColor" />
+                Arrêter
+              </button>
+            )}
           </>
         )}
         <span className="message-action-separator" />
@@ -1478,6 +1503,19 @@ export function ChatApp() {
     }
     return "Aoede";
   });
+  const [ttsTone, setTtsTone] = useState<string>(() => {
+    if (typeof window !== "undefined") {
+      return window.localStorage.getItem("clair_tts_tone") || "natural";
+    }
+    return "natural";
+  });
+  const [ttsSpeed, setTtsSpeed] = useState<number>(() => {
+    if (typeof window !== "undefined") {
+      const parsed = Number.parseFloat(window.localStorage.getItem("clair_tts_speed") || "1");
+      if (Number.isFinite(parsed) && parsed >= 0.5 && parsed <= 2.5) return parsed;
+    }
+    return 1;
+  });
   const [autoReadEnabled, setAutoReadEnabled] = useState<boolean>(() => {
     if (typeof window !== "undefined") {
       return window.localStorage.getItem("clair_tts_auto_read") === "1";
@@ -1488,8 +1526,17 @@ export function ChatApp() {
   autoReadEnabledRef.current = autoReadEnabled;
   const ttsVoiceRef = useRef(ttsVoice);
   ttsVoiceRef.current = ttsVoice;
+  const ttsToneRef = useRef(ttsTone);
+  ttsToneRef.current = ttsTone;
+  const ttsSpeedRef = useRef(ttsSpeed);
+  ttsSpeedRef.current = ttsSpeed;
   const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null);
+  const [isSpeechPaused, setIsSpeechPaused] = useState(false);
   const [loadingTtsMessageId, setLoadingTtsMessageId] = useState<string | null>(null);
+  const [voiceFullscreenOpen, setVoiceFullscreenOpen] = useState(false);
+  const voiceFullscreenOpenRef = useRef(voiceFullscreenOpen);
+  voiceFullscreenOpenRef.current = voiceFullscreenOpen;
+  const [speechEndTick, setSpeechEndTick] = useState(0);
   const activeAudioRef = useRef<HTMLAudioElement | null>(null);
   const ttsAbortRef = useRef<AbortController | null>(null);
   const ttsCacheRef = useRef<Map<string, string>>(new Map());
@@ -1505,7 +1552,31 @@ export function ChatApp() {
       activeAudioRef.current = null;
     }
     setSpeakingMessageId(null);
+    setIsSpeechPaused(false);
     setLoadingTtsMessageId(null);
+  }
+
+  function togglePauseSpeech() {
+    const audio = activeAudioRef.current;
+    if (!audio) return;
+    if (audio.paused) {
+      audio.playbackRate = ttsSpeedRef.current;
+      void audio.play().then(() => setIsSpeechPaused(false)).catch((err) => setError(errorMessage(err)));
+    } else {
+      audio.pause();
+      setIsSpeechPaused(true);
+    }
+  }
+
+  function handleSelectSpeed(nextSpeed: number) {
+    setTtsSpeed(nextSpeed);
+    ttsSpeedRef.current = nextSpeed;
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("clair_tts_speed", String(nextSpeed));
+    }
+    if (activeAudioRef.current) {
+      activeAudioRef.current.playbackRate = nextSpeed;
+    }
   }
 
   async function speakMessageContent(messageId: string, rawContent: string) {
@@ -1514,28 +1585,35 @@ export function ChatApp() {
     stopSpeech();
 
     const voiceId = ttsVoiceRef.current || config?.voice?.default_voice || "Aoede";
-    const cacheKey = `${messageId}:${voiceId}`;
+    const toneValue = ttsToneRef.current || "natural";
+    const cacheKey = `${messageId}:${voiceId}:${toneValue}`;
     const cachedUrl = ttsCacheRef.current.get(cacheKey);
     if (cachedUrl) {
       const audio = new Audio(cachedUrl);
+      audio.playbackRate = ttsSpeedRef.current;
       activeAudioRef.current = audio;
       setSpeakingMessageId(messageId);
+      setIsSpeechPaused(false);
       audio.onended = () => {
         if (activeAudioRef.current === audio) {
           activeAudioRef.current = null;
           setSpeakingMessageId(null);
+          setIsSpeechPaused(false);
+          setSpeechEndTick((n) => n + 1);
         }
       };
       audio.onerror = () => {
         if (activeAudioRef.current === audio) {
           activeAudioRef.current = null;
           setSpeakingMessageId(null);
+          setIsSpeechPaused(false);
         }
       };
       try {
         await audio.play();
       } catch (err) {
         setSpeakingMessageId(null);
+        setIsSpeechPaused(false);
         setError(errorMessage(err));
       }
       return;
@@ -1545,7 +1623,7 @@ export function ChatApp() {
     ttsAbortRef.current = controller;
     setLoadingTtsMessageId(messageId);
     try {
-      const blob = await synthesizeSpeech(cleanBody, voiceId, controller.signal);
+      const blob = await synthesizeSpeech(cleanBody, voiceId, toneValue, controller.signal);
       if (ttsAbortRef.current !== controller) return;
       const objectUrl = URL.createObjectURL(blob);
       // Limiter le cache client à 15 pistes audio récentes
@@ -1559,19 +1637,24 @@ export function ChatApp() {
       }
       ttsCacheRef.current.set(cacheKey, objectUrl);
       const audio = new Audio(objectUrl);
+      audio.playbackRate = ttsSpeedRef.current;
       activeAudioRef.current = audio;
       setLoadingTtsMessageId(null);
       setSpeakingMessageId(messageId);
+      setIsSpeechPaused(false);
       audio.onended = () => {
         if (activeAudioRef.current === audio) {
           activeAudioRef.current = null;
           setSpeakingMessageId(null);
+          setIsSpeechPaused(false);
+          setSpeechEndTick((n) => n + 1);
         }
       };
       audio.onerror = () => {
         if (activeAudioRef.current === audio) {
           activeAudioRef.current = null;
           setSpeakingMessageId(null);
+          setIsSpeechPaused(false);
         }
       };
       await audio.play();
@@ -1582,6 +1665,7 @@ export function ChatApp() {
       }
       setLoadingTtsMessageId(null);
       setSpeakingMessageId(null);
+      setIsSpeechPaused(false);
     } finally {
       if (ttsAbortRef.current === controller) {
         ttsAbortRef.current = null;
@@ -1590,8 +1674,12 @@ export function ChatApp() {
   }
 
   function handleToggleSpeakMessage(msg: Message) {
-    if (speakingMessageId === msg.id || loadingTtsMessageId === msg.id) {
+    if (loadingTtsMessageId === msg.id) {
       stopSpeech();
+      return;
+    }
+    if (speakingMessageId === msg.id) {
+      togglePauseSpeech();
       return;
     }
     void speakMessageContent(msg.id, msg.content);
@@ -1601,6 +1689,13 @@ export function ChatApp() {
     setTtsVoice(nextVoice);
     if (typeof window !== "undefined") {
       window.localStorage.setItem("clair_tts_voice", nextVoice);
+    }
+  }
+
+  function handleSelectTone(nextTone: string) {
+    setTtsTone(nextTone);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("clair_tts_tone", nextTone);
     }
   }
 
@@ -2608,7 +2703,7 @@ export function ChatApp() {
                 messages: event.data.conversation.messages ?? (old.messages ?? []).map(item => item.id === assistantId ? event.data.message : item)
               } : old));
               if (
-                autoReadEnabledRef.current
+                (autoReadEnabledRef.current || voiceFullscreenOpenRef.current)
                 && config?.features?.tts
                 && event.data.message?.id
                 && event.data.message?.content
@@ -3704,7 +3799,7 @@ export function ChatApp() {
               })() : (
                 <div className="welcome"><div className="welcome-eyebrow"><span /> UN PEU DE CLARTÉ, BEAUCOUP DE POSSIBILITÉS</div><BrandMark /><h1>Qu’avez-vous en tête<span> aujourd’hui ?</span></h1><p>Un espace pour vos questions, vos idées et vos projets.<br />Commencez quelque part. On avance ensemble.</p><div className="suggestions">{suggestions.map((item, index) => <button type="button" className="suggestion" key={item.title} disabled={working} onClick={() => { if (index === 3) { openImageStudio(item.prompt); } else if (index === 1) { openBlogModal(item.prompt); } else { setDraft(item.prompt); textareaRef.current?.focus(); } }}><span className={`suggestion-icon suggestion-icon-${index}`}><item.icon size={19} strokeWidth={1.6} /></span><strong>{item.title}</strong><span>{item.description}</span><ChevronRight size={15} className="suggestion-arrow" /></button>)}</div><div className="welcome-note"><Brain size={14} /><span>Les souvenirs que vous choisissez gardent le fil d’une conversation à l’autre.</span></div></div>
               )
-            ) : busy === "switch" ? <div className="loading-conversation"><LoaderCircle size={23} className="spin" />Ouverture de votre conversation…</div> : <div className="messages"><div className="conversation-heading"><div className="conversation-heading-top"><span>CONVERSATION</span>{conversation?.topic_space_id && (() => { const curTopic = topics.find(t => t.id === conversation.topic_space_id); if (!curTopic) return null; return <button type="button" className="conversation-topic-badge" onClick={() => { setTopicModalId(curTopic.id); setTopicModalOpen(true); }} title={`Espace : ${curTopic.title} (cliquer pour voir la synthèse et mémoire)`}><span>{curTopic.icon || "📌"}</span><span>{curTopic.title}</span></button>; })()}{conversation?.theme && <button type="button" className={`conversation-theme-badge tone-${themeTone(conversation.theme)}`} onClick={() => { setGroupMode("theme"); setSelectedTheme(old => (old === conversation.theme ? "" : (conversation.theme ?? ""))); setSidebarOpen(true); }} title={`Voir toutes les discussions du thème « ${conversation.theme} »`}>{conversation.theme}</button>}<div className="conversation-heading-actions">{conversation && <button type="button" className="conversation-meta-btn" disabled={working} onClick={() => setLinkTopicDialogOpen(true)} title="Associer ou détacher cette discussion d'un espace thématique"><FolderKanban size={12} /><span>{conversation.topic_space_id ? "Espace lié" : "Lier à un espace"}</span></button>}{conversation && <button type="button" className="conversation-meta-btn conversation-page-btn" disabled={working} onClick={() => openWebPagesModal()} title="Générer une page web autonome (HTML5 + SVG + JS) à partir de cette conversation"><Globe size={12} /><span>Page Web</span></button>}{conversation && <button type="button" className="conversation-meta-btn conversation-study-btn" disabled={working} onClick={() => openStudyModal("all")} title="Réviser les notions de cette discussion : Flashcards 3D, Quizz QCM et Phrases à trous"><GraduationCap size={12} /><span>Réviser</span></button>}{conversation && <button type="button" className="conversation-meta-btn" disabled={working} onClick={() => openEditDialog(conversation)} title="Modifier le titre, le thème et les mots-clés"><Pencil size={12} /><span>Éditer</span></button>}{conversation && <button type="button" className="conversation-meta-btn" disabled={working} onClick={() => void classifyConversation(conversation.id, true)} title="Régénérer le titre, le thème et les mots-clés automatiquement (Mistral Small)">{busy === "classify" ? <LoaderCircle size={12} className="spin" /> : <WandSparkles size={12} />}<span>Auto-tags IA</span></button>}</div></div><h1>{conversation?.title}</h1>{!!conversation?.keywords?.length && <div className="conversation-keywords-row" aria-label="Mots-clés de la discussion">{conversation.keywords.map(kw => <button key={kw} type="button" className={`conversation-keyword-chip ${selectedKeyword.toLocaleLowerCase("fr") === kw.toLocaleLowerCase("fr") ? "is-active" : ""}`} onClick={() => { toggleKeywordFilter(kw); setSidebarOpen(true); }} title={`Filtrer les discussions avec #${kw}`}>#{kw}</button>)}</div>}</div>{conversation && <ChatAttachedSites key={conversation.id} conversationId={conversation.id} />}{messages.map(message => <MessageView key={message.id} message={message} streaming={streamingId === message.id} visualDocs={activeVisualDocs} onOpenCanvas={openCanvasForMessage} onOpenDeepSearchReport={handleOpenDeepSearchReport} researchActivity={researchRuns[message.id]} onOpenResearchActivity={setResearchActivityMessageId} onOpenLearnReport={handleOpenLearnReport} onOpenFinanceModal={openFinanceModal} onRegenerateExercise={prompt => void send(undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, prompt)} onSelectFollowUp={q => void send(undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, q)} ttsEnabled={Boolean(config?.features?.tts)} isSpeaking={speakingMessageId === message.id} isLoadingTts={loadingTtsMessageId === message.id} onToggleSpeak={handleToggleSpeakMessage} />)}<div ref={bottomRef} /></div>}
+            ) : busy === "switch" ? <div className="loading-conversation"><LoaderCircle size={23} className="spin" />Ouverture de votre conversation…</div> : <div className="messages"><div className="conversation-heading"><div className="conversation-heading-top"><span>CONVERSATION</span>{conversation?.topic_space_id && (() => { const curTopic = topics.find(t => t.id === conversation.topic_space_id); if (!curTopic) return null; return <button type="button" className="conversation-topic-badge" onClick={() => { setTopicModalId(curTopic.id); setTopicModalOpen(true); }} title={`Espace : ${curTopic.title} (cliquer pour voir la synthèse et mémoire)`}><span>{curTopic.icon || "📌"}</span><span>{curTopic.title}</span></button>; })()}{conversation?.theme && <button type="button" className={`conversation-theme-badge tone-${themeTone(conversation.theme)}`} onClick={() => { setGroupMode("theme"); setSelectedTheme(old => (old === conversation.theme ? "" : (conversation.theme ?? ""))); setSidebarOpen(true); }} title={`Voir toutes les discussions du thème « ${conversation.theme} »`}>{conversation.theme}</button>}<div className="conversation-heading-actions">{conversation && <button type="button" className="conversation-meta-btn" disabled={working} onClick={() => setLinkTopicDialogOpen(true)} title="Associer ou détacher cette discussion d'un espace thématique"><FolderKanban size={12} /><span>{conversation.topic_space_id ? "Espace lié" : "Lier à un espace"}</span></button>}{conversation && <button type="button" className="conversation-meta-btn conversation-page-btn" disabled={working} onClick={() => openWebPagesModal()} title="Générer une page web autonome (HTML5 + SVG + JS) à partir de cette conversation"><Globe size={12} /><span>Page Web</span></button>}{conversation && <button type="button" className="conversation-meta-btn conversation-study-btn" disabled={working} onClick={() => openStudyModal("all")} title="Réviser les notions de cette discussion : Flashcards 3D, Quizz QCM et Phrases à trous"><GraduationCap size={12} /><span>Réviser</span></button>}{conversation && <button type="button" className="conversation-meta-btn" disabled={working} onClick={() => openEditDialog(conversation)} title="Modifier le titre, le thème et les mots-clés"><Pencil size={12} /><span>Éditer</span></button>}{conversation && <button type="button" className="conversation-meta-btn" disabled={working} onClick={() => void classifyConversation(conversation.id, true)} title="Régénérer le titre, le thème et les mots-clés automatiquement (Mistral Small)">{busy === "classify" ? <LoaderCircle size={12} className="spin" /> : <WandSparkles size={12} />}<span>Auto-tags IA</span></button>}</div></div><h1>{conversation?.title}</h1>{!!conversation?.keywords?.length && <div className="conversation-keywords-row" aria-label="Mots-clés de la discussion">{conversation.keywords.map(kw => <button key={kw} type="button" className={`conversation-keyword-chip ${selectedKeyword.toLocaleLowerCase("fr") === kw.toLocaleLowerCase("fr") ? "is-active" : ""}`} onClick={() => { toggleKeywordFilter(kw); setSidebarOpen(true); }} title={`Filtrer les discussions avec #${kw}`}>#{kw}</button>)}</div>}</div>{conversation && <ChatAttachedSites key={conversation.id} conversationId={conversation.id} />}{messages.map(message => <MessageView key={message.id} message={message} streaming={streamingId === message.id} visualDocs={activeVisualDocs} onOpenCanvas={openCanvasForMessage} onOpenDeepSearchReport={handleOpenDeepSearchReport} researchActivity={researchRuns[message.id]} onOpenResearchActivity={setResearchActivityMessageId} onOpenLearnReport={handleOpenLearnReport} onOpenFinanceModal={openFinanceModal} onRegenerateExercise={prompt => void send(undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, prompt)} onSelectFollowUp={q => void send(undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, q)} ttsEnabled={Boolean(config?.features?.tts)} isSpeaking={speakingMessageId === message.id} isSpeechPaused={speakingMessageId === message.id && isSpeechPaused} isLoadingTts={loadingTtsMessageId === message.id} onToggleSpeak={handleToggleSpeakMessage} onStopSpeak={stopSpeech} />)}<div ref={bottomRef} /></div>}
           </div>
           {!atBottom && !!messages.length && <IconButton className="scroll-bottom" label="Aller aux derniers messages" onClick={() => { atBottomRef.current = true; setAtBottom(true); messagesRef.current?.scrollTo({ top: messagesRef.current.scrollHeight, behavior: "smooth" }); }}><ArrowDown size={18} /></IconButton>}
 
@@ -3968,6 +4063,16 @@ export function ChatApp() {
                       </span>
                     ))}
                   </div>
+                  <button
+                    type="button"
+                    className="vdoc-active-chip-open"
+                    style={{ marginLeft: "auto", fontWeight: 600 }}
+                    onClick={() => setVoiceFullscreenOpen(true)}
+                    title="Interagir à voix haute avec ce document en Mode Vocal Plein Écran"
+                  >
+                    <AudioLines size={13} />
+                    <span>Vocal Plein Écran</span>
+                  </button>
                 </div>
               )}
               {!!attachments.length && <div className="pending-attachments">{attachments.map(item => {
@@ -4005,7 +4110,7 @@ export function ChatApp() {
                 disabled={working || !config}
                 aria-describedby="composer-hint"
               />
-              <div className="composer-toolbar"><div className="composer-tools"><div className="composer-attach-wrapper" ref={attachMenuRef}><input className="sr-only" type="file" ref={docInputRef} multiple accept=".txt,.md,.csv,.json,.pdf,.docx,image/png,image/jpeg,image/webp" onChange={event => void uploadFiles(event.target.files, "ocr")} tabIndex={-1} /><input className="sr-only" type="file" ref={visionInputRef} multiple accept="image/png,image/jpeg,image/webp" onChange={event => void uploadFiles(event.target.files, "vision")} tabIndex={-1} /><IconButton label="Joindre un document ou analyser une image" aria-expanded={attachMenuOpen} aria-haspopup="menu" disabled={working || !config} onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); setAttachMenuOpen(prev => !prev); }}><Paperclip size={19} /></IconButton>{attachMenuOpen && <div className="composer-attach-popover" role="menu" onMouseDown={e => e.stopPropagation()}><div className="attach-popover-header"><span className="attach-popover-title">Joindre une pièce</span></div><button type="button" className="attach-popover-item" role="menuitem" onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); docInputRef.current?.click(); setAttachMenuOpen(false); }}><span className="attach-popover-icon is-doc"><FileText size={17} /></span><div className="attach-popover-text"><span className="attach-item-title">Document (Mistral OCR)</span><span className="attach-item-desc">PDF, Word, scans, tableaux — extraction structurée & fidèle</span></div></button><button type="button" className="attach-popover-item" role="menuitem" onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); visionInputRef.current?.click(); setAttachMenuOpen(false); }}><span className="attach-popover-icon is-vision"><Eye size={17} /></span><div className="attach-popover-text"><span className="attach-item-title">Image (Vision IA détaillée)</span><span className="attach-item-desc">Photos, infographies, schémas — analyse visuelle exhaustive</span></div></button><button type="button" className="attach-popover-item" role="menuitem" onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); setAttachMenuOpen(false); setVisualDocModalInitialId(null); setVisualDocModalTab("ingest"); setVisualDocModalOpen(true); }}><span className="attach-popover-icon is-doc"><BookOpen size={17} /></span><div className="attach-popover-text"><span className="attach-item-title">Document illustré (Règle / Manuel)</span><span className="attach-item-desc">PDF ou photos — Mistral OCR + schémas WebP &amp; citations [p. X]</span></div></button></div>}</div><IconButton label="Analyser un lien web ou vidéo YouTube (URL)" disabled={working || !config} onClick={() => { setUrlError(""); setUrlInputValue(""); setShowUrlModal(true); }}><Link2 size={19} /></IconButton><span className="tool-divider" /><button type="button" className={`tool-button web-trigger ${effectiveWebMode !== "off" && !deepSearch && !learnMode ? "active" : ""} ${effectiveWebMode === "auto" && !deepSearch && !learnMode ? "web-auto" : ""} ${effectiveWebMode === "always" && !deepSearch && !learnMode ? "web-always" : ""} ${effectiveWebMode === "off" && !deepSearch && !learnMode ? "web-off" : ""}`} disabled={working || !isWebSearchAvailable} aria-pressed={effectiveWebMode !== "off" && !deepSearch && !learnMode} title={webSearchTooltip} aria-describedby={showDuckDuckGoNotice ? "web-search-hint" : undefined} onClick={() => { if (deepSearch || learnMode) { setDeepSearch(false); setLearnMode(false); setWebSearchMode("auto"); return; } setWebSearchMode(current => { if (current === "auto") return "always"; if (current === "always") return "off"; return "auto"; }); }}><Globe2 size={16} /><span>Web</span>{effectiveWebMode === "auto" && !deepSearch && !learnMode && <span className="auto-badge" title="Décision automatique par agent rapide">Auto</span>}{effectiveWebMode === "always" && !deepSearch && !learnMode && <Check size={12} />}</button><button type="button" className={`tool-button deepsearch-trigger ${deepSearch ? "active" : ""}`} disabled={working || !isWebSearchAvailable} aria-pressed={deepSearch} title={isWebSearchAvailable ? "DeepSearch : recherche large multi-requêtes via SearXNG et grand rapport d’analyse approfondi" : webSearchTooltip} onClick={() => { setDeepSearch(old => { if (!old) setLearnMode(false); return !old; }); }}><Compass size={16} /><span>DeepSearch</span>{deepSearch && <Check size={12} />}</button><button type="button" className={`tool-button codecanvas-trigger ${codeMode ? "active" : ""}`} disabled={working || !config} aria-pressed={codeMode} title="Mode Code Canvas : générer une application ou un projet multi-fichiers dans l’éditeur interactif avec téléchargement .zip" onClick={toggleCodeMode}><Code2 size={16} /><span>Code · Canvas</span>{codeMode && <Check size={12} />}</button><button type="button" className={`tool-button followup-trigger ${followupQuestionsEnabled ? "active" : ""}`} disabled={working || !config} aria-pressed={followupQuestionsEnabled} title="Relances auto : proposer en fin de message au moins 5 questions, affirmations ou réponses pour continuer (désactivé par défaut)" onClick={() => setFollowupQuestionsEnabled(old => !old)}><Sparkles size={16} /><span>Relances</span>{followupQuestionsEnabled && <Check size={12} />}</button></div><div className="composer-submit"><VoiceSettingsMenu disabled={!config} ttsEnabled={Boolean(config?.features?.tts)} voices={config?.voice?.voices ?? []} selectedVoice={ttsVoice} autoReadEnabled={autoReadEnabled} isSpeaking={Boolean(speakingMessageId)} onSelectVoice={handleSelectVoice} onToggleAutoRead={handleToggleAutoRead} onStopSpeaking={stopSpeech} /><VoiceRecorderButton disabled={working || !config} sttEnabled={Boolean(config?.features?.stt)} sttProvider={config?.voice?.stt_provider} onTranscribed={handleVoiceTranscript} onError={setError} /><span className="enter-hint">↵ pour envoyer</span>{isCurrentStreaming ? <button className="send-button stop-button" type="button" onClick={stopCurrentStream} aria-label="Interrompre la génération" title="Interrompre la génération"><Square size={14} fill="currentColor" /></button> : <button className="send-button" type="submit" disabled={!canSend} aria-label="Envoyer le message">{busy === "upload" ? <LoaderCircle size={19} className="spin" /> : <ArrowUp size={20} />}</button>}</div></div>
+              <div className="composer-toolbar"><div className="composer-tools"><div className="composer-attach-wrapper" ref={attachMenuRef}><input className="sr-only" type="file" ref={docInputRef} multiple accept=".txt,.md,.csv,.json,.pdf,.docx,image/png,image/jpeg,image/webp" onChange={event => void uploadFiles(event.target.files, "ocr")} tabIndex={-1} /><input className="sr-only" type="file" ref={visionInputRef} multiple accept="image/png,image/jpeg,image/webp" onChange={event => void uploadFiles(event.target.files, "vision")} tabIndex={-1} /><IconButton label="Joindre un document ou analyser une image" aria-expanded={attachMenuOpen} aria-haspopup="menu" disabled={working || !config} onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); setAttachMenuOpen(prev => !prev); }}><Paperclip size={19} /></IconButton>{attachMenuOpen && <div className="composer-attach-popover" role="menu" onMouseDown={e => e.stopPropagation()}><div className="attach-popover-header"><span className="attach-popover-title">Joindre une pièce</span></div><button type="button" className="attach-popover-item" role="menuitem" onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); docInputRef.current?.click(); setAttachMenuOpen(false); }}><span className="attach-popover-icon is-doc"><FileText size={17} /></span><div className="attach-popover-text"><span className="attach-item-title">Document (Mistral OCR)</span><span className="attach-item-desc">PDF, Word, scans, tableaux — extraction structurée & fidèle</span></div></button><button type="button" className="attach-popover-item" role="menuitem" onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); visionInputRef.current?.click(); setAttachMenuOpen(false); }}><span className="attach-popover-icon is-vision"><Eye size={17} /></span><div className="attach-popover-text"><span className="attach-item-title">Image (Vision IA détaillée)</span><span className="attach-item-desc">Photos, infographies, schémas — analyse visuelle exhaustive</span></div></button><button type="button" className="attach-popover-item" role="menuitem" onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); setAttachMenuOpen(false); setVisualDocModalInitialId(null); setVisualDocModalTab("ingest"); setVisualDocModalOpen(true); }}><span className="attach-popover-icon is-doc"><BookOpen size={17} /></span><div className="attach-popover-text"><span className="attach-item-title">Document illustré (Règle / Manuel)</span><span className="attach-item-desc">PDF ou photos — Mistral OCR + schémas WebP &amp; citations [p. X]</span></div></button></div>}</div><IconButton label="Analyser un lien web ou vidéo YouTube (URL)" disabled={working || !config} onClick={() => { setUrlError(""); setUrlInputValue(""); setShowUrlModal(true); }}><Link2 size={19} /></IconButton><span className="tool-divider" /><button type="button" className={`tool-button web-trigger ${effectiveWebMode !== "off" && !deepSearch && !learnMode ? "active" : ""} ${effectiveWebMode === "auto" && !deepSearch && !learnMode ? "web-auto" : ""} ${effectiveWebMode === "always" && !deepSearch && !learnMode ? "web-always" : ""} ${effectiveWebMode === "off" && !deepSearch && !learnMode ? "web-off" : ""}`} disabled={working || !isWebSearchAvailable} aria-pressed={effectiveWebMode !== "off" && !deepSearch && !learnMode} title={webSearchTooltip} aria-describedby={showDuckDuckGoNotice ? "web-search-hint" : undefined} onClick={() => { if (deepSearch || learnMode) { setDeepSearch(false); setLearnMode(false); setWebSearchMode("auto"); return; } setWebSearchMode(current => { if (current === "auto") return "always"; if (current === "always") return "off"; return "auto"; }); }}><Globe2 size={16} /><span>Web</span>{effectiveWebMode === "auto" && !deepSearch && !learnMode && <span className="auto-badge" title="Décision automatique par agent rapide">Auto</span>}{effectiveWebMode === "always" && !deepSearch && !learnMode && <Check size={12} />}</button><button type="button" className={`tool-button deepsearch-trigger ${deepSearch ? "active" : ""}`} disabled={working || !isWebSearchAvailable} aria-pressed={deepSearch} title={isWebSearchAvailable ? "DeepSearch : recherche large multi-requêtes via SearXNG et grand rapport d’analyse approfondi" : webSearchTooltip} onClick={() => { setDeepSearch(old => { if (!old) setLearnMode(false); return !old; }); }}><Compass size={16} /><span>DeepSearch</span>{deepSearch && <Check size={12} />}</button><button type="button" className={`tool-button codecanvas-trigger ${codeMode ? "active" : ""}`} disabled={working || !config} aria-pressed={codeMode} title="Mode Code Canvas : générer une application ou un projet multi-fichiers dans l’éditeur interactif avec téléchargement .zip" onClick={toggleCodeMode}><Code2 size={16} /><span>Code · Canvas</span>{codeMode && <Check size={12} />}</button><button type="button" className={`tool-button followup-trigger ${followupQuestionsEnabled ? "active" : ""}`} disabled={working || !config} aria-pressed={followupQuestionsEnabled} title="Relances auto : proposer en fin de message au moins 5 questions, affirmations ou réponses pour continuer (désactivé par défaut)" onClick={() => setFollowupQuestionsEnabled(old => !old)}><Sparkles size={16} /><span>Relances</span>{followupQuestionsEnabled && <Check size={12} />}</button></div><div className="composer-submit"><VoiceSettingsMenu disabled={!config} ttsEnabled={Boolean(config?.features?.tts)} voices={config?.voice?.voices ?? []} tones={config?.voice?.tones} selectedVoice={ttsVoice} selectedTone={ttsTone} playbackSpeed={ttsSpeed} autoReadEnabled={autoReadEnabled} isSpeaking={Boolean(speakingMessageId)} isPaused={isSpeechPaused} onSelectVoice={handleSelectVoice} onSelectTone={handleSelectTone} onSelectSpeed={handleSelectSpeed} onToggleAutoRead={handleToggleAutoRead} onTogglePause={togglePauseSpeech} onStopSpeaking={stopSpeech} /><VoiceRecorderButton disabled={working || !config} sttEnabled={Boolean(config?.features?.stt)} sttProvider={config?.voice?.stt_provider} onTranscribed={handleVoiceTranscript} onError={setError} /><button type="button" className="voice-icon-btn" disabled={!config} onClick={() => setVoiceFullscreenOpen(true)} title="Mode Vocal Plein Écran (mains-libres à distance + clavier)" aria-label="Ouvrir le Mode Vocal Plein Écran"><AudioLines size={17} /></button><span className="enter-hint">↵ pour envoyer</span>{isCurrentStreaming ? <button className="send-button stop-button" type="button" onClick={stopCurrentStream} aria-label="Interrompre la génération" title="Interrompre la génération"><Square size={14} fill="currentColor" /></button> : <button className="send-button" type="submit" disabled={!canSend} aria-label="Envoyer le message">{busy === "upload" ? <LoaderCircle size={19} className="spin" /> : <ArrowUp size={20} />}</button>}</div></div>
             </form>
             <div className="composer-footnote" id="composer-hint"><span>cLAIr peut se tromper. Gardez un regard critique sur les réponses.</span><span>Maj + Entrée pour un saut de ligne</span></div>
           </div>
@@ -4202,7 +4307,27 @@ export function ChatApp() {
       onRefreshModels={refreshModels}
       onInsertIntoChat={(promptText) => {
         setDraft(promptText);
-        textareaRef.current?.focus();
+        setFinanceModalOpen(false);
+        setTimeout(() => {
+          const el = textareaRef.current;
+          if (el) {
+            el.focus();
+            el.style.height = "auto";
+            el.style.height = `${Math.min(Math.max(el.scrollHeight, 48), 180)}px`;
+          }
+        }, 60);
+      }}
+      onOpenReportAsDoc={async (report: QuarterlyReport, openVoiceFullscreen = false) => {
+        const vdoc = await ensureVisualDocFromFinanceReport(report.id);
+        setConversation(null);
+        setPendingVisualDocs([vdoc]);
+        setDraft("");
+        setFinanceModalOpen(false);
+        if (openVoiceFullscreen) {
+          setVoiceFullscreenOpen(true);
+        } else {
+          setTimeout(() => textareaRef.current?.focus(), 60);
+        }
       }}
     />
     <ToolsModal
@@ -4358,6 +4483,62 @@ export function ChatApp() {
         setDraft("");
         setTimeout(() => textareaRef.current?.focus(), 60);
       }}
+      onStartVoiceWithDoc={async (doc) => {
+        setConversation(null);
+        setPendingVisualDocs([doc]);
+        setDraft("");
+        setVoiceFullscreenOpen(true);
+      }}
+    />
+
+    <VoiceFullscreenModal
+      isOpen={voiceFullscreenOpen}
+      onClose={() => setVoiceFullscreenOpen(false)}
+      conversationTitle={conversation?.title || (activeVisualDocs[0]?.title ?? "Discussion vocale")}
+      messages={messages}
+      streamingMessageId={streamingId}
+      working={working}
+      activeVisualDocs={activeVisualDocs}
+      onAttachVisualDoc={async (doc) => {
+        if (conversation) {
+          const updated = await attachVisualDocToConversation(conversation.id, doc.id);
+          setConversation(updated);
+        } else {
+          setPendingVisualDocs(prev => (prev.some(item => item.id === doc.id) ? prev : [...prev, doc]));
+        }
+      }}
+      onDetachVisualDoc={async (docId) => {
+        if (conversation) {
+          const updated = await detachVisualDocFromConversation(conversation.id, docId);
+          setConversation(updated);
+        } else {
+          setPendingVisualDocs(prev => prev.filter(item => item.id !== docId));
+        }
+      }}
+      onSendText={async (text) => {
+        await send(undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, text);
+      }}
+      onStopStream={stopCurrentStream}
+      ttsEnabled={Boolean(config?.features?.tts)}
+      sttEnabled={Boolean(config?.features?.stt)}
+      sttProvider={config?.voice?.stt_provider}
+      voices={config?.voice?.voices ?? []}
+      tones={config?.voice?.tones}
+      selectedVoice={ttsVoice}
+      selectedTone={ttsTone}
+      playbackSpeed={ttsSpeed}
+      autoReadEnabled={autoReadEnabled}
+      speakingMessageId={speakingMessageId}
+      isSpeechPaused={isSpeechPaused}
+      loadingTtsMessageId={loadingTtsMessageId}
+      speechEndTick={speechEndTick}
+      onSelectVoice={handleSelectVoice}
+      onSelectTone={handleSelectTone}
+      onSelectSpeed={handleSelectSpeed}
+      onToggleAutoRead={handleToggleAutoRead}
+      onTogglePauseSpeech={togglePauseSpeech}
+      onStopSpeech={stopSpeech}
+      onSpeakMessage={handleToggleSpeakMessage}
     />
 
     {linkTopicDialogOpen && conversation && (
