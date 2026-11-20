@@ -170,3 +170,17 @@ def test_settings_api_get_and_patch(tmp_path):
         verify_res = client.get("/api/settings")
         assert verify_res.json()["system_prompt"] == "Nouveau prompt général : réponds en français et concis."
         assert verify_res.json()["prompt_cache_enabled"] is False
+
+
+def test_settings_llm_timeout_seconds_default_and_bounds():
+    default_settings = Settings(_env_file=None)
+    assert default_settings.llm_timeout_seconds == 480
+
+    custom_settings = Settings(_env_file=None, llm_timeout_seconds=600)
+    assert custom_settings.llm_timeout_seconds == 600
+
+    with pytest.raises(ValueError, match="LLM_TIMEOUT_SECONDS"):
+        Settings(_env_file=None, llm_timeout_seconds=29)
+
+    with pytest.raises(ValueError, match="LLM_TIMEOUT_SECONDS"):
+        Settings(_env_file=None, llm_timeout_seconds=1801)

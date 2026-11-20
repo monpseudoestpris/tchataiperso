@@ -959,10 +959,14 @@ class ProposePageTopicsRequest(BaseModel):
     conversation_id: str | None = Field(default=None, max_length=36)
     page_type: str = Field(default="auto", max_length=50)
     target_audience: str = Field(default="general", max_length=50)
+    editorial_tone: str = Field(default="auto", max_length=50)
+    format_priorities: list[str] = Field(default_factory=list, max_length=12)
+    mandatory_sections: list[str] = Field(default_factory=list, max_length=15)
     author_persona: str | None = Field(default=None, max_length=300)
     visual_description: str | None = Field(default=None, max_length=1000)
     layout_style: str = Field(default="auto", max_length=40)
     model: str | None = Field(default=None, max_length=200)
+    web_search: bool = True
 
     @field_validator("prompt")
     @classmethod
@@ -974,6 +978,61 @@ class ProposePageTopicsResponse(BaseModel):
     suggested_title: str = Field(default="Page Web", max_length=200)
     summary: str = Field(default="", max_length=1000)
     topics: list[PageTopicItem] = Field(default_factory=list)
+
+
+class PageWizardQuestion(BaseModel):
+    id: str = Field(min_length=1, max_length=60)
+    question: str = Field(min_length=1, max_length=300)
+    options: list[str] = Field(default_factory=list, max_length=8)
+    allow_multiple: bool = False
+    recommended_option: str | None = Field(default=None, max_length=160)
+
+
+class PageWizardCriteria(BaseModel):
+    suggested_title: str = Field(default="", max_length=200)
+    refined_prompt: str = Field(default="", max_length=15000)
+    author_persona: str = Field(default="", max_length=300)
+    visual_description: str = Field(default="", max_length=1000)
+    page_type: str = Field(default="auto", max_length=50)
+    target_audience: str = Field(default="general", max_length=50)
+    editorial_tone: str = Field(default="auto", max_length=50)
+    format_priorities: list[str] = Field(default_factory=list, max_length=12)
+    mandatory_sections: list[str] = Field(default_factory=list, max_length=15)
+    creative_freedom: Literal["low", "medium", "high"] = "medium"
+    orientation: Literal["portrait", "landscape"] = "portrait"
+    layout_style: Literal["tabs", "single_page", "print_sheet", "a4_1p", "a4_2p", "cheat_sheet", "auto"] = "auto"
+    text_density: int = Field(default=6, ge=1, le=10)
+    interactivity: Literal["auto", "high", "none"] = "auto"
+    include_quiz: bool = False
+    include_svg: bool = True
+    theme_palette: str = Field(default="ocean", max_length=40)
+    visual_style: str = Field(default="auto", max_length=50)
+    animation_engine: Literal["auto", "both", "aos", "gsap", "none"] = "auto"
+    font_family: str = Field(default="auto", max_length=50)
+    text_effects: list[str] = Field(default_factory=list, max_length=10)
+    web_search: bool = True
+    multipass_exhaustive: bool = False
+
+
+class WizardInterviewMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=8000)
+
+
+class PageWizardInterviewRequest(BaseModel):
+    prompt: str = Field(default="", max_length=15000)
+    title: str | None = Field(default=None, max_length=200)
+    conversation_id: str | None = Field(default=None, max_length=36)
+    messages: list[WizardInterviewMessage] = Field(default_factory=list, max_length=20)
+    model: str | None = Field(default=None, max_length=200)
+    force_finalize: bool = False
+
+
+class PageWizardInterviewResponse(BaseModel):
+    status: Literal["questions", "ready"] = "questions"
+    assistant_message: str = Field(default="", max_length=1200)
+    questions: list[PageWizardQuestion] = Field(default_factory=list, max_length=6)
+    criteria: PageWizardCriteria = Field(default_factory=PageWizardCriteria)
 
 
 class BrickInputFieldSchema(BaseModel):
@@ -1048,6 +1107,9 @@ class CreateWebPage(BaseModel):
     kind: Literal["page", "app"] = "page"
     page_type: str = Field(default="auto", max_length=50)
     target_audience: str = Field(default="general", max_length=50)
+    editorial_tone: str = Field(default="auto", max_length=50)
+    format_priorities: list[str] = Field(default_factory=list, max_length=12)
+    mandatory_sections: list[str] = Field(default_factory=list, max_length=15)
     author_persona: str | None = Field(default=None, max_length=300)
     visual_description: str | None = Field(default=None, max_length=1000)
     creative_freedom: Literal["low", "medium", "high"] = "medium"
@@ -1066,6 +1128,8 @@ class CreateWebPage(BaseModel):
     html_content: str | None = Field(default=None, max_length=2000000)
     canvas_files: list[CanvasFileSchema] = Field(default_factory=list, max_length=60)
     bricks: list[PageBrickSchema] = Field(default_factory=list, max_length=20)
+    web_search: bool = True
+    multipass_exhaustive: bool = False
 
     @field_validator("prompt")
     @classmethod
@@ -1076,6 +1140,7 @@ class CreateWebPage(BaseModel):
 class RefineWebPage(BaseModel):
     instruction: str = Field(min_length=1, max_length=10000)
     model: str | None = Field(default=None, max_length=200)
+    web_search: bool = True
 
     @field_validator("instruction")
     @classmethod

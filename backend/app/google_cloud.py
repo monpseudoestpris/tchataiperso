@@ -68,6 +68,32 @@ def clean_secret(value: Any) -> str:
     return cleaned
 
 
+def _extract_safe_error_detail(response: httpx.Response) -> str:
+    """Extract a short, redacted error message from an HTTP error response if available."""
+    try:
+        data = response.json()
+    except Exception:
+        return ""
+    msg = ""
+    if isinstance(data, dict):
+        err = data.get("error")
+        if isinstance(err, dict):
+            msg = str(err.get("message") or "")
+        elif isinstance(err, str):
+            msg = err
+        if not msg:
+            msg = str(data.get("message") or "")
+    elif isinstance(data, list) and data and isinstance(data[0], dict):
+        err = data[0].get("error")
+        if isinstance(err, dict):
+            msg = str(err.get("message") or "")
+    msg = " ".join(msg.split()).strip()
+    if not msg:
+        return ""
+    msg = re.sub(r"(Bearer\s+[A-Za-z0-9._-]+|ya29\.[A-Za-z0-9._-]+|AIza[0-9A-Za-z_-]+)", "[REDACTED]", msg)
+    return msg[:220]
+
+
 def check_response(response: httpx.Response, provider: str) -> None:
     if response.is_success:
         return
@@ -79,6 +105,9 @@ def check_response(response: httpx.Response, provider: str) -> None:
         message = "limite de requêtes atteinte ; réessayez plus tard"
     elif response.status_code in (400, 404, 422):
         message = "requête ou modèle non pris en charge ; vérifiez la configuration"
+        detail = _extract_safe_error_detail(response)
+        if detail:
+            raise ProviderError(f"{provider} : {message} (HTTP {response.status_code} — {detail}).")
     elif response.status_code >= 500:
         message = "service temporairement indisponible"
     else:
@@ -429,6 +458,14 @@ def _is_mandatory_reasoning_gemini(bare_model: str) -> bool:
     )
 
 
+def _max_output_tokens_for_google_model(bare_model: str) -> int:
+    """Return the maximum output tokens accepted by Google Cloud / Vertex AI for the given model."""
+    low = (bare_model or "").strip().lower()
+    if low.startswith("gemini-1.5") or low.startswith("gemini-2.0"):
+        return 8192
+    return 65536
+
+
 def adapt_openai_payload_for_google(
     payload: dict[str, Any],
     *,
@@ -441,6 +478,12 @@ def adapt_openai_payload_for_google(
     adapted["model"] = (
         f"google/{bare_model}" if mode == "vertex_oauth" else bare_model
     )
+
+    max_cap = _max_output_tokens_for_google_model(bare_model)
+    for tok_key in ("max_tokens", "max_completion_tokens"):
+        tok_val = adapted.get(tok_key)
+        if isinstance(tok_val, int) and not isinstance(tok_val, bool) and tok_val > max_cap:
+            adapted[tok_key] = max_cap
 
     if isinstance(adapted.get("messages"), list):
         adapted["messages"] = _strip_cache_control(adapted["messages"])
@@ -978,7 +1021,7 @@ async def post_chat_completion(
     payload: dict[str, Any],
     *,
     client: httpx.AsyncClient | None = None,
-    timeout: float | httpx.Timeout = 60.0,
+    timeout: float | httpx.Timeout = 120.0,
     extra_headers: dict[str, str] | None = None,
     provider_label: str = "Fournisseur IA",
 ) -> httpx.Response:
@@ -1041,13 +1084,40 @@ async def post_chat_completion(
         return await _run_with_client(local_client)
 
 
+def _is_output_token_limit_error(err_text: str) -> bool:
+    low = (err_text or "").lower()
+    return any(
+        tok in low
+        for tok in ("max_tokens", "max_output_tokens", "max_completion_tokens", "maxoutputtokens", "output tokens")
+    )
+
+
+def _lower_max_tokens_in_body(body: dict[str, Any], is_native: bool) -> dict[str, Any] | None:
+    """Return a copy of body with output token limit stepped down (65536 -> 32768 -> 8192), or None."""
+    if is_native:
+        gen_cfg = body.get("generationConfig")
+        if not isinstance(gen_cfg, dict):
+            return None
+        cur = gen_cfg.get("maxOutputTokens")
+        if not isinstance(cur, int) or cur <= 8192:
+            return None
+        nxt = 32768 if cur > 32768 else 8192
+        return {**body, "generationConfig": {**gen_cfg, "maxOutputTokens": nxt}}
+    for key in ("max_tokens", "max_completion_tokens"):
+        cur = body.get(key)
+        if isinstance(cur, int) and cur > 8192:
+            nxt = 32768 if cur > 32768 else 8192
+            return {**body, key: nxt}
+    return None
+
+
 @asynccontextmanager
 async def open_chat_stream(
     settings: Any,
     payload: dict[str, Any],
     *,
     client: httpx.AsyncClient | None = None,
-    timeout: float | httpx.Timeout = 60.0,
+    timeout: float | httpx.Timeout = 480.0,
     extra_headers: dict[str, str] | None = None,
     provider_label: str = "Fournisseur IA",
     raise_on_error: bool = True,
@@ -1087,24 +1157,50 @@ async def open_chat_stream(
             )
             headers.setdefault("Accept", "text/event-stream")
             bare = normalize_google_model_id(model, settings=settings, for_vertex_openapi=False)
-            async with AsyncExitStack() as gc_stack:
-                resp = await gc_stack.enter_async_context(
-                    active_client.stream("POST", url, headers=headers, json=body)
-                )
-                if resp.is_success:
-                    sse_iter = (
-                        iter_gemini_sse_as_openai_data(resp, bare)
-                        if is_native
-                        else _iter_openai_sse_data(resp)
+            active_body = body
+            for _attempt in range(3):
+                async with AsyncExitStack() as gc_stack:
+                    resp = await gc_stack.enter_async_context(
+                        active_client.stream("POST", url, headers=headers, json=active_body)
                     )
-                    yield resp, sse_iter, route_label
-                    return
-                if not (fallback_or and has_or_key):
-                    if raise_on_error:
-                        check_response(resp, route_label)
-                    yield resp, _empty_sse_data(), route_label
-                    return
-                fallback_reason = f"HTTP {resp.status_code}"
+                    if resp.is_success:
+                        sse_iter = (
+                            iter_gemini_sse_as_openai_data(resp, bare)
+                            if is_native
+                            else _iter_openai_sse_data(resp)
+                        )
+                        yield resp, sse_iter, route_label
+                        return
+                    err_preview = ""
+                    try:
+                        await resp.aread()
+                        err_preview = resp.text[:400].replace("\n", " ")
+                    except Exception:
+                        pass
+                    if resp.status_code == 400 and _is_output_token_limit_error(err_preview):
+                        stepped_body = _lower_max_tokens_in_body(active_body, is_native)
+                        if stepped_body is not None:
+                            _logger.warning(
+                                "Google Cloud HTTP 400 sur max_tokens pour %s ; nouvelle tentative avec plafond réduit.",
+                                bare,
+                            )
+                            active_body = stepped_body
+                            continue
+                    if not (fallback_or and has_or_key):
+                        if raise_on_error:
+                            if err_preview:
+                                _logger.warning(
+                                    "Échec %s HTTP %s pour %s : %s",
+                                    route_label,
+                                    resp.status_code,
+                                    bare,
+                                    err_preview,
+                                )
+                            check_response(resp, route_label)
+                        yield resp, _empty_sse_data(), route_label
+                        return
+                    fallback_reason = f"HTTP {resp.status_code}"
+                    break
             _logger.warning(
                 "Échec stream Google Cloud (%s) pour %s ; bascule OpenRouter activée",
                 fallback_reason,

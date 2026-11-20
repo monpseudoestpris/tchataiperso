@@ -41,12 +41,12 @@ from .tool_registry import CLAIR_TOOL_REGISTRY, ToolExecutionContext, permission
 _logger = logging.getLogger("uvicorn.error")
 
 _GATEWAY_PROBE_TIMEOUT = httpx.Timeout(2.5, connect=1.5, pool=1.5)
-_GATEWAY_STREAM_TIMEOUT = httpx.Timeout(120.0, connect=10.0, pool=10.0)
+_GATEWAY_STREAM_TIMEOUT = httpx.Timeout(300.0, connect=15.0, pool=15.0)
 _LEARNING_TIMEOUT = httpx.Timeout(30.0, connect=5.0, pool=5.0)
 _GENERATION_COST_TIMEOUT = httpx.Timeout(3.0, connect=1.5, pool=1.5)
 _MAX_LLM_CALLS = 15
 _MAX_TOOL_CALLS = 10
-_MAX_MISSION_SECONDS = 120.0
+_MAX_MISSION_SECONDS = 300.0
 
 DEFAULT_HERMES_SOUL = (
     "Tu es Hermes Agent (inspiré de NousResearch/hermes-agent), un agent autonome méthodique "

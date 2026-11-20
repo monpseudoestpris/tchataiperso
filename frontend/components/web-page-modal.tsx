@@ -32,6 +32,7 @@ import {
   Sparkles,
   Star,
   Trash2,
+  Wand2,
   X,
 } from "lucide-react";
 import {
@@ -41,6 +42,7 @@ import {
   executePageBrick,
   fetchWebPage,
   fetchWebPages,
+  interviewWebPageWizard,
   proposeWebPageTopics,
   refineWebPage,
   restoreWebPageVersion,
@@ -48,6 +50,8 @@ import {
   type Model,
   type PageBrick,
   type PageTopicItem,
+  type PageWizardCriteria,
+  type PageWizardQuestion,
   type WebPage,
   type WebPageVersion,
 } from "@/lib/api";
@@ -198,6 +202,37 @@ export const TEXT_EFFECTS_LIST = [
   { id: "gsap_counters", icon: "🔢", name: "Compteurs chiffrés", desc: "Défilement numérique animé des statistiques" },
 ];
 
+export const FORMAT_PRIORITIES_LIST = [
+  { id: "tables_priority", icon: "📊", name: "Priorité aux Tableaux", desc: "Tableaux comparatifs riches, matrices & bilans" },
+  { id: "kpi_metrics", icon: "📈", name: "KPI & Chiffres clés", desc: "Statistiques, ordres de grandeur & ratios mis en avant" },
+  { id: "lists_checklists", icon: "✅", name: "Listes & Checklists", desc: "Puces hiérarchisées & points de contrôle actionnables" },
+  { id: "cards_bento", icon: "🍱", name: "Cartes Bento", desc: "Grilles modulaires contrastées côte à côte" },
+  { id: "timeline_steps", icon: "⏳", name: "Frise & Étapes", desc: "Chronologie ou méthodologie pas-à-pas numérotée" },
+  { id: "code_formulas", icon: "🧮", name: "Formules & Code", desc: "Équations, théorèmes, commandes & blocs techniques" },
+  { id: "prose_editorial", icon: "📖", name: "Rédaction approfondie", desc: "Paragraphes développés, nuancés & argumentés" },
+];
+
+export const MANDATORY_SECTIONS_LIST = [
+  { id: "executive_summary", icon: "⚡", name: "L'essentiel en 30s" },
+  { id: "comparison_matrix", icon: "⚖️", name: "Matrice comparative" },
+  { id: "case_studies", icon: "🔬", name: "Études de cas réels" },
+  { id: "common_pitfalls", icon: "⚠️", name: "Pièges à éviter" },
+  { id: "step_by_step_method", icon: "🧭", name: "Méthode pas-à-pas" },
+  { id: "glossary_definitions", icon: "📚", name: "Glossaire & Définitions" },
+  { id: "faq_section", icon: "❓", name: "FAQ interactive" },
+  { id: "key_takeaways", icon: "📌", name: "Encadré À retenir" },
+  { id: "sources_references", icon: "🔗", name: "Sources & Références" },
+];
+
+export const EDITORIAL_TONES_LIST = [
+  { id: "auto", label: "✨ Auto-adapté au sujet" },
+  { id: "pedagogical", label: "🎓 Pédagogique & Didactique (progressif, analogies)" },
+  { id: "analytical", label: "📊 Analytique, Factuel & Chiffré (preuves & ratios)" },
+  { id: "direct_actionable", label: "⚡ Direct & Actionnable (pratique, décisionnel)" },
+  { id: "storytelling", label: "📖 Narratif & Immersif (récit & mise en contexte)" },
+  { id: "critical_debate", label: "⚖️ Critique & Nuancé (avantages, limites, débats)" },
+];
+
 
 export function WebPageModal({
   isOpen,
@@ -247,8 +282,22 @@ export function WebPageModal({
   const [useConversation, setUseConversation] = useState(Boolean(conversationId));
   const [pageType, setPageType] = useState<string>("auto");
   const [targetAudience, setTargetAudience] = useState<string>("general");
+  const [editorialTone, setEditorialTone] = useState<string>("auto");
+  const [formatPriorities, setFormatPriorities] = useState<string[]>([]);
+  const [mandatorySections, setMandatorySections] = useState<string[]>([]);
   const [authorPersona, setAuthorPersona] = useState<string>("");
   const [visualDescription, setVisualDescription] = useState<string>("");
+
+  // Interactive Conception Wizard state
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const [wizardLoading, setWizardLoading] = useState(false);
+  const [wizardStatus, setWizardStatus] = useState<"idle" | "questions" | "ready">("idle");
+  const [wizardAssistantMsg, setWizardAssistantMsg] = useState("");
+  const [wizardQuestions, setWizardQuestions] = useState<PageWizardQuestion[]>([]);
+  const [wizardAnswers, setWizardAnswers] = useState<Record<string, string[]>>({});
+  const [wizardExtraNote, setWizardExtraNote] = useState("");
+  const [wizardMessages, setWizardMessages] = useState<{ role: "user" | "assistant"; content: string }[]>([]);
+  const [wizardAppliedNotice, setWizardAppliedNotice] = useState<string | null>(null);
 
   const [creativeFreedom, setCreativeFreedom] = useState<"low" | "medium" | "high">("medium");
   const [orientation, setOrientation] = useState<"portrait" | "landscape">("portrait");
@@ -259,6 +308,8 @@ export function WebPageModal({
   const [interactivity, setInteractivity] = useState<"auto" | "high" | "none">("auto");
   const [includeQuiz, setIncludeQuiz] = useState<boolean>(false);
   const [includeSvg, setIncludeSvg] = useState<boolean>(true);
+  const [webSearch, setWebSearch] = useState<boolean>(true);
+  const [multipassExhaustive, setMultipassExhaustive] = useState<boolean>(false);
   const [themePalette, setThemePalette] = useState<string>("ocean");
   const [visualStyle, setVisualStyle] = useState<string>("auto");
   const [activePreset, setActivePreset] = useState<string>("auto");
@@ -384,6 +435,9 @@ export function WebPageModal({
     if (presetId === "auto") {
       setPageType("auto");
       setTargetAudience("general");
+      setEditorialTone("auto");
+      setFormatPriorities([]);
+      setMandatorySections([]);
       setCreativeFreedom("medium");
       setOrientation("portrait");
       setLayoutStyle("auto");
@@ -397,6 +451,9 @@ export function WebPageModal({
     } else if (presetId === "a4_sheet_1p") {
       setPageType("a4_revision_1p");
       setTargetAudience("academic");
+      setEditorialTone("pedagogical");
+      setFormatPriorities(["lists_checklists", "code_formulas"]);
+      setMandatorySections(["key_takeaways", "common_pitfalls"]);
       setCreativeFreedom("low");
       setOrientation("portrait");
       setLayoutStyle("a4_1p");
@@ -410,6 +467,9 @@ export function WebPageModal({
     } else if (presetId === "a4_sheet_2p") {
       setPageType("a4_revision_2p");
       setTargetAudience("academic");
+      setEditorialTone("pedagogical");
+      setFormatPriorities(["lists_checklists", "tables_priority"]);
+      setMandatorySections(["step_by_step_method", "common_pitfalls"]);
       setCreativeFreedom("low");
       setOrientation("portrait");
       setLayoutStyle("a4_2p");
@@ -423,6 +483,9 @@ export function WebPageModal({
     } else if (presetId === "cheat_sheet") {
       setPageType("cheat_sheet");
       setTargetAudience("professional");
+      setEditorialTone("direct_actionable");
+      setFormatPriorities(["tables_priority", "code_formulas", "lists_checklists"]);
+      setMandatorySections([]);
       setCreativeFreedom("low");
       setOrientation("landscape");
       setLayoutStyle("cheat_sheet");
@@ -436,6 +499,9 @@ export function WebPageModal({
     } else if (presetId === "revision") {
       setPageType("revision");
       setTargetAudience("school");
+      setEditorialTone("pedagogical");
+      setFormatPriorities(["cards_bento", "lists_checklists"]);
+      setMandatorySections(["common_pitfalls", "key_takeaways"]);
       setCreativeFreedom("medium");
       setOrientation("portrait");
       setLayoutStyle("tabs");
@@ -449,19 +515,25 @@ export function WebPageModal({
     } else if (presetId === "comparison") {
       setPageType("comparison");
       setTargetAudience("general");
+      setEditorialTone("analytical");
+      setFormatPriorities(["tables_priority", "kpi_metrics"]);
+      setMandatorySections(["comparison_matrix", "executive_summary"]);
       setCreativeFreedom("medium");
       setOrientation("landscape");
       setLayoutStyle("single_page");
-      setTextDensity(5);
+      setTextDensity(6);
       setInteractivity("auto");
       setAnimationEngine("auto");
       setIncludeSvg(true);
       setIncludeQuiz(false);
       setVisualStyle("modern_clean");
-      setBulkDetailLevel(5);
+      setBulkDetailLevel(6);
     } else if (presetId === "timeline") {
       setPageType("timeline");
       setTargetAudience("general");
+      setEditorialTone("storytelling");
+      setFormatPriorities(["timeline_steps"]);
+      setMandatorySections(["step_by_step_method"]);
       setCreativeFreedom("medium");
       setOrientation("portrait");
       setLayoutStyle("single_page");
@@ -475,6 +547,9 @@ export function WebPageModal({
     } else if (presetId === "article") {
       setPageType("article");
       setTargetAudience("general");
+      setEditorialTone("storytelling");
+      setFormatPriorities(["prose_editorial"]);
+      setMandatorySections(["executive_summary", "sources_references"]);
       setCreativeFreedom("medium");
       setOrientation("portrait");
       setLayoutStyle("single_page");
@@ -488,6 +563,9 @@ export function WebPageModal({
     } else if (presetId === "interactive") {
       setPageType("didactic_sheet");
       setTargetAudience("general");
+      setEditorialTone("pedagogical");
+      setFormatPriorities(["cards_bento"]);
+      setMandatorySections(["case_studies"]);
       setCreativeFreedom("high");
       setOrientation("portrait");
       setLayoutStyle("tabs");
@@ -501,16 +579,19 @@ export function WebPageModal({
     } else if (presetId === "dashboard") {
       setPageType("dashboard");
       setTargetAudience("professional");
+      setEditorialTone("analytical");
+      setFormatPriorities(["kpi_metrics", "tables_priority", "cards_bento"]);
+      setMandatorySections(["executive_summary", "comparison_matrix"]);
       setCreativeFreedom("medium");
       setOrientation("landscape");
       setLayoutStyle("single_page");
-      setTextDensity(4);
+      setTextDensity(5);
       setInteractivity("high");
       setAnimationEngine("auto");
       setIncludeSvg(true);
       setIncludeQuiz(false);
       setVisualStyle("modern_clean");
-      setBulkDetailLevel(4);
+      setBulkDetailLevel(5);
     }
   }
 
@@ -666,6 +747,174 @@ export function WebPageModal({
     return selectedPage.latest_html ?? "";
   }, [selectedPage, selectedVersionId]);
 
+  function applyWizardCriteria(criteria: PageWizardCriteria) {
+    if (criteria.refined_prompt && criteria.refined_prompt.trim()) {
+      setPrompt(criteria.refined_prompt.trim());
+    }
+    if (criteria.suggested_title && criteria.suggested_title.trim() && !title.trim()) {
+      setTitle(criteria.suggested_title.trim());
+    }
+    if (criteria.author_persona !== undefined) {
+      setAuthorPersona(criteria.author_persona || "");
+    }
+    if (criteria.visual_description !== undefined) {
+      setVisualDescription(criteria.visual_description || "");
+    }
+    setPageType(criteria.page_type || "auto");
+    setTargetAudience(criteria.target_audience || "general");
+    setEditorialTone(criteria.editorial_tone || "auto");
+    setFormatPriorities(Array.isArray(criteria.format_priorities) ? criteria.format_priorities : []);
+    setMandatorySections(Array.isArray(criteria.mandatory_sections) ? criteria.mandatory_sections : []);
+    setCreativeFreedom(criteria.creative_freedom || "medium");
+    setOrientation(criteria.orientation || "portrait");
+    setLayoutStyle(criteria.layout_style || "auto");
+    setTextDensity(Math.max(1, Math.min(10, Number(criteria.text_density) || 6)));
+    setInteractivity(criteria.interactivity || "auto");
+    setIncludeQuiz(Boolean(criteria.include_quiz));
+    setIncludeSvg(criteria.include_svg !== false);
+    setThemePalette(criteria.theme_palette || "ocean");
+    setVisualStyle(criteria.visual_style || "auto");
+    setAnimationEngine(criteria.animation_engine || "auto");
+    setFontFamily(criteria.font_family || "auto");
+    setTextEffects(Array.isArray(criteria.text_effects) ? criteria.text_effects : []);
+    setWebSearch(criteria.web_search !== false);
+    setMultipassExhaustive(Boolean(criteria.multipass_exhaustive));
+    setActivePreset("custom");
+
+    const appliedParts: string[] = [];
+    if (criteria.multipass_exhaustive) {
+      appliedParts.push("📚 Mode Encyclopédique Multi-Passes");
+    }
+    if (criteria.format_priorities?.length) {
+      const labels = criteria.format_priorities
+        .map((id) => FORMAT_PRIORITIES_LIST.find((f) => f.id === id)?.name || id)
+        .slice(0, 3);
+      appliedParts.push(`Formats : ${labels.join(", ")}`);
+    }
+    if (criteria.mandatory_sections?.length) {
+      appliedParts.push(`${criteria.mandatory_sections.length} section(s) obligatoire(s)`);
+    }
+    appliedParts.push(`Densité ${Math.max(1, Math.min(10, Number(criteria.text_density) || 6))}/10`);
+    setWizardAppliedNotice(`Prompt raffiné & critères pré-remplis (${appliedParts.join(" · ")})`);
+  }
+
+  async function handleStartWizard() {
+    if (wizardLoading || working) return;
+    setWizardOpen(true);
+    if (!prompt.trim() && !useConversation) {
+      setWizardStatus("idle");
+      setWizardAssistantMsg("Décrivez brièvement votre idée de page ci-dessous, puis cliquez sur « Poser les questions ».");
+      return;
+    }
+    setWizardLoading(true);
+    setWizardAppliedNotice(null);
+    setError(null);
+    const seedMsg = prompt.trim() || "Synthèse interactive de la conversation active";
+    const initialHistory: { role: "user" | "assistant"; content: string }[] = [
+      { role: "user", content: seedMsg },
+    ];
+    setWizardMessages(initialHistory);
+    setWizardAnswers({});
+    setWizardExtraNote("");
+
+    try {
+      const res = await interviewWebPageWizard({
+        prompt: prompt.trim(),
+        title: title.trim() || undefined,
+        conversation_id: useConversation && conversationId ? conversationId : undefined,
+        messages: initialHistory,
+        model: selectedModel || undefined,
+        force_finalize: false,
+      });
+      setWizardStatus(res.status === "ready" ? "ready" : "questions");
+      setWizardAssistantMsg(res.assistant_message || "");
+      setWizardQuestions(res.questions || []);
+      const initAnswers: Record<string, string[]> = {};
+      (res.questions || []).forEach((q) => {
+        if (q.recommended_option) {
+          initAnswers[q.id] = [q.recommended_option];
+        }
+      });
+      setWizardAnswers(initAnswers);
+      setWizardMessages([
+        ...initialHistory,
+        { role: "assistant", content: res.assistant_message || "Voici quelques questions." },
+      ]);
+      if (res.status === "ready" && res.criteria) {
+        applyWizardCriteria(res.criteria);
+      }
+    } catch (err) {
+      setError("Impossible de lancer l'assistant Wizard : " + errorMessage(err));
+    } finally {
+      setWizardLoading(false);
+    }
+  }
+
+  function toggleWizardOption(question: PageWizardQuestion, option: string) {
+    setWizardAnswers((prev) => {
+      const current = prev[question.id] || [];
+      if (question.allow_multiple) {
+        const exists = current.includes(option);
+        return {
+          ...prev,
+          [question.id]: exists ? current.filter((o) => o !== option) : [...current, option],
+        };
+      }
+      return {
+        ...prev,
+        [question.id]: current.includes(option) ? [] : [option],
+      };
+    });
+  }
+
+  async function handleSubmitWizardAnswers(forceFinalize = true) {
+    if (wizardLoading || working) return;
+    setWizardLoading(true);
+    setError(null);
+
+    const answerLines = wizardQuestions
+      .map((q) => {
+        const picked = wizardAnswers[q.id] || [];
+        return picked.length > 0 ? `- ${q.question} -> ${picked.join(", ")}` : null;
+      })
+      .filter(Boolean) as string[];
+
+    if (wizardExtraNote.trim()) {
+      answerLines.push(`- Précisions complémentaires -> ${wizardExtraNote.trim()}`);
+    }
+
+    const replyText =
+      answerLines.join("\n") ||
+      "Raffine le prompt et pré-remplis automatiquement les meilleurs critères (page complète et structurée).";
+
+    const nextHistory: { role: "user" | "assistant"; content: string }[] = [
+      ...wizardMessages,
+      { role: "user", content: replyText },
+    ];
+    setWizardMessages(nextHistory);
+
+    try {
+      const res = await interviewWebPageWizard({
+        prompt: prompt.trim(),
+        title: title.trim() || undefined,
+        conversation_id: useConversation && conversationId ? conversationId : undefined,
+        messages: nextHistory,
+        model: selectedModel || undefined,
+        force_finalize: forceFinalize,
+      });
+      setWizardStatus("ready");
+      setWizardAssistantMsg(res.assistant_message || "Critères et prompt raffiné appliqués.");
+      setWizardQuestions([]);
+      if (res.criteria) {
+        applyWizardCriteria(res.criteria);
+      }
+    } catch (err) {
+      setError("Impossible de finaliser le Wizard : " + errorMessage(err));
+    } finally {
+      setWizardLoading(false);
+    }
+  }
+
   // Trigger topic exploration before generation
   async function handleExploreTopics(e?: FormEvent) {
     if (e) e.preventDefault();
@@ -680,10 +929,14 @@ export function WebPageModal({
         conversation_id: useConversation && conversationId ? conversationId : undefined,
         page_type: pageType,
         target_audience: targetAudience,
+        editorial_tone: editorialTone,
+        format_priorities: formatPriorities,
+        mandatory_sections: mandatorySections,
         author_persona: authorPersona.trim() || undefined,
         visual_description: visualDescription.trim() || undefined,
         layout_style: layoutStyle,
         model: selectedModel || undefined,
+        web_search: webSearch,
       });
 
       if (!title.trim() && res.suggested_title) {
@@ -698,13 +951,18 @@ export function WebPageModal({
           ? 2
           : layoutStyle === "a4_2p"
           ? 3
-          : 5;
+          : Math.max(5, textDensity);
       setBulkDetailLevel(fallbackLvl);
+      const preferTables = formatPriorities.includes("tables_priority") || mandatorySections.includes("comparison_matrix");
       const initialLevels: Record<string, number> = {};
       const initialFormats: Record<string, "auto" | "text" | "list" | "table" | "cards" | "timeline"> = {};
-      (res.topics || []).forEach((t) => {
+      (res.topics || []).forEach((t, idx) => {
         initialLevels[t.id] = t.detail_level || fallbackLvl;
-        initialFormats[t.id] = (t.output_format as any) || "auto";
+        let fmt = (t.output_format as any) || "auto";
+        if (preferTables && fmt === "auto" && idx % 2 === 0) {
+          fmt = "table";
+        }
+        initialFormats[t.id] = fmt;
       });
       setTopicDetailLevels(initialLevels);
       setTopicOutputFormats(initialFormats);
@@ -742,6 +1000,9 @@ export function WebPageModal({
         kind: sidebarTab === "apps" ? "app" : "page",
         page_type: pageType,
         target_audience: targetAudience,
+        editorial_tone: editorialTone,
+        format_priorities: formatPriorities,
+        mandatory_sections: mandatorySections,
         author_persona: authorPersona.trim() || undefined,
         visual_description: visualDescription.trim() || undefined,
         creative_freedom: creativeFreedom,
@@ -757,6 +1018,8 @@ export function WebPageModal({
         font_family: fontFamily,
         text_effects: textEffects,
         selected_topics: topicsToInclude && topicsToInclude.length > 0 ? topicsToInclude : undefined,
+        web_search: webSearch,
+        multipass_exhaustive: multipassExhaustive && !isStrictA4Selected,
       });
       setPages((prev) => [created, ...prev]);
       setSelectedPageId(created.id);
@@ -858,6 +1121,7 @@ export function WebPageModal({
       const updated = await refineWebPage(selectedPage.id, {
         instruction: text,
         model: selectedModel || undefined,
+        web_search: webSearch,
       });
       setSelectedPage(updated);
       if (updated.versions && updated.versions.length > 0) {
@@ -1489,6 +1753,226 @@ export function WebPageModal({
                     SVG inline, polices système et composants interactifs légers.
                   </p>
 
+                  {/* Bandeau principal du Wizard IA de conception (toujours visible en haut) */}
+                  <div
+                    style={{
+                      marginBottom: "0.95rem",
+                      padding: "0.85rem 1rem",
+                      borderRadius: "10px",
+                      border: "1px solid rgba(99, 102, 241, 0.45)",
+                      background: "linear-gradient(135deg, rgba(79, 70, 229, 0.14), rgba(2, 132, 199, 0.1))",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: "0.7rem",
+                    }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
+                      <div style={{ display: "flex", flexDirection: "column", gap: "0.2rem", minWidth: 0 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "0.45rem", fontWeight: 700, fontSize: "0.9rem" }}>
+                          <Wand2 size={16} color="#6366f1" />
+                          <span>Assistant Wizard IA de Conception</span>
+                        </div>
+                        <span style={{ fontSize: "0.78rem", opacity: 0.85 }}>
+                          L&apos;IA vous pose 3-4 questions ciblées (priorité aux tableaux, sections, longueur...), raffine votre prompt et pré-remplit tous les critères.
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        className={styles.btn}
+                        disabled={working || wizardLoading}
+                        onClick={() => void handleStartWizard()}
+                        style={{
+                          background: "linear-gradient(135deg, #4f46e5, #0284c7)",
+                          color: "#ffffff",
+                          border: "none",
+                          fontWeight: 600,
+                          padding: "0.48rem 0.9rem",
+                          flexShrink: 0,
+                        }}
+                      >
+                        {wizardLoading ? <LoaderCircle size={14} className="spin" /> : <Wand2 size={14} />}
+                        <span>{wizardOpen ? "Relancer le Wizard IA" : "Lancer le Wizard IA"}</span>
+                      </button>
+                    </div>
+
+                    {wizardAppliedNotice && (
+                      <div
+                        style={{
+                          fontSize: "0.78rem",
+                          fontWeight: 600,
+                          color: "#10b981",
+                          background: "rgba(16, 185, 129, 0.12)",
+                          border: "1px solid rgba(16, 185, 129, 0.35)",
+                          padding: "0.35rem 0.65rem",
+                          borderRadius: "8px",
+                        }}
+                      >
+                        ✓ {wizardAppliedNotice}
+                      </div>
+                    )}
+
+                    {wizardOpen && (
+                      <div
+                        style={{
+                          paddingTop: "0.6rem",
+                          borderTop: "1px solid rgba(99, 102, 241, 0.25)",
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: "0.7rem",
+                        }}
+                      >
+                        {wizardAssistantMsg && (
+                          <div style={{ fontSize: "0.82rem", lineHeight: 1.45 }}>
+                            {wizardAssistantMsg}
+                          </div>
+                        )}
+
+                        {wizardStatus === "idle" && !wizardLoading && wizardQuestions.length === 0 && (
+                          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                            <input
+                              type="text"
+                              className={styles.input}
+                              style={{ flex: "1 1 240px" }}
+                              placeholder="Ex : Comparatif complet des batteries sodium-ion vs lithium-ion en 2026..."
+                              value={prompt}
+                              onChange={(e) => setPrompt(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                  e.preventDefault();
+                                  if (prompt.trim() || useConversation) {
+                                    void handleStartWizard();
+                                  }
+                                }
+                              }}
+                              disabled={working || wizardLoading}
+                            />
+                            <button
+                              type="button"
+                              className={`${styles.btn} ${styles.btnPrimary}`}
+                              disabled={working || wizardLoading || (!prompt.trim() && !useConversation)}
+                              onClick={() => void handleStartWizard()}
+                            >
+                              <Sparkles size={14} />
+                              <span>Poser les questions</span>
+                            </button>
+                          </div>
+                        )}
+
+                        {wizardLoading && wizardQuestions.length === 0 && (
+                          <div style={{ display: "flex", alignItems: "center", gap: "0.45rem", fontSize: "0.82rem", opacity: 0.85 }}>
+                            <LoaderCircle size={15} className="spin" />
+                            <span>Analyse de votre sujet et préparation des questions...</span>
+                          </div>
+                        )}
+
+                        {wizardQuestions.length > 0 && (
+                          <div style={{ display: "flex", flexDirection: "column", gap: "0.65rem" }}>
+                            {wizardQuestions.map((q, qIdx) => {
+                              const picked = wizardAnswers[q.id] || [];
+                              return (
+                                <div
+                                  key={q.id}
+                                  style={{
+                                    padding: "0.65rem 0.75rem",
+                                    borderRadius: "8px",
+                                    border: "1px solid var(--border-color, rgba(148, 163, 184, 0.3))",
+                                    background: "var(--bg-surface, rgba(15, 23, 42, 0.04))",
+                                  }}
+                                >
+                                  <div style={{ fontSize: "0.81rem", fontWeight: 600, marginBottom: "0.45rem" }}>
+                                    {qIdx + 1}. {q.question}{" "}
+                                    {q.allow_multiple && (
+                                      <span style={{ fontSize: "0.7rem", opacity: 0.72, fontWeight: 500 }}>
+                                        (choix multiples)
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem" }}>
+                                    {q.options.map((opt) => {
+                                      const isSelected = picked.includes(opt);
+                                      return (
+                                        <button
+                                          key={opt}
+                                          type="button"
+                                          disabled={wizardLoading}
+                                          onClick={() => toggleWizardOption(q, opt)}
+                                          style={{
+                                            padding: "0.3rem 0.62rem",
+                                            borderRadius: "999px",
+                                            fontSize: "0.75rem",
+                                            fontWeight: isSelected ? 600 : 500,
+                                            cursor: "pointer",
+                                            border: isSelected
+                                              ? "1px solid #4f46e5"
+                                              : "1px solid var(--border-color, rgba(148, 163, 184, 0.45))",
+                                            background: isSelected ? "#4f46e5" : "transparent",
+                                            color: isSelected ? "#ffffff" : "inherit",
+                                            transition: "all 0.15s",
+                                          }}
+                                        >
+                                          {isSelected ? "✓ " : ""}
+                                          {opt}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              );
+                            })}
+
+                            <input
+                              type="text"
+                              className={styles.input}
+                              placeholder="Précision libre optionnelle (ex: priorité aux tableaux chiffrés, page très longue et complète, focus 2026)..."
+                              value={wizardExtraNote}
+                              onChange={(e) => setWizardExtraNote(e.target.value)}
+                              disabled={wizardLoading}
+                            />
+
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+                              <button
+                                type="button"
+                                className={styles.btn}
+                                onClick={() => setWizardOpen(false)}
+                                disabled={wizardLoading}
+                              >
+                                Fermer
+                              </button>
+                              <button
+                                type="button"
+                                className={styles.btn}
+                                disabled={wizardLoading}
+                                onClick={() => void handleSubmitWizardAnswers(true)}
+                                style={{
+                                  background: "#4f46e5",
+                                  color: "#ffffff",
+                                  borderColor: "#4f46e5",
+                                  fontWeight: 600,
+                                }}
+                              >
+                                {wizardLoading ? <LoaderCircle size={14} className="spin" /> : <Sparkles size={14} />}
+                                <span>Valider, raffiner le prompt &amp; pré-remplir les critères</span>
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        {wizardStatus === "ready" && wizardQuestions.length === 0 && (
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.5rem", flexWrap: "wrap", fontSize: "0.78rem" }}>
+                            <span>Le prompt et tous les critères ci-dessous ont été pré-remplis. Vous pouvez les ajuster ou lancer la génération.</span>
+                            <button
+                              type="button"
+                              className={styles.btn}
+                              onClick={() => setWizardOpen(false)}
+                            >
+                              Masquer le Wizard
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
                   {/* UX Presets */}
                   <div className={styles.presetsRow}>
                     {PAGE_PRESETS.map((preset) => (
@@ -1995,9 +2479,179 @@ export function WebPageModal({
                         </div>
                       </div>
 
+                      {/* Row 10bis: Ton éditorial, Priorités de format (Tableaux, KPI...), Sections obligatoires & Quiz */}
+                      <div style={{ marginBottom: "0.85rem" }}>
+                        <label className={styles.label}>Ton &amp; Registre éditorial</label>
+                        <select
+                          className={styles.selectInput}
+                          value={editorialTone}
+                          onChange={(e) => {
+                            setEditorialTone(e.target.value);
+                            setActivePreset("custom");
+                          }}
+                        >
+                          {EDITORIAL_TONES_LIST.map((tone) => (
+                            <option key={tone.id} value={tone.id}>
+                              {tone.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div style={{ marginBottom: "0.85rem" }}>
+                        <div className={styles.sectionSubTitle}>
+                          <span>Priorités de structure &amp; format (multi-sélection) :</span>
+                          {formatPriorities.includes("tables_priority") && (
+                            <span style={{ fontSize: "0.7rem", color: "#0284c7", fontWeight: 700 }}>
+                              📊 Tableaux prioritaires activés
+                            </span>
+                          )}
+                        </div>
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(175px, 1fr))", gap: "0.35rem" }}>
+                          {FORMAT_PRIORITIES_LIST.map((prio) => {
+                            const isChecked = formatPriorities.includes(prio.id);
+                            return (
+                              <button
+                                key={prio.id}
+                                type="button"
+                                className={`${styles.effectChip} ${isChecked ? styles.active : ""}`}
+                                onClick={() => {
+                                  setFormatPriorities((prev) =>
+                                    isChecked ? prev.filter((id) => id !== prio.id) : [...prev, prio.id]
+                                  );
+                                  setActivePreset("custom");
+                                }}
+                              >
+                                <span style={{ fontSize: "0.95rem" }}>{prio.icon}</span>
+                                <div style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+                                  <span style={{ fontWeight: 600, fontSize: "0.72rem" }}>{prio.name}</span>
+                                  <span style={{ fontSize: "0.6rem", opacity: 0.75, lineHeight: 1.15 }}>{prio.desc}</span>
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <div style={{ marginBottom: "0.85rem" }}>
+                        <div className={styles.sectionSubTitle}>
+                          <span>Sections &amp; blocs obligatoires à inclure :</span>
+                        </div>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem" }}>
+                          {MANDATORY_SECTIONS_LIST.map((sec) => {
+                            const isChecked = mandatorySections.includes(sec.id);
+                            return (
+                              <button
+                                key={sec.id}
+                                type="button"
+                                className={`${styles.suggestionChip}`}
+                                onClick={() => {
+                                  setMandatorySections((prev) =>
+                                    isChecked ? prev.filter((id) => id !== sec.id) : [...prev, sec.id]
+                                  );
+                                  setActivePreset("custom");
+                                }}
+                                style={
+                                  isChecked
+                                    ? {
+                                        borderColor: "#0284c7",
+                                        background: "rgba(2, 132, 199, 0.14)",
+                                        color: "#0284c7",
+                                        fontWeight: 600,
+                                      }
+                                    : undefined
+                                }
+                              >
+                                {isChecked ? "✓ " : ""}
+                                {sec.icon} {sec.name}
+                              </button>
+                            );
+                          })}
+                          <button
+                            type="button"
+                            className={styles.suggestionChip}
+                            onClick={() => {
+                              setIncludeQuiz((v) => !v);
+                              setActivePreset("custom");
+                            }}
+                            style={
+                              includeQuiz
+                                ? {
+                                    borderColor: "#7c3aed",
+                                    background: "rgba(124, 58, 237, 0.14)",
+                                    color: "#7c3aed",
+                                    fontWeight: 600,
+                                  }
+                                : undefined
+                            }
+                          >
+                            {includeQuiz ? "✓ " : ""}🎯 Quiz interactif (3 questions)
+                          </button>
+                        </div>
+                      </div>
+
                     </div>
 
-                    <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.6rem" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.6rem", flexWrap: "wrap" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+                        <label
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: "0.45rem",
+                            cursor: "pointer",
+                            fontSize: "0.82rem",
+                            fontWeight: 600,
+                            padding: "0.4rem 0.7rem",
+                            borderRadius: "999px",
+                            border: webSearch ? "1px solid rgba(2, 132, 199, 0.45)" : "1px solid var(--border, #d1d5db)",
+                            background: webSearch ? "rgba(2, 132, 199, 0.1)" : "transparent",
+                            color: webSearch ? "#0284c7" : "inherit",
+                          }}
+                          title="Enrichir automatiquement le contenu de la page avec des résultats web récents via SearXNG"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={webSearch}
+                            onChange={(e) => setWebSearch(e.target.checked)}
+                            disabled={working || loadingTopics}
+                          />
+                          <Globe size={14} />
+                          <span>Recherche web (SearXNG)</span>
+                        </label>
+                        <label
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: "0.45rem",
+                            cursor: isStrictA4Selected ? "not-allowed" : "pointer",
+                            fontSize: "0.82rem",
+                            fontWeight: 600,
+                            padding: "0.4rem 0.75rem",
+                            borderRadius: "999px",
+                            opacity: isStrictA4Selected ? 0.5 : 1,
+                            border:
+                              multipassExhaustive && !isStrictA4Selected
+                                ? "1px solid rgba(124, 58, 237, 0.55)"
+                                : "1px solid var(--border, #d1d5db)",
+                            background:
+                              multipassExhaustive && !isStrictA4Selected
+                                ? "rgba(124, 58, 237, 0.12)"
+                                : "transparent",
+                            color: multipassExhaustive && !isStrictA4Selected ? "#7c3aed" : "inherit",
+                          }}
+                          title="Découpe automatiquement en lots (ex. 30 races/entités) avec recherche SearXNG dédiée par lot et génération en parallèle, sans limite de taille ni résumé paresseux"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={multipassExhaustive && !isStrictA4Selected}
+                            onChange={(e) => setMultipassExhaustive(e.target.checked)}
+                            disabled={working || loadingTopics || isStrictA4Selected}
+                          />
+                          <span>📚 Mode Encyclopédique Multi-Passes</span>
+                        </label>
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.6rem" }}>
                       <button
                         type="button"
                         className={styles.btn}
@@ -2005,7 +2659,7 @@ export function WebPageModal({
                         onClick={() => void handleCreate()}
                         title="Générer directement la page sans passer par la sélection de thèmes"
                       >
-                        <span>Génération directe</span>
+                        <span>{working && multipassExhaustive ? "Génération Multi-Passes..." : "Génération directe"}</span>
                       </button>
                       <button
                         type="submit"
@@ -2029,6 +2683,7 @@ export function WebPageModal({
                           </>
                         )}
                       </button>
+                      </div>
                     </div>
                   </form>
                 </div>
@@ -2177,6 +2832,30 @@ export function WebPageModal({
                         onChange={(e) => setRefineInstruction(e.target.value)}
                         disabled={working}
                       />
+                      <button
+                        type="button"
+                        className={styles.btn}
+                        onClick={() => setWebSearch((v) => !v)}
+                        disabled={working}
+                        title={
+                          webSearch
+                            ? "Recherche web SearXNG activée pour l'amélioration (cliquer pour désactiver)"
+                            : "Recherche web SearXNG désactivée (cliquer pour activer)"
+                        }
+                        style={
+                          webSearch
+                            ? {
+                                borderColor: "rgba(2, 132, 199, 0.5)",
+                                background: "rgba(2, 132, 199, 0.12)",
+                                color: "#0284c7",
+                                flexShrink: 0,
+                              }
+                            : { flexShrink: 0, opacity: 0.7 }
+                        }
+                      >
+                        <Globe size={14} />
+                        <span>SearXNG</span>
+                      </button>
                       <button
                         type="submit"
                         className={`${styles.btn} ${styles.btnPrimary}`}

@@ -382,7 +382,7 @@ async def generate_ai_presentation_slides(
 
     _logger.info("Lancement de la génération de présentation IA avec le modèle : %s", chosen_model)
     try:
-        timeout = getattr(settings, "llm_timeout", 45.0)
+        timeout = getattr(settings, "llm_timeout", None) or min(float(getattr(settings, "llm_timeout_seconds", 120.0) or 120.0), 180.0)
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
             resp = await post_chat_completion(
                 settings,

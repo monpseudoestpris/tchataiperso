@@ -377,6 +377,47 @@ export type ProposePageTopicsResponse = {
   topics: PageTopicItem[];
 };
 
+export type PageWizardQuestion = {
+  id: string;
+  question: string;
+  options: string[];
+  allow_multiple?: boolean;
+  recommended_option?: string | null;
+};
+
+export type PageWizardCriteria = {
+  suggested_title: string;
+  refined_prompt: string;
+  author_persona: string;
+  visual_description: string;
+  page_type: string;
+  target_audience: string;
+  editorial_tone: string;
+  format_priorities: string[];
+  mandatory_sections: string[];
+  creative_freedom: "low" | "medium" | "high";
+  orientation: "portrait" | "landscape";
+  layout_style: "tabs" | "single_page" | "print_sheet" | "a4_1p" | "a4_2p" | "cheat_sheet" | "auto";
+  text_density: number;
+  interactivity: "auto" | "high" | "none";
+  include_quiz: boolean;
+  include_svg: boolean;
+  theme_palette: string;
+  visual_style: string;
+  animation_engine: "auto" | "both" | "aos" | "gsap" | "none";
+  font_family: string;
+  text_effects: string[];
+  web_search: boolean;
+  multipass_exhaustive?: boolean;
+};
+
+export type PageWizardInterviewResponse = {
+  status: "questions" | "ready";
+  assistant_message: string;
+  questions: PageWizardQuestion[];
+  criteria: PageWizardCriteria;
+};
+
 import type { BrickExecutionResult, PageBrick } from "./canvas-bricks";
 import type { AppDiagram } from "./canvas-diagram";
 
@@ -786,12 +827,30 @@ export async function proposeWebPageTopics(payload: {
   conversation_id?: string;
   page_type?: string;
   target_audience?: string;
+  editorial_tone?: string;
+  format_priorities?: string[];
+  mandatory_sections?: string[];
   author_persona?: string;
   visual_description?: string;
   layout_style?: string;
   model?: string;
+  web_search?: boolean;
 }): Promise<ProposePageTopicsResponse> {
   return api<ProposePageTopicsResponse>("/pages/propose-topics", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function interviewWebPageWizard(payload: {
+  prompt?: string;
+  title?: string;
+  conversation_id?: string;
+  messages?: { role: "user" | "assistant"; content: string }[];
+  model?: string;
+  force_finalize?: boolean;
+}): Promise<PageWizardInterviewResponse> {
+  return api<PageWizardInterviewResponse>("/pages/wizard/interview", {
     method: "POST",
     body: JSON.stringify(payload),
   });
@@ -805,6 +864,9 @@ export async function createWebPage(payload: {
   kind?: "page" | "app";
   page_type?: string;
   target_audience?: string;
+  editorial_tone?: string;
+  format_priorities?: string[];
+  mandatory_sections?: string[];
   author_persona?: string;
   visual_description?: string;
   creative_freedom?: "low" | "medium" | "high";
@@ -823,6 +885,8 @@ export async function createWebPage(payload: {
   html_content?: string;
   canvas_files?: WebPageCanvasFile[];
   bricks?: PageBrick[];
+  web_search?: boolean;
+  multipass_exhaustive?: boolean;
 }): Promise<WebPage> {
   return api<WebPage>("/pages", {
     method: "POST",
@@ -906,7 +970,7 @@ export async function deleteWebPage(pageId: string): Promise<void> {
 
 export async function refineWebPage(
   pageId: string,
-  payload: { instruction: string; model?: string }
+  payload: { instruction: string; model?: string; web_search?: boolean }
 ): Promise<WebPage> {
   return api<WebPage>(`/pages/${pageId}/refine`, {
     method: "POST",

@@ -16,11 +16,15 @@ from ..page_bricks import (
 from ..page_generator import propose_page_topics, refine_page_html, slugify
 from ..page_runtime import sanitize_and_enhance_html
 from ..page_service import create_draft_web_page
+from ..page_wizard import interview_page_wizard
+from ..providers import ProviderError
 from ..schemas import (
     CreateWebPage,
     ExecutePageBrickRequest,
     InterviewAppDiagramRequest,
     PageTopicItem,
+    PageWizardInterviewRequest,
+    PageWizardInterviewResponse,
     ProposeAppDiagramRequest,
     ProposePageTopicsRequest,
     ProposePageTopicsResponse,
@@ -78,23 +82,72 @@ async def propose_topics_endpoint(
                     lines.append(f"{role_label} : {msg.content}")
                 chat_transcript = "\n\n".join(lines)
 
-    s_title, summary, topics_data = await propose_page_topics(
-        settings=settings,
-        prompt=body.prompt,
-        chat_transcript=chat_transcript,
-        title=fallback_title,
-        page_type=body.page_type,
-        target_audience=body.target_audience,
-        author_persona=body.author_persona,
-        visual_description=body.visual_description,
-        layout_style=body.layout_style,
-        model=selected_model,
-    )
+    try:
+        s_title, summary, topics_data = await propose_page_topics(
+            settings=settings,
+            prompt=body.prompt,
+            chat_transcript=chat_transcript,
+            title=fallback_title,
+            page_type=body.page_type,
+            target_audience=body.target_audience,
+            editorial_tone=body.editorial_tone,
+            format_priorities=body.format_priorities,
+            mandatory_sections=body.mandatory_sections,
+            author_persona=body.author_persona,
+            visual_description=body.visual_description,
+            layout_style=body.layout_style,
+            model=selected_model,
+            web_search=body.web_search,
+            raise_on_failure=not getattr(settings, "demo_mode", False),
+        )
+    except ProviderError as exc:
+        raise HTTPException(502, str(exc)) from exc
 
     return ProposePageTopicsResponse(
         suggested_title=s_title,
         summary=summary,
         topics=[PageTopicItem(**t) for t in topics_data],
+    )
+
+
+@router.post("/api/pages/wizard/interview", response_model=PageWizardInterviewResponse)
+async def wizard_interview_endpoint(
+    body: PageWizardInterviewRequest,
+    user: User = Depends(current_user),
+    settings: Settings = Depends(get_settings),
+    sessions: sessionmaker = Depends(get_sessions),
+):
+    chat_transcript = None
+    fallback_title = body.title
+    selected_model = body.model
+
+    if body.conversation_id:
+        with sessions() as db:
+            conv = db.scalar(
+                select(Conversation).where(
+                    Conversation.id == body.conversation_id,
+                    Conversation.user_id == user.id,
+                )
+            )
+            if conv:
+                if not fallback_title:
+                    fallback_title = conv.title
+                if not selected_model and conv.model:
+                    selected_model = conv.model
+                lines = []
+                for msg in conv.messages:
+                    role_label = "Utilisateur" if msg.role == "user" else "Assistant"
+                    lines.append(f"{role_label} : {msg.content}")
+                chat_transcript = "\n\n".join(lines)
+
+    return await interview_page_wizard(
+        settings=settings,
+        prompt=body.prompt,
+        title=fallback_title,
+        chat_transcript=chat_transcript,
+        messages=[m.model_dump() for m in body.messages],
+        model=selected_model,
+        force_finalize=body.force_finalize,
     )
 
 
@@ -106,36 +159,44 @@ async def create_page(
     settings: Settings = Depends(get_settings),
     sessions: sessionmaker = Depends(get_sessions),
 ):
-    return await create_draft_web_page(
-        settings=settings,
-        sessions=sessions,
-        user_id=user.id,
-        prompt=body.prompt,
-        title=body.title,
-        model=body.model,
-        conversation_id=body.conversation_id,
-        kind=body.kind,
-        page_type=body.page_type,
-        target_audience=body.target_audience,
-        author_persona=body.author_persona,
-        visual_description=body.visual_description,
-        creative_freedom=body.creative_freedom,
-        orientation=body.orientation,
-        layout_style=body.layout_style,
-        text_density=body.text_density,
-        interactivity=body.interactivity,
-        include_quiz=body.include_quiz,
-        include_svg=body.include_svg,
-        theme_palette=body.theme_palette,
-        visual_style=body.visual_style,
-        animation_engine=body.animation_engine,
-        font_family=body.font_family,
-        text_effects=body.text_effects,
-        selected_topics=[t.model_dump() for t in body.selected_topics] if body.selected_topics else None,
-        html_content=body.html_content,
-        canvas_files=[f.model_dump() for f in body.canvas_files] if body.canvas_files else None,
-        bricks=[b.model_dump() for b in body.bricks] if body.bricks else None,
-    )
+    try:
+        return await create_draft_web_page(
+            settings=settings,
+            sessions=sessions,
+            user_id=user.id,
+            prompt=body.prompt,
+            title=body.title,
+            model=body.model,
+            conversation_id=body.conversation_id,
+            kind=body.kind,
+            page_type=body.page_type,
+            target_audience=body.target_audience,
+            editorial_tone=body.editorial_tone,
+            format_priorities=body.format_priorities,
+            mandatory_sections=body.mandatory_sections,
+            author_persona=body.author_persona,
+            visual_description=body.visual_description,
+            creative_freedom=body.creative_freedom,
+            orientation=body.orientation,
+            layout_style=body.layout_style,
+            text_density=body.text_density,
+            interactivity=body.interactivity,
+            include_quiz=body.include_quiz,
+            include_svg=body.include_svg,
+            theme_palette=body.theme_palette,
+            visual_style=body.visual_style,
+            animation_engine=body.animation_engine,
+            font_family=body.font_family,
+            text_effects=body.text_effects,
+            selected_topics=[t.model_dump() for t in body.selected_topics] if body.selected_topics else None,
+            html_content=body.html_content,
+            canvas_files=[f.model_dump() for f in body.canvas_files] if body.canvas_files else None,
+            bricks=[b.model_dump() for b in body.bricks] if body.bricks else None,
+            web_search=body.web_search,
+            multipass_exhaustive=body.multipass_exhaustive,
+        )
+    except ProviderError as exc:
+        raise HTTPException(502, str(exc)) from exc
 
 
 @router.post("/api/pages/bricks/execute")
@@ -339,12 +400,17 @@ async def refine_page(
     if bricks_ctx:
         effective_instruction = f"{effective_instruction}\n\n{bricks_ctx}"
 
-    updated_html = await refine_page_html(
-        settings=settings,
-        current_html=current_html,
-        instruction=effective_instruction,
-        model=body.model,
-    )
+    try:
+        updated_html = await refine_page_html(
+            settings=settings,
+            current_html=current_html,
+            instruction=effective_instruction,
+            model=body.model,
+            web_search=body.web_search,
+            raise_on_failure=not getattr(settings, "demo_mode", False),
+        )
+    except ProviderError as exc:
+        raise HTTPException(502, str(exc)) from exc
     if page_bricks or getattr(page, "kind", "page") == "app":
         updated_html = inject_bricks_runtime_html(updated_html, page_bricks)
 

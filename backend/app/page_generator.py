@@ -13,12 +13,83 @@ from .google_cloud import can_fallback_to_model, has_llm_access, post_chat_compl
 from .providers import ProviderError, _check_response, _json
 from .motion_fx import MOTION_FX_CSS, MOTION_FX_JS, inject_motion_fx
 from .page_runtime import CLAIR_PAGE_RUNTIME_JS, sanitize_and_enhance_html
+from .page_web_search import gather_page_web_context
 from .svg_assets import inject_svg_placeholders, render_svg_asset
 from .text_fx import TEXT_FX_CSS, TEXT_FX_JS, inject_text_fx_placeholders, render_curved_text
 
 _logger = logging.getLogger("uvicorn.error")
 
-_TIMEOUT = httpx.Timeout(180.0, connect=15.0, pool=15.0)
+_TIMEOUT = httpx.Timeout(480.0, connect=20.0, pool=15.0)
+
+_EDITORIAL_TONE_DIRECTIVES = {
+    "pedagogical": "Ton pédagogique et didactique : explications progressives, analogies claires, définitions accessibles et mises en situation concrètes.",
+    "analytical": "Ton analytique, factuel et rigoureux : privilégie les preuves, données chiffrées, ratios, comparaisons objectives et justifications précises.",
+    "direct_actionable": "Ton direct, synthétique et orienté action : va droit au but, formule des recommandations opérationnelles et des critères de décision clairs.",
+    "storytelling": "Ton narratif et immersif : contextualise par l'histoire, les cas vécus, la progression dramatique et les figures marquantes.",
+    "critical_debate": "Ton critique et nuancé : confronte thèses et antithèses, expose les limites, biais, coûts cachés et controverses du sujet.",
+}
+
+_FORMAT_PRIORITY_DIRECTIVES = {
+    "tables_priority": (
+        "- PRIORITÉ ABSOLUE AUX TABLEAUX HTML (EXIGENCE FORTE) : L'utilisateur exige une présentation riche en tableaux. "
+        "Intègre impérativement plusieurs tableaux HTML (<table>, <thead>, <tbody>) complets, multi-colonnes (4 à 6 colonnes) "
+        "et riches en données concrètes (comparatifs, matrices de synthèse, bilans chiffrés, critères détaillés) dans les sections principales de la page."
+    ),
+    "kpi_metrics": (
+        "- PRIORITÉ AUX KPI & CHIFFRES CLÉS : Mets en avant des bandeaux de métriques clés, ordres de grandeur, "
+        "pourcentages, seuils critiques et comparaisons quantitatives (cartes KPI contrastées / compteurs)."
+    ),
+    "lists_checklists": (
+        "- PRIORITÉ AUX LISTES & CHECKLISTS STRUCTURÉES : Organise les recommandations et procédures sous forme de "
+        "listes hiérarchisées à puces en gras, checklists actionnables et étapes numérotées."
+    ),
+    "cards_bento": (
+        "- PRIORITÉ AUX CARTES BENTO MODULAIRES : Structure les idées clés en grilles de cartes modulaires contrastées "
+        "côte à côte (style Bento Grid responsive) pour une lecture scannable."
+    ),
+    "timeline_steps": (
+        "- PRIORITÉ AUX FRISES & ÉTAPES SÉQUENTIELLES : Décline les évolutions, processus ou méthodes sous forme de "
+        "frise chronologique ou pipeline visuel étape par étape numéroté."
+    ),
+    "code_formulas": (
+        "- PRIORITÉ AUX FORMULES, ÉQUATIONS & BLOCS TECHNIQUES : Mets en exergue les formules mathématiques, théorèmes, "
+        "équations, commandes ou extraits techniques dans des encadrés dédiés lisibles."
+    ),
+    "prose_editorial": (
+        "- PRIORITÉ À LA RÉDACTION ÉDITORIALE APPROFONDIE : Rédige des paragraphes développés, nuancés et argumentés "
+        "sans te limiter à des puces télégraphiques."
+    ),
+}
+
+_MANDATORY_SECTION_DIRECTIVES = {
+    "executive_summary": "Un bloc « L'essentiel en 30 secondes / Résumé exécutif » placé tout en haut de la page.",
+    "comparison_matrix": "Un grand tableau comparatif / matrice Avantages vs Limites multi-colonnes détaillé.",
+    "case_studies": "Une section dédiée aux « Exemples concrets & Études de cas réels » décortiqués.",
+    "common_pitfalls": "Une section « Pièges fréquents, Erreurs à éviter & Idées reçues » avec parades concrètes.",
+    "step_by_step_method": "Une section « Méthode d'application / Guide pratique pas-à-pas ».",
+    "glossary_definitions": "Un « Glossaire & Définitions » des termes, sigles et notions indispensables.",
+    "faq_section": "Une « Foire Aux Questions (FAQ) » interactive (accordéons <details>/<summary>) répondant aux questions concrètes.",
+    "key_takeaways": "Un encadré final « À retenir / Synthèse mémotechnique » récapitulant les points cardinaux.",
+    "sources_references": "Une section « Sources & Références » citant les liens web vérifiés ou ouvrages de référence.",
+}
+
+
+def _extract_message_text(message: Any) -> str:
+    """Extrait en toute sécurité le texte d'un objet message OpenAI/Gemini (str, liste ou None)."""
+    if not isinstance(message, dict):
+        return ""
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict) and isinstance(item.get("text"), str):
+                parts.append(item["text"])
+        return "".join(parts)
+    return ""
 
 
 def short_token() -> str:
@@ -441,6 +512,8 @@ def generate_fallback_page(
     font_family_choice: str = "auto",
     text_effects: list[str] | None = None,
     selected_topics: list[dict[str, Any]] | None = None,
+    format_priorities: list[str] | None = None,
+    mandatory_sections: list[str] | None = None,
 ) -> str:
     """Generate a rich, responsive, completely self-contained fallback HTML page with custom options."""
     safe_title = html.escape(title or "cLAIr Pages — Guide interactif")
@@ -686,6 +759,28 @@ def generate_fallback_page(
 """
 
     print_badge = '<span class="brand-badge" style="background:rgba(234,88,12,0.15);color:#ea580c;">Format Fiche Impression A4</span>' if is_print else '<span class="brand-badge">Autonome & Hors-ligne</span>'
+
+    extra_blocks_html = ""
+    if format_priorities and "tables_priority" in format_priorities:
+        extra_blocks_html += """
+    <div class="card" style="margin-bottom: 1.5rem; overflow-x: auto;">
+      <h3 style="margin-bottom: 0.75rem;">Matrice comparative de synthèse</h3>
+      <table style="width: 100%; border-collapse: collapse; font-size: 0.9rem; text-align: left;">
+        <thead>
+          <tr style="border-bottom: 2px solid var(--primary);">
+            <th style="padding: 0.6rem 0.75rem;">Critère d'analyse</th>
+            <th style="padding: 0.6rem 0.75rem;">Description</th>
+            <th style="padding: 0.6rem 0.75rem;">Points forts</th>
+            <th style="padding: 0.6rem 0.75rem;">Limites / Vigilance</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr style="border-bottom: 1px solid var(--border);"><td style="padding: 0.6rem 0.75rem;">Fondamentaux</td><td style="padding: 0.6rem 0.75rem;">Concepts pivots</td><td style="padding: 0.6rem 0.75rem;">Structure claire</td><td style="padding: 0.6rem 0.75rem;">Nécessite des exemples</td></tr>
+          <tr><td style="padding: 0.6rem 0.75rem;">Mise en œuvre</td><td style="padding: 0.6rem 0.75rem;">Application pratique</td><td style="padding: 0.6rem 0.75rem;">Impact mesurable</td><td style="padding: 0.6rem 0.75rem;">Suivi régulier requis</td></tr>
+        </tbody>
+      </table>
+    </div>
+"""
 
     full_page = f"""<!DOCTYPE html>
 <html lang="fr" data-theme="dark">
@@ -1033,6 +1128,7 @@ def generate_fallback_page(
     </div>
 
     <!-- Content Sections -->
+    {extra_blocks_html}
     {tabs_html}
 
     {quiz_section}
@@ -1101,6 +1197,9 @@ async def generate_page_html(
     model: str | None = None,
     page_type: str = "auto",
     target_audience: str = "general",
+    editorial_tone: str = "auto",
+    format_priorities: list[str] | None = None,
+    mandatory_sections: list[str] | None = None,
     author_persona: str | None = None,
     visual_description: str | None = None,
     creative_freedom: str = "medium",
@@ -1116,6 +1215,7 @@ async def generate_page_html(
     font_family: str = "auto",
     text_effects: list[str] | None = None,
     selected_topics: list[dict[str, Any]] | None = None,
+    web_search: bool = True,
     raise_on_failure: bool = False,
 ) -> tuple[str, str]:
     """
@@ -1455,6 +1555,36 @@ async def generate_page_html(
             )
 
     design_options.append(f"- AMBIANCE & COULEURS : Palette dominante '{theme_palette}' avec variables CSS claires et sombres.")
+
+    if editorial_tone and editorial_tone != "auto" and editorial_tone in _EDITORIAL_TONE_DIRECTIVES:
+        design_options.append(f"- TON ÉDITORIAL : {_EDITORIAL_TONE_DIRECTIVES[editorial_tone]}")
+
+    clean_priorities = [p for p in (format_priorities or []) if p in _FORMAT_PRIORITY_DIRECTIVES]
+    for prio in clean_priorities:
+        design_options.append(_FORMAT_PRIORITY_DIRECTIVES[prio])
+
+    clean_sections = [s for s in (mandatory_sections or []) if s in _MANDATORY_SECTION_DIRECTIVES]
+    if clean_sections:
+        sec_lines = "\n".join(f"  * {_MANDATORY_SECTION_DIRECTIVES[s]}" for s in clean_sections)
+        design_options.append(
+            "- SECTIONS OBLIGATOIRES À INTÉGRER IMPÉRATIVEMENT DANS LA PAGE :\n"
+            f"{sec_lines}"
+        )
+
+    is_long_complex = (not is_strict_a4) and (
+        resolved_density >= 7
+        or bool(selected_topics)
+        or bool(clean_priorities)
+        or bool(clean_sections)
+        or len(clean_prompt) > 500
+    )
+    if is_long_complex:
+        design_options.append(
+            "- ARCHITECTURE POUR PAGE LONGUE & COMPLEXE : Factorise ton CSS dans des classes utilitaires sobres et réutilisables "
+            "sans CSS inline répétitif afin de consacrer plus de 85 % de ton budget de tokens au contenu réel, aux tableaux complets, "
+            "aux analyses détaillées et à toutes les sections demandées, sans jamais écourter ni résumer la fin du document."
+        )
+
     user_query_parts.append("\n".join(design_options))
 
     full_user_prompt = "\n\n".join(user_query_parts)
@@ -1478,13 +1608,28 @@ async def generate_page_html(
             font_family_choice=font_family,
             text_effects=text_effects,
             selected_topics=selected_topics,
+            format_priorities=clean_priorities,
+            mandatory_sections=clean_sections,
         )
+
+    # Recherche web SearXNG activée par défaut (hors mode démo)
+    if web_search:
+        web_context, _ = await gather_page_web_context(
+            settings,
+            query=clean_prompt,
+            title=title,
+            selected_topics=selected_topics,
+            limit=8,
+        )
+        if web_context:
+            full_user_prompt = f"{full_user_prompt}\n\n{web_context}"
 
     # Temperature adapted to creative freedom
     temp = 0.2 if creative_freedom == "low" else (0.75 if creative_freedom == "high" else 0.45)
 
+    system_prompt = _get_page_system_prompt(is_strict_a4)
     messages = [
-        {"role": "system", "content": _get_page_system_prompt(is_strict_a4)},
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": full_user_prompt},
     ]
 
@@ -1494,13 +1639,21 @@ async def generate_page_html(
             "messages": messages,
             "stream": False,
             "temperature": temp,
-            "max_tokens": 32768,
+            "max_tokens": 65536 if not is_strict_a4 else 32768,
         }
         async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=False) as client:
             # Retry incomplete documents once, regenerating from the original input.
             # Never append closing tags to a response whose content may be truncated.
             for attempt in range(2):
                 response = await post_chat_completion(settings, request_payload, client=client)
+                err_body_lower = (response.text or "").lower() if response.status_code in (400, 422) else ""
+                if (
+                    response.status_code in (400, 422)
+                    and request_payload.get("max_tokens", 0) > 32768
+                    and any(tok in err_body_lower for tok in ("max_tokens", "max_output_tokens", "max_completion_tokens", "output tokens"))
+                ):
+                    request_payload = {**request_payload, "max_tokens": 32768}
+                    response = await post_chat_completion(settings, request_payload, client=client)
                 # Follow the existing presentation fallback for unsupported page models.
                 fallback_model = getattr(settings, "default_model", "")
                 if (
@@ -1514,19 +1667,27 @@ async def generate_page_html(
                 _check_response(response, "Fournisseur IA")
                 payload = _json(response, "Fournisseur IA")
                 choice = payload["choices"][0]
-                html_code = extract_html(choice["message"]["content"])
+                raw_text = _extract_message_text(choice.get("message"))
+                html_code = extract_html(raw_text)
                 incomplete = choice.get("finish_reason") == "length" or "</html>" not in html_code.lower()
                 if not incomplete:
                     break
                 if attempt == 1:
+                    if "<body" in html_code.lower() and len(html_code) >= 6000:
+                        _logger.warning(
+                            "Page longue tronquée en fin de génération (%d car.) — fermeture propre par sanitize_and_enhance_html.",
+                            len(html_code),
+                        )
+                        break
                     if raise_on_failure:
                         raise ProviderError("La page générée reste incomplète après une seconde tentative compacte. Réessayez.")
                     break
-                if selected_topics and not is_strict_a4:
+                if is_long_complex:
                     compact_instruction = (
-                        "La précédente réponse a été coupée par la limite de contexte. "
-                        "Régénère le document HTML COMPLET en optimisant le code CSS et JavaScript pour laisser "
-                        "le maximum d'espace au contenu rédigé détaillé de chaque thème sans le brider, et termine impérativement par </body></html>."
+                        "La précédente réponse a atteint la limite de longueur. "
+                        "Régénère le document HTML COMPLET en factorisant au maximum le CSS (classes courtes et propres, zéro CSS inline répétitif) "
+                        "et le JavaScript afin de laisser le maximum d'espace au contenu détaillé, aux tableaux complets et à chaque section, "
+                        "et termine impérativement par </body></html>."
                     )
                 else:
                     compact_instruction = (
@@ -1563,6 +1724,8 @@ async def generate_page_html(
                 font_family_choice=font_family,
                 text_effects=text_effects,
                 selected_topics=selected_topics,
+                format_priorities=clean_priorities,
+                mandatory_sections=clean_sections,
             )
 
         html_code = inject_text_fx_placeholders(inject_svg_placeholders(html_code))
@@ -1578,6 +1741,12 @@ async def generate_page_html(
         return resolved_title, html_code
 
     except Exception as exc:
+        _logger.warning(
+            "Erreur lors de la génération de page HTML par IA (model=%s, %s): %r",
+            target_model,
+            type(exc).__name__,
+            exc,
+        )
         if raise_on_failure:
             if isinstance(exc, ProviderError):
                 raise
@@ -1586,7 +1755,6 @@ async def generate_page_html(
             if isinstance(exc, httpx.HTTPError):
                 raise ProviderError("Impossible de joindre le fournisseur IA pour créer la page.") from None
             raise ProviderError("Le fournisseur IA a renvoyé une page illisible ou invalide.") from None
-        _logger.warning("Erreur lors de la génération de page HTML par IA: %s; utilisation du fallback.", exc)
         resolved_title = title or (clean_prompt[:60].strip() or "Page Web")
         return resolved_title, generate_fallback_page(
             resolved_title,
@@ -1603,6 +1771,8 @@ async def generate_page_html(
             font_family_choice=font_family,
             text_effects=text_effects,
             selected_topics=selected_topics,
+            format_priorities=clean_priorities,
+            mandatory_sections=clean_sections,
         )
 
 
@@ -1611,6 +1781,8 @@ async def refine_page_html(
     current_html: str,
     instruction: str,
     model: str | None = None,
+    web_search: bool = True,
+    raise_on_failure: bool = False,
 ) -> str:
     """
     Refines an existing HTML page given user instructions.
@@ -1634,6 +1806,8 @@ async def refine_page_html(
             detected_layout = "a4_1p"
 
     if getattr(settings, "demo_mode", False) or not has_llm_access(settings, target_model):
+        if raise_on_failure and not getattr(settings, "demo_mode", False):
+            raise ProviderError("L'amélioration de la page nécessite un fournisseur IA actif.")
         # Demo fallback: simple substitution or append a banner note
         note = f"<!-- Modifié suite à la consigne : {html.escape(clean_instruction)} -->"
         if "</head>" in current_html:
@@ -1649,9 +1823,20 @@ async def refine_page_html(
             "sans augmenter le volume global ni provoquer de débordement sur une page supplémentaire.\n"
         )
 
+    web_context_block = ""
+    if web_search:
+        web_context, _ = await gather_page_web_context(
+            settings,
+            query=clean_instruction,
+            limit=5,
+        )
+        if web_context:
+            web_context_block = f"\n{web_context}\n"
+
     user_prompt = (
         f"Consigne d'amélioration demandée par l'utilisateur :\n{clean_instruction}\n"
-        f"{a4_refine_note}\n"
+        f"{a4_refine_note}"
+        f"{web_context_block}\n"
         f"Code HTML actuel de la page :\n```html\n{current_html}\n```"
     )
 
@@ -1666,20 +1851,30 @@ async def refine_page_html(
             "messages": messages,
             "stream": False,
             "temperature": 0.3,
-            "max_tokens": 32768,
+            "max_tokens": 65536 if not has_a4_sheet else 32768,
         }
         async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=False) as client:
             for attempt in range(2):
                 response = await post_chat_completion(settings, request_payload, client=client)
+                err_body_lower = (response.text or "").lower() if response.status_code in (400, 422) else ""
+                if (
+                    response.status_code in (400, 422)
+                    and request_payload.get("max_tokens", 0) > 32768
+                    and any(tok in err_body_lower for tok in ("max_tokens", "max_output_tokens", "max_completion_tokens", "output tokens"))
+                ):
+                    request_payload = {**request_payload, "max_tokens": 32768}
+                    response = await post_chat_completion(settings, request_payload, client=client)
                 _check_response(response, "Fournisseur IA")
                 payload = _json(response, "Fournisseur IA")
-                raw_content = payload["choices"][0]["message"]["content"]
                 choice = payload["choices"][0]
+                raw_content = _extract_message_text(choice.get("message"))
                 updated_html = extract_html(raw_content)
                 incomplete = choice.get("finish_reason") == "length" or "</html>" not in updated_html.lower()
                 if not incomplete:
                     break
                 if attempt == 1:
+                    if raise_on_failure:
+                        raise ProviderError("La page modifiée reste incomplète après une seconde tentative. Réessayez.")
                     break
                 compact_instruction = (
                     f"Consigne d'amélioration précédente : {clean_instruction}\n\n"
@@ -1694,6 +1889,8 @@ async def refine_page_html(
                 }
 
         if not updated_html or "<html" not in updated_html.lower():
+            if raise_on_failure:
+                raise ProviderError("Le fournisseur IA a renvoyé une page modifiée invalide ou vide.")
             return current_html
 
         enhanced = inject_motion_fx(inject_text_fx_placeholders(inject_svg_placeholders(updated_html)))
@@ -1704,7 +1901,20 @@ async def refine_page_html(
         )
 
     except Exception as exc:
-        _logger.warning("Erreur lors de l'affinage de page HTML par IA: %s", exc)
+        _logger.warning(
+            "Erreur lors de l'affinage de page HTML par IA (model=%s, %s): %r",
+            target_model,
+            type(exc).__name__,
+            exc,
+        )
+        if raise_on_failure:
+            if isinstance(exc, ProviderError):
+                raise
+            if isinstance(exc, httpx.TimeoutException):
+                raise ProviderError("L'amélioration de la page a dépassé le délai autorisé. Réessayez.") from None
+            if isinstance(exc, httpx.HTTPError):
+                raise ProviderError("Impossible de joindre le fournisseur IA pour modifier la page.") from None
+            raise ProviderError("Le fournisseur IA a renvoyé une page modifiée illisible ou invalide.") from None
         return current_html
 
 
@@ -2003,6 +2213,47 @@ def _apply_a4_topic_constraints(
     return adjusted
 
 
+def _apply_topic_priority_defaults(
+    topics: list[dict[str, Any]],
+    format_priorities: list[str] | None,
+    mandatory_sections: list[str] | None,
+) -> list[dict[str, Any]]:
+    """Oriente le format des thèmes proposés selon les priorités utilisateur (ex. tableaux prioritaires)."""
+    priorities = set(format_priorities or [])
+    sections = set(mandatory_sections or [])
+    prefer_tables = "tables_priority" in priorities or "comparison_matrix" in sections
+    if not prefer_tables and not priorities:
+        return topics
+
+    valid_formats = {"auto", "text", "list", "table", "cards", "timeline"}
+    adjusted: list[dict[str, Any]] = []
+    table_count = 0
+    for idx, topic in enumerate(topics):
+        updated = dict(topic)
+        cur_fmt = str(updated.get("output_format") or "auto")
+        if cur_fmt not in valid_formats:
+            cur_fmt = "auto"
+        if prefer_tables and cur_fmt == "auto":
+            title_cat = f"{updated.get('title', '')} {updated.get('category', '')} {updated.get('description', '')}".lower()
+            is_table_candidate = (
+                any(k in title_cat for k in ("compar", "benchmark", "tableau", "chiffre", "métrique", "statistiq", "critère", "bilan", "synth", "outil", "barème"))
+                or idx % 2 == 0
+            )
+            if is_table_candidate:
+                cur_fmt = "table"
+                table_count += 1
+        elif cur_fmt == "auto" and idx % 2 == 0:
+            if "timeline_steps" in priorities:
+                cur_fmt = "timeline"
+            elif "cards_bento" in priorities:
+                cur_fmt = "cards"
+            elif "lists_checklists" in priorities:
+                cur_fmt = "list"
+        updated["output_format"] = cur_fmt
+        adjusted.append(updated)
+    return adjusted
+
+
 async def propose_page_topics(
     settings: Settings,
     prompt: str,
@@ -2010,10 +2261,15 @@ async def propose_page_topics(
     title: str | None = None,
     page_type: str = "auto",
     target_audience: str = "general",
+    editorial_tone: str = "auto",
+    format_priorities: list[str] | None = None,
+    mandatory_sections: list[str] | None = None,
     author_persona: str | None = None,
     visual_description: str | None = None,
     layout_style: str = "auto",
     model: str | None = None,
+    web_search: bool = True,
+    raise_on_failure: bool = False,
 ) -> tuple[str, str, list[dict[str, Any]]]:
     """
     Brainstorms a wide, comprehensive list of thematic angles for the given subject.
@@ -2027,7 +2283,10 @@ async def propose_page_topics(
     is_cheat_sheet = layout_style == "cheat_sheet" or page_type == "cheat_sheet"
 
     if getattr(settings, "demo_mode", False) or not has_llm_access(settings, target_model):
+        if raise_on_failure and not getattr(settings, "demo_mode", False):
+            raise ProviderError("L'exploration des thèmes nécessite un fournisseur IA actif.")
         f_title, f_summary, f_topics = _generate_fallback_topics(clean_prompt, title)
+        f_topics = _apply_topic_priority_defaults(f_topics, format_priorities, mandatory_sections)
         return f_title, f_summary, _apply_a4_topic_constraints(f_topics, is_a4_1p, is_a4_2p, is_cheat_sheet)
 
     user_query_parts = []
@@ -2044,10 +2303,26 @@ async def propose_page_topics(
         user_query_parts.append(f"Type de page envisagée : {page_type}")
     if target_audience and target_audience != "general":
         user_query_parts.append(f"Public cible : {target_audience}")
+    if editorial_tone and editorial_tone != "auto" and editorial_tone in _EDITORIAL_TONE_DIRECTIVES:
+        user_query_parts.append(f"Ton éditorial : {_EDITORIAL_TONE_DIRECTIVES[editorial_tone]}")
+    if format_priorities:
+        user_query_parts.append(f"Priorités de mise en forme demandées : {', '.join(format_priorities)}")
+    if mandatory_sections:
+        user_query_parts.append(f"Sections obligatoires demandées : {', '.join(mandatory_sections)}")
     if author_persona and author_persona.strip():
         user_query_parts.append(f"Auteur / Persona de rédaction souhaité : {author_persona.strip()}")
     if visual_description and visual_description.strip():
         user_query_parts.append(f"Ambiance visuelle & couleurs : {visual_description.strip()}")
+
+    if web_search:
+        web_context, _ = await gather_page_web_context(
+            settings,
+            query=clean_prompt,
+            title=title,
+            limit=6,
+        )
+        if web_context:
+            user_query_parts.append(web_context)
 
     if is_cheat_sheet:
         user_query_parts.append(
@@ -2088,15 +2363,24 @@ async def propose_page_topics(
             "temperature": 0.45,
             "max_tokens": 8192,
         }
-        async with httpx.AsyncClient(timeout=httpx.Timeout(45.0, connect=10.0), follow_redirects=False) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=15.0, pool=15.0), follow_redirects=False) as client:
             response = await post_chat_completion(settings, request_payload, client=client)
             _check_response(response, "Fournisseur IA")
             payload = _json(response, "Fournisseur IA")
-            raw_content = payload["choices"][0]["message"]["content"].strip()
+            raw_content = _extract_message_text(payload["choices"][0].get("message")).strip()
 
-            # Strip markdown json code fences if present
-            cleaned_json = re.sub(r"^```(?:json)?\s*", "", raw_content, flags=re.IGNORECASE)
-            cleaned_json = re.sub(r"\s*```$", "", cleaned_json).strip()
+            # Strip markdown json code fences or surrounding prose if present
+            fenced_match = re.search(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", raw_content, flags=re.IGNORECASE)
+            if fenced_match:
+                cleaned_json = fenced_match.group(1).strip()
+            else:
+                cleaned_json = re.sub(r"^```(?:json)?\s*", "", raw_content, flags=re.IGNORECASE)
+                cleaned_json = re.sub(r"\s*```$", "", cleaned_json).strip()
+                if not cleaned_json.startswith("{"):
+                    brace_start = cleaned_json.find("{")
+                    brace_end = cleaned_json.rfind("}")
+                    if brace_start != -1 and brace_end > brace_start:
+                        cleaned_json = cleaned_json[brace_start : brace_end + 1]
 
             parsed = json.loads(cleaned_json)
             s_title = str(parsed.get("suggested_title") or title or clean_prompt[:60] or "Page Web").strip()
@@ -2117,6 +2401,9 @@ async def propose_page_topics(
                 t_det = int(item.get("detail_level", 5) or 5)
                 if t_det < 1 or t_det > 10:
                     t_det = 5
+                out_fmt = str(item.get("output_format") or "auto").strip()
+                if out_fmt not in {"auto", "text", "list", "table", "cards", "timeline"}:
+                    out_fmt = "auto"
                 topics.append({
                     "id": t_id,
                     "title": t_title,
@@ -2124,14 +2411,32 @@ async def propose_page_topics(
                     "category": t_cat,
                     "recommended": t_rec,
                     "detail_level": t_det,
+                    "output_format": out_fmt,
                 })
 
             if len(topics) >= 4:
+                topics = _apply_topic_priority_defaults(topics, format_priorities, mandatory_sections)
                 return s_title, s_summary, _apply_a4_topic_constraints(topics, is_a4_1p, is_a4_2p, is_cheat_sheet)
+            if raise_on_failure:
+                raise ProviderError("Le fournisseur IA n'a pas renvoyé suffisamment de thèmes exploitables.")
 
     except Exception as exc:
-        _logger.warning("Erreur lors de la proposition de thèmes par IA: %s; utilisation du fallback.", exc)
+        _logger.warning(
+            "Erreur lors de la proposition de thèmes par IA (model=%s, %s): %r",
+            target_model,
+            type(exc).__name__,
+            exc,
+        )
+        if raise_on_failure:
+            if isinstance(exc, ProviderError):
+                raise
+            if isinstance(exc, httpx.TimeoutException):
+                raise ProviderError("L'exploration des thèmes a dépassé le délai autorisé. Réessayez.") from None
+            if isinstance(exc, httpx.HTTPError):
+                raise ProviderError("Impossible de joindre le fournisseur IA pour explorer les thèmes.") from None
+            raise ProviderError("Le fournisseur IA a renvoyé une proposition de thèmes illisible ou invalide.") from None
 
     f_title, f_summary, f_topics = _generate_fallback_topics(clean_prompt, title)
+    f_topics = _apply_topic_priority_defaults(f_topics, format_priorities, mandatory_sections)
     return f_title, f_summary, _apply_a4_topic_constraints(f_topics, is_a4_1p, is_a4_2p, is_cheat_sheet)
 

@@ -17,6 +17,7 @@ from .config import Settings
 from .models import Conversation, WebPage, WebPageVersion, now
 from .page_bricks import build_bricks_prompt_context, normalize_bricks
 from .page_generator import extract_title_from_html, generate_page_html, slugify
+from .page_multipass import generate_multipass_page_html
 from .page_runtime import sanitize_and_enhance_html
 from .serializers import web_page_json
 
@@ -33,6 +34,9 @@ async def create_draft_web_page(
     kind: str = "page",
     page_type: str = "educational",
     target_audience: str | None = None,
+    editorial_tone: str = "auto",
+    format_priorities: list[str] | None = None,
+    mandatory_sections: list[str] | None = None,
     author_persona: str | None = None,
     visual_description: str | None = None,
     creative_freedom: str = "balanced",
@@ -51,6 +55,8 @@ async def create_draft_web_page(
     html_content: str | None = None,
     canvas_files: list[dict[str, Any]] | None = None,
     bricks: list[dict[str, Any]] | None = None,
+    web_search: bool = True,
+    multipass_exhaustive: bool = False,
 ) -> dict[str, Any]:
     """Génère et enregistre une nouvelle page Web ou App cLAIr strictement en brouillon."""
     resolved_kind = "app" if kind == "app" else "page"
@@ -122,30 +128,62 @@ async def create_draft_web_page(
         bricks_ctx = build_bricks_prompt_context(normalized_bricks)
         if bricks_ctx:
             effective_prompt = f"{effective_prompt}\n\n{bricks_ctx}".strip()
-        resolved_title, final_html = await generate_page_html(
-            settings=settings,
-            prompt=effective_prompt,
-            chat_transcript=chat_transcript,
-            title=fallback_title,
-            model=selected_model,
-            page_type=page_type,
-            target_audience=target_audience,
-            author_persona=author_persona,
-            visual_description=visual_description,
-            creative_freedom=creative_freedom,
-            orientation=orientation,
-            layout_style=layout_style,
-            text_density=resolved_density,
-            interactivity=interactivity,
-            include_quiz=include_quiz,
-            include_svg=include_svg,
-            theme_palette=theme_palette,
-            visual_style=visual_style,
-            animation_engine=animation_engine,
-            font_family=font_family,
-            text_effects=resolved_effects,
-            selected_topics=selected_topics,
+        is_strict_a4 = layout_style in ("print_sheet", "a4_1p", "a4_2p", "cheat_sheet") or page_type in (
+            "a4_revision_1p",
+            "revision_a4",
+            "a4_revision_2p",
+            "cheat_sheet",
         )
+        if multipass_exhaustive and not is_strict_a4:
+            resolved_title, final_html = await generate_multipass_page_html(
+                settings=settings,
+                prompt=effective_prompt,
+                chat_transcript=chat_transcript,
+                title=fallback_title,
+                model=selected_model,
+                target_audience=target_audience or "general",
+                editorial_tone=editorial_tone,
+                format_priorities=format_priorities,
+                mandatory_sections=mandatory_sections,
+                author_persona=author_persona,
+                visual_description=visual_description,
+                orientation=orientation,
+                theme_palette=theme_palette,
+                font_family=font_family,
+                selected_topics=selected_topics,
+                web_search=web_search,
+                raise_on_failure=not getattr(settings, "demo_mode", False),
+            )
+        else:
+            resolved_title, final_html = await generate_page_html(
+                settings=settings,
+                prompt=effective_prompt,
+                chat_transcript=chat_transcript,
+                title=fallback_title,
+                model=selected_model,
+                page_type=page_type,
+                target_audience=target_audience,
+                editorial_tone=editorial_tone,
+                format_priorities=format_priorities,
+                mandatory_sections=mandatory_sections,
+                author_persona=author_persona,
+                visual_description=visual_description,
+                creative_freedom=creative_freedom,
+                orientation=orientation,
+                layout_style=layout_style,
+                text_density=resolved_density,
+                interactivity=interactivity,
+                include_quiz=include_quiz,
+                include_svg=include_svg,
+                theme_palette=theme_palette,
+                visual_style=visual_style,
+                animation_engine=animation_engine,
+                font_family=font_family,
+                text_effects=resolved_effects,
+                selected_topics=selected_topics,
+                web_search=web_search,
+                raise_on_failure=not getattr(settings, "demo_mode", False),
+            )
         if normalized_bricks:
             final_html = sanitize_and_enhance_html(
                 final_html,

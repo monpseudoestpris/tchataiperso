@@ -40,10 +40,14 @@ from .google_cloud import (
 
 
 _TIMEOUT = httpx.Timeout(60.0, connect=10.0, pool=10.0)
-_QUERY_REWRITE_TIMEOUT = httpx.Timeout(15.0, connect=5.0, pool=5.0)
-_AUDIT_TIMEOUT = httpx.Timeout(90.0, connect=10.0, pool=10.0)
+_DEFAULT_LLM_STREAM_TIMEOUT_S = 480.0
+_SUMMARY_TIMEOUT = httpx.Timeout(120.0, connect=15.0, pool=15.0)
+_RESEARCH_PLAN_TIMEOUT = httpx.Timeout(120.0, connect=15.0, pool=15.0)
+_SOURCE_JUDGE_TIMEOUT = httpx.Timeout(45.0, connect=10.0, pool=10.0)
+_QUERY_REWRITE_TIMEOUT = httpx.Timeout(25.0, connect=8.0, pool=8.0)
+_AUDIT_TIMEOUT = httpx.Timeout(180.0, connect=15.0, pool=15.0)
 _SONAR_DEEP_RESEARCH_TIMEOUT = httpx.Timeout(1200.0, connect=30.0, read=400.0, pool=30.0)
-_DECISION_TIMEOUT = httpx.Timeout(10.0, connect=3.0, pool=3.0)
+_DECISION_TIMEOUT = httpx.Timeout(15.0, connect=5.0, pool=5.0)
 _IMAGE_SEARCH_TIMEOUT = httpx.Timeout(12.0, connect=4.0, pool=4.0)
 _MAX_IMAGE_BYTES = 10 * 1024 * 1024
 _DUCKDUCKGO_TIMEOUT = httpx.Timeout(12.0, connect=5.0, pool=5.0)
@@ -51,6 +55,16 @@ _DUCKDUCKGO_MAX_RESULTS = 5
 _DUCKDUCKGO_MAX_DEPTH = 4
 _DUCKDUCKGO_MAX_NODES = 200
 _logger = logging.getLogger("uvicorn.error")
+
+
+def _llm_stream_timeout(settings: Any) -> httpx.Timeout:
+    """Construit le timeout HTTPX pour le streaming LLM à partir de `llm_timeout_seconds`."""
+    raw = getattr(settings, "llm_timeout_seconds", _DEFAULT_LLM_STREAM_TIMEOUT_S)
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool) and raw > 0:
+        read_s = float(raw)
+    else:
+        read_s = _DEFAULT_LLM_STREAM_TIMEOUT_S
+    return httpx.Timeout(60.0, connect=20.0, read=read_s, write=60.0, pool=15.0)
 
 
 def _key(settings: Any, name: str, provider: str) -> str:
@@ -329,11 +343,13 @@ async def stream_chat_events(
     tag_splitter = ThinkTagSplitter()
 
     try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=False) as client:
+        stream_timeout = _llm_stream_timeout(settings)
+        async with httpx.AsyncClient(timeout=stream_timeout, follow_redirects=False) as client:
             async with open_chat_stream(
                 settings,
                 request_json,
                 client=client,
+                timeout=stream_timeout,
                 provider_label="Fournisseur IA",
             ) as (_response, sse_iter, _route_label):
                 async for data in sse_iter:
@@ -363,6 +379,13 @@ async def stream_chat_events(
                 if not completed:
                     raise ProviderError("La réponse IA a été interrompue ; réessayez.")
     except httpx.TimeoutException:
+        if completed:
+            fin_c, fin_t = tag_splitter.finalize()
+            if fin_t:
+                yield {"type": "thought", "text": fin_t}
+            if fin_c:
+                yield {"type": "delta", "text": fin_c}
+            return
         raise ProviderError("Le fournisseur IA met trop de temps à répondre ; réessayez.") from None
     except httpx.HTTPError:
         raise ProviderError("Impossible de joindre le fournisseur IA.") from None
@@ -402,7 +425,7 @@ async def summarize(settings: Any, model: str, previous_summary: str, transcript
         )},
     ]
     try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=False) as client:
+        async with httpx.AsyncClient(timeout=_SUMMARY_TIMEOUT, follow_redirects=False) as client:
             response = await post_chat_completion(
                 settings,
                 {"model": model, "messages": messages, "stream": False,
@@ -1440,7 +1463,7 @@ async def decompose_deep_search_objective(
         {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
     ]
     try:
-        async with httpx.AsyncClient(timeout=_QUERY_REWRITE_TIMEOUT, follow_redirects=False) as client:
+        async with httpx.AsyncClient(timeout=_RESEARCH_PLAN_TIMEOUT, follow_redirects=False) as client:
             response = await post_chat_completion(
                 settings,
                 {"model": fast_model, "messages": messages, "stream": False, "temperature": 0.1, "max_tokens": 2048},
@@ -1548,7 +1571,7 @@ async def plan_deep_search_queries(
         {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
     ]
     try:
-        async with httpx.AsyncClient(timeout=_QUERY_REWRITE_TIMEOUT, follow_redirects=False) as client:
+        async with httpx.AsyncClient(timeout=_RESEARCH_PLAN_TIMEOUT, follow_redirects=False) as client:
             response = await post_chat_completion(
                 settings,
                 {"model": plan_model, "messages": messages, "stream": False,
@@ -1685,7 +1708,7 @@ async def validate_and_followup_deep_search(
         {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
     ]
     try:
-        async with httpx.AsyncClient(timeout=_QUERY_REWRITE_TIMEOUT, follow_redirects=False) as client:
+        async with httpx.AsyncClient(timeout=_RESEARCH_PLAN_TIMEOUT, follow_redirects=False) as client:
             response = await post_chat_completion(
                 settings,
                 {"model": followup_model, "messages": messages, "stream": False,
@@ -1863,7 +1886,7 @@ async def plan_deep_search_followup(
         {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
     ]
     try:
-        async with httpx.AsyncClient(timeout=_QUERY_REWRITE_TIMEOUT, follow_redirects=False) as client:
+        async with httpx.AsyncClient(timeout=_RESEARCH_PLAN_TIMEOUT, follow_redirects=False) as client:
             response = await post_chat_completion(
                 settings,
                 {"model": followup_model, "messages": messages, "stream": False,
@@ -1957,7 +1980,7 @@ async def decompose_learn_objective(
         {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
     ]
     try:
-        async with httpx.AsyncClient(timeout=_QUERY_REWRITE_TIMEOUT, follow_redirects=False) as client:
+        async with httpx.AsyncClient(timeout=_RESEARCH_PLAN_TIMEOUT, follow_redirects=False) as client:
             response = await post_chat_completion(
                 settings,
                 {"model": fast_model, "messages": messages, "stream": False, "temperature": 0.1, "max_tokens": 2048},
@@ -2071,7 +2094,7 @@ async def plan_learn_queries(
         {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
     ]
     try:
-        async with httpx.AsyncClient(timeout=_QUERY_REWRITE_TIMEOUT, follow_redirects=False) as client:
+        async with httpx.AsyncClient(timeout=_RESEARCH_PLAN_TIMEOUT, follow_redirects=False) as client:
             response = await post_chat_completion(
                 settings,
                 {"model": plan_model, "messages": messages, "stream": False,
@@ -2200,7 +2223,7 @@ async def validate_and_followup_learn(
         {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
     ]
     try:
-        async with httpx.AsyncClient(timeout=_QUERY_REWRITE_TIMEOUT, follow_redirects=False) as client:
+        async with httpx.AsyncClient(timeout=_RESEARCH_PLAN_TIMEOUT, follow_redirects=False) as client:
             response = await post_chat_completion(
                 settings,
                 {"model": followup_model, "messages": messages, "stream": False, "temperature": 0.1, "max_tokens": 1600},
@@ -2361,7 +2384,7 @@ async def plan_learn_followup(
         {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
     ]
     try:
-        async with httpx.AsyncClient(timeout=_QUERY_REWRITE_TIMEOUT, follow_redirects=False) as client:
+        async with httpx.AsyncClient(timeout=_RESEARCH_PLAN_TIMEOUT, follow_redirects=False) as client:
             response = await post_chat_completion(
                 settings,
                 {"model": followup_model, "messages": messages, "stream": False,
@@ -2843,7 +2866,7 @@ async def plan_report_outline(
         {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
     ]
     try:
-        async with httpx.AsyncClient(timeout=_QUERY_REWRITE_TIMEOUT, follow_redirects=False) as client:
+        async with httpx.AsyncClient(timeout=_RESEARCH_PLAN_TIMEOUT, follow_redirects=False) as client:
             response = await post_chat_completion(
                 settings,
                 {"model": fast_model, "messages": messages, "stream": False, "temperature": 0.15, "max_tokens": 2800},
@@ -3278,7 +3301,7 @@ async def judge_source_relevance(
             {"role": "user", "content": json.dumps({"question": question[:1200], "sources": listing}, ensure_ascii=False)},
         ]
         try:
-            async with httpx.AsyncClient(timeout=_QUERY_REWRITE_TIMEOUT, follow_redirects=False) as client:
+            async with httpx.AsyncClient(timeout=_SOURCE_JUDGE_TIMEOUT, follow_redirects=False) as client:
                 response = await post_chat_completion(
                     settings,
                     {"model": model, "messages": messages, "stream": False, "temperature": 0, "max_tokens": 900},

@@ -2061,3 +2061,70 @@ def test_stream_delta_with_thought_and_splitter():
     fin_c, fin_t = splitter.finalize()
     assert fin_c == "" and fin_t == ""
 
+
+def test_stream_chat_uses_configurable_read_timeout(settings, transport):
+    observed_timeouts = []
+
+    def handler(request):
+        observed_timeouts.append(request.extensions.get("timeout"))
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=Chunks(
+                b'data: {"choices":[{"delta":{"content":"OK"},"finish_reason":"stop"}]}\n\n',
+                b'data: [DONE]\n\n',
+            ),
+        )
+
+    transport(handler)
+    assert asyncio.run(collect_chat(settings)) == ["OK"]
+    assert observed_timeouts[0]["read"] == 480.0
+
+    settings.llm_timeout_seconds = 600
+    assert asyncio.run(collect_chat(settings)) == ["OK"]
+    assert observed_timeouts[1]["read"] == 600.0
+
+
+def test_chat_returns_after_finish_reason_even_if_timeout_before_done(settings, transport):
+    class FinishThenTimeout(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield 'data: {"choices":[{"delta":{"content":"Réponse complète"},"finish_reason":"stop"}]}\n\n'.encode("utf-8")
+            raise httpx.ReadTimeout("The provider kept the SSE stream open without [DONE]")
+
+    transport(lambda request: httpx.Response(
+        200, headers={"content-type": "text/event-stream"}, stream=FinishThenTimeout()
+    ))
+    assert asyncio.run(collect_chat(settings)) == ["Réponse complète"]
+
+
+def test_chat_timeout_before_completion_raises_provider_error_without_secret(settings, transport):
+    def handler(request):
+        raise httpx.ReadTimeout("timeout at ?api_key=fake-llm-secret", request=request)
+
+    transport(handler)
+    with pytest.raises(providers.ProviderError, match="met trop de temps") as error:
+        asyncio.run(collect_chat(settings))
+    assert "fake-llm-secret" not in str(error.value)
+
+
+def test_plan_report_outline_uses_research_plan_timeout(settings, transport):
+    observed_timeouts = []
+
+    def handler(request):
+        observed_timeouts.append(request.extensions.get("timeout"))
+        outline_json = json.dumps({
+            "title": "# Dossier Test",
+            "executive_summary_guide": "Synthèse",
+            "experts": [{"id": "E1", "title": "Expert Test", "perspective": "Analyse"}],
+            "parts": [
+                {"id": "S1", "heading": "## 1. Axe Alpha", "subparts": ["### 1.1 Sous-axe"], "focus": "Détails"},
+                {"id": "S2", "heading": "## 2. Axe Beta", "subparts": ["### 2.1 Sous-axe"], "focus": "Détails"},
+            ],
+        })
+        return httpx.Response(200, json={"choices": [{"message": {"content": outline_json}}]})
+
+    transport(handler)
+    result = asyncio.run(providers.plan_report_outline(settings, "Sujet de test complexe", [], []))
+    assert len(result["parts"]) == 2
+    assert observed_timeouts[0]["read"] == 120.0
+

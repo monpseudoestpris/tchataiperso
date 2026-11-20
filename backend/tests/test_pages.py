@@ -973,6 +973,469 @@ def test_finance_eod_brick_execution_and_interview(tmp_path, monkeypatch):
         assert "finance_eod_indicateurs" in int_data["selected_brick_ids"]
 
 
+def test_pages_searxng_web_search_enabled_by_default_and_non_silent_errors(tmp_path, monkeypatch):
+    import httpx
+    from app import page_generator, page_web_search
+    from app.providers import ProviderError
+    from app.schemas import CreateWebPage, ProposePageTopicsRequest, RefineWebPage
+
+    # 1. Vérifier que web_search est activé par défaut dans les schémas cLAIr Pages
+    assert CreateWebPage(prompt="Sujet test").web_search is True
+    assert ProposePageTopicsRequest(prompt="Sujet test").web_search is True
+    assert RefineWebPage(instruction="Ajoute une section").web_search is True
+
+    settings = Settings(
+        _env_file=None,
+        app_data_dir=tmp_path,
+        demo_mode=False,
+        llm_api_key="fake-test-key",
+        default_model="openai/gpt-4o-mini",
+        page_model="openai/gpt-4o-mini",
+        searxng_url="http://clair-searxng:8080",
+    )
+
+    search_calls: list[str] = []
+    llm_prompts: list[str] = []
+    reformulate_calls: list[dict] = []
+
+    async def fake_reformulate_post(_settings, payload, client=None, **kwargs):
+        reformulate_calls.append(payload)
+        return httpx.Response(
+            200,
+            request=httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions"),
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": '{"queries": ["nuclear fusion plasma confinement record 2026", "ITER tokamak fusion progress"]}'
+                        }
+                    }
+                ]
+            },
+        )
+
+    async def fake_search_web(_settings, query: str, limit: int = 5, engines=None):
+        search_calls.append(query)
+        return [
+            {
+                "title": "Rapport Fusion Nucléaire 2026",
+                "url": "https://example.org/fusion-2026",
+                "snippet": "Record de confinement plasma maintenu pendant 1200 secondes en 2026.",
+                "engine": "searxng",
+            }
+        ]
+
+    async def fake_post_chat_completion(_settings, payload, client=None, **kwargs):
+        llm_prompts.append(payload["messages"][-1]["content"])
+        return httpx.Response(
+            200,
+            request=httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions"),
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": "<!DOCTYPE html><html lang='fr'><head><title>Fusion 2026</title></head><body><h1>Fusion Nucléaire</h1><p>1200 secondes</p></body></html>"
+                        },
+                        "finish_reason": "stop",
+                    }
+                ]
+            },
+        )
+
+    monkeypatch.setattr(page_web_search, "post_chat_completion", fake_reformulate_post)
+    monkeypatch.setattr(page_web_search, "search_web", fake_search_web)
+    monkeypatch.setattr(page_generator, "post_chat_completion", fake_post_chat_completion)
+
+    with authenticated_client(settings) as authed_client:
+        # 2. Création par défaut : les requêtes sont reformulées avant d'interroger SearXNG
+        res = authed_client.post(
+            "/api/pages",
+            json={"prompt": "Fais-moi une belle page web pédagogique avec schéma SVG et quiz sur les avancées récentes de la fusion nucléaire"},
+        )
+        assert res.status_code == 201, res.text
+        assert len(reformulate_calls) == 1
+        assert search_calls == [
+            "nuclear fusion plasma confinement record 2026",
+            "ITER tokamak fusion progress",
+        ]
+        assert "RECHERCHE WEB SEARXNG" in llm_prompts[-1]
+        assert "https://example.org/fusion-2026" in llm_prompts[-1]
+        assert "1200 secondes" in res.json()["latest_html"]
+
+        # 2bis. Si la reformulation échoue, repli gracieux sur les requêtes directes sans bloquer SearXNG
+        search_calls.clear()
+
+        async def failing_reformulate(*args, **kwargs):
+            raise httpx.ReadTimeout("timeout reformulation")
+
+        monkeypatch.setattr(page_web_search, "post_chat_completion", failing_reformulate)
+        res_fb = authed_client.post(
+            "/api/pages",
+            json={"prompt": "Batteries sodium-ion 2026"},
+        )
+        assert res_fb.status_code == 201, res_fb.text
+        assert search_calls == ["Batteries sodium-ion 2026"]
+        monkeypatch.setattr(page_web_search, "post_chat_completion", fake_reformulate_post)
+
+        # 3. Opt-out explicite : web_search=False n'appelle pas SearXNG
+        search_calls.clear()
+        res_off = authed_client.post(
+            "/api/pages",
+            json={"prompt": "Cours sur la thermodynamique", "web_search": False},
+        )
+        assert res_off.status_code == 201, res_off.text
+        assert search_calls == []
+        assert "RECHERCHE WEB SEARXNG" not in llm_prompts[-1]
+
+        # 4. Si SearXNG échoue, la génération continue gracieusement sans bloquer
+        async def failing_search_web(*args, **kwargs):
+            raise ProviderError("SearXNG temporairement indisponible")
+
+        monkeypatch.setattr(page_web_search, "search_web", failing_search_web)
+        res_degraded = authed_client.post(
+            "/api/pages",
+            json={"prompt": "Histoire de l'aviation"},
+        )
+        assert res_degraded.status_code == 201, res_degraded.text
+
+        # 5. Si le fournisseur IA échoue en mode réel (demo_mode=False), HTTP 502 au lieu d'une page fallback CSS vide
+        async def failing_llm(*args, **kwargs):
+            raise ProviderError("Modèle indisponible sur le fournisseur")
+
+        monkeypatch.setattr(page_generator, "post_chat_completion", failing_llm)
+        res_err = authed_client.post(
+            "/api/pages",
+            json={"prompt": "Sujet qui ne doit pas renvoyer un faux fallback CSS"},
+        )
+        assert res_err.status_code == 502
+        assert "Modèle indisponible" in res_err.json()["detail"]
+
+
+def test_page_wizard_interview_and_exhaustive_criteria(tmp_path, monkeypatch):
+    import json
+    import httpx
+    from app import page_wizard
+
+    # 1. Mode démo : vérifie les deux phases (questions -> ready) et la détection des critères
+    demo_settings = Settings(_env_file=None, app_data_dir=tmp_path / "demo", demo_mode=True)
+    with authenticated_client(demo_settings) as demo_client:
+        res_q = demo_client.post(
+            "/api/pages/wizard/interview",
+            json={"prompt": "Comparatif détaillé et exhaustif des batteries sodium-ion vs lithium-ion"},
+        )
+        assert res_q.status_code == 200, res_q.text
+        data_q = res_q.json()
+        assert data_q["status"] == "questions"
+        assert len(data_q["questions"]) >= 3
+        assert "tables_priority" in data_q["criteria"]["format_priorities"]
+
+        res_ready = demo_client.post(
+            "/api/pages/wizard/interview",
+            json={
+                "prompt": "Batteries sodium-ion vs lithium-ion",
+                "messages": [
+                    {"role": "user", "content": "Batteries sodium-ion vs lithium-ion"},
+                    {"role": "assistant", "content": "Questions ?"},
+                    {"role": "user", "content": "Priorité aux tableaux comparatifs, dossier complet et études de cas"},
+                ],
+                "force_finalize": True,
+            },
+        )
+        assert res_ready.status_code == 200, res_ready.text
+        data_ready = res_ready.json()
+        assert data_ready["status"] == "ready"
+        assert "tables_priority" in data_ready["criteria"]["format_priorities"]
+        assert "comparison_matrix" in data_ready["criteria"]["mandatory_sections"]
+        assert data_ready["criteria"]["text_density"] >= 8
+        assert "sodium-ion" in data_ready["criteria"]["refined_prompt"].lower()
+
+    # 2. Mode IA réelle (mocké) : vérifie l'appel LLM, le raffinage du prompt et le pré-remplissage complet
+    ai_settings = Settings(
+        _env_file=None,
+        app_data_dir=tmp_path / "ai",
+        demo_mode=False,
+        llm_api_key="fake-test-key",
+        default_model="openai/gpt-4o-mini",
+        page_model="openai/gpt-4o-mini",
+    )
+
+    async def fake_wizard_llm(_settings, payload, client=None, **kwargs):
+        is_second_turn = "FINALISER" in payload["messages"][0]["content"] or len(payload["messages"]) > 2
+        if not is_second_turn:
+            body = {
+                "status": "questions",
+                "assistant_message": "Précisons le format idéal.",
+                "questions": [
+                    {
+                        "id": "q1",
+                        "question": "Quels formats prioriser ?",
+                        "options": ["Priorité aux tableaux", "Cartes Bento"],
+                        "allow_multiple": True,
+                        "recommended_option": "Priorité aux tableaux",
+                    }
+                ],
+                "criteria": {
+                    "suggested_title": "Benchmark IA",
+                    "format_priorities": ["tables_priority"],
+                    "text_density": 7,
+                },
+            }
+        else:
+            body = {
+                "status": "ready",
+                "assistant_message": "Prompt raffiné et critères prêts.",
+                "questions": [],
+                "criteria": {
+                    "suggested_title": "Comparatif Complet GPU Cloud 2026",
+                    "refined_prompt": "Dossier complet comparant H100, H200 et B200 avec tableaux de coûts, latence et VRAM.",
+                    "page_type": "comparison",
+                    "target_audience": "professional",
+                    "editorial_tone": "analytical",
+                    "format_priorities": ["tables_priority", "kpi_metrics"],
+                    "mandatory_sections": ["executive_summary", "comparison_matrix", "common_pitfalls"],
+                    "orientation": "landscape",
+                    "layout_style": "single_page",
+                    "text_density": 9,
+                    "include_quiz": False,
+                    "include_svg": True,
+                    "web_search": True,
+                },
+            }
+        return httpx.Response(
+            200,
+            request=httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions"),
+            json={"choices": [{"message": {"content": json.dumps(body)}}]},
+        )
+
+    monkeypatch.setattr(page_wizard, "post_chat_completion", fake_wizard_llm)
+
+    with authenticated_client(ai_settings) as ai_client:
+        res1 = ai_client.post("/api/pages/wizard/interview", json={"prompt": "Comparatif GPU Cloud"})
+        assert res1.status_code == 200
+        assert res1.json()["status"] == "questions"
+        assert res1.json()["questions"][0]["allow_multiple"] is True
+
+        res2 = ai_client.post(
+            "/api/pages/wizard/interview",
+            json={
+                "prompt": "Comparatif GPU Cloud",
+                "messages": [
+                    {"role": "user", "content": "Comparatif GPU Cloud"},
+                    {"role": "assistant", "content": "Quels formats prioriser ?"},
+                    {"role": "user", "content": "Priorité aux tableaux et KPI chiffrés"},
+                ],
+                "force_finalize": True,
+            },
+        )
+        assert res2.status_code == 200
+        ready = res2.json()
+        assert ready["status"] == "ready"
+        assert ready["criteria"]["suggested_title"] == "Comparatif Complet GPU Cloud 2026"
+        assert ready["criteria"]["editorial_tone"] == "analytical"
+        assert ready["criteria"]["orientation"] == "landscape"
+        assert ready["criteria"]["text_density"] == 9
+        assert "tables_priority" in ready["criteria"]["format_priorities"]
+        assert "comparison_matrix" in ready["criteria"]["mandatory_sections"]
+
+
+def test_long_complex_page_directives_and_truncation_recovery(tmp_path, monkeypatch):
+    import httpx
+    from app import page_generator
+
+    settings = Settings(
+        _env_file=None,
+        app_data_dir=tmp_path,
+        demo_mode=False,
+        llm_api_key="fake-test-key",
+        default_model="openai/gpt-4o-mini",
+        page_model="openai/gpt-4o-mini",
+    )
+
+    captured_payloads: list[dict] = []
+    long_body_chunk = "<section><h2>Comparatif détaillé</h2><table><thead><tr><th>Critère</th><th>Valeur</th></tr></thead><tbody>" + ("<tr><td>Paramètre</td><td>Mesure détaillée exhaustive et vérifiée</td></tr>" * 100) + "</tbody></table></section>"
+    truncated_long_html = f"<!DOCTYPE html><html lang='fr'><head><title>Dossier Long</title></head><body><main>{long_body_chunk}"
+    assert len(truncated_long_html) >= 6000
+
+    async def fake_post(_settings, payload, client=None, **kwargs):
+        captured_payloads.append(payload)
+        return httpx.Response(
+            200,
+            request=httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions"),
+            json={
+                "choices": [
+                    {
+                        "message": {"content": truncated_long_html},
+                        "finish_reason": "length",
+                    }
+                ]
+            },
+        )
+
+    monkeypatch.setattr(page_generator, "post_chat_completion", fake_post)
+
+    with authenticated_client(settings) as authed_client:
+        res = authed_client.post(
+            "/api/pages",
+            json={
+                "prompt": "Analyse exhaustive et complexe avec tableaux comparatifs",
+                "editorial_tone": "analytical",
+                "format_priorities": ["tables_priority", "kpi_metrics"],
+                "mandatory_sections": ["executive_summary", "comparison_matrix"],
+                "text_density": 9,
+                "web_search": False,
+            },
+        )
+        assert res.status_code == 201, res.text
+        assert len(captured_payloads) == 2
+        assert captured_payloads[0]["max_tokens"] == 65536
+        user_msg = captured_payloads[0]["messages"][1]["content"]
+        assert "PRIORITÉ ABSOLUE AUX TABLEAUX HTML" in user_msg
+        assert "PRIORITÉ AUX KPI & CHIFFRES CLÉS" in user_msg
+        assert "Ton analytique, factuel et rigoureux" in user_msg
+        assert "Un bloc « L'essentiel en 30 secondes / Résumé exécutif »" in user_msg
+        assert "ARCHITECTURE POUR PAGE LONGUE & COMPLEXE" in user_msg
+        # Le retry d'une page complexe ne doit pas brider à 600 mots
+        assert "600 mots maximum" not in captured_payloads[1]["messages"][-1]["content"]
+        # La page longue tronquée en fin de 2e tentative est proprement refermée au lieu d'échouer
+        html_out = res.json()["latest_html"]
+        assert "</html>" in html_out.lower()
+        assert "<table>" in html_out
+
+
+def test_multipass_encyclopedic_page_generation_and_wizard_autodetect(tmp_path, monkeypatch):
+    import json
+    import httpx
+    from app import page_multipass
+
+    # 1. Le Wizard active automatiquement multipass_exhaustive sur une demande encyclopédique
+    demo_settings = Settings(_env_file=None, app_data_dir=tmp_path / "wiz", demo_mode=True)
+    with authenticated_client(demo_settings) as demo_client:
+        res_wiz = demo_client.post(
+            "/api/pages/wizard/interview",
+            json={
+                "prompt": "Toutes les races de Blood Bowl 2025 avec leur roster et le détail de toutes les compétences",
+                "force_finalize": True,
+            },
+        )
+        assert res_wiz.status_code == 200, res_wiz.text
+        wiz_criteria = res_wiz.json()["criteria"]
+        assert wiz_criteria["multipass_exhaustive"] is True
+        assert wiz_criteria["text_density"] >= 9
+
+    # 2. Génération multi-passes complète : Plan -> Recherches SearXNG par lot + Rédaction parallèle -> Assemblage
+    settings = Settings(
+        _env_file=None,
+        app_data_dir=tmp_path / "mp",
+        demo_mode=False,
+        llm_api_key="fake-test-key",
+        default_model="openai/gpt-4o-mini",
+        page_model="openai/gpt-4o-mini",
+        searxng_url="http://clair-searxng:8080",
+    )
+
+    batch_queries_seen: list[str] = []
+    llm_call_count = 0
+
+    async def fake_global_search(*args, **kwargs):
+        return "=== RECHERCHE WEB SEARXNG ===\n[1] Blood Bowl 2025 Teams List", []
+
+    async def fake_batch_search_web(_settings, query: str, limit: int = 5, engines=None):
+        batch_queries_seen.append(query)
+        return [
+            {
+                "title": f"BB2025 Roster — {query}",
+                "url": "https://example.org/bb2025",
+                "snippet": "Stats officielles MA ST AG PA AV et compétences détaillées.",
+                "engine": "searxng",
+            }
+        ]
+
+    async def fake_mp_llm(_settings, payload, client=None, **kwargs):
+        nonlocal llm_call_count
+        llm_call_count += 1
+        user_content = payload["messages"][-1]["content"]
+        if payload.get("response_format"):
+            blueprint = {
+                "title": "Encyclopédie Blood Bowl 2025 — Toutes les Équipes",
+                "subtitle": "Rosters complets et détail des compétences",
+                "intro_html": "<p>Référentiel exhaustif des équipes Blood Bowl 2025.</p>",
+                "batches": [
+                    {
+                        "batch_id": "lot_1",
+                        "category": "Tier 1",
+                        "search_queries": ["Blood Bowl 2025 Humans Orcs roster skills"],
+                        "items": [
+                            {"id": "humains", "title": "Humains", "subtitle": "Tier 1", "focus": "Roster + compétences"},
+                            {"id": "orques", "title": "Orques", "subtitle": "Tier 1", "focus": "Roster + compétences"},
+                        ],
+                    },
+                    {
+                        "batch_id": "lot_2",
+                        "category": "Tier 2",
+                        "search_queries": ["Blood Bowl 2025 Skaven Dwarfs roster skills"],
+                        "items": [
+                            {"id": "skaven", "title": "Skaven", "subtitle": "Tier 2", "focus": "Roster + compétences"},
+                        ],
+                    },
+                ],
+            }
+            content = json.dumps(blueprint)
+        elif "lot_1" in user_content or "Humains" in user_content:
+            content = (
+                '<section class="mp-entry" id="humains" data-category="Tier 1" data-search="humains blocage esquive">'
+                '<div class="mp-entry-head"><div><h2>Humains</h2></div></div>'
+                '<div class="mp-table-wrap"><table class="mp-table"><thead><tr><th>Poste</th><th>Compétences</th></tr></thead>'
+                '<tbody><tr><td>Blitzer</td><td>Blocage</td></tr></tbody></table></div>'
+                '<div class="mp-skill-grid"><div class="mp-skill-card"><strong>Blocage</strong><p>Évite de tomber sur Les Deux Plaqués.</p></div></div>'
+                "</section>"
+                '<section class="mp-entry" id="orques" data-category="Tier 1" data-search="orques blocage">'
+                '<div class="mp-entry-head"><div><h2>Orques</h2></div></div>'
+                "</section>"
+            )
+        else:
+            content = (
+                '<section class="mp-entry" id="skaven" data-category="Tier 2" data-search="skaven esquive">'
+                '<div class="mp-entry-head"><div><h2>Skaven</h2></div></div>'
+                '<div class="mp-skill-grid"><div class="mp-skill-card"><strong>Esquive</strong><p>Relance un jet d\'esquive par tour.</p></div></div>'
+                "</section>"
+            )
+        return httpx.Response(
+            200,
+            request=httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions"),
+            json={"choices": [{"message": {"content": content}, "finish_reason": "stop"}]},
+        )
+
+    monkeypatch.setattr(page_multipass, "gather_page_web_context", fake_global_search)
+    monkeypatch.setattr(page_multipass, "search_web", fake_batch_search_web)
+    monkeypatch.setattr(page_multipass, "post_chat_completion", fake_mp_llm)
+
+    with authenticated_client(settings) as authed_client:
+        res = authed_client.post(
+            "/api/pages",
+            json={
+                "prompt": "Toutes les races de Blood Bowl 2025 avec leur roster et toutes les compétences",
+                "format_priorities": ["tables_priority"],
+                "multipass_exhaustive": True,
+                "web_search": True,
+            },
+        )
+        assert res.status_code == 201, res.text
+        page = res.json()
+        assert page["title"] == "Encyclopédie Blood Bowl 2025 — Toutes les Équipes"
+        assert llm_call_count == 3  # 1 plan + 2 lots
+        assert len(batch_queries_seen) == 2
+        html_out = page["latest_html"]
+        assert "mpSearch" in html_out
+        assert 'id="humains"' in html_out
+        assert 'id="orques"' in html_out
+        assert 'id="skaven"' in html_out
+        assert "Évite de tomber sur Les Deux Plaqués" in html_out
+        assert "Relance un jet d'esquive par tour" in html_out
+
+
+
+
+
 
 
 

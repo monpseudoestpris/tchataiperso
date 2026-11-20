@@ -391,6 +391,7 @@ class Settings(BaseSettings):
     max_summary_chars: int = 6000
     llm_temperature: float = 0.2
     llm_max_tokens: int = 2048
+    llm_timeout_seconds: int = 480
     summary_temperature: float = 0.1
     summary_max_tokens: int = 900
     deep_search_max_tokens: int = 131072
@@ -553,6 +554,13 @@ class Settings(BaseSettings):
     def valid_max_tokens(cls, value: int) -> int:
         if not 1 <= value <= 200000:
             raise ValueError("Le nombre maximal de tokens doit être compris entre 1 et 200000")
+        return value
+
+    @field_validator("llm_timeout_seconds")
+    @classmethod
+    def valid_llm_timeout_seconds(cls, value: int) -> int:
+        if not 30 <= value <= 1800:
+            raise ValueError("LLM_TIMEOUT_SECONDS doit être compris entre 30 et 1800 secondes")
         return value
 
     @field_validator("summary_model", "search_query_model", "web_search_decision_model", "deep_search_plan_model", "presentation_model")
@@ -944,6 +952,13 @@ class Settings(BaseSettings):
                 budget = float(parsed["HERMES_MAX_COST_USD"].strip())
                 if 0.0 <= budget <= 50.0:
                     self.hermes_max_cost_usd = budget
+            except ValueError:
+                pass
+        if "llm_timeout_seconds" not in self._explicit_fields and isinstance(parsed.get("LLM_TIMEOUT_SECONDS"), str):
+            try:
+                timeout_s = int(parsed["LLM_TIMEOUT_SECONDS"].strip())
+                if 30 <= timeout_s <= 1800:
+                    self.llm_timeout_seconds = timeout_s
             except ValueError:
                 pass
 

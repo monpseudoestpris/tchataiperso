@@ -1015,3 +1015,96 @@ def test_fastapi_config_and_images_work_with_google_cloud_only(tmp_path, monkeyp
         assert img_res.status_code == 201, img_res.text
         body = img_res.json()
         assert body["mime_type"] == "image/png"
+
+
+def test_adapt_payload_caps_max_tokens_for_google_cloud():
+    s = Settings(_env_file=None, llm_api_key=SecretStr(""), google_cloud_mode="vertex_oauth", google_cloud_project="p-12345")
+
+    # Code Canvas (131072) and Learn Mode (98304) must be capped to 65536 on Gemini 2.5/3/4
+    adapted_4 = google_cloud.adapt_openai_payload_for_google(
+        {"model": "google/gemini-4-hydrogen", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 131072},
+        mode="vertex_oauth",
+        settings=s,
+    )
+    assert adapted_4["max_tokens"] == 65536
+
+    adapted_25 = google_cloud.adapt_openai_payload_for_google(
+        {"model": "google/gemini-2.5-pro", "messages": [{"role": "user", "content": "hi"}], "max_completion_tokens": 98304},
+        mode="vertex_api_key",
+        settings=s,
+    )
+    assert adapted_25["max_completion_tokens"] == 65536
+    native_25 = google_cloud.openai_to_gemini_native_request(adapted_25, bare_model="gemini-2.5-pro")
+    assert native_25["generationConfig"]["maxOutputTokens"] == 65536
+
+    # Gemini 1.5 / 2.0 cap at 8192
+    adapted_20 = google_cloud.adapt_openai_payload_for_google(
+        {"model": "google/gemini-2.0-flash", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 131072},
+        mode="vertex_oauth",
+        settings=s,
+    )
+    assert adapted_20["max_tokens"] == 8192
+
+    # Smaller values remain untouched
+    adapted_small = google_cloud.adapt_openai_payload_for_google(
+        {"model": "google/gemini-4-hydrogen", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16384},
+        mode="vertex_oauth",
+        settings=s,
+    )
+    assert adapted_small["max_tokens"] == 16384
+
+
+def test_open_chat_stream_retries_lower_max_tokens_and_surfaces_safe_400_detail(monkeypatch):
+    creds = _DummyCredentials(token="ya29.retry", expiry_delta_seconds=3600)
+    monkeypatch.setattr(google_cloud.google.auth, "default", lambda scopes=None: (creds, "p-retry"))
+
+    s = Settings(
+        _env_file=None,
+        llm_api_key=SecretStr(""),
+        google_cloud_mode="vertex_oauth",
+        google_cloud_project="p-retry",
+    )
+
+    seen_max_tokens = []
+
+    def handler(url, headers, body):
+        seen_max_tokens.append(body.get("max_tokens"))
+        if body.get("max_tokens", 0) > 32768:
+            return httpx.Response(
+                400,
+                json={"error": {"message": "max_output_tokens must be <= 32768 for this model"}},
+                request=httpx.Request("POST", url),
+            )
+        sse_body = 'data: {"choices":[{"delta":{"content":"OK canvas"}}]}\n\ndata: [DONE]\n\n'
+        return httpx.Response(
+            200,
+            content=sse_body.encode("utf-8"),
+            headers={"Content-Type": "text/event-stream"},
+            request=httpx.Request("POST", url),
+        )
+
+    mock_cls, _ = _mock_async_client_factory(handler)
+    monkeypatch.setattr(google_cloud.httpx, "AsyncClient", mock_cls)
+
+    async def _run():
+        async with google_cloud.open_chat_stream(
+            s,
+            {"model": "google/gemini-4-hydrogen", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 131072, "stream": True},
+        ) as (_resp, sse_iter, _label):
+            return [chunk async for chunk in sse_iter]
+
+    chunks = asyncio.run(_run())
+    assert seen_max_tokens == [65536, 32768]
+    assert any("OK canvas" in c for c in chunks)
+
+    # Also verify check_response includes safe detail on HTTP 400
+    bad_resp = httpx.Response(
+        400,
+        json={"error": {"message": "Invalid model foo with key AIzaSecret123"}},
+        request=httpx.Request("POST", "https://example.com"),
+    )
+    with pytest.raises(google_cloud.ProviderError) as exc_info:
+        google_cloud.check_response(bad_resp, "Google Cloud (Vertex AI)")
+    assert "Invalid model foo" in str(exc_info.value)
+    assert "AIzaSecret123" not in str(exc_info.value)
+    assert "[REDACTED]" in str(exc_info.value)
