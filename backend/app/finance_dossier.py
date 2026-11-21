@@ -1765,7 +1765,7 @@ async def get_financial_dossier(
         currency = str(cat_hit["currency"]).upper()
     display_name = gen.get("Name") or (cat_hit.get("name") if cat_hit else None) or y_price.get("longName") or canonical
 
-    return {
+    dossier_payload = {
         "symbol": canonical,
         "currency": currency,
         "source_provider": statements.get("source_provider") or ("eodhd" if (eod_fund or is_eufund) else "yahoo_finance"),
@@ -1813,6 +1813,13 @@ async def get_financial_dossier(
         "ai_analysis": ai_history[0] if ai_history else None,
         "ai_history": ai_history,
     }
+    try:
+        from .finance_screener import sync_screener_snapshot_from_dossier
+
+        sync_screener_snapshot_from_dossier(db_path, dossier_payload, stored_bars)
+    except Exception as exc:
+        _logger.debug("Mise à jour snapshot screener ignorée (%s): %s", canonical, exc)
+    return dossier_payload
 
 
 def _resolve_gemini_hydrogen_model(settings: Settings, explicit_model_id: str | None = None) -> str:

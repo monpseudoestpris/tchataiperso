@@ -3189,3 +3189,243 @@ export async function detachVisualDocFromConversation(
     method: "DELETE",
   });
 }
+
+// ---------------------------------------------------------------------------
+// Screener boursier intégré (Fondamentaux & Indicateurs techniques)
+// ---------------------------------------------------------------------------
+
+export type ScreenerFieldOption = {
+  value: number;
+  label: string;
+};
+
+export type ScreenerFieldMeta = {
+  key: string;
+  label: string;
+  category: "performance" | "valuation" | "quality" | "scores" | "technical";
+  type: "number" | "signal";
+  unit?: string;
+  scale?: number;
+  comparable?: boolean;
+  options?: ScreenerFieldOption[];
+  description?: string;
+};
+
+export type ScreenerRule =
+  | {
+      kind: "metric";
+      field: string;
+      op: "gt" | "gte" | "lt" | "lte" | "eq" | "neq" | "between" | "is_not_null";
+      value?: number;
+      value_max?: number;
+    }
+  | {
+      kind: "compare";
+      left: string;
+      op: "gt" | "gte" | "lt" | "lte";
+      right: string;
+      multiplier?: number;
+    }
+  | {
+      kind: "signal";
+      field: string;
+      op: "eq" | "in";
+      value: number | number[];
+    };
+
+export type ScreenerPreset = {
+  id: string;
+  name: string;
+  description: string;
+  sort_by: string;
+  sort_dir: "asc" | "desc";
+  rules: ScreenerRule[];
+};
+
+export type ScreenerCoverage = {
+  total_snapshots: number;
+  with_technicals: number;
+  with_fundamentals: number;
+  warehouse_symbols_count: number;
+  sectors: string[];
+  exchanges: string[];
+  currencies: string[];
+  last_computed_at: string | null;
+};
+
+export type ScreenerMetaResponse = {
+  fields: ScreenerFieldMeta[];
+  presets: ScreenerPreset[];
+  coverage: ScreenerCoverage;
+  formula_engine: {
+    ready: boolean;
+    registered_kinds: string[];
+  };
+};
+
+export type ScreenerRow = {
+  symbol: string;
+  eod_ticker: string | null;
+  yahoo_symbol: string | null;
+  name: string;
+  exchange: string;
+  country: string;
+  currency: string;
+  sector: string;
+  industry: string;
+  cap_category: string;
+  indices: string[];
+  market_cap: number | null;
+  market_cap_m: number | null;
+  price: number | null;
+  volume: number | null;
+  rel_volume_20d: number | null;
+  change_1d_pct: number | null;
+  change_1w_pct: number | null;
+  change_1m_pct: number | null;
+  change_3m_pct: number | null;
+  change_ytd_pct: number | null;
+  change_1y_pct: number | null;
+  dist_52w_high_pct: number | null;
+  dist_52w_low_pct: number | null;
+  pe_ttm: number | null;
+  pe_forward: number | null;
+  peg_ratio: number | null;
+  ev_ebitda: number | null;
+  pb_ratio: number | null;
+  fcf_yield_pct: number | null;
+  dividend_yield_pct: number | null;
+  roic_pct: number | null;
+  roe_pct: number | null;
+  op_margin_pct: number | null;
+  net_margin_pct: number | null;
+  net_debt_ebitda: number | null;
+  debt_to_equity_pct: number | null;
+  current_ratio: number | null;
+  rev_cagr_3y_pct: number | null;
+  eps_cagr_3y_pct: number | null;
+  beta: number | null;
+  analyst_upside_pct: number | null;
+  ih_score: number | null;
+  piotroski_f: number | null;
+  altman_z: number | null;
+  mos_intrinsic_pct: number | null;
+  sma20: number | null;
+  sma50: number | null;
+  sma200: number | null;
+  ema20: number | null;
+  ema50: number | null;
+  dist_sma50_pct: number | null;
+  dist_sma200_pct: number | null;
+  rsi_14: number | null;
+  macd_line: number | null;
+  macd_signal: number | null;
+  macd_hist: number | null;
+  macd_cross: number | null;
+  sma_golden_cross: number | null;
+  boll_pct_b: number | null;
+  boll_width_pct: number | null;
+  adx_14: number | null;
+  stoch_k: number | null;
+  atr_pct: number | null;
+  roc_12: number | null;
+  supertrend_dir: number | null;
+  has_fundamentals: boolean;
+  bars_count: number;
+  bars_date: string | null;
+  fundamentals_updated_at: string | null;
+  computed_at: string;
+  sparkline: number[];
+};
+
+export type ScreenerQueryRequest = {
+  universe_type?: "all" | "index" | "watchlist" | "exchange";
+  universe_value?: string | null;
+  search?: string;
+  sector?: string;
+  exchange?: string;
+  currency?: string;
+  only_with_fundamentals?: boolean;
+  rules?: ScreenerRule[];
+  sort_by?: string;
+  sort_dir?: "asc" | "desc";
+  limit?: number;
+  offset?: number;
+};
+
+export type ScreenerQueryResponse = {
+  total: number;
+  universe_total: number;
+  offset: number;
+  limit: number;
+  items: ScreenerRow[];
+  coverage: ScreenerCoverage;
+};
+
+export type ScreenerHydrateResponse = {
+  universe_type: string;
+  universe_value: string | null;
+  symbols_count: number;
+  eod_loaded: number;
+  indexed_count: number;
+  fundamentals_enriched: number;
+  fundamentals_cached: number;
+  fundamentals_errors: number;
+  coverage: ScreenerCoverage;
+};
+
+export async function fetchFinanceScreenerMeta(): Promise<ScreenerMetaResponse> {
+  return api<ScreenerMetaResponse>("/finance/screener/meta");
+}
+
+export async function queryFinanceScreener(
+  body: ScreenerQueryRequest,
+): Promise<ScreenerQueryResponse> {
+  return api<ScreenerQueryResponse>("/finance/screener/query", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function rebuildFinanceScreener(): Promise<{
+  indexed_count: number;
+  coverage: ScreenerCoverage;
+}> {
+  return api<{ indexed_count: number; coverage: ScreenerCoverage }>("/finance/screener/rebuild", {
+    method: "POST",
+  });
+}
+
+export async function hydrateFinanceScreener(body: {
+  universe_type: "all" | "index" | "watchlist";
+  universe_value?: string | null;
+  include_fundamentals?: boolean;
+  max_fundamentals?: number;
+  refresh_eod?: boolean;
+}): Promise<ScreenerHydrateResponse> {
+  return api<ScreenerHydrateResponse>("/finance/screener/hydrate", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function exportScreenerToWatchlist(body: {
+  list_name?: string;
+  list_id?: string | null;
+  items: Array<{
+    symbol: string;
+    eod_ticker?: string | null;
+    yahoo_symbol?: string | null;
+    name?: string;
+    exchange?: string;
+    currency?: string;
+  }>;
+}): Promise<{ list: FinanceWatchlistMeta; added_count: number }> {
+  return api<{ list: FinanceWatchlistMeta; added_count: number }>(
+    "/finance/screener/export-watchlist",
+    {
+      method: "POST",
+      body: JSON.stringify(body),
+    },
+  );
+}

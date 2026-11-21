@@ -1805,3 +1805,209 @@ def delete_stock_moat(
         db.commit()
     return Response(status_code=204)
 
+
+# ---------------------------------------------------------------------------
+# Screener boursier intégré (Fondamentaux & Indicateurs techniques)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/screener/meta")
+def get_finance_screener_meta(
+    settings: Settings = Depends(get_settings),
+    user: User = Depends(current_user),
+) -> dict[str, Any]:
+    """Retourne les champs filtrables, presets et couverture de l'entrepôt pour le Screener."""
+    from ..finance_screener import get_screener_metadata
+
+    return get_screener_metadata(settings)
+
+
+@router.post("/screener/query")
+def query_finance_screener(
+    body: dict[str, Any] = Body(default_factory=dict),
+    settings: Settings = Depends(get_settings),
+    user: User = Depends(current_user),
+    sessions: sessionmaker = Depends(get_sessions),
+) -> dict[str, Any]:
+    """Exécute un screening multi-critères (fondamentaux + technique) sur `finance_screener_snapshots`."""
+    from ..finance_screener import query_screener
+
+    universe_type = str(body.get("universe_type") or "all").strip().lower()
+    universe_value = str(body.get("universe_value") or "").strip() or None
+    wl_symbols: list[str] | None = None
+
+    if universe_type == "watchlist":
+        with sessions() as db:
+            stmt = select(
+                FinanceWatchlistItem.symbol,
+                FinanceWatchlistItem.eod_ticker,
+                FinanceWatchlistItem.yahoo_symbol,
+            ).where(FinanceWatchlistItem.user_id == user.id)
+            if universe_value:
+                stmt = stmt.where(FinanceWatchlistItem.list_id == universe_value)
+            rows = db.execute(stmt).all()
+            wl_symbols = [
+                str(s).strip().upper()
+                for row in rows
+                for s in row
+                if s and str(s).strip()
+            ]
+
+    try:
+        return query_screener(
+            settings,
+            universe_type=universe_type,
+            universe_value=universe_value,
+            watchlist_symbols=wl_symbols,
+            search=str(body.get("search") or ""),
+            sector=str(body.get("sector") or ""),
+            exchange=str(body.get("exchange") or ""),
+            currency=str(body.get("currency") or ""),
+            only_with_fundamentals=bool(body.get("only_with_fundamentals", False)),
+            rules=body.get("rules") if isinstance(body.get("rules"), list) else [],
+            sort_by=str(body.get("sort_by") or "market_cap"),
+            sort_dir=str(body.get("sort_dir") or "desc"),
+            limit=int(body.get("limit") or 100),
+            offset=int(body.get("offset") or 0),
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/screener/rebuild")
+def rebuild_finance_screener(
+    settings: Settings = Depends(get_settings),
+    user: User = Depends(current_user),
+) -> dict[str, Any]:
+    """Reconstruit immédiatement l'index matérialisé du Screener à partir du cache local (0 appel réseau)."""
+    from ..finance_screener import rebuild_screener_snapshots_from_warehouse
+
+    return rebuild_screener_snapshots_from_warehouse(warehouse_db_path(settings))
+
+
+@router.post("/screener/hydrate")
+async def hydrate_finance_screener(
+    body: dict[str, Any] = Body(default_factory=dict),
+    settings: Settings = Depends(get_settings),
+    user: User = Depends(current_user),
+    sessions: sessionmaker = Depends(get_sessions),
+) -> dict[str, Any]:
+    """Synchronise les cours EOD (et optionnellement les fondamentaux manquants) d'un univers du Screener."""
+    from ..finance_screener import hydrate_screener_universe
+
+    universe_type = str(body.get("universe_type") or "index").strip().lower()
+    universe_value = str(body.get("universe_value") or "").strip() or None
+    wl_symbols: list[str] | None = None
+
+    if universe_type == "watchlist":
+        with sessions() as db:
+            stmt = select(FinanceWatchlistItem.eod_ticker, FinanceWatchlistItem.symbol).where(
+                FinanceWatchlistItem.user_id == user.id
+            )
+            if universe_value:
+                stmt = stmt.where(FinanceWatchlistItem.list_id == universe_value)
+            wl_symbols = [
+                str(r[0] or r[1]).strip().upper()
+                for r in db.execute(stmt).all()
+                if (r[0] or r[1])
+            ]
+
+    try:
+        return await hydrate_screener_universe(
+            settings,
+            universe_type=universe_type,
+            universe_value=universe_value,
+            watchlist_symbols=wl_symbols,
+            include_fundamentals=bool(body.get("include_fundamentals", True)),
+            max_fundamentals=int(body.get("max_fundamentals") or 40),
+            refresh_eod=bool(body.get("refresh_eod", False)),
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/screener/export-watchlist", status_code=201)
+def export_screener_to_watchlist(
+    body: dict[str, Any] = Body(...),
+    settings: Settings = Depends(get_settings),
+    user: User = Depends(current_user),
+    sessions: sessionmaker = Depends(get_sessions),
+) -> dict[str, Any]:
+    """Crée ou complète une liste de suivi avec une sélection de titres issus du Screener."""
+    raw_items = body.get("items")
+    if not isinstance(raw_items, list) or not raw_items:
+        raise HTTPException(400, "Aucun titre à exporter vers la liste de suivi.")
+    target_list_id = str(body.get("list_id") or "").strip() or None
+    requested_name = str(body.get("list_name") or "Sélection Screener").strip()[:80] or "Sélection Screener"
+
+    with sessions() as db:
+        lists = _ensure_user_watchlists(db, user.id, settings=settings)
+        target: FinanceWatchlist | None = None
+        if target_list_id:
+            target = next((wl for wl in lists if wl.id == target_list_id), None)
+            if not target:
+                raise HTTPException(404, "Liste de suivi introuvable.")
+        else:
+            target = next((wl for wl in lists if wl.name.lower() == requested_name.lower()), None)
+            if not target:
+                max_pos = max((wl.position for wl in lists), default=-1)
+                target = FinanceWatchlist(user_id=user.id, name=requested_name, position=max_pos + 1)
+                db.add(target)
+                db.commit()
+                db.refresh(target)
+
+        existing_rows = db.execute(
+            select(FinanceWatchlistItem.symbol, FinanceWatchlistItem.eod_ticker).where(
+                FinanceWatchlistItem.user_id == user.id,
+                FinanceWatchlistItem.list_id == target.id,
+            )
+        ).all()
+        existing_syms = {str(r[0]).upper() for r in existing_rows if r[0]} | {
+            str(r[1]).upper() for r in existing_rows if r[1]
+        }
+        max_item_pos = db.scalar(
+            select(func.max(FinanceWatchlistItem.position)).where(
+                FinanceWatchlistItem.user_id == user.id,
+                FinanceWatchlistItem.list_id == target.id,
+            )
+        )
+        next_pos = (max_item_pos if max_item_pos is not None else -1) + 1
+        added_count = 0
+        for item in raw_items[:200]:
+            if not isinstance(item, dict):
+                continue
+            sym = str(item.get("eod_ticker") or item.get("symbol") or "").strip().upper()[:32]
+            if not sym or sym in existing_syms:
+                continue
+            existing_syms.add(sym)
+            db.add(
+                FinanceWatchlistItem(
+                    user_id=user.id,
+                    list_id=target.id,
+                    symbol=sym,
+                    yahoo_symbol=str(item.get("yahoo_symbol") or sym).strip().upper()[:32],
+                    eod_ticker=str(item.get("eod_ticker") or sym).strip().upper()[:32],
+                    name=str(item.get("name") or sym).strip()[:200],
+                    exchange=str(item.get("exchange") or "")[:80],
+                    currency=str(item.get("currency") or "EUR").strip().upper()[:16],
+                    position=next_pos,
+                )
+            )
+            next_pos += 1
+            added_count += 1
+        if added_count > 0:
+            db.commit()
+        total_in_list = db.scalar(
+            select(func.count(FinanceWatchlistItem.id)).where(
+                FinanceWatchlistItem.user_id == user.id,
+                FinanceWatchlistItem.list_id == target.id,
+            )
+        )
+        _backup_user_watchlists_to_warehouse(settings, db, user.id)
+        wl_payload = watchlist_json(target, int(total_in_list or 0))
+
+    return {
+        "list": wl_payload,
+        "added_count": added_count,
+    }
+

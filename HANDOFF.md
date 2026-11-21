@@ -10,9 +10,11 @@ Application de chat IA multi-fournisseurs (`tchataiperso`) composée d'un backen
 - Le connecteur agentique **Hermes Agent** et la recherche approfondie **Google Deep Research** (Interactions API).
 
 ## 2. Current Objective
-1. **Changement de ticker en mode Plein Écran du graphique financier (`FinanceFullscreenTickerSwitcher` dans `FinanceModal`)** :
+1. **Screener Boursier intégré V1 (Fondamentaux & Indicateurs techniques, architecture extensible V2 pour formules personnalisées)** :
+   - Table matérialisée SQLite WAL `finance_screener_snapshots` dans `finance_warehouse.db`, moteur technique Python pur (`finance_technicals.py`), moteur de requête en 2 passes (`finance_screener.py`) avec registre Passe 2 prêt pour vos futures formules custom, endpoints `/api/finance/screener/*` et 4ᵉ onglet `4 · Screener` dans `FinanceModal`.
+2. **Changement de ticker en mode Plein Écran du graphique financier (`FinanceFullscreenTickerSwitcher` dans `FinanceModal`)** :
    - Permet de rechercher et changer directement le ticker observé sans quitter le mode plein écran du cours (recherche catalogue + saisie libre, filtrage/changement de liste de suivi, boutons Précédent/Suivant, navigation clavier et bandeau d'erreur dédié).
-2. **Page d'accueil Galerie de Cartes + Couverture personnalisée sur les Documents Illustrés (`VisualDocGallery` + `/api/visual-docs/{doc_id}/cover`)** :
+3. **Page d'accueil Galerie de Cartes + Couverture personnalisée sur les Documents Illustrés (`VisualDocGallery` + `/api/visual-docs/{doc_id}/cover`)** :
    - Remplacement de la barre latérale étroite par une **page d'accueil Galerie pleine largeur** (`VisualDocGallery`) affichant des cartes éditoriales premium pour chaque document (couverture, badge de catégorie, statistiques pages/schémas/liens, forums dédiés, filtres par recherche/catégorie, carte `+ Nouveau document`).
    - Ajout/remplacement/réinitialisation d'une **image de couverture personnalisée (`cover.webp`)** directement depuis chaque carte, depuis l'en-tête du document ou dès l'ingestion.
    - Ouverture en pleine largeur du **détail du document et de la Liseuse 3D** au clic sur une carte, avec bouton **« ← Bibliothèque »**.
@@ -23,6 +25,11 @@ Application de chat IA multi-fournisseurs (`tchataiperso`) composée d'un backen
 **Statut** : Implémenté et vérifié.
 
 ## 3. Completed Work
+- **Screener Boursier intégré V1 (`finance_technicals.py`, `finance_screener.py`, `FinanceScreenerPanel`)** :
+  - BDD (`backend/app/finance_warehouse.py`) : ajout de `PRAGMA busy_timeout=15000`, création idempotente de la table indexée `finance_screener_snapshots` (1 ligne par titre, ~50 colonnes fondamentales/scores/techniques + `scores_json` + `sparkline_json`) et écritures par micro-lots (`upsert_screener_snapshots`).
+  - Moteur technique Python pur (`backend/app/finance_technicals.py`) : `SMA 20/50/200`, `EMA 20/50`, `RSI 14`, `MACD` (+ croisement 3j), `Bollinger %B / largeur`, `ADX 14`, `Stochastique %K`, `ATR %`, `ROC 12`, `Supertrend (10, 3)`, `Golden/Death Cross`, volume relatif 20j et distances 52S (0 dépendance externe, `None` garanti si historique insuffisant).
+  - Moteur Screener extensible (`backend/app/finance_screener.py`) : catalogue whitelisté (`SCREENER_FIELDS`), 5 presets, constructeur SQL paramétré en Passe 1 (`kind="metric" | "compare" | "signal"`) + registre Passe 2 (`register_post_filter_evaluator`) prêt pour brancher des formules personnalisées en V2 sans toucher à la BDD ni aux routes ; hooks automatiques depuis `finance_dossier.py` et `finance_indices.py` ; endpoints `GET /api/finance/screener/meta`, `POST /api/finance/screener/query`, `POST /api/finance/screener/rebuild`, `POST /api/finance/screener/hydrate`, `POST /api/finance/screener/export-watchlist`.
+  - Frontend (`frontend/components/finance-screener-panel.tsx` + `.module.css`, `frontend/lib/api.ts`, `frontend/components/finance-modal.tsx`, `frontend/app/globals.css`) : 4ᵉ onglet `4 · Screener` avec univers (`Entrepôt`, `Indice`, `Watchlist`), jauge de couverture, presets, constructeur visuel de règles, tableau triable par groupes de colonnes (`Synthèse`, `Valorisation`, `Qualité & Scores`, `Technique`), sparklines, ouverture directe en Dossier ou Graphique, et export en 1 clic vers une Watchlist (pour parcourir en plein écran avec `←` / `→`).
 - **Sélecteur / recherche de ticker en mode Plein Écran Finances (`FinanceFullscreenTickerSwitcher`)** :
   - Frontend : nouveau module dédié `frontend/components/finance-fullscreen-ticker-switcher.tsx` (+ `.module.css`) intégré dans l'en-tête du graphique en mode plein écran de `frontend/components/finance-modal.tsx`.
   - Fonctionnalités : bouton pilule affichant ticker/nom/cours/variation, boutons `←`/`→` pour parcourir la liste de suivi active en un clic, popover de recherche debouncée (`searchFinanceCatalog` + saisie libre ticker/ISIN/société), onglets de changement de liste de suivi, accès rapide (`QUICK_SUGGESTIONS`), navigation clavier (`↑`/`↓`/`Entrée`/`Échap` fermant d'abord le popover avant de quitter le plein écran) et bandeau d'erreur visible en plein écran.
@@ -72,6 +79,8 @@ Application de chat IA multi-fournisseurs (`tchataiperso`) composée d'un backen
 
 ## 5. Modified Files
 - Créés (session courante) :
+  - `backend/app/finance_technicals.py`, `backend/app/finance_screener.py`, `backend/tests/test_finance_technicals.py`, `backend/tests/test_finance_screener.py`.
+  - `frontend/components/finance-screener-panel.tsx`, `frontend/components/finance-screener-panel.module.css`.
   - `frontend/components/finance-fullscreen-ticker-switcher.tsx`, `frontend/components/finance-fullscreen-ticker-switcher.module.css`.
   - `frontend/components/visual-doc-gallery.tsx`, `frontend/components/visual-doc-gallery.module.css`.
   - `backend/app/visual_doc_links.py`, `backend/app/visual_doc_profiles.py`.
@@ -80,7 +89,7 @@ Application de chat IA multi-fournisseurs (`tchataiperso`) composée d'un backen
   - `frontend/components/visual-doc-book-reader.tsx`, `frontend/components/visual-doc-book-reader.module.css`.
   - `backend/migrations/versions/0028_add_user_default_voice.py`.
 - Modifiés (session courante) :
-  - `backend/app/context.py`, `backend/app/visual_documents.py`, `backend/app/routers/visual_docs.py`, `backend/app/routers/messages.py`, `backend/app/routers/finance.py`, `backend/tests/test_visual_documents.py`.
+  - `backend/app/context.py`, `backend/app/visual_documents.py`, `backend/app/routers/visual_docs.py`, `backend/app/routers/messages.py`, `backend/app/routers/finance.py`, `backend/app/finance_warehouse.py`, `backend/app/finance_dossier.py`, `backend/app/finance_indices.py`, `backend/tests/test_visual_documents.py`.
   - `frontend/components/finance-modal.tsx`, `frontend/components/visual-doc-modal.tsx`, `frontend/components/visual-doc-modal.module.css`, `frontend/lib/api.ts`.
   - `backend/app/models.py`, `backend/app/cli.py`, `backend/app/main.py`, `backend/app/voice.py`, `backend/app/schemas.py`, `backend/app/routers/settings.py`, `backend/app/routers/voice.py`, `backend/app/serializers.py`, `backend/tests/test_settings.py`.
   - `frontend/lib/api.ts`, `frontend/components/settings-modal.tsx`, `frontend/components/chat-app.tsx`, `frontend/app/globals.css`, `frontend/app/interface-themes.css`, `HANDOFF.md`.
@@ -88,9 +97,10 @@ Application de chat IA multi-fournisseurs (`tchataiperso`) composée d'un backen
   - `scripts/install.sh`, `scripts/install_lib/*`, `.env.example`, `README.md`, `backend/app/voice_sanitize.py`, `backend/app/routers/finance.py`, `backend/app/routers/system.py`, `frontend/components/voice-fullscreen-modal.tsx`, `frontend/components/finance-reports-panel.tsx`, etc.
 
 ## 6. Verification
-- `cd frontend && npx tsc --noEmit && npx eslint components/finance-fullscreen-ticker-switcher.tsx` : **RÉUSSI** (0 erreur, 0 avertissement).
-- `cd backend && .venv/bin/python -m pytest tests/test_visual_documents.py tests/test_context.py -q` : **RÉUSSI** (session précédente, non relancé — changement frontend uniquement).
-- Non exécutés : redémarrage du conteneur Docker `clair-web` (`./scripts/compose.sh up -d --build clair-web`).
+- `cd backend && .venv/bin/python -m pytest tests/test_finance_technicals.py tests/test_finance_screener.py tests/test_finance*.py -q` : **94 passed** (8/8 nouveaux tests Screener & Technicals réussis ; 2 échecs préexistants dans `tests/test_finance_funds.py` liés à `no such column: users.default_voice` sur une base locale de test antérieure à la migration `0028`).
+- `cd frontend && npx tsc --noEmit && npx eslint components/finance-screener-panel.tsx` : **RÉUSSI** (0 erreur, 0 avertissement).
+- `cd frontend && npx eslint components/finance-fullscreen-ticker-switcher.tsx` : **RÉUSSI** (0 erreur, 0 avertissement).
+- Non exécutés : rebuild/redémarrage des conteneurs Docker `clair-api` / `clair-web` (`./scripts/compose.sh up -d --build clair-api clair-web`).
 
 ## 7. Known Issues and Risks
 - Sur un PC Windows, exécuter `./scripts/install.sh` depuis **WSL2** (Ubuntu/Debian) avec Docker Desktop actif côté Windows.

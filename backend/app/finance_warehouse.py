@@ -247,6 +247,89 @@ CREATE TABLE IF NOT EXISTS finance_sync_preferences (
     last_status_json TEXT,
     updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS finance_screener_snapshots (
+    symbol TEXT PRIMARY KEY,
+    eod_ticker TEXT,
+    yahoo_symbol TEXT,
+    name TEXT NOT NULL DEFAULT '',
+    exchange TEXT NOT NULL DEFAULT '',
+    country TEXT NOT NULL DEFAULT '',
+    currency TEXT NOT NULL DEFAULT '',
+    sector TEXT NOT NULL DEFAULT '',
+    industry TEXT NOT NULL DEFAULT '',
+    cap_category TEXT NOT NULL DEFAULT '',
+    indices_csv TEXT NOT NULL DEFAULT '',
+    market_cap REAL,
+    price REAL,
+    volume REAL,
+    avg_volume_20d REAL,
+    rel_volume_20d REAL,
+    change_1d_pct REAL,
+    change_1w_pct REAL,
+    change_1m_pct REAL,
+    change_3m_pct REAL,
+    change_ytd_pct REAL,
+    change_1y_pct REAL,
+    dist_52w_high_pct REAL,
+    dist_52w_low_pct REAL,
+    pe_ttm REAL,
+    pe_forward REAL,
+    peg_ratio REAL,
+    ev_ebitda REAL,
+    pb_ratio REAL,
+    fcf_yield_pct REAL,
+    dividend_yield_pct REAL,
+    roic_pct REAL,
+    roe_pct REAL,
+    op_margin_pct REAL,
+    net_margin_pct REAL,
+    net_debt_ebitda REAL,
+    debt_to_equity_pct REAL,
+    current_ratio REAL,
+    rev_cagr_3y_pct REAL,
+    eps_cagr_3y_pct REAL,
+    beta REAL,
+    analyst_upside_pct REAL,
+    ih_score REAL,
+    piotroski_f REAL,
+    altman_z REAL,
+    mos_intrinsic_pct REAL,
+    sma20 REAL,
+    sma50 REAL,
+    sma200 REAL,
+    ema20 REAL,
+    ema50 REAL,
+    dist_sma50_pct REAL,
+    dist_sma200_pct REAL,
+    rsi_14 REAL,
+    macd_line REAL,
+    macd_signal REAL,
+    macd_hist REAL,
+    macd_cross INTEGER,
+    sma_golden_cross INTEGER,
+    boll_pct_b REAL,
+    boll_width_pct REAL,
+    adx_14 REAL,
+    stoch_k REAL,
+    atr_pct REAL,
+    roc_12 REAL,
+    supertrend_dir INTEGER,
+    has_fundamentals INTEGER NOT NULL DEFAULT 0,
+    bars_count INTEGER NOT NULL DEFAULT 0,
+    bars_date TEXT,
+    fundamentals_updated_at TEXT,
+    computed_at TEXT NOT NULL,
+    scores_json TEXT NOT NULL DEFAULT '{}',
+    sparkline_json TEXT NOT NULL DEFAULT '[]'
+);
+
+CREATE INDEX IF NOT EXISTS idx_fin_scr_exch_sec ON finance_screener_snapshots (exchange, sector);
+CREATE INDEX IF NOT EXISTS idx_fin_scr_mcap ON finance_screener_snapshots (market_cap);
+CREATE INDEX IF NOT EXISTS idx_fin_scr_pe ON finance_screener_snapshots (pe_ttm);
+CREATE INDEX IF NOT EXISTS idx_fin_scr_roic ON finance_screener_snapshots (roic_pct);
+CREATE INDEX IF NOT EXISTS idx_fin_scr_rsi ON finance_screener_snapshots (rsi_14);
+CREATE INDEX IF NOT EXISTS idx_fin_scr_scores ON finance_screener_snapshots (ih_score, piotroski_f);
 """
 
 
@@ -332,6 +415,7 @@ def _connect(db_path: Path) -> Iterator[sqlite3.Connection]:
     conn = sqlite3.connect(db_path, timeout=15.0)
     conn.row_factory = sqlite3.Row
     try:
+        conn.execute("PRAGMA busy_timeout=15000;")
         conn.execute("PRAGMA synchronous=NORMAL;")
         conn.execute("PRAGMA cache_size=-32768;")
         conn.execute("PRAGMA mmap_size=268435456;")
@@ -1973,3 +2057,292 @@ def list_warehouse_watchlist_items_for_sync(db_path: Path) -> list[dict[str, Any
         }
         for idx, r in enumerate(rows)
     ]
+
+
+_SCREENER_SNAPSHOT_COLS: tuple[str, ...] = (
+    "symbol",
+    "eod_ticker",
+    "yahoo_symbol",
+    "name",
+    "exchange",
+    "country",
+    "currency",
+    "sector",
+    "industry",
+    "cap_category",
+    "indices_csv",
+    "market_cap",
+    "price",
+    "volume",
+    "avg_volume_20d",
+    "rel_volume_20d",
+    "change_1d_pct",
+    "change_1w_pct",
+    "change_1m_pct",
+    "change_3m_pct",
+    "change_ytd_pct",
+    "change_1y_pct",
+    "dist_52w_high_pct",
+    "dist_52w_low_pct",
+    "pe_ttm",
+    "pe_forward",
+    "peg_ratio",
+    "ev_ebitda",
+    "pb_ratio",
+    "fcf_yield_pct",
+    "dividend_yield_pct",
+    "roic_pct",
+    "roe_pct",
+    "op_margin_pct",
+    "net_margin_pct",
+    "net_debt_ebitda",
+    "debt_to_equity_pct",
+    "current_ratio",
+    "rev_cagr_3y_pct",
+    "eps_cagr_3y_pct",
+    "beta",
+    "analyst_upside_pct",
+    "ih_score",
+    "piotroski_f",
+    "altman_z",
+    "mos_intrinsic_pct",
+    "sma20",
+    "sma50",
+    "sma200",
+    "ema20",
+    "ema50",
+    "dist_sma50_pct",
+    "dist_sma200_pct",
+    "rsi_14",
+    "macd_line",
+    "macd_signal",
+    "macd_hist",
+    "macd_cross",
+    "sma_golden_cross",
+    "boll_pct_b",
+    "boll_width_pct",
+    "adx_14",
+    "stoch_k",
+    "atr_pct",
+    "roc_12",
+    "supertrend_dir",
+    "has_fundamentals",
+    "bars_count",
+    "bars_date",
+    "fundamentals_updated_at",
+    "computed_at",
+    "scores_json",
+    "sparkline_json",
+)
+
+_SCREENER_PRESERVE_IF_NULL_COLS: frozenset[str] = frozenset(
+    {
+        "eod_ticker",
+        "yahoo_symbol",
+        "country",
+        "currency",
+        "sector",
+        "industry",
+        "cap_category",
+        "market_cap",
+        "pe_ttm",
+        "pe_forward",
+        "peg_ratio",
+        "ev_ebitda",
+        "pb_ratio",
+        "fcf_yield_pct",
+        "dividend_yield_pct",
+        "roic_pct",
+        "roe_pct",
+        "op_margin_pct",
+        "net_margin_pct",
+        "net_debt_ebitda",
+        "debt_to_equity_pct",
+        "current_ratio",
+        "rev_cagr_3y_pct",
+        "eps_cagr_3y_pct",
+        "beta",
+        "analyst_upside_pct",
+        "ih_score",
+        "piotroski_f",
+        "altman_z",
+        "mos_intrinsic_pct",
+        "fundamentals_updated_at",
+    }
+)
+
+
+def upsert_screener_snapshots(
+    db_path: Path,
+    rows: list[dict[str, Any]],
+    *,
+    preserve_fundamentals_if_missing: bool = True,
+    batch_size: int = 40,
+) -> int:
+    """Insère ou met à jour par micro-lots les lignes matérialisées du Screener dans `finance_warehouse.db`."""
+    if not rows:
+        return 0
+    now_iso = _utc_iso()
+    placeholders = ", ".join("?" for _ in _SCREENER_SNAPSHOT_COLS)
+    col_list = ", ".join(_SCREENER_SNAPSHOT_COLS)
+    update_parts: list[str] = []
+    for col in _SCREENER_SNAPSHOT_COLS:
+        if col == "symbol":
+            continue
+        if col in ("name", "exchange", "country", "currency", "sector", "industry", "cap_category", "indices_csv"):
+            update_parts.append(f"{col} = COALESCE(NULLIF(excluded.{col}, ''), finance_screener_snapshots.{col})")
+        elif col == "has_fundamentals":
+            update_parts.append("has_fundamentals = MAX(finance_screener_snapshots.has_fundamentals, excluded.has_fundamentals)")
+        elif col == "bars_count":
+            update_parts.append("bars_count = MAX(finance_screener_snapshots.bars_count, excluded.bars_count)")
+        elif col == "scores_json":
+            update_parts.append(
+                "scores_json = CASE WHEN excluded.scores_json IS NOT NULL AND excluded.scores_json != '{}' "
+                "THEN excluded.scores_json ELSE finance_screener_snapshots.scores_json END"
+            )
+        elif col == "sparkline_json":
+            update_parts.append(
+                "sparkline_json = CASE WHEN excluded.sparkline_json IS NOT NULL AND excluded.sparkline_json != '[]' "
+                "THEN excluded.sparkline_json ELSE finance_screener_snapshots.sparkline_json END"
+            )
+        elif col == "computed_at":
+            update_parts.append("computed_at = excluded.computed_at")
+        elif preserve_fundamentals_if_missing:
+            update_parts.append(f"{col} = COALESCE(excluded.{col}, finance_screener_snapshots.{col})")
+        else:
+            update_parts.append(f"{col} = excluded.{col}")
+
+    sql = (
+        f"INSERT INTO finance_screener_snapshots ({col_list}) VALUES ({placeholders}) "
+        f"ON CONFLICT(symbol) DO UPDATE SET {', '.join(update_parts)}"
+    )
+
+    non_null_text_cols = ("name", "exchange", "country", "currency", "sector", "industry", "cap_category", "indices_csv")
+    prepared: list[tuple[Any, ...]] = []
+    for row in rows:
+        sym = _norm_sym(str(row.get("symbol") or ""))
+        if not sym:
+            continue
+        payload = {**row, "symbol": sym, "computed_at": row.get("computed_at") or now_iso}
+        for txt_col in non_null_text_cols:
+            if payload.get(txt_col) is None:
+                payload[txt_col] = ""
+        if isinstance(payload.get("scores_json"), dict):
+            payload["scores_json"] = json.dumps(payload["scores_json"], ensure_ascii=False, separators=(",", ":"))
+        elif not payload.get("scores_json"):
+            payload["scores_json"] = "{}"
+        if isinstance(payload.get("sparkline_json"), list):
+            payload["sparkline_json"] = json.dumps(payload["sparkline_json"], separators=(",", ":"))
+        elif not payload.get("sparkline_json"):
+            payload["sparkline_json"] = "[]"
+        payload["has_fundamentals"] = 1 if payload.get("has_fundamentals") else 0
+        payload["bars_count"] = int(payload.get("bars_count") or 0)
+        prepared.append(tuple(payload.get(col) for col in _SCREENER_SNAPSHOT_COLS))
+
+    if not prepared:
+        return 0
+
+    step = max(1, int(batch_size or 40))
+    for i in range(0, len(prepared), step):
+        chunk = prepared[i : i + step]
+        with _connect(db_path) as conn:
+            conn.executemany(sql, chunk)
+    return len(prepared)
+
+
+def get_symbol_indices_map(db_path: Path) -> dict[str, list[str]]:
+    """Retourne un dictionnaire `symbole_normalisé -> [codes d'indices triés]` depuis `finance_index_constituents`."""
+    if not db_path.exists():
+        return {}
+    out: dict[str, set[str]] = {}
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT index_code, symbol, eod_ticker, yahoo_symbol FROM finance_index_constituents"
+        ).fetchall()
+    for r in rows:
+        idx_code = _norm_sym(str(r["index_code"] or ""))
+        if not idx_code:
+            continue
+        for key in (r["symbol"], r["eod_ticker"], r["yahoo_symbol"]):
+            norm = _norm_sym(str(key or ""))
+            if norm:
+                out.setdefault(norm, set()).add(idx_code)
+    return {k: sorted(v) for k, v in out.items()}
+
+
+def list_warehouse_screener_symbols(db_path: Path) -> list[str]:
+    """Liste tous les symboles canoniques possédant au moins des barres EOD ou des fondamentaux en entrepôt."""
+    if not db_path.exists():
+        return []
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT symbol FROM (
+                SELECT symbol FROM finance_eod_bars
+                UNION
+                SELECT symbol FROM finance_fundamental_facts
+                UNION
+                SELECT symbol FROM finance_raw_snapshots WHERE payload_type = 'fundamentals'
+            )
+            ORDER BY symbol ASC
+            """
+        ).fetchall()
+    return [_norm_sym(str(r["symbol"])) for r in rows if r["symbol"]]
+
+
+def get_screener_coverage(db_path: Path) -> dict[str, Any]:
+    """Retourne la couverture actuelle de la table matérialisée `finance_screener_snapshots`."""
+    empty = {
+        "total_snapshots": 0,
+        "with_technicals": 0,
+        "with_fundamentals": 0,
+        "warehouse_symbols_count": 0,
+        "sectors": [],
+        "exchanges": [],
+        "currencies": [],
+        "last_computed_at": None,
+    }
+    if not db_path.exists():
+        return empty
+    with _connect(db_path) as conn:
+        agg = conn.execute(
+            """
+            SELECT
+                COUNT(*) AS total,
+                SUM(CASE WHEN bars_count >= 20 THEN 1 ELSE 0 END) AS with_tech,
+                SUM(CASE WHEN has_fundamentals = 1 THEN 1 ELSE 0 END) AS with_fund,
+                MAX(computed_at) AS last_comp
+            FROM finance_screener_snapshots
+            """
+        ).fetchone()
+        wh_cnt = conn.execute(
+            "SELECT COUNT(DISTINCT symbol) AS cnt FROM finance_eod_bars"
+        ).fetchone()
+        sectors = [
+            str(r["sector"])
+            for r in conn.execute(
+                "SELECT DISTINCT sector FROM finance_screener_snapshots WHERE sector != '' ORDER BY sector ASC"
+            ).fetchall()
+        ]
+        exchanges = [
+            str(r["exchange"])
+            for r in conn.execute(
+                "SELECT DISTINCT exchange FROM finance_screener_snapshots WHERE exchange != '' ORDER BY exchange ASC"
+            ).fetchall()
+        ]
+        currencies = [
+            str(r["currency"])
+            for r in conn.execute(
+                "SELECT DISTINCT currency FROM finance_screener_snapshots WHERE currency != '' ORDER BY currency ASC"
+            ).fetchall()
+        ]
+    return {
+        "total_snapshots": int((agg["total"] if agg else 0) or 0),
+        "with_technicals": int((agg["with_tech"] if agg else 0) or 0),
+        "with_fundamentals": int((agg["with_fund"] if agg else 0) or 0),
+        "warehouse_symbols_count": int((wh_cnt["cnt"] if wh_cnt else 0) or 0),
+        "sectors": sectors,
+        "exchanges": exchanges,
+        "currencies": currencies,
+        "last_computed_at": str(agg["last_comp"]) if (agg and agg["last_comp"]) else None,
+    }

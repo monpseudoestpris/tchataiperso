@@ -25099,7 +25099,7 @@ thead .finance-stmt-sticky-col {
 
 .finance-main-tabs-nav {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
   padding: 5px;
   border-radius: 14px;

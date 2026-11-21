@@ -33,6 +33,7 @@ import {
 import { FinanceMoatPanel } from "@/components/finance-moat-panel";
 import { FinanceNewsPanel } from "@/components/finance-news-panel";
 import { FinanceReportsPanel } from "@/components/finance-reports-panel";
+import { FinanceScreenerPanel } from "@/components/finance-screener-panel";
 import { FinanceSyncPanel } from "@/components/finance-sync-panel";
 import { FinanceStatements } from "@/components/finance-statements";
 import { FinanceTvChart } from "@/components/finance-tv-chart";
@@ -64,6 +65,7 @@ import {
   RefreshCw,
   Search,
   ShieldCheck,
+  SlidersHorizontal,
   Sparkles,
   Target,
   TrendingDown,
@@ -124,7 +126,7 @@ type FinanceModalProps = {
   onOpenReportAsDoc?: (report: QuarterlyReport, openVoiceFullscreen?: boolean) => Promise<void> | void;
 };
 
-type MainTab = "search_indices" | "fundamentals" | "chart_tech";
+type MainTab = "search_indices" | "fundamentals" | "chart_tech" | "screener";
 
 type ActiveTab =
   | "dossier"
@@ -1619,6 +1621,18 @@ export function FinanceModal({
                 </span>
               )}
             </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mainTab === "screener"}
+              className={`finance-main-tab-btn ${mainTab === "screener" ? "active" : ""}`}
+              onClick={() => switchMainTab("screener")}
+            >
+              <span className="finance-main-tab-num">4</span>
+              <SlidersHorizontal size={15} />
+              <span className="finance-main-tab-label">Screener</span>
+              <span className="finance-main-tab-meta">Fondamental · Tech</span>
+            </button>
           </nav>
         </div>
 
@@ -1839,6 +1853,27 @@ export function FinanceModal({
                 <LoaderCircle size={36} className="spin text-emerald" />
                 <p>Téléchargement des cours live (EOD) et des états financiers (Yahoo Finance)…</p>
               </div>
+            )}
+
+            {/* ONGLET 4 : Screener boursier multi-critères */}
+            {mainTab === "screener" && (
+              <FinanceScreenerPanel
+                indices={indices}
+                watchlists={watchlists}
+                activeListId={activeListId}
+                onOpenStock={async (target, displayName, openTab) => {
+                  setQuery(displayName || target);
+                  setMainTab(openTab);
+                  await loadDetails(target);
+                  window.requestAnimationFrame(() => {
+                    modalBodyRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+                  });
+                }}
+                onWatchlistExported={async listId => {
+                  toggleWatchlistSidebar(true);
+                  await handleSelectWatchlistTab(listId);
+                }}
+              />
             )}
 
             {/* ONGLET 3 : Cours & Indicateurs techniques */}

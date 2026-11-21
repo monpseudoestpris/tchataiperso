@@ -1796,6 +1796,20 @@ async def get_index_performances(
     gainers_1y = sum(1 for r in rows if (r.get("change_1y_pct") or 0) > 0)
     losers_1y = sum(1 for r in rows if (r.get("change_1y_pct") or 0) < 0)
 
+    if not cache_only:
+        try:
+            from .finance_screener import rebuild_screener_snapshots_from_warehouse
+
+            loaded_syms = [
+                str(r.get("eod_ticker") or r.get("symbol") or "").upper()
+                for r in rows
+                if r.get("price") is not None
+            ]
+            if loaded_syms:
+                rebuild_screener_snapshots_from_warehouse(db_path, loaded_syms)
+        except Exception as exc:
+            _logger.debug("Actualisation snapshots screener indice %s ignorée: %s", index_code, exc)
+
     return {
         "index": {
             **defn,

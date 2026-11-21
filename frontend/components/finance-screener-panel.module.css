@@ -1,0 +1,704 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.topCard,
+.rulesCard,
+.resultsCard {
+  border-radius: 14px;
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.topHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.titleBlock {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.titleIcon {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: #ecfdf5;
+  color: #059669;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.titleBlock h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.subtitle {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.coveragePills {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.coveragePill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #334155;
+  font-size: 11.5px;
+}
+
+.universeRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.controlGroup {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.label {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: #475569;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.select,
+.opSelect,
+.numInput,
+.searchInput {
+  height: 32px;
+  padding: 0 9px;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #0f172a;
+  font-size: 12.5px;
+}
+
+.opSelect {
+  width: 78px;
+}
+
+.numInput {
+  width: 96px;
+}
+
+.searchWrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.searchIcon {
+  position: absolute;
+  left: 9px;
+  color: #64748b;
+  pointer-events: none;
+}
+
+.searchInput {
+  padding-left: 28px;
+  width: 195px;
+}
+
+.checkboxLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #334155;
+  cursor: pointer;
+}
+
+.syncActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.primaryBtn,
+.secondaryBtn,
+.exportBtn,
+.addRuleBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 11px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.primaryBtn {
+  border: 1px solid #059669;
+  background: #10b981;
+  color: #ffffff;
+}
+
+.primaryBtn:hover:not(:disabled) {
+  background: #059669;
+}
+
+.secondaryBtn,
+.addRuleBtn,
+.exportBtn {
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  color: #1e293b;
+}
+
+.secondaryBtn:hover:not(:disabled),
+.addRuleBtn:hover:not(:disabled),
+.exportBtn:hover:not(:disabled) {
+  border-color: #10b981;
+  color: #047857;
+  background: #ecfdf5;
+}
+
+.primaryBtn:disabled,
+.secondaryBtn:disabled,
+.exportBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.presetsRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding-top: 6px;
+  border-top: 1px solid #f1f5f9;
+}
+
+.presetsLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: #64748b;
+}
+
+.presetChip,
+.resetChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #334155;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.presetChip:hover {
+  border-color: #10b981;
+  color: #047857;
+}
+
+.presetChipActive {
+  background: #ecfdf5;
+  border-color: #10b981;
+  color: #047857;
+}
+
+.resetChip {
+  border-color: #fecdd3;
+  color: #be123c;
+  background: #fff1f2;
+}
+
+.rulesHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.rulesTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #0f172a;
+}
+
+.rulesButtons {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.emptyRulesHint {
+  margin: 0;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.rulesList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ruleRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 6px 8px;
+  border-radius: 9px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+}
+
+.ruleKindBadge {
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: #e2e8f0;
+  color: #334155;
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.ruleHint {
+  flex: 1;
+  min-width: 140px;
+  font-size: 11px;
+  color: #64748b;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.deleteRuleBtn {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+}
+
+.deleteRuleBtn:hover {
+  background: #fee2e2;
+  color: #dc2626;
+}
+
+.bannerInfo {
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: #ecfdf5;
+  border: 1px solid #a7f3d0;
+  color: #065f46;
+  font-size: 12.5px;
+}
+
+.bannerError {
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: #fff1f2;
+  border: 1px solid #fecdd3;
+  color: #9f1239;
+  font-size: 12.5px;
+}
+
+.resultsToolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.resultsCount {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #0f172a;
+}
+
+.colGroupTabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px;
+  border-radius: 9px;
+  background: #f1f5f9;
+}
+
+.colGroupBtn {
+  padding: 5px 10px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.colGroupBtnActive {
+  background: #ffffff;
+  color: #0f172a;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+}
+
+.tableWrap {
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.table thead th {
+  text-align: left;
+  padding: 8px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #64748b;
+  border-bottom: 1px solid #e2e8f0;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+
+.table thead th:hover {
+  color: #0f172a;
+}
+
+.dataRow {
+  cursor: pointer;
+  border-bottom: 1px solid #f1f5f9;
+  transition: background 0.12s ease;
+}
+
+.dataRow:hover {
+  background: #f8fafc;
+}
+
+.table td {
+  padding: 7px 8px;
+  white-space: nowrap;
+  color: #0f172a;
+}
+
+.numCol {
+  text-align: right !important;
+  font-variant-numeric: tabular-nums;
+}
+
+.actionCol {
+  text-align: center !important;
+  width: 48px;
+}
+
+.stockCell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 240px;
+}
+
+.symbolBadge {
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: #f1f5f9;
+  color: #0f172a;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.stockMeta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.stockName {
+  font-size: 12.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stockSub {
+  font-size: 10.5px;
+  color: #64748b;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.curr {
+  font-size: 10px;
+  font-weight: 500;
+  color: #64748b;
+}
+
+.pos {
+  color: #059669 !important;
+  font-weight: 600;
+}
+
+.neg {
+  color: #e11d48 !important;
+  font-weight: 600;
+}
+
+.muted {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.badgePos,
+.badgeNeg,
+.badgeNeutral {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.badgePos {
+  background: #ecfdf5;
+  color: #047857;
+}
+
+.badgeNeg {
+  background: #fff1f2;
+  color: #be123c;
+}
+
+.badgeNeutral {
+  background: #f1f5f9;
+  color: #475569;
+}
+
+.sparkline {
+  display: block;
+}
+
+.chartIconBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #334155;
+  cursor: pointer;
+}
+
+.chartIconBtn:hover {
+  border-color: #10b981;
+  color: #059669;
+  background: #ecfdf5;
+}
+
+.emptyTable {
+  padding: 28px 16px;
+  text-align: center;
+  color: #475569;
+  font-size: 13px;
+}
+
+/* Dark theme */
+:global(:root[data-theme="dark"]) .topCard,
+:global(:root[data-theme="dark"]) .rulesCard,
+:global(:root[data-theme="dark"]) .resultsCard {
+  background: #111827;
+  border-color: #1f2937;
+}
+
+:global(:root[data-theme="dark"]) .titleIcon {
+  background: rgba(16, 185, 129, 0.16);
+  color: #34d399;
+}
+
+:global(:root[data-theme="dark"]) .titleBlock h3,
+:global(:root[data-theme="dark"]) .rulesTitle,
+:global(:root[data-theme="dark"]) .resultsCount,
+:global(:root[data-theme="dark"]) .table td {
+  color: #f1f5f9;
+}
+
+:global(:root[data-theme="dark"]) .subtitle,
+:global(:root[data-theme="dark"]) .muted,
+:global(:root[data-theme="dark"]) .ruleHint,
+:global(:root[data-theme="dark"]) .stockSub,
+:global(:root[data-theme="dark"]) .emptyRulesHint {
+  color: #94a3b8;
+}
+
+:global(:root[data-theme="dark"]) .coveragePill {
+  background: #1e293b;
+  color: #cbd5e1;
+}
+
+:global(:root[data-theme="dark"]) .select,
+:global(:root[data-theme="dark"]) .opSelect,
+:global(:root[data-theme="dark"]) .numInput,
+:global(:root[data-theme="dark"]) .searchInput {
+  background: #0f172a;
+  border-color: #334155;
+  color: #f8fafc;
+}
+
+:global(:root[data-theme="dark"]) .checkboxLabel {
+  color: #cbd5e1;
+}
+
+:global(:root[data-theme="dark"]) .secondaryBtn,
+:global(:root[data-theme="dark"]) .addRuleBtn,
+:global(:root[data-theme="dark"]) .exportBtn,
+:global(:root[data-theme="dark"]) .presetChip,
+:global(:root[data-theme="dark"]) .chartIconBtn {
+  background: #1e293b;
+  border-color: #334155;
+  color: #cbd5e1;
+}
+
+:global(:root[data-theme="dark"]) .secondaryBtn:hover:not(:disabled),
+:global(:root[data-theme="dark"]) .addRuleBtn:hover:not(:disabled),
+:global(:root[data-theme="dark"]) .exportBtn:hover:not(:disabled),
+:global(:root[data-theme="dark"]) .presetChip:hover,
+:global(:root[data-theme="dark"]) .presetChipActive,
+:global(:root[data-theme="dark"]) .chartIconBtn:hover {
+  background: rgba(16, 185, 129, 0.16);
+  border-color: #10b981;
+  color: #6ee7b7;
+}
+
+:global(:root[data-theme="dark"]) .presetsRow {
+  border-top-color: #1e293b;
+}
+
+:global(:root[data-theme="dark"]) .ruleRow {
+  background: #0f172a;
+  border-color: #1e293b;
+}
+
+:global(:root[data-theme="dark"]) .ruleKindBadge,
+:global(:root[data-theme="dark"]) .symbolBadge,
+:global(:root[data-theme="dark"]) .badgeNeutral {
+  background: #1e293b;
+  color: #cbd5e1;
+}
+
+:global(:root[data-theme="dark"]) .colGroupTabs {
+  background: #0f172a;
+}
+
+:global(:root[data-theme="dark"]) .colGroupBtn {
+  color: #94a3b8;
+}
+
+:global(:root[data-theme="dark"]) .colGroupBtnActive {
+  background: #1e293b;
+  color: #f8fafc;
+}
+
+:global(:root[data-theme="dark"]) .table thead th {
+  color: #94a3b8;
+  border-bottom-color: #1f2937;
+}
+
+:global(:root[data-theme="dark"]) .dataRow {
+  border-bottom-color: #1e293b;
+}
+
+:global(:root[data-theme="dark"]) .dataRow:hover {
+  background: #1e293b;
+}
+
+:global(:root[data-theme="dark"]) .pos {
+  color: #34d399 !important;
+}
+
+:global(:root[data-theme="dark"]) .neg {
+  color: #fb7185 !important;
+}
+
+:global(:root[data-theme="dark"]) .badgePos {
+  background: rgba(16, 185, 129, 0.16);
+  color: #6ee7b7;
+}
+
+:global(:root[data-theme="dark"]) .badgeNeg {
+  background: rgba(244, 63, 94, 0.16);
+  color: #fda4af;
+}
+
+:global(:root[data-theme="dark"]) .bannerInfo {
+  background: rgba(16, 185, 129, 0.14);
+  border-color: rgba(16, 185, 129, 0.35);
+  color: #6ee7b7;
+}
+
+:global(:root[data-theme="dark"]) .bannerError {
+  background: rgba(244, 63, 94, 0.14);
+  border-color: rgba(244, 63, 94, 0.35);
+  color: #fda4af;
+}
