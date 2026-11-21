@@ -1012,6 +1012,48 @@ def test_filter_visual_doc_forum_sources_drops_offtopic_results():
     assert "boardgamegeek.com" in filtered[0]["url"]
 
 
+def test_rename_visual_doc_and_supplementary_file(tmp_path):
+    """Vérifie le renommage d'un document principal ET d'un document complémentaire (ex. dsfdsfds5454.pdf -> Perlae Imperii.pdf)."""
+    settings = Settings(_env_file=None, app_data_dir=tmp_path, demo_mode=True)
+    app = _create_app_with_users(settings)
+
+    with _login(app, settings, "alice") as alice:
+        create_resp = alice.post(
+            "/api/visual-docs",
+            files=[("files", ("dsfdsfds5454.pdf", _make_pdf_bytes(1), "application/pdf"))],
+            data={"title": "dsfdsfds5454"},
+        )
+        assert create_resp.status_code == 201
+        doc = create_resp.json()
+        assert doc["filename"] == "dsfdsfds5454.pdf"
+
+        # 1. Renommer le document principal
+        rename_main = alice.patch(f"/api/visual-docs/{doc['id']}", json={"title": "Res Arcana"})
+        assert rename_main.status_code == 200
+        renamed = rename_main.json()
+        assert renamed["title"] == "Res Arcana"
+        assert renamed["filename"] == "Res Arcana.pdf"
+
+        # 2. Ajouter un PDF complémentaire au nom cryptique puis le renommer
+        supp_resp = alice.post(
+            f"/api/visual-docs/{doc['id']}/supplementary-files",
+            files=[("files", ("x9923_scan.pdf", _make_pdf_bytes(1), "application/pdf"))],
+            data={"doc_role": "extension"},
+        )
+        assert supp_resp.status_code == 200
+        link_id = supp_resp.json()["external_links"][0]["id"]
+
+        rename_supp = alice.patch(
+            f"/api/visual-docs/{doc['id']}/links/{link_id}",
+            json={"title": "Perlae Imperii"},
+        )
+        assert rename_supp.status_code == 200
+        supp_entry = rename_supp.json()["external_links"][0]
+        assert supp_entry["title"] == "Perlae Imperii"
+        assert supp_entry["filename"] == "Perlae Imperii.pdf"
+
+
+
 
 
 

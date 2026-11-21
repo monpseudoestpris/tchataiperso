@@ -435,6 +435,81 @@
   background: rgba(239, 68, 68, 0.1);
 }
 
+.cardTitleRow {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.cardRenameTrigger {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  background: rgba(15, 23, 42, 0.7);
+  backdrop-filter: blur(8px);
+  color: #f8fafc;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.16s ease, background 0.16s ease;
+}
+
+.bookCard:hover .cardRenameTrigger,
+.cardRenameTrigger:focus-visible {
+  opacity: 1;
+}
+
+.cardRenameTrigger:hover {
+  background: rgba(79, 70, 229, 0.92);
+  border-color: rgba(165, 180, 252, 0.65);
+}
+
+.cardRenameForm {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+}
+
+.cardRenameInput {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  background: rgba(15, 23, 42, 0.88);
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 600;
+  outline: none;
+}
+
+.cardRenameConfirmBtn,
+.cardRenameCancelBtn {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: #ffffff;
+}
+
+.cardRenameConfirmBtn {
+  background: #16a34a;
+}
+
+.cardRenameCancelBtn {
+  background: rgba(15, 23, 42, 0.78);
+}
+
 /* Carte "+ Nouveau document" */
 .addNewCard {
   display: flex;

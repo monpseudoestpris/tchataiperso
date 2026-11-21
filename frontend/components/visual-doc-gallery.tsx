@@ -5,18 +5,22 @@ import {
   AudioLines,
   BookOpen,
   Camera,
+  Check,
   Globe,
   LoaderCircle,
   MessageSquare,
+  Pencil,
   Plus,
   RotateCcw,
   Search,
   Sparkles,
   Trash2,
+  X,
 } from "lucide-react";
 import {
   errorMessage,
   resetVisualDocCover,
+  updateVisualDoc,
   uploadVisualDocCover,
   VISUAL_DOC_CATEGORIES,
   type VisualDocDetail,
@@ -60,6 +64,8 @@ export function VisualDocGallery({
   const [selectedCategory, setSelectedCategory] = useState<string>("all");
   const [uploadingCoverDocId, setUploadingCoverDocId] = useState<string | null>(null);
   const [busyDocId, setBusyDocId] = useState<string | null>(null);
+  const [renamingDocId, setRenamingDocId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
   const coverInputRef = useRef<HTMLInputElement>(null);
   const pendingCoverTargetRef = useRef<string | null>(null);
 
@@ -111,6 +117,37 @@ export function VisualDocGallery({
       setUploadingCoverDocId(null);
       pendingCoverTargetRef.current = null;
       if (coverInputRef.current) coverInputRef.current.value = "";
+    }
+  }
+
+  function startRename(doc: VisualDocSummary, e: React.MouseEvent) {
+    e.stopPropagation();
+    setRenamingDocId(doc.id);
+    setRenameDraft(doc.title);
+  }
+
+  function cancelRename(e?: React.MouseEvent | React.KeyboardEvent) {
+    e?.stopPropagation();
+    setRenamingDocId(null);
+    setRenameDraft("");
+  }
+
+  async function commitRename(docId: string, e?: React.FormEvent | React.MouseEvent) {
+    e?.preventDefault();
+    e?.stopPropagation();
+    const cleaned = renameDraft.trim();
+    if (!cleaned || busyDocId === docId) return;
+    setBusyDocId(docId);
+    onError("");
+    try {
+      const updated = await updateVisualDoc(docId, { title: cleaned });
+      onDocCoverUpdated(updated);
+      setRenamingDocId(null);
+      setRenameDraft("");
+    } catch (err) {
+      onError(errorMessage(err));
+    } finally {
+      setBusyDocId(null);
     }
   }
 
@@ -285,9 +322,57 @@ export function VisualDocGallery({
 
                 {/* Titre en bas de la couverture */}
                 <div className={styles.cardCoverTitleOverlay}>
-                  <h3 className={styles.cardTitle} title={doc.title}>
-                    {doc.title}
-                  </h3>
+                  {renamingDocId === doc.id ? (
+                    <form
+                      className={styles.cardRenameForm}
+                      onSubmit={(e) => void commitRename(doc.id, e)}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <input
+                        type="text"
+                        className={styles.cardRenameInput}
+                        value={renameDraft}
+                        onChange={(e) => setRenameDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Escape") cancelRename(e);
+                        }}
+                        autoFocus
+                        maxLength={200}
+                        aria-label="Nouveau nom du document"
+                      />
+                      <button
+                        type="submit"
+                        className={styles.cardRenameConfirmBtn}
+                        disabled={isBusy || !renameDraft.trim()}
+                        title="Enregistrer le nouveau nom"
+                      >
+                        <Check size={13} />
+                      </button>
+                      <button
+                        type="button"
+                        className={styles.cardRenameCancelBtn}
+                        onClick={(e) => cancelRename(e)}
+                        title="Annuler"
+                      >
+                        <X size={13} />
+                      </button>
+                    </form>
+                  ) : (
+                    <div className={styles.cardTitleRow}>
+                      <h3 className={styles.cardTitle} title={doc.title}>
+                        {doc.title}
+                      </h3>
+                      <button
+                        type="button"
+                        className={styles.cardRenameTrigger}
+                        onClick={(e) => startRename(doc, e)}
+                        title="Renommer ce document"
+                        aria-label={`Renommer ${doc.title}`}
+                      >
+                        <Pencil size={12} />
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
 

@@ -23,6 +23,7 @@ import {
   Link2,
   LoaderCircle,
   MessageSquare,
+  Pencil,
   Plus,
   Save,
   Sparkles,
@@ -37,6 +38,7 @@ import {
   getVisualDoc,
   ingestVisualDoc,
   listVisualDocs,
+  renameVisualDocLink,
   updateVisualDoc,
   uploadVisualDocCover,
   VISUAL_DOC_CATEGORIES,
@@ -49,6 +51,14 @@ import { VisualDocGallery } from "./visual-doc-gallery";
 import { VisualDocLinksPanel } from "./visual-doc-links-panel";
 import styles from "./visual-doc-modal.module.css";
 
+const VISUAL_DOC_MODEL_STORAGE_KEY = "clair_visual_doc_model";
+
+const VISUAL_DOC_ANALYSIS_MODELS = [
+  { id: "google/gemini-3.8-flash", label: "Gemini 3.8 Flash", hint: "Rapide & économique · 1M" },
+  { id: "google/gemini-4-hydrogen", label: "Gemini 4 Hydrogen", hint: "Raisonnement poussé · 1M" },
+  { id: "google/gemini-4-neon", label: "Gemini 4 Neon", hint: "Analyse experte · 1M" },
+] as const;
+
 export interface VisualDocModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -56,8 +66,8 @@ export interface VisualDocModalProps {
   attachedDocIds: string[];
   onAttachToConversation?: (doc: VisualDocSummary) => Promise<void> | void;
   onDetachFromConversation?: (docId: string) => Promise<void> | void;
-  onStartChatWithDoc: (doc: VisualDocSummary) => Promise<void> | void;
-  onStartVoiceWithDoc?: (doc: VisualDocSummary) => Promise<void> | void;
+  onStartChatWithDoc: (doc: VisualDocSummary, modelId?: string) => Promise<void> | void;
+  onStartVoiceWithDoc?: (doc: VisualDocSummary, modelId?: string) => Promise<void> | void;
   initialDocId?: string | null;
   initialTab?: "library" | "ingest";
   ocrEnabled?: boolean;
@@ -102,6 +112,15 @@ export function VisualDocModal({
   demoMode = false,
 }: VisualDocModalProps) {
   const [tab, setTab] = useState<"library" | "ingest">(initialTab);
+  const [analysisModel, setAnalysisModel] = useState<string>(() => {
+    if (typeof window !== "undefined") {
+      const saved = window.localStorage.getItem(VISUAL_DOC_MODEL_STORAGE_KEY);
+      if (saved && VISUAL_DOC_ANALYSIS_MODELS.some((m) => m.id === saved)) {
+        return saved;
+      }
+    }
+    return VISUAL_DOC_ANALYSIS_MODELS[0].id;
+  });
   const [docs, setDocs] = useState<VisualDocSummary[]>([]);
   const [loadingList, setLoadingList] = useState(false);
   const [selectedDocId, setSelectedDocId] = useState<string | null>(initialDocId);
@@ -127,6 +146,10 @@ export function VisualDocModal({
   const [enrichVision, setEnrichVision] = useState(true);
   const [ingesting, setIngesting] = useState(false);
   const [uploadingDetailCover, setUploadingDetailCover] = useState(false);
+  const [renamingDetail, setRenamingDetail] = useState(false);
+  const [detailTitleDraft, setDetailTitleDraft] = useState("");
+  const [renamingVolumeId, setRenamingVolumeId] = useState<string | null>(null);
+  const [volumeTitleDraft, setVolumeTitleDraft] = useState("");
   const [dragActive, setDragActive] = useState(false);
   const [zoomedAsset, setZoomedAsset] = useState<{ src: string; caption: string } | null>(null);
 
@@ -439,6 +462,32 @@ export function VisualDocModal({
             </div>
           </div>
           <div className={styles.headerRight}>
+            <label
+              className={styles.analysisModelPicker}
+              title="Modèle Google utilisé pour l'analyse et les questions sur vos documents"
+            >
+              <Sparkles size={13} />
+              <select
+                className={styles.analysisModelSelect}
+                value={analysisModel}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  setAnalysisModel(next);
+                  try {
+                    window.localStorage.setItem(VISUAL_DOC_MODEL_STORAGE_KEY, next);
+                  } catch {
+                    // ignore storage errors
+                  }
+                }}
+                aria-label="Modèle IA pour l'analyse de documents"
+              >
+                {VISUAL_DOC_ANALYSIS_MODELS.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.label} ({m.hint})
+                  </option>
+                ))}
+              </select>
+            </label>
             <div className={styles.modeTabs} role="tablist">
               <button
                 type="button"
@@ -842,13 +891,13 @@ export function VisualDocModal({
               attachedDocIds={attachedDocIds}
               onSelectDoc={(docId) => setSelectedDocId(docId)}
               onStartChatWithDoc={async (doc) => {
-                await onStartChatWithDoc(doc);
+                await onStartChatWithDoc(doc, analysisModel);
                 onClose();
               }}
               onStartVoiceWithDoc={
                 onStartVoiceWithDoc
                   ? async (doc) => {
-                      await onStartVoiceWithDoc(doc);
+                      await onStartVoiceWithDoc(doc, analysisModel);
                       onClose();
                     }
                   : undefined
@@ -918,7 +967,81 @@ export function VisualDocModal({
                           <span>Bibliothèque</span>
                         </button>
                         <div className={styles.detailTitleBlock}>
-                          <h3>{activeDetail.title}</h3>
+                          {renamingDetail ? (
+                            <form
+                              className={styles.detailRenameForm}
+                              onSubmit={async (e) => {
+                                e.preventDefault();
+                                const cleaned = detailTitleDraft.trim();
+                                if (!cleaned || busyAction) return;
+                                setBusyAction(true);
+                                setError("");
+                                try {
+                                  const updated = await updateVisualDoc(activeDetail.id, { title: cleaned });
+                                  setDetail(updated);
+                                  setDocs((prev) =>
+                                    prev.map((d) => (d.id === updated.id ? { ...d, ...updated } : d)),
+                                  );
+                                  setRenamingDetail(false);
+                                } catch (err) {
+                                  setError(errorMessage(err));
+                                } finally {
+                                  setBusyAction(false);
+                                }
+                              }}
+                            >
+                              <input
+                                type="text"
+                                className={styles.detailRenameInput}
+                                value={detailTitleDraft}
+                                onChange={(e) => setDetailTitleDraft(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Escape") {
+                                    setRenamingDetail(false);
+                                    setDetailTitleDraft("");
+                                  }
+                                }}
+                                autoFocus
+                                maxLength={200}
+                                aria-label="Nouveau nom du document"
+                              />
+                              <button
+                                type="submit"
+                                className={styles.detailRenameSaveBtn}
+                                disabled={busyAction || !detailTitleDraft.trim()}
+                                title="Enregistrer le nouveau nom"
+                              >
+                                <Check size={14} />
+                              </button>
+                              <button
+                                type="button"
+                                className={styles.detailRenameCancelBtn}
+                                onClick={() => {
+                                  setRenamingDetail(false);
+                                  setDetailTitleDraft("");
+                                }}
+                                title="Annuler"
+                              >
+                                <X size={14} />
+                              </button>
+                            </form>
+                          ) : (
+                            <div className={styles.detailTitleHeadingRow}>
+                              <h3>{activeDetail.title}</h3>
+                              <button
+                                type="button"
+                                className={styles.detailRenameTrigger}
+                                onClick={() => {
+                                  setDetailTitleDraft(activeDetail.title);
+                                  setRenamingDetail(true);
+                                }}
+                                title="Renommer ce document"
+                                aria-label="Renommer ce document"
+                              >
+                                <Pencil size={13} />
+                              </button>
+                            </div>
+                          )}
                           <div className={styles.detailSubMetaRow}>
                             <select
                               className={styles.categorySelectInline}
@@ -962,7 +1085,7 @@ export function VisualDocModal({
                           onClick={async () => {
                             setBusyAction(true);
                             try {
-                              await onStartChatWithDoc(activeDetail);
+                              await onStartChatWithDoc(activeDetail, analysisModel);
                               onClose();
                             } finally {
                               setBusyAction(false);
@@ -981,7 +1104,7 @@ export function VisualDocModal({
                             onClick={async () => {
                               setBusyAction(true);
                               try {
-                                await onStartVoiceWithDoc(activeDetail);
+                                await onStartVoiceWithDoc(activeDetail, analysisModel);
                                 onClose();
                               } finally {
                                 setBusyAction(false);
@@ -1080,19 +1203,101 @@ export function VisualDocModal({
                         </button>
                         {supplementaryDocs.map((sDoc) => {
                           const isCurrent = activeSuppDoc?.id === sDoc.id;
+                          if (renamingVolumeId === sDoc.id) {
+                            return (
+                              <form
+                                key={sDoc.id}
+                                className={styles.volumeRenameForm}
+                                onSubmit={async (e) => {
+                                  e.preventDefault();
+                                  const cleaned = volumeTitleDraft.trim();
+                                  if (!cleaned || busyAction) return;
+                                  setBusyAction(true);
+                                  setError("");
+                                  try {
+                                    const updated = await renameVisualDocLink(activeDetail.id, sDoc.id, {
+                                      title: cleaned,
+                                    });
+                                    setDetail(updated);
+                                    setDocs((prev) =>
+                                      prev.map((d) => (d.id === updated.id ? { ...d, ...updated } : d)),
+                                    );
+                                    setRenamingVolumeId(null);
+                                    setVolumeTitleDraft("");
+                                  } catch (err) {
+                                    setError(errorMessage(err));
+                                  } finally {
+                                    setBusyAction(false);
+                                  }
+                                }}
+                              >
+                                <input
+                                  type="text"
+                                  className={styles.volumeRenameInput}
+                                  value={volumeTitleDraft}
+                                  onChange={(e) => setVolumeTitleDraft(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Escape") {
+                                      setRenamingVolumeId(null);
+                                      setVolumeTitleDraft("");
+                                    }
+                                  }}
+                                  autoFocus
+                                  maxLength={200}
+                                  aria-label="Nouveau nom du document complémentaire"
+                                />
+                                <button
+                                  type="submit"
+                                  className={styles.volumeRenameSaveBtn}
+                                  disabled={busyAction || !volumeTitleDraft.trim()}
+                                  title="Enregistrer"
+                                >
+                                  <Check size={12} />
+                                </button>
+                                <button
+                                  type="button"
+                                  className={styles.volumeRenameCancelBtn}
+                                  onClick={() => {
+                                    setRenamingVolumeId(null);
+                                    setVolumeTitleDraft("");
+                                  }}
+                                  title="Annuler"
+                                >
+                                  <X size={12} />
+                                </button>
+                              </form>
+                            );
+                          }
                           return (
-                            <button
+                            <div
                               key={sDoc.id}
-                              type="button"
-                              role="tab"
-                              aria-selected={isCurrent}
-                              className={`${styles.volumePill} ${isCurrent ? styles.volumePillActive : ""}`}
-                              onClick={() => setActiveVolumeId(sDoc.id)}
-                              title={sDoc.doc_role_label || sDoc.filename}
+                              className={`${styles.volumePillGroup} ${isCurrent ? styles.volumePillGroupActive : ""}`}
                             >
-                              <span>📜 {sDoc.title}</span>
-                              {sDoc.page_count ? <small>{sDoc.page_count} p.</small> : null}
-                            </button>
+                              <button
+                                type="button"
+                                role="tab"
+                                aria-selected={isCurrent}
+                                className={`${styles.volumePill} ${styles.volumePillInner} ${isCurrent ? styles.volumePillActive : ""}`}
+                                onClick={() => setActiveVolumeId(sDoc.id)}
+                                title={sDoc.doc_role_label || sDoc.filename}
+                              >
+                                <span>📜 {sDoc.title}</span>
+                                {sDoc.page_count ? <small>{sDoc.page_count} p.</small> : null}
+                              </button>
+                              <button
+                                type="button"
+                                className={styles.volumeRenameTrigger}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setRenamingVolumeId(sDoc.id);
+                                  setVolumeTitleDraft(sDoc.title || sDoc.filename || "");
+                                }}
+                                title="Renommer ce document complémentaire"
+                                aria-label={`Renommer ${sDoc.title}`}
+                              >
+                                <Pencil size={11} />
+                              </button>
+                            </div>
                           );
                         })}
                       </div>

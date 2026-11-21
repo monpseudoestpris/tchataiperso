@@ -4518,15 +4518,17 @@ export function ChatApp() {
           setPendingVisualDocs(prev => prev.filter(item => item.id !== docId));
         }
       }}
-      onStartChatWithDoc={async (doc) => {
+      onStartChatWithDoc={async (doc, modelId) => {
         setConversation(null);
         setPendingVisualDocs([doc]);
+        if (modelId) setModel(modelId);
         setDraft("");
         setTimeout(() => textareaRef.current?.focus(), 60);
       }}
-      onStartVoiceWithDoc={async (doc) => {
+      onStartVoiceWithDoc={async (doc, modelId) => {
         setConversation(null);
         setPendingVisualDocs([doc]);
+        if (modelId) setModel(modelId);
         setDraft("");
         setVoiceFullscreenOpen(true);
       }}

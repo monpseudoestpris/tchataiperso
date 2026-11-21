@@ -1347,6 +1347,7 @@ class AnalyzeStockMoatRequest(BaseModel):
 
 class UpdateVisualDocumentRequest(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=200)
+    filename: str | None = Field(default=None, min_length=1, max_length=255)
     doc_category: str | None = Field(default=None, max_length=40)
     compiled_markdown: str | None = Field(default=None, max_length=2_000_000)
 
@@ -1360,6 +1361,16 @@ class UpdateVisualDocumentRequest(BaseModel):
             raise ValueError("Le titre du document ne peut pas être vide.")
         return cleaned
 
+    @field_validator("filename")
+    @classmethod
+    def trim_visual_doc_filename(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.replace("\\", "/").split("/")[-1].strip()
+        if not cleaned:
+            raise ValueError("Le nom de fichier ne peut pas être vide.")
+        return cleaned[:255]
+
     @field_validator("doc_category")
     @classmethod
     def validate_visual_doc_category(cls, value: str | None) -> str | None:
@@ -1371,6 +1382,31 @@ class UpdateVisualDocumentRequest(BaseModel):
         if cleaned not in valid_ids:
             raise ValueError(f"Catégorie de document invalide ({cleaned}).")
         return cleaned
+
+
+class UpdateVisualDocLinkRequest(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    filename: str | None = Field(default=None, min_length=1, max_length=255)
+
+    @field_validator("title")
+    @classmethod
+    def trim_link_title(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Le nom de la ressource ne peut pas être vide.")
+        return cleaned
+
+    @field_validator("filename")
+    @classmethod
+    def trim_link_filename(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.replace("\\", "/").split("/")[-1].strip()
+        if not cleaned:
+            raise ValueError("Le nom de fichier ne peut pas être vide.")
+        return cleaned[:255]
 
 
 class AddVisualDocLinksRequest(BaseModel):

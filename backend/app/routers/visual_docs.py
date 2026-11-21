@@ -16,7 +16,7 @@ from .. import providers
 from ..config import Settings
 from ..deps import current_user, get_conversation, get_sessions, get_settings
 from ..models import ConversationVisualDoc, User, VisualDocument, now
-from ..schemas import AddVisualDocLinksRequest, UpdateVisualDocumentRequest
+from ..schemas import AddVisualDocLinksRequest, UpdateVisualDocLinkRequest, UpdateVisualDocumentRequest
 from ..serializers import conversation_json, visual_doc_json
 from ..visual_doc_links import (
     MAX_LINKS_PER_VISUAL_DOC,
@@ -287,6 +287,14 @@ def update_visual_doc(
             raise HTTPException(404, "Document illustré introuvable")
         if body.title is not None:
             item.title = body.title
+            if body.filename is None and item.filename:
+                orig_ext = Path(item.filename).suffix
+                if orig_ext and len(orig_ext) <= 8 and not body.title.lower().endswith(orig_ext.lower()):
+                    item.filename = f"{body.title}{orig_ext}"[:255]
+                else:
+                    item.filename = body.title[:255]
+        if body.filename is not None:
+            item.filename = body.filename
         if body.doc_category is not None:
             item.doc_category = body.doc_category
         if body.compiled_markdown is not None:
@@ -667,6 +675,52 @@ async def refresh_visual_doc_link(
             refreshed if str(entry.get("id")) == link_id else entry
             for entry in (item.external_links if isinstance(item.external_links, list) else [])
         ]
+        item.external_links = updated_links
+        item.updated_at = now()
+        db.commit()
+        db.refresh(item)
+        return visual_doc_json(item, detail=True, app_data_dir=settings.app_data_dir)
+
+
+@router.patch("/api/visual-docs/{doc_id}/links/{link_id}")
+def update_visual_doc_link(
+    doc_id: str,
+    link_id: str,
+    body: UpdateVisualDocLinkRequest,
+    user: User = Depends(current_user),
+    settings: Settings = Depends(get_settings),
+    sessions: sessionmaker = Depends(get_sessions),
+):
+    with sessions() as db:
+        item = db.scalar(
+            select(VisualDocument)
+            .where(VisualDocument.id == doc_id, VisualDocument.user_id == user.id)
+            .with_for_update()
+        )
+        if not item:
+            raise HTTPException(404, "Document illustré introuvable")
+        current = list(item.external_links if isinstance(item.external_links, list) else [])
+        found = False
+        updated_links: list[dict] = []
+        for entry in current:
+            if str(entry.get("id")) == link_id:
+                found = True
+                cloned = dict(entry)
+                if body.title is not None:
+                    cloned["title"] = body.title
+                    if body.filename is None and cloned.get("link_type") == "document" and cloned.get("filename"):
+                        orig_ext = Path(str(cloned["filename"])).suffix
+                        if orig_ext and len(orig_ext) <= 8 and not body.title.lower().endswith(orig_ext.lower()):
+                            cloned["filename"] = f"{body.title}{orig_ext}"[:255]
+                        else:
+                            cloned["filename"] = body.title[:255]
+                if body.filename is not None:
+                    cloned["filename"] = body.filename
+                updated_links.append(cloned)
+            else:
+                updated_links.append(entry)
+        if not found:
+            raise HTTPException(404, "Ressource introuvable sur ce document")
         item.external_links = updated_links
         item.updated_at = now()
         db.commit()

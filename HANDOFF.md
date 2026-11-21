@@ -21,6 +21,12 @@ Application de chat IA multi-fournisseurs (`tchataiperso`) composée d'un backen
 **Statut** : Implémenté et vérifié.
 
 ## 3. Completed Work
+- **Sélecteur de modèle dédié dans Documents Illustrés (`Gemini 3.8 Flash`, `Gemini 4 Hydrogen`, `Gemini 4 Neon`)** :
+  - Backend : ajout de `google/gemini-4-neon` (`1M` tokens, vision, raisonnement) dans `DEFAULT_GOOGLE_CLOUD_MODELS` (`backend/app/config.py`).
+  - Frontend : sélecteur de modèle dédié dans l'en-tête de `VisualDocModal` proposant uniquement ces 3 modèles (mémorisé dans `localStorage`), automatiquement appliqué au clic sur « Poser des questions » ou « Vocal Plein Écran » (galerie et vue détail) via `chat-app.tsx`.
+- **Renommage en ligne des documents principaux & complémentaires (`dsfdsfds5454.pdf` → nom propre)** :
+  - Backend : `PATCH /api/visual-docs/{doc_id}` synchronise désormais aussi `filename` (en conservant l'extension `.pdf`) lors du renommage ; nouvel endpoint `PATCH /api/visual-docs/{doc_id}/links/{link_id}` (`UpdateVisualDocLinkRequest`) pour renommer n'importe quel fichier complémentaire (extension, FAQ) ou lien.
+  - Frontend : bouton crayon (`Pencil`) + édition en ligne (`Entrée`/`Échap`) sur chaque carte de `VisualDocGallery`, dans l'en-tête du document dans `VisualDocModal`, et sur chaque carte de `VisualDocLinksPanel` (mettant à jour le titre, le nom de fichier affiché et la barre de volumes).
 - **Correctif TTS Google Vertex AI (`HTTP 400 Please use a valid role: user, model.`)** :
   - `backend/app/voice.py` : ajout de `"role": "user"` dans `contents[0]` pour `gemini_ga_body` et `gemini_preview_body` dans `synthesize_speech_google` (requis par Vertex AI `aiplatform.googleapis.com`, également accepté par Gemini Developer API).
 - **Correctif citations `.webp` brutes & filtrage anti-hors-sujet des forums dédiés** :

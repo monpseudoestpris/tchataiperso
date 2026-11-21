@@ -5,6 +5,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   BookOpen,
+  Check,
   ChevronDown,
   ChevronUp,
   CircleAlert,
@@ -15,17 +16,20 @@ import {
   Link2,
   LoaderCircle,
   MessageSquare,
+  Pencil,
   Play,
   Plus,
   RefreshCw,
   Trash2,
   Upload,
+  X,
 } from "lucide-react";
 import {
   addVisualDocLinks,
   deleteVisualDocLink,
   errorMessage,
   refreshVisualDocLink,
+  renameVisualDocLink,
   SUPPLEMENTARY_DOC_ROLES,
   uploadVisualDocSupplementaryFiles,
   type SupplementaryDocRoleId,
@@ -84,11 +88,34 @@ export function VisualDocLinksPanel({
   const suppFileInputRef = useRef<HTMLInputElement>(null);
 
   const [busyLinkId, setBusyLinkId] = useState<string | null>(null);
+  const [renamingLinkId, setRenamingLinkId] = useState<string | null>(null);
+  const [renameLinkDraft, setRenameLinkDraft] = useState("");
   const [localError, setLocalError] = useState<string>("");
   const [expandedTextIds, setExpandedTextIds] = useState<Record<string, boolean>>({});
   const [playingVideoIds, setPlayingVideoIds] = useState<Record<string, boolean>>({});
 
   const links: VisualDocExternalLink[] = Array.isArray(doc.external_links) ? doc.external_links : [];
+
+  async function handleCommitRenameLink(linkId: string, e: React.FormEvent) {
+    e.preventDefault();
+    const cleaned = renameLinkDraft.trim();
+    if (!cleaned || busyLinkId) return;
+    setBusyLinkId(linkId);
+    setLocalError("");
+    onError("");
+    try {
+      const updated = await renameVisualDocLink(doc.id, linkId, { title: cleaned });
+      onDocUpdated(updated);
+      setRenamingLinkId(null);
+      setRenameLinkDraft("");
+    } catch (err) {
+      const msg = errorMessage(err);
+      setLocalError(msg);
+      onError(msg);
+    } finally {
+      setBusyLinkId(null);
+    }
+  }
 
   async function handleAddSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -308,16 +335,58 @@ export function VisualDocLinksPanel({
                       <span>{meta.emoji}</span>
                       <span>{meta.label}</span>
                     </span>
-                    <a
-                      href={link.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className={styles.linkCardTitle}
-                      title={isDoc ? `Ouvrir ${link.filename || link.title}` : link.url}
-                    >
-                      <span>{link.title}</span>
-                      <ExternalLink size={13} />
-                    </a>
+                    {renamingLinkId === link.id ? (
+                      <form
+                        className={styles.linkRenameForm}
+                        onSubmit={(e) => void handleCommitRenameLink(link.id, e)}
+                      >
+                        <input
+                          type="text"
+                          className={styles.linkRenameInput}
+                          value={renameLinkDraft}
+                          onChange={(e) => setRenameLinkDraft(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Escape") {
+                              setRenamingLinkId(null);
+                              setRenameLinkDraft("");
+                            }
+                          }}
+                          autoFocus
+                          maxLength={200}
+                          aria-label="Nouveau nom du document complémentaire"
+                        />
+                        <button
+                          type="submit"
+                          className={styles.miniActionBtn}
+                          disabled={isBusy || !renameLinkDraft.trim()}
+                          title="Enregistrer le nouveau nom"
+                        >
+                          <Check size={12} />
+                        </button>
+                        <button
+                          type="button"
+                          className={styles.miniActionBtn}
+                          onClick={() => {
+                            setRenamingLinkId(null);
+                            setRenameLinkDraft("");
+                          }}
+                          title="Annuler"
+                        >
+                          <X size={12} />
+                        </button>
+                      </form>
+                    ) : (
+                      <a
+                        href={link.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className={styles.linkCardTitle}
+                        title={isDoc ? `Ouvrir ${link.filename || link.title}` : link.url}
+                      >
+                        <span>{link.title}</span>
+                        <ExternalLink size={13} />
+                      </a>
+                    )}
                     {link.author && <span className={styles.metaSubTag}>par {link.author}</span>}
                     {link.duration && <span className={styles.metaSubTag}>⏱ {link.duration}</span>}
                     {isDoc && link.page_count ? (
@@ -369,6 +438,19 @@ export function VisualDocLinksPanel({
                         <span>{isPlaying ? "Masquer vidéo" : "Voir la vidéo"}</span>
                       </button>
                     )}
+                    <button
+                      type="button"
+                      className={styles.miniActionBtn}
+                      disabled={isBusy}
+                      onClick={() => {
+                        setRenamingLinkId(link.id);
+                        setRenameLinkDraft(link.title || link.filename || "");
+                      }}
+                      title="Renommer ce fichier / cette ressource"
+                    >
+                      <Pencil size={12} />
+                      <span>Renommer</span>
+                    </button>
                     <button
                       type="button"
                       className={styles.miniActionBtn}

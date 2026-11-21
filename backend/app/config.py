@@ -304,6 +304,15 @@ DEFAULT_GOOGLE_CLOUD_MODELS: list[dict[str, Any]] = [
         "context_length": 1000000,
         "supported_parameters": ["temperature", "top_p", "seed", "reasoning_effort"],
     },
+    {
+        "id": "google/gemini-4-neon",
+        "name": "Google: Gemini 4 Neon (Google Cloud)",
+        "vision": True,
+        "provider": "google",
+        "reasoning": True,
+        "context_length": 1000000,
+        "supported_parameters": ["temperature", "top_p", "seed", "reasoning_effort"],
+    },
 ]
 
 

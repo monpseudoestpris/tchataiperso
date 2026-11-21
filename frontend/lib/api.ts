@@ -3147,9 +3147,20 @@ export async function deleteVisualDocLink(
   });
 }
 
+export async function renameVisualDocLink(
+  docId: string,
+  linkId: string,
+  body: { title?: string; filename?: string },
+): Promise<VisualDocDetail> {
+  return api<VisualDocDetail>(`/visual-docs/${docId}/links/${linkId}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
 export async function updateVisualDoc(
   docId: string,
-  body: { title?: string; doc_category?: string; compiled_markdown?: string },
+  body: { title?: string; filename?: string; doc_category?: string; compiled_markdown?: string },
 ): Promise<VisualDocDetail> {
   return api<VisualDocDetail>(`/visual-docs/${docId}`, {
     method: "PATCH",
