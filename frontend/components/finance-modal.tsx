@@ -6,6 +6,7 @@ import { FinanceCustomIndicatorModal } from "@/components/finance-custom-indicat
 import { FinanceDossierPanel } from "@/components/finance-dossier-panel";
 import { FinanceEufundBrowser } from "@/components/finance-eufund-browser";
 import { FinanceExpertsPanel } from "@/components/finance-experts-panel";
+import { FinanceFullscreenTickerSwitcher } from "@/components/finance-fullscreen-ticker-switcher";
 import { FinanceHelpGuideId, FinanceHelpModal } from "@/components/finance-help-modal";
 import { FinanceThemeSwitcher, useInterfaceTheme } from "@/components/finance-theme-switcher";
 import { ModelModal } from "@/components/model-modal";
@@ -373,6 +374,7 @@ export function FinanceModal({
   const [renamingChartTabValue, setRenamingChartTabValue] = useState<string>("");
   const [rangeLoading, setRangeLoading] = useState(false);
   const [chartFullscreen, setChartFullscreen] = useState(false);
+  const [fullscreenTickerOpen, setFullscreenTickerOpen] = useState(false);
   const [hoveredBarIndex, setHoveredBarIndex] = useState<number | null>(null);
   const activeChartTab = useMemo(
     () => chartTabs.find(t => t.id === activeChartTabId) ?? chartTabs[0],
@@ -545,6 +547,10 @@ export function FinanceModal({
           setEditingIndicator(null);
           return;
         }
+        if (fullscreenTickerOpen) {
+          setFullscreenTickerOpen(false);
+          return;
+        }
         if (chartFullscreen) {
           setChartFullscreen(false);
           return;
@@ -554,7 +560,7 @@ export function FinanceModal({
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen, modelModalOpen, helpOpen, indicatorModalOpen, chartFullscreen, onClose]);
+  }, [isOpen, modelModalOpen, helpOpen, indicatorModalOpen, fullscreenTickerOpen, chartFullscreen, onClose]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -1947,13 +1953,40 @@ export function FinanceModal({
 
                 <div className="finance-chart-header">
                   <div className="finance-chart-title">
-                    <span className="chart-icon-wrap">
-                      <TrendingUp size={16} />
-                    </span>
+                    {chartFullscreen ? (
+                      <FinanceFullscreenTickerSwitcher
+                        currentSymbol={data.symbol}
+                        currentEodTicker={data.eod_ticker}
+                        currentYahooSymbol={data.yahoo_symbol}
+                        currentName={data.long_name || data.short_name || data.symbol}
+                        currentPrice={data.price}
+                        currentCurrency={data.currency}
+                        currentChangePct={data.change_percent}
+                        loading={loading}
+                        watchlist={watchlist}
+                        watchlists={watchlists}
+                        activeListId={activeListId}
+                        watchlistLoading={watchlistLoading}
+                        quickSuggestions={QUICK_SUGGESTIONS}
+                        isOpen={fullscreenTickerOpen}
+                        onOpenChange={setFullscreenTickerOpen}
+                        onSelectTicker={async (target, displayName) => {
+                          setQuery(displayName || target);
+                          await loadDetails(target);
+                        }}
+                        onSelectWatchlistTab={handleSelectWatchlistTab}
+                      />
+                    ) : (
+                      <span className="chart-icon-wrap">
+                        <TrendingUp size={16} />
+                      </span>
+                    )}
                     <div>
-                      <strong>
-                        {data.long_name || data.short_name || data.symbol} ({data.symbol}) — {activeChartTab.name}
-                      </strong>
+                      {!chartFullscreen && (
+                        <strong>
+                          {data.long_name || data.short_name || data.symbol} ({data.symbol}) — {activeChartTab.name}
+                        </strong>
+                      )}
                       <small>
                         {filteredBars.length} points · {TIMEFRAME_LABELS[activeChartTab.timeframe]} · Barres :{" "}
                         {BAR_INTERVAL_LABELS[activeChartTab.barInterval]} ·{" "}
@@ -2019,7 +2052,12 @@ export function FinanceModal({
                     <button
                       type="button"
                       className={`finance-chart-fullscreen-btn${chartFullscreen ? " active" : ""}`}
-                      onClick={() => setChartFullscreen(prev => !prev)}
+                      onClick={() => {
+                        setChartFullscreen(prev => {
+                          if (prev) setFullscreenTickerOpen(false);
+                          return !prev;
+                        });
+                      }}
                       title={
                         chartFullscreen
                           ? "Revenir au mode réduit (Échap)"
@@ -2032,6 +2070,15 @@ export function FinanceModal({
                     </button>
                   </div>
                 </div>
+
+                {chartFullscreen && error && (
+                  <div className="finance-modal-error" role="alert">
+                    <span>⚠️ {error}</span>
+                    <button type="button" onClick={() => setError(null)} aria-label="Fermer l'erreur">
+                      <X size={14} /> Fermer
+                    </button>
+                  </div>
+                )}
 
                 {!chartFullscreen && (
                   <div className="finance-timeframe-selector finance-chart-view-toggle">

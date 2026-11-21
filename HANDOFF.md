@@ -10,7 +10,9 @@ Application de chat IA multi-fournisseurs (`tchataiperso`) composée d'un backen
 - Le connecteur agentique **Hermes Agent** et la recherche approfondie **Google Deep Research** (Interactions API).
 
 ## 2. Current Objective
-1. **Page d'accueil Galerie de Cartes + Couverture personnalisée sur les Documents Illustrés (`VisualDocGallery` + `/api/visual-docs/{doc_id}/cover`)** :
+1. **Changement de ticker en mode Plein Écran du graphique financier (`FinanceFullscreenTickerSwitcher` dans `FinanceModal`)** :
+   - Permet de rechercher et changer directement le ticker observé sans quitter le mode plein écran du cours (recherche catalogue + saisie libre, filtrage/changement de liste de suivi, boutons Précédent/Suivant, navigation clavier et bandeau d'erreur dédié).
+2. **Page d'accueil Galerie de Cartes + Couverture personnalisée sur les Documents Illustrés (`VisualDocGallery` + `/api/visual-docs/{doc_id}/cover`)** :
    - Remplacement de la barre latérale étroite par une **page d'accueil Galerie pleine largeur** (`VisualDocGallery`) affichant des cartes éditoriales premium pour chaque document (couverture, badge de catégorie, statistiques pages/schémas/liens, forums dédiés, filtres par recherche/catégorie, carte `+ Nouveau document`).
    - Ajout/remplacement/réinitialisation d'une **image de couverture personnalisée (`cover.webp`)** directement depuis chaque carte, depuis l'en-tête du document ou dès l'ingestion.
    - Ouverture en pleine largeur du **détail du document et de la Liseuse 3D** au clic sur une carte, avec bouton **« ← Bibliothèque »**.
@@ -21,6 +23,9 @@ Application de chat IA multi-fournisseurs (`tchataiperso`) composée d'un backen
 **Statut** : Implémenté et vérifié.
 
 ## 3. Completed Work
+- **Sélecteur / recherche de ticker en mode Plein Écran Finances (`FinanceFullscreenTickerSwitcher`)** :
+  - Frontend : nouveau module dédié `frontend/components/finance-fullscreen-ticker-switcher.tsx` (+ `.module.css`) intégré dans l'en-tête du graphique en mode plein écran de `frontend/components/finance-modal.tsx`.
+  - Fonctionnalités : bouton pilule affichant ticker/nom/cours/variation, boutons `←`/`→` pour parcourir la liste de suivi active en un clic, popover de recherche debouncée (`searchFinanceCatalog` + saisie libre ticker/ISIN/société), onglets de changement de liste de suivi, accès rapide (`QUICK_SUGGESTIONS`), navigation clavier (`↑`/`↓`/`Entrée`/`Échap` fermant d'abord le popover avant de quitter le plein écran) et bandeau d'erreur visible en plein écran.
 - **Sélecteur de modèle dédié dans Documents Illustrés (`Gemini 3.8 Flash`, `Gemini 4 Hydrogen`, `Gemini 4 Neon`)** :
   - Backend : ajout de `google/gemini-4-neon` (`1M` tokens, vision, raisonnement) dans `DEFAULT_GOOGLE_CLOUD_MODELS` (`backend/app/config.py`).
   - Frontend : sélecteur de modèle dédié dans l'en-tête de `VisualDocModal` proposant uniquement ces 3 modèles (mémorisé dans `localStorage`), automatiquement appliqué au clic sur « Poser des questions » ou « Vocal Plein Écran » (galerie et vue détail) via `chat-app.tsx`.
@@ -67,6 +72,7 @@ Application de chat IA multi-fournisseurs (`tchataiperso`) composée d'un backen
 
 ## 5. Modified Files
 - Créés (session courante) :
+  - `frontend/components/finance-fullscreen-ticker-switcher.tsx`, `frontend/components/finance-fullscreen-ticker-switcher.module.css`.
   - `frontend/components/visual-doc-gallery.tsx`, `frontend/components/visual-doc-gallery.module.css`.
   - `backend/app/visual_doc_links.py`, `backend/app/visual_doc_profiles.py`.
   - `backend/migrations/versions/0029_add_visual_doc_category.py`, `backend/migrations/versions/0030_add_visual_doc_links.py`.
@@ -75,17 +81,16 @@ Application de chat IA multi-fournisseurs (`tchataiperso`) composée d'un backen
   - `backend/migrations/versions/0028_add_user_default_voice.py`.
 - Modifiés (session courante) :
   - `backend/app/context.py`, `backend/app/visual_documents.py`, `backend/app/routers/visual_docs.py`, `backend/app/routers/messages.py`, `backend/app/routers/finance.py`, `backend/tests/test_visual_documents.py`.
-  - `frontend/components/visual-doc-modal.tsx`, `frontend/components/visual-doc-modal.module.css`, `frontend/lib/api.ts`.
+  - `frontend/components/finance-modal.tsx`, `frontend/components/visual-doc-modal.tsx`, `frontend/components/visual-doc-modal.module.css`, `frontend/lib/api.ts`.
   - `backend/app/models.py`, `backend/app/cli.py`, `backend/app/main.py`, `backend/app/voice.py`, `backend/app/schemas.py`, `backend/app/routers/settings.py`, `backend/app/routers/voice.py`, `backend/app/serializers.py`, `backend/tests/test_settings.py`.
   - `frontend/lib/api.ts`, `frontend/components/settings-modal.tsx`, `frontend/components/chat-app.tsx`, `frontend/app/globals.css`, `frontend/app/interface-themes.css`, `HANDOFF.md`.
 - Autres fichiers déjà modifiés/créés dans l'arbre de travail (sessions précédentes — installeur, Mode Vocal Plein Écran & Rapports Financiers) :
   - `scripts/install.sh`, `scripts/install_lib/*`, `.env.example`, `README.md`, `backend/app/voice_sanitize.py`, `backend/app/routers/finance.py`, `backend/app/routers/system.py`, `frontend/components/voice-fullscreen-modal.tsx`, `frontend/components/finance-reports-panel.tsx`, etc.
 
 ## 6. Verification
-- `cd backend && .venv/bin/python -m pytest tests/test_visual_documents.py tests/test_context.py -q` : **RÉUSSI** (`39 passed`, incluant `test_visual_doc_custom_cover_upload_serve_and_reset` et `test_filter_visual_doc_forum_sources_drops_offtopic_results`).
-- `cd frontend && npx tsc --noEmit` : **RÉUSSI** (0 erreur).
-- `cd frontend && npx eslint lib/visual-doc-markdown.ts` : **RÉUSSI** (0 erreur).
-- Non exécutés : redémarrage des conteneurs Docker `clair-api` / `clair-web` (`./scripts/compose.sh up -d --build clair-api clair-web`).
+- `cd frontend && npx tsc --noEmit && npx eslint components/finance-fullscreen-ticker-switcher.tsx` : **RÉUSSI** (0 erreur, 0 avertissement).
+- `cd backend && .venv/bin/python -m pytest tests/test_visual_documents.py tests/test_context.py -q` : **RÉUSSI** (session précédente, non relancé — changement frontend uniquement).
+- Non exécutés : redémarrage du conteneur Docker `clair-web` (`./scripts/compose.sh up -d --build clair-web`).
 
 ## 7. Known Issues and Risks
 - Sur un PC Windows, exécuter `./scripts/install.sh` depuis **WSL2** (Ubuntu/Debian) avec Docker Desktop actif côté Windows.
