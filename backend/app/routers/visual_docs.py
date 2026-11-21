@@ -37,9 +37,11 @@ from ..visual_documents import (
     SLUG_RE,
     ingest_visual_document,
     make_visual_doc_slug,
+    remove_visual_doc_cover_image,
     remove_visual_doc_dir,
     remove_visual_doc_prefixed_assets,
     resolve_visual_doc_asset,
+    save_visual_doc_cover_image,
 )
 
 router = APIRouter(tags=["visual-docs"])
@@ -67,6 +69,7 @@ def list_visual_doc_categories(
 @router.get("/api/visual-docs")
 def list_visual_docs(
     user: User = Depends(current_user),
+    settings: Settings = Depends(get_settings),
     sessions: sessionmaker = Depends(get_sessions),
 ):
     with sessions() as db:
@@ -75,13 +78,14 @@ def list_visual_docs(
             .where(VisualDocument.user_id == user.id)
             .order_by(VisualDocument.updated_at.desc(), VisualDocument.created_at.desc())
         )
-        return [visual_doc_json(doc, detail=False) for doc in docs]
+        return [visual_doc_json(doc, detail=False, app_data_dir=settings.app_data_dir) for doc in docs]
 
 
 @router.post("/api/visual-docs", status_code=201)
 async def create_visual_doc(
     files: list[UploadFile] = File(...),
     supplementary_files: list[UploadFile] | None = File(default=None),
+    cover_image: UploadFile | None = File(default=None),
     title: str = Form(""),
     doc_category: str = Form(""),
     links: str = Form(""),
@@ -125,6 +129,16 @@ async def create_visual_doc(
                 raise HTTPException(413, f"La taille totale des fichiers dépasse {max(settings.max_upload_mb, 40)} Mo.")
             s_name = Path((supp_up.filename or "complement.pdf").replace("\\", "/")).name[:200] or "complement.pdf"
             prepared_supp_files.append((s_name, s_raw))
+
+    cover_raw_data: tuple[str, bytes] | None = None
+    if cover_image is not None:
+        try:
+            c_raw = await cover_image.read(15 * 1024 * 1024 + 1)
+        finally:
+            await cover_image.close()
+        if c_raw:
+            c_name = Path((cover_image.filename or "cover.png").replace("\\", "/")).name[:200] or "cover.png"
+            cover_raw_data = (c_name, c_raw)
 
     first_name = prepared_files[0][0]
     default_title = Path(first_name).stem.replace("_", " ").replace("-", " ").strip()[:180] or "Document illustré"
@@ -201,6 +215,18 @@ async def create_visual_doc(
                 detail_msg = getattr(outcome, "detail", str(outcome))
                 warnings_combined.append(f"Lien ignoré ({u}) : {detail_msg}")
 
+    if cover_raw_data is not None:
+        try:
+            await asyncio.to_thread(
+                save_visual_doc_cover_image,
+                settings.app_data_dir,
+                doc_id,
+                cover_raw_data[1],
+                cover_raw_data[0],
+            )
+        except Exception as cover_exc:
+            warnings_combined.append(f"Image de couverture ignorée : {getattr(cover_exc, 'detail', str(cover_exc))}")
+
     try:
         with sessions() as db:
             item = VisualDocument(
@@ -223,7 +249,7 @@ async def create_visual_doc(
             db.add(item)
             db.commit()
             db.refresh(item)
-            return visual_doc_json(item, detail=True)
+            return visual_doc_json(item, detail=True, app_data_dir=settings.app_data_dir)
     except Exception:
         remove_visual_doc_dir(settings.app_data_dir, doc_id)
         raise
@@ -233,6 +259,7 @@ async def create_visual_doc(
 def read_visual_doc(
     doc_id: str,
     user: User = Depends(current_user),
+    settings: Settings = Depends(get_settings),
     sessions: sessionmaker = Depends(get_sessions),
 ):
     with sessions() as db:
@@ -241,7 +268,7 @@ def read_visual_doc(
         )
         if not item:
             raise HTTPException(404, "Document illustré introuvable")
-        return visual_doc_json(item, detail=True)
+        return visual_doc_json(item, detail=True, app_data_dir=settings.app_data_dir)
 
 
 @router.patch("/api/visual-docs/{doc_id}")
@@ -249,6 +276,7 @@ def update_visual_doc(
     doc_id: str,
     body: UpdateVisualDocumentRequest,
     user: User = Depends(current_user),
+    settings: Settings = Depends(get_settings),
     sessions: sessionmaker = Depends(get_sessions),
 ):
     with sessions() as db:
@@ -266,7 +294,70 @@ def update_visual_doc(
         item.updated_at = now()
         db.commit()
         db.refresh(item)
-        return visual_doc_json(item, detail=True)
+        return visual_doc_json(item, detail=True, app_data_dir=settings.app_data_dir)
+
+
+@router.post("/api/visual-docs/{doc_id}/cover")
+async def upload_visual_doc_cover(
+    doc_id: str,
+    file: UploadFile = File(...),
+    user: User = Depends(current_user),
+    settings: Settings = Depends(get_settings),
+    sessions: sessionmaker = Depends(get_sessions),
+):
+    try:
+        raw = await file.read(15 * 1024 * 1024 + 1)
+    finally:
+        await file.close()
+    if not raw:
+        raise HTTPException(422, "L'image de couverture est vide.")
+    if len(raw) > 15 * 1024 * 1024:
+        raise HTTPException(413, "L'image de couverture ne doit pas dépasser 15 Mo.")
+    clean_name = Path((file.filename or "cover.png").replace("\\", "/")).name[:200] or "cover.png"
+
+    with sessions() as db:
+        item = db.scalar(
+            select(VisualDocument).where(VisualDocument.id == doc_id, VisualDocument.user_id == user.id)
+        )
+        if not item:
+            raise HTTPException(404, "Document illustré introuvable")
+
+    await asyncio.to_thread(save_visual_doc_cover_image, settings.app_data_dir, doc_id, raw, clean_name)
+
+    with sessions() as db:
+        item = db.scalar(
+            select(VisualDocument)
+            .where(VisualDocument.id == doc_id, VisualDocument.user_id == user.id)
+            .with_for_update()
+        )
+        if not item:
+            raise HTTPException(404, "Document illustré introuvable")
+        item.updated_at = now()
+        db.commit()
+        db.refresh(item)
+        return visual_doc_json(item, detail=True, app_data_dir=settings.app_data_dir)
+
+
+@router.delete("/api/visual-docs/{doc_id}/cover")
+def reset_visual_doc_cover(
+    doc_id: str,
+    user: User = Depends(current_user),
+    settings: Settings = Depends(get_settings),
+    sessions: sessionmaker = Depends(get_sessions),
+):
+    with sessions() as db:
+        item = db.scalar(
+            select(VisualDocument)
+            .where(VisualDocument.id == doc_id, VisualDocument.user_id == user.id)
+            .with_for_update()
+        )
+        if not item:
+            raise HTTPException(404, "Document illustré introuvable")
+        remove_visual_doc_cover_image(settings.app_data_dir, doc_id)
+        item.updated_at = now()
+        db.commit()
+        db.refresh(item)
+        return visual_doc_json(item, detail=True, app_data_dir=settings.app_data_dir)
 
 
 @router.delete("/api/visual-docs/{doc_id}", status_code=204)
@@ -371,7 +462,7 @@ async def add_links_to_visual_doc(
         item.updated_at = now()
         db.commit()
         db.refresh(item)
-        return visual_doc_json(item, detail=True)
+        return visual_doc_json(item, detail=True, app_data_dir=settings.app_data_dir)
 
 
 @router.post("/api/visual-docs/{doc_id}/supplementary-files")
@@ -471,7 +562,7 @@ async def add_supplementary_files_to_visual_doc(
         item.updated_at = now()
         db.commit()
         db.refresh(item)
-        return visual_doc_json(item, detail=True)
+        return visual_doc_json(item, detail=True, app_data_dir=settings.app_data_dir)
 
 
 @router.get("/api/visual-docs/{doc_id}/supplementary-files/{link_id}")
@@ -580,7 +671,7 @@ async def refresh_visual_doc_link(
         item.updated_at = now()
         db.commit()
         db.refresh(item)
-        return visual_doc_json(item, detail=True)
+        return visual_doc_json(item, detail=True, app_data_dir=settings.app_data_dir)
 
 
 @router.delete("/api/visual-docs/{doc_id}/links/{link_id}")
@@ -611,7 +702,7 @@ def delete_visual_doc_link(
         item.updated_at = now()
         db.commit()
         db.refresh(item)
-        payload = visual_doc_json(item, detail=True)
+        payload = visual_doc_json(item, detail=True, app_data_dir=settings.app_data_dir)
     if removed_storage:
         remove_supplementary_file(settings.app_data_dir, doc_id, str(removed_storage))
     if removed_prefix:

@@ -3014,6 +3014,13 @@ export type VisualDocSummary = {
   page_count: number;
   figure_count: number;
   link_count?: number;
+  supplementary_docs?: Array<{
+    id: string;
+    title: string;
+    asset_prefix: string;
+    page_count: number;
+  }>;
+  has_custom_cover?: boolean;
   cover_url?: string | null;
   compiled_chars?: number;
   warnings?: string[];
@@ -3038,6 +3045,7 @@ export async function getVisualDoc(docId: string): Promise<VisualDocDetail> {
 export async function ingestVisualDoc(params: {
   files: File[];
   supplementaryFiles?: File[];
+  coverImage?: File | null;
   title?: string;
   docCategory?: string;
   links?: string[];
@@ -3052,6 +3060,9 @@ export async function ingestVisualDoc(params: {
       form.append("supplementary_files", sFile);
     }
   }
+  if (params.coverImage) {
+    form.append("cover_image", params.coverImage);
+  }
   if (params.title?.trim()) {
     form.append("title", params.title.trim());
   }
@@ -3065,6 +3076,21 @@ export async function ingestVisualDoc(params: {
   return api<VisualDocDetail>("/visual-docs", {
     method: "POST",
     body: form,
+  });
+}
+
+export async function uploadVisualDocCover(docId: string, file: File): Promise<VisualDocDetail> {
+  const form = new FormData();
+  form.append("file", file);
+  return api<VisualDocDetail>(`/visual-docs/${docId}/cover`, {
+    method: "POST",
+    body: form,
+  });
+}
+
+export async function resetVisualDocCover(docId: string): Promise<VisualDocDetail> {
+  return api<VisualDocDetail>(`/visual-docs/${docId}/cover`, {
+    method: "DELETE",
   });
 }
 

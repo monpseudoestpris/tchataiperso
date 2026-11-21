@@ -313,3 +313,4 @@ def test_voice_tts_prioritizes_vertex_oauth_and_falls_back_on_402(tmp_path: Path
             assert mock_post.await_count == 2
             first_url = mock_post.await_args_list[0].args[0]
             assert "us-central1-aiplatform.googleapis.com/v1/projects/my-test-project/locations/us-central1/publishers/google/models/gemini-2.5-flash-tts:generateContent" in first_url
+            assert mock_post.await_args_list[0].kwargs["json"]["contents"][0]["role"] == "user"

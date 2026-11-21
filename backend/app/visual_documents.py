@@ -48,7 +48,7 @@ MAX_PAGE_RENDER_DIM = 2048
 MAX_FIGURE_RENDER_DIM = 1600
 MAX_VISUAL_CONTEXT_CHARS = 450_000
 
-ASSET_NAME_RE = re.compile(r"^(?:supp_[a-f0-9]{8}_)?(?:page_\d{1,4}|p\d{1,4}_fig\d{1,4})\.webp$")
+ASSET_NAME_RE = re.compile(r"^(?:cover|(?:supp_[a-f0-9]{8}_)?(?:page_\d{1,4}|p\d{1,4}_fig\d{1,4}))\.webp$")
 SUPP_ASSET_PREFIX_RE = re.compile(r"^supp_[a-f0-9]{8}_$")
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,78}[a-z0-9]$")
 _INLINE_MD_IMG_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
@@ -149,6 +149,35 @@ def resolve_visual_doc_asset(app_data_dir: Path, doc_id: str, asset_name: str) -
     if candidate.parent != doc_dir or not candidate.is_file():
         return None
     return candidate
+
+
+def save_visual_doc_cover_image(
+    app_data_dir: Path,
+    doc_id: str,
+    raw_bytes: bytes,
+    filename: str = "cover.png",
+) -> tuple[int, int]:
+    """Valide et enregistre une image de couverture personnalisée (`cover.webp`) pour un document illustré."""
+    if not raw_bytes:
+        raise HTTPException(422, "L'image de couverture est vide.")
+    if len(raw_bytes) > 15 * 1024 * 1024:
+        raise HTTPException(413, "L'image de couverture ne doit pas dépasser 15 Mo.")
+    _validate_image_bytes(raw_bytes, filename)
+    doc_dir = get_visual_doc_dir(app_data_dir, doc_id)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", Image.DecompressionBombWarning)
+        with Image.open(io.BytesIO(raw_bytes)) as pil_img:
+            return _save_pil_webp(pil_img, doc_dir / "cover.webp", max_dim=1200, quality=88)
+
+
+def remove_visual_doc_cover_image(app_data_dir: Path, doc_id: str) -> None:
+    """Supprime l'image de couverture personnalisée (`cover.webp`) pour revenir à la page 1."""
+    path = resolve_visual_doc_asset(app_data_dir, doc_id, "cover.webp")
+    if path is not None:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _sanitize_alt_text(text: str, max_len: int = 900) -> str:
@@ -1034,7 +1063,7 @@ def _format_attached_external_links(external_links: list[dict[str, Any]], max_li
         return ""
     per_link_budget = max(600, max_links_budget // len(valid))
     parts: list[str] = [
-        "=== RESSOURCES COMPLÉMENTAIRES ATTACHÉES AU DOCUMENT (FORUMS, SITES, VIDÉOS YOUTUBE — DONNÉES EXTERNES) ==="
+        "=== RESSOURCES COMPLÉMENTAIRES ATTACHÉES AU DOCUMENT (DOCUMENTS COMPILÉS, EXTENSIONS, FAQ, ERRATA, FORUMS & VIDÉOS) ==="
     ]
     for idx, link in enumerate(valid, start=1):
         ltype = str(link.get("link_type") or "site")
@@ -1047,16 +1076,28 @@ def _format_attached_external_links(external_links: list[dict[str, Any]], max_li
         fname_info = f" · Fichier : {link['filename']}" if link.get("filename") else ""
         duration = f" · Durée : {link['duration']}" if link.get("duration") else ""
         author = f" · Auteur : {link['author']}" if link.get("author") else ""
+        fig_count = int(link.get("figure_count") or 0)
+        pg_count = int(link.get("page_count") or 0)
+        visual_hint = (
+            f" · {pg_count} page(s), {fig_count} schéma(s) WebP illustrables en Markdown `![Légende](/api/docs/...)`"
+            if ltype == "document" and (fig_count > 0 or pg_count > 0)
+            else ""
+        )
         summary_md = str(link.get("summary_markdown") or "").strip()
         raw_text = str(link.get("compiled_markdown") or link.get("extracted_text") or "").strip()
 
-        entry_header = f"--- [Ressource liée R{idx} · {kind_badge}] {ltitle}{fname_info}{author}{duration}\nSource : {lurl}\n"
+        entry_header = f"--- [Ressource liée R{idx} · {kind_badge}] {ltitle}{fname_info}{author}{duration}{visual_hint}\nSource : {lurl}\n"
         body = ""
         if summary_md:
             body += f"Résumé synthétique :\n{summary_md}\n"
         remaining_for_raw = per_link_budget - len(entry_header) - len(body) - 60
         if raw_text and remaining_for_raw > 300:
-            body += f"\nExtrait / Transcription source :\n{raw_text[:remaining_for_raw]}"
+            section_label = (
+                "Markdown compilé avec schémas WebP intégrables :"
+                if ltype == "document" and link.get("compiled_markdown")
+                else "Extrait / Transcription source :"
+            )
+            body += f"\n{section_label}\n{raw_text[:remaining_for_raw]}"
         parts.append((entry_header + body)[:per_link_budget])
     return "\n\n".join(parts)
 

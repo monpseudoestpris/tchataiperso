@@ -44,7 +44,7 @@ import { VoiceRecorderButton } from "@/components/voice-recorder-button";
 import { VoiceSettingsMenu } from "@/components/voice-settings-menu";
 import { synthesizeSpeech } from "@/lib/voice-api";
 import { ApiError, api, attachUrl, attachVisualDocToConversation, createLearnReportFromMessage, createReportFromMessage, detachVisualDocFromConversation, ensureVisualDocFromFinanceReport, errorMessage, fetchTopics, linkConversationToTopic, unlinkConversationFromTopic, skillToSlug, streamMessage, type Attachment, type AuthUser, type Config, type Conversation, type DocumentExtraction, type FamilyGroupInfo, type FinancialDashboardData, type GeneratedSound, type Memory, type Message, type Model, type MultiAgentConfig, type PageBrick, type QuarterlyReport, type SamplingParameters, type Skill, type Source, type StageModelsConfig, type TopicSpace, type VisualDocSummary, type WebPage } from "@/lib/api";
-import { extractDocMetaFromImageSrc, isIncompleteLocalDocImage, isLocalVisualDocImage, linkifyPageCitations, parsePageCitationHref, prepareStreamingVisualMarkdown } from "@/lib/visual-doc-markdown";
+import { extractDocMetaFromImageSrc, isIncompleteLocalDocImage, isLocalVisualDocImage, linkifyPageCitations, parseAssetCitationHref, parsePageCitationHref, prepareStreamingVisualMarkdown } from "@/lib/visual-doc-markdown";
 import { collectConversationCanvasFiles, createZipBlob, extractCanvasFiles, hasExplicitCanvasFiles, triggerBlobDownload, type CanvasFile } from "@/lib/code-canvas";
 import { hasInteractiveLearnModules, stripInteractiveModulesForBody } from "@/lib/learn-parser";
 import { useModelFavorites } from "@/lib/model-favorites";
@@ -491,12 +491,12 @@ function MarkdownInlineImage({
               onClick={e => {
                 e.stopPropagation();
                 onOpenLightbox({
-                  src: `/api/docs/${docMeta.slug}/page_${docMeta.page}.webp`,
+                  src: `/api/docs/${docMeta.slug}/${docMeta.assetPrefix}page_${docMeta.page}.webp`,
                   title: `${matchedVisualDoc?.title || "Livret"} — Page ${docMeta.page}`,
-                  docSlug: docMeta.slug,
+                  docSlug: docMeta.assetPrefix ? undefined : docMeta.slug,
                   docTitle: matchedVisualDoc?.title,
-                  docPage: docMeta.page,
-                  docPageCount: matchedVisualDoc?.page_count,
+                  docPage: docMeta.assetPrefix ? undefined : docMeta.page,
+                  docPageCount: docMeta.assetPrefix ? undefined : matchedVisualDoc?.page_count,
                 });
               }}
             >
@@ -805,6 +805,26 @@ const MessageView = memo(function MessageView({
               }
             >
               <BookOpen size={11} />
+              <span>{children}</span>
+            </button>
+          );
+        }
+        const assetCitation = parseAssetCitationHref(href);
+        if (assetCitation) {
+          const matchedDoc = visualDocs?.find(d => d.slug === assetCitation.slug);
+          return (
+            <button
+              type="button"
+              className="vdoc-page-citation-pill"
+              title={`Afficher le schéma extrait${matchedDoc ? ` (${matchedDoc.title})` : ""}`}
+              onClick={() =>
+                openLightbox({
+                  src: `/api/docs/${assetCitation.slug}/${assetCitation.filename}`,
+                  title: `${matchedDoc?.title || "Document"} — ${assetCitation.page ? `Page ${assetCitation.page}` : "Illustration"}`,
+                })
+              }
+            >
+              <Eye size={11} />
               <span>{children}</span>
             </button>
           );

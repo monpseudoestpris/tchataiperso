@@ -5,9 +5,11 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   ArrowDown,
+  ArrowLeft,
   ArrowUp,
   AudioLines,
   BookOpen,
+  Camera,
   Check,
   CircleAlert,
   Code2,
@@ -36,12 +38,14 @@ import {
   ingestVisualDoc,
   listVisualDocs,
   updateVisualDoc,
+  uploadVisualDocCover,
   VISUAL_DOC_CATEGORIES,
   type VisualDocCategoryId,
   type VisualDocDetail,
   type VisualDocSummary,
 } from "@/lib/api";
 import { VisualDocBookReader } from "./visual-doc-book-reader";
+import { VisualDocGallery } from "./visual-doc-gallery";
 import { VisualDocLinksPanel } from "./visual-doc-links-panel";
 import styles from "./visual-doc-modal.module.css";
 
@@ -115,18 +119,22 @@ export function VisualDocModal({
   // État d'ingestion
   const [queuedFiles, setQueuedFiles] = useState<File[]>([]);
   const [queuedSuppFiles, setQueuedSuppFiles] = useState<File[]>([]);
+  const [coverFileInput, setCoverFileInput] = useState<File | null>(null);
   const [titleInput, setTitleInput] = useState("");
   const [categoryInput, setCategoryInput] = useState<VisualDocCategoryId>("boardgame");
   const [queuedLinks, setQueuedLinks] = useState<string[]>([]);
   const [linkDraftInput, setLinkDraftInput] = useState("");
   const [enrichVision, setEnrichVision] = useState(true);
   const [ingesting, setIngesting] = useState(false);
+  const [uploadingDetailCover, setUploadingDetailCover] = useState(false);
   const [dragActive, setDragActive] = useState(false);
   const [zoomedAsset, setZoomedAsset] = useState<{ src: string; caption: string } | null>(null);
 
   const pdfInputRef = useRef<HTMLInputElement>(null);
   const imgInputRef = useRef<HTMLInputElement>(null);
   const suppIngestInputRef = useRef<HTMLInputElement>(null);
+  const ingestCoverInputRef = useRef<HTMLInputElement>(null);
+  const detailCoverInputRef = useRef<HTMLInputElement>(null);
 
   // Aperçus miniatures temporaires pour la file d'images à ingérer
   const previewUrls = useMemo(
@@ -155,10 +163,11 @@ export function VisualDocModal({
         setDocs(items);
         if (initialDocId && items.some((d) => d.id === initialDocId)) {
           setSelectedDocId(initialDocId);
-        } else if (items.length > 0 && !selectedDocId) {
-          setSelectedDocId(items[0].id);
-        } else if (items.length === 0) {
-          setTab("ingest");
+        } else {
+          setSelectedDocId(null);
+          if (items.length === 0) {
+            setTab("ingest");
+          }
         }
       } catch (err) {
         if (!cancelled) setError(errorMessage(err));
@@ -329,6 +338,7 @@ export function VisualDocModal({
       const created = await ingestVisualDoc({
         files: queuedFiles,
         supplementaryFiles: queuedSuppFiles.length > 0 ? queuedSuppFiles : undefined,
+        coverImage: coverFileInput,
         title: titleInput.trim() || undefined,
         docCategory: categoryInput,
         links: allInitialLinks.length > 0 ? allInitialLinks : undefined,
@@ -341,6 +351,7 @@ export function VisualDocModal({
       setDetailSubTab("book");
       setQueuedFiles([]);
       setQueuedSuppFiles([]);
+      setCoverFileInput(null);
       setQueuedLinks([]);
       setLinkDraftInput("");
       setTitleInput("");
@@ -387,7 +398,7 @@ export function VisualDocModal({
       const remaining = docs.filter((d) => d.id !== docId);
       setDocs(remaining);
       if (selectedDocId === docId) {
-        setSelectedDocId(remaining[0]?.id ?? null);
+        setSelectedDocId(null);
         setDetail(null);
       }
       if (attachedDocIds.includes(docId) && onDetachFromConversation) {
@@ -434,7 +445,10 @@ export function VisualDocModal({
                 role="tab"
                 aria-selected={tab === "library"}
                 className={`${styles.modeTab} ${tab === "library" ? styles.modeTabActive : ""}`}
-                onClick={() => setTab("library")}
+                onClick={() => {
+                  setTab("library");
+                  setSelectedDocId(null);
+                }}
                 disabled={ingesting}
               >
                 <Layers size={14} />
@@ -667,14 +681,36 @@ export function VisualDocModal({
                     disabled={ingesting}
                   />
                 </div>
-                <button
-                  type="submit"
-                  className={styles.primaryBtn}
-                  disabled={!queuedFiles.length || ingesting}
-                >
-                  {ingesting ? <LoaderCircle size={16} className="spin" /> : <Sparkles size={16} />}
-                  <span>{ingesting ? "Compilation Mistral OCR + WebP…" : "Ingérer & Compiler"}</span>
-                </button>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <input
+                    ref={ingestCoverInputRef}
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"
+                    style={{ display: "none" }}
+                    onChange={(e) => {
+                      if (e.target.files?.[0]) setCoverFileInput(e.target.files[0]);
+                      e.target.value = "";
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className={styles.secondaryBtn}
+                    disabled={ingesting}
+                    onClick={() => ingestCoverInputRef.current?.click()}
+                    title="Choisir une image de couverture personnalisée pour la carte de la bibliothèque"
+                  >
+                    <Camera size={14} />
+                    <span>{coverFileInput ? `Image : ${coverFileInput.name.slice(0, 18)}` : "Image de couverture"}</span>
+                  </button>
+                  <button
+                    type="submit"
+                    className={styles.primaryBtn}
+                    disabled={!queuedFiles.length || ingesting}
+                  >
+                    {ingesting ? <LoaderCircle size={16} className="spin" /> : <Sparkles size={16} />}
+                    <span>{ingesting ? "Compilation Mistral OCR + WebP…" : "Ingérer & Compiler"}</span>
+                  </button>
+                </div>
               </div>
 
               <div className={styles.ingestLinksBox}>
@@ -799,63 +835,56 @@ export function VisualDocModal({
                 </div>
               )}
             </form>
+          ) : !selectedDocId ? (
+            <VisualDocGallery
+              docs={docs}
+              loading={loadingList}
+              attachedDocIds={attachedDocIds}
+              onSelectDoc={(docId) => setSelectedDocId(docId)}
+              onStartChatWithDoc={async (doc) => {
+                await onStartChatWithDoc(doc);
+                onClose();
+              }}
+              onStartVoiceWithDoc={
+                onStartVoiceWithDoc
+                  ? async (doc) => {
+                      await onStartVoiceWithDoc(doc);
+                      onClose();
+                    }
+                  : undefined
+              }
+              onDeleteDoc={handleDeleteDoc}
+              onDocCoverUpdated={(updated) => {
+                setDocs((prev) => prev.map((d) => (d.id === updated.id ? { ...d, ...updated } : d)));
+                if (detail?.id === updated.id) setDetail(updated);
+              }}
+              onOpenIngest={() => setTab("ingest")}
+              onError={setError}
+            />
           ) : (
-            <div className={styles.libraryLayout}>
-              <aside className={styles.sidebarList} aria-label="Mes documents compilés">
-                {loadingList ? (
-                  <div className={styles.emptyState}>
-                    <LoaderCircle size={20} className="spin" />
-                    <span>Chargement…</span>
-                  </div>
-                ) : docs.length === 0 ? (
-                  <div className={styles.emptyState}>
-                    <BookOpen size={24} />
-                    <p>Aucun document illustré compilé.</p>
-                    <button type="button" className={styles.primaryBtn} onClick={() => setTab("ingest")}>
-                      <Plus size={14} />
-                      <span>Ingérer un premier document</span>
-                    </button>
-                  </div>
-                ) : (
-                  docs.map((doc) => {
-                    const isLinked = attachedDocIds.includes(doc.id);
-                    return (
-                      <button
-                        key={doc.id}
-                        type="button"
-                        className={`${styles.docCard} ${selectedDocId === doc.id ? styles.docCardActive : ""}`}
-                        onClick={() => setSelectedDocId(doc.id)}
-                      >
-                        {doc.cover_url ? (
-                          <img src={doc.cover_url} alt={doc.title} className={styles.docCover} loading="lazy" />
-                        ) : (
-                          <div className={styles.docCover} />
-                        )}
-                        <div className={styles.docCardInfo}>
-                          <span className={styles.docCardTitle} title={doc.title}>
-                            {doc.title}
-                          </span>
-                          <div className={styles.docCardMeta}>
-                            <span className={styles.badge}>
-                              {doc.page_count} p. · {doc.figure_count} schéma{doc.figure_count > 1 ? "s" : ""}
-                              {(doc.link_count ?? 0) > 0 ? ` · ${doc.link_count} lien${(doc.link_count ?? 0) > 1 ? "s" : ""}` : ""}
-                            </span>
-                            {isLinked && <span className={`${styles.badge} ${styles.badgeLinked}`}>Actif ici</span>}
-                          </div>
-                          <div className={styles.docCardMeta}>
-                            <span>
-                              {findCategorySpec(doc.doc_category).emoji}{" "}
-                              {doc.doc_category_label || findCategorySpec(doc.doc_category).shortLabel}
-                            </span>
-                            {doc.vision_enriched && <span>· Vision IA</span>}
-                          </div>
-                        </div>
-                      </button>
-                    );
-                  })
-                )}
-              </aside>
-
+            <div className={styles.fullDetailLayout}>
+              <input
+                ref={detailCoverInputRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"
+                style={{ display: "none" }}
+                onChange={async (e) => {
+                  const f = e.target.files?.[0];
+                  if (!f || !activeDetail) return;
+                  setUploadingDetailCover(true);
+                  setError("");
+                  try {
+                    const updated = await uploadVisualDocCover(activeDetail.id, f);
+                    setDetail(updated);
+                    setDocs((prev) => prev.map((d) => (d.id === updated.id ? { ...d, ...updated } : d)));
+                  } catch (err) {
+                    setError(errorMessage(err));
+                  } finally {
+                    setUploadingDetailCover(false);
+                    if (detailCoverInputRef.current) detailCoverInputRef.current.value = "";
+                  }
+                }}
+              />
               <section className={styles.detailPane}>
                 {loadingDetail ? (
                   <div className={styles.emptyState}>
@@ -865,38 +894,67 @@ export function VisualDocModal({
                 ) : !activeDetail ? (
                   <div className={styles.emptyState}>
                     <BookOpen size={28} />
-                    <p>Sélectionnez un document dans la bibliothèque ou ingérez un nouveau PDF / jeu d&apos;images.</p>
+                    <p>Document introuvable.</p>
+                    <button
+                      type="button"
+                      className={styles.secondaryBtn}
+                      onClick={() => setSelectedDocId(null)}
+                    >
+                      <ArrowLeft size={14} />
+                      <span>Retour à la bibliothèque</span>
+                    </button>
                   </div>
                 ) : (
                   <>
                     <div className={styles.detailHeader}>
-                      <div className={styles.detailTitleBlock}>
-                        <h3>{activeDetail.title}</h3>
-                        <div className={styles.detailSubMetaRow}>
-                          <select
-                            className={styles.categorySelectInline}
-                            value={activeDetail.doc_category || "general"}
-                            onChange={(e) => void handleChangeCategory(activeDetail.id, e.target.value)}
-                            aria-label="Type du document illustré"
-                            title="Changer le type du document et les forums spécialisés interrogés"
-                          >
-                            {VISUAL_DOC_CATEGORIES.map((cat) => (
-                              <option key={cat.id} value={cat.id}>
-                                {cat.emoji} {cat.shortLabel}
-                              </option>
-                            ))}
-                          </select>
-                          <small>
-                            {activeDetail.page_count} page{activeDetail.page_count > 1 ? "s" : ""} ·{" "}
-                            {activeDetail.figure_count} schéma{activeDetail.figure_count > 1 ? "s" : ""} ·{" "}
-                            <span className={styles.forumInlinePill}>
-                              <Globe size={11} />
-                              <span>{activeDetail.forum_label || findCategorySpec(activeDetail.doc_category).forumLabel}</span>
-                            </span>
-                          </small>
+                      <div className={styles.detailTitleRow}>
+                        <button
+                          type="button"
+                          className={styles.backToGalleryBtn}
+                          onClick={() => setSelectedDocId(null)}
+                          title="Revenir à la galerie des documents"
+                        >
+                          <ArrowLeft size={15} />
+                          <span>Bibliothèque</span>
+                        </button>
+                        <div className={styles.detailTitleBlock}>
+                          <h3>{activeDetail.title}</h3>
+                          <div className={styles.detailSubMetaRow}>
+                            <select
+                              className={styles.categorySelectInline}
+                              value={activeDetail.doc_category || "general"}
+                              onChange={(e) => void handleChangeCategory(activeDetail.id, e.target.value)}
+                              aria-label="Type du document illustré"
+                              title="Changer le type du document et les forums spécialisés interrogés"
+                            >
+                              {VISUAL_DOC_CATEGORIES.map((cat) => (
+                                <option key={cat.id} value={cat.id}>
+                                  {cat.emoji} {cat.shortLabel}
+                                </option>
+                              ))}
+                            </select>
+                            <small>
+                              {activeDetail.page_count} page{activeDetail.page_count > 1 ? "s" : ""} ·{" "}
+                              {activeDetail.figure_count} schéma{activeDetail.figure_count > 1 ? "s" : ""} ·{" "}
+                              <span className={styles.forumInlinePill}>
+                                <Globe size={11} />
+                                <span>{activeDetail.forum_label || findCategorySpec(activeDetail.doc_category).forumLabel}</span>
+                              </span>
+                            </small>
+                          </div>
                         </div>
                       </div>
                       <div className={styles.detailActions}>
+                        <button
+                          type="button"
+                          className={styles.secondaryBtn}
+                          disabled={uploadingDetailCover}
+                          onClick={() => detailCoverInputRef.current?.click()}
+                          title="Ajouter ou changer l'image de couverture de ce document"
+                        >
+                          {uploadingDetailCover ? <LoaderCircle size={14} className="spin" /> : <Camera size={14} />}
+                          <span>Couverture</span>
+                        </button>
                         <button
                           type="button"
                           className={styles.primaryBtn}

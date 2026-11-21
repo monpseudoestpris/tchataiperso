@@ -920,6 +920,100 @@ def test_owner_encrypted_publisher_pdf_succeeds_while_user_locked_pdf_returns_42
         assert locked_resp.status_code == 422
 
 
+def test_visual_doc_custom_cover_upload_serve_and_reset(tmp_path):
+    """Vérifie l'ajout, la mise à jour, la lecture sécurisée et la réinitialisation
+    d'une image de couverture personnalisée (`cover.webp`) sur un Document Illustré.
+    """
+    settings = Settings(_env_file=None, app_data_dir=tmp_path, demo_mode=True)
+    app = _create_app_with_users(settings)
+
+    page_png = _make_png_bytes((200, 180, 140))
+    custom_cover_png = _make_png_bytes((30, 80, 160))
+
+    with _login(app, settings, "alice") as alice:
+        # 1. Ingestion standard : cover_url pointe sur page_1.webp, has_custom_cover == False
+        create_resp = alice.post(
+            "/api/visual-docs",
+            files=[("files", ("page1.png", page_png, "image/png"))],
+            data={"title": "Règle Viticulture", "doc_category": "boardgame"},
+        )
+        assert create_resp.status_code == 201
+        doc = create_resp.json()
+        assert doc["has_custom_cover"] is False
+        assert doc["cover_url"] == f"/api/docs/{doc['slug']}/page_1.webp"
+
+        # 2. Téléversement d'une couverture personnalisée
+        cover_resp = alice.post(
+            f"/api/visual-docs/{doc['id']}/cover",
+            files={"file": ("boite-jeu.png", custom_cover_png, "image/png")},
+        )
+        assert cover_resp.status_code == 200
+        updated = cover_resp.json()
+        assert updated["has_custom_cover"] is True
+        assert updated["cover_url"].startswith(f"/api/docs/{doc['slug']}/cover.webp?v=")
+
+        # 3. La liste `GET /api/visual-docs` expose bien `has_custom_cover` et l'URL cover.webp
+        list_resp = alice.get("/api/visual-docs")
+        assert list_resp.status_code == 200
+        listed = next(item for item in list_resp.json() if item["id"] == doc["id"])
+        assert listed["has_custom_cover"] is True
+        assert listed["cover_url"].startswith(f"/api/docs/{doc['slug']}/cover.webp?v=")
+
+        # 4. L'asset `cover.webp` est servi en 200 `image/webp` à Alice
+        img_resp = alice.get(updated["cover_url"])
+        assert img_resp.status_code == 200
+        assert img_resp.headers["content-type"] == "image/webp"
+
+        # 5. Un fichier non-image est rejeté (422)
+        bad_resp = alice.post(
+            f"/api/visual-docs/{doc['id']}/cover",
+            files={"file": ("notes.txt", b"not an image", "text/plain")},
+        )
+        assert bad_resp.status_code == 422
+
+        # 6. Réinitialisation de la couverture : retour sur page_1.webp
+        reset_resp = alice.delete(f"/api/visual-docs/{doc['id']}/cover")
+        assert reset_resp.status_code == 200
+        reverted = reset_resp.json()
+        assert reverted["has_custom_cover"] is False
+        assert reverted["cover_url"] == f"/api/docs/{doc['slug']}/page_1.webp"
+        assert alice.get(f"/api/docs/{doc['slug']}/cover.webp").status_code == 404
+
+    # 7. Isolation inter-utilisateurs : Bob ne peut pas modifier la couverture d'Alice
+    with _login(app, settings, "bob") as bob:
+        forbidden = bob.post(
+            f"/api/visual-docs/{doc['id']}/cover",
+            files={"file": ("hack.png", custom_cover_png, "image/png")},
+        )
+        assert forbidden.status_code == 404
+
+
+def test_filter_visual_doc_forum_sources_drops_offtopic_results():
+    """Vérifie que les résultats web hors-sujet (ex. PPT 'Transmission de puissance' sur slideserve.com)
+    sont écartés lorsque le document attaché est 'Regle res arcana'.
+    """
+    from app.visual_doc_profiles import filter_visual_doc_forum_sources
+
+    docs = [{"title": "Regle res arcana", "doc_category": "boardgame"}]
+    raw_sources = [
+        {
+            "title": "Res Arcana: Lux et Tenebrae FAQ",
+            "snippet": "Scrolls, demons and 5-player rules on BoardGameGeek.",
+            "url": "https://boardgamegeek.com/thread/234567/res-arcana-lux-et-tenebrae",
+        },
+        {
+            "title": "PPT - Chapitre VIII Transmission de puissance",
+            "snippet": "Cours de mécanique industrielle sur les engrenages.",
+            "url": "https://www.slideserve.com/user/transmission-de-puissance",
+        },
+    ]
+    filtered = filter_visual_doc_forum_sources(raw_sources, docs)
+    assert len(filtered) == 1
+    assert "boardgamegeek.com" in filtered[0]["url"]
+
+
+
+
 
 
 

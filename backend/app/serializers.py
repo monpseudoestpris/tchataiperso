@@ -264,12 +264,31 @@ def blog_json(item: Blog, include_posts: bool = False) -> dict:
     return result
 
 
-def visual_doc_json(item: VisualDocument, detail: bool = False) -> dict:
+def visual_doc_json(item: VisualDocument, detail: bool = False, app_data_dir=None) -> dict:
     from .visual_doc_profiles import get_visual_doc_category_spec, normalize_visual_doc_category
+    from .visual_documents import resolve_visual_doc_asset
 
     cat_id = normalize_visual_doc_category(getattr(item, "doc_category", None))
     cat_spec = get_visual_doc_category_spec(cat_id)
     raw_links = item.external_links if isinstance(getattr(item, "external_links", None), list) else []
+    has_custom_cover = False
+    cover_url: str | None = f"/api/docs/{item.slug}/page_1.webp" if (item.page_count or 0) > 0 else None
+    if app_data_dir is not None and resolve_visual_doc_asset(app_data_dir, item.id, "cover.webp") is not None:
+        has_custom_cover = True
+        ts = int(item.updated_at.timestamp()) if getattr(item, "updated_at", None) else 1
+        cover_url = f"/api/docs/{item.slug}/cover.webp?v={ts}"
+
+    supplementary_docs = [
+        {
+            "id": str(l.get("id") or ""),
+            "title": str(l.get("title") or l.get("filename") or ""),
+            "asset_prefix": str(l.get("asset_prefix") or ""),
+            "page_count": int(l.get("page_count") or 0),
+        }
+        for l in raw_links
+        if isinstance(l, dict) and l.get("link_type") == "document" and l.get("asset_prefix")
+    ]
+
     data = {
         "id": item.id,
         "slug": item.slug,
@@ -284,7 +303,9 @@ def visual_doc_json(item: VisualDocument, detail: bool = False) -> dict:
         "page_count": int(item.page_count or 0),
         "figure_count": int(item.figure_count or 0),
         "link_count": len(raw_links),
-        "cover_url": f"/api/docs/{item.slug}/page_1.webp" if (item.page_count or 0) > 0 else None,
+        "supplementary_docs": supplementary_docs,
+        "has_custom_cover": has_custom_cover,
+        "cover_url": cover_url,
         "compiled_chars": len(item.compiled_markdown or ""),
         "warnings": item.warnings if isinstance(item.warnings, list) else [],
         "created_at": stamp(item.created_at),

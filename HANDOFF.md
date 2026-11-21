@@ -10,17 +10,26 @@ Application de chat IA multi-fournisseurs (`tchataiperso`) composée d'un backen
 - Le connecteur agentique **Hermes Agent** et la recherche approfondie **Google Deep Research** (Interactions API).
 
 ## 2. Current Objective
-1. **Adjonction à tout moment de Documents complémentaires (FAQ, Errata, Extensions, Aide de jeu, Annexes) ET de Liens Externes (Forums, Sites, Vidéos YouTube) sur un Document Illustré (`visual_doc_links.py` + `VisualDocLinksPanel`)** :
-   - Pouvoir adjoindre dès l'ingestion **et à tout moment après coup** :
-     - Des **fichiers complémentaires locaux** (`PDF`, `DOCX`, `MD`, `TXT`, `CSV`, `JSON`, `PNG`, `JPEG`, `WebP`) typés (`FAQ / Errata officiel`, `Aide de jeu / Référence`, `Extension / Module`, `Annexe`), extraits via Mistral OCR / parseurs locaux, résumés par l'IA et prioritaires en cas d'erratum officiel.
-     - Des **liens externes** (transcription horodatée `[MM:SS]` des vidéos YouTube avec lecteur intégré, fils de forums type BoardGameGeek/Reddit/TricTrac, pages web ou PDF distants), protégés contre le SSRF et résumés automatiquement.
-2. **Typologie métier des Documents Illustrés, Raisonnement Déductif & Forums Dédiés (`visual_doc_profiles.py`)** :
-   - 9 catégories complètes (`boardgame`, `rpg_lore`, `scientific`, `financial`, `technical`, `legal`, `medical`, `educational`, `general`), raisonnement déductif par recoupement multi-pages obligatoire et recherche automatique sur les forums dédiés (ex. `site:boardgamegeek.com` pour un jeu de société).
-3. **Liseuse Livre 3D interactive (`VisualDocBookReader`)** & **Mode Hybride toutes-pages (`450k` car.)**.
+1. **Page d'accueil Galerie de Cartes + Couverture personnalisée sur les Documents Illustrés (`VisualDocGallery` + `/api/visual-docs/{doc_id}/cover`)** :
+   - Remplacement de la barre latérale étroite par une **page d'accueil Galerie pleine largeur** (`VisualDocGallery`) affichant des cartes éditoriales premium pour chaque document (couverture, badge de catégorie, statistiques pages/schémas/liens, forums dédiés, filtres par recherche/catégorie, carte `+ Nouveau document`).
+   - Ajout/remplacement/réinitialisation d'une **image de couverture personnalisée (`cover.webp`)** directement depuis chaque carte, depuis l'en-tête du document ou dès l'ingestion.
+   - Ouverture en pleine largeur du **détail du document et de la Liseuse 3D** au clic sur une carte, avec bouton **« ← Bibliothèque »**.
+2. **Adjonction à tout moment de Documents complémentaires (FAQ, Errata, Extensions, Aide de jeu, Annexes) ET de Liens Externes (Forums, Sites, Vidéos YouTube) sur un Document Illustré (`visual_doc_links.py` + `VisualDocLinksPanel`)** :
+   - Fichiers complémentaires locaux compilés intégralement en pages WebP + Markdown compilé lisibles dans la Liseuse 3D (via la barre de sélection de volume) + liens externes (YouTube, forums, web) résumés automatiquement.
+3. **Typologie métier des Documents Illustrés (9 catégories), Raisonnement Déductif & Forums Dédiés (`visual_doc_profiles.py`)** & **Liseuse Livre 3D interactive (`VisualDocBookReader`)**.
 
 **Statut** : Implémenté et vérifié.
 
 ## 3. Completed Work
+- **Correctif TTS Google Vertex AI (`HTTP 400 Please use a valid role: user, model.`)** :
+  - `backend/app/voice.py` : ajout de `"role": "user"` dans `contents[0]` pour `gemini_ga_body` et `gemini_preview_body` dans `synthesize_speech_google` (requis par Vertex AI `aiplatform.googleapis.com`, également accepté par Gemini Developer API).
+- **Correctif citations `.webp` brutes & filtrage anti-hors-sujet des forums dédiés** :
+  - `backend/app/context.py` (`VISUAL_DOC_SYSTEM_PROMPT`) : interdiction explicite de citer des noms de fichiers `.webp` entre crochets (`[supp_...webp]`), consigne d'insertion d'images Markdown pour les schémas du livret et des compléments (`supp_...`).
+  - `frontend/lib/visual-doc-markdown.ts` & `frontend/components/chat-app.tsx` : prise en charge du préfixe `supp_<8hex>_` dans `extractDocMetaFromImageSrc` + filet de sécurité `RAW_ASSET_CITATION_RE` / `parseAssetCitationHref` qui transforme tout `[supp_..._pX_figY.webp]` résiduel en pastille cliquable « Schéma p. X » ouvrant l'image WebP dans la lightbox.
+  - `backend/app/routers/messages.py` & `backend/app/visual_doc_profiles.py` : désactivation de la recherche d'images web SearXNG aléatoires en mode `visual_doc_forum_mode` (les visuels authentiques proviennent déjà du livret compilé), ancrage obligatoire du sujet du document dans les requêtes générées, filtrage `filter_visual_doc_forum_sources` sur les résultats forums et filtrage `filter_irrelevant_web_sources` sur les `web_imgs`.
+- **Page d'accueil Galerie de Cartes & Couverture personnalisée (`VisualDocGallery`)** :
+  - Backend : `ASSET_NAME_RE` étendu à `cover.webp`, helpers `save_visual_doc_cover_image` / `remove_visual_doc_cover_image` dans `backend/app/visual_documents.py` ; sérialiseur `visual_doc_json(..., app_data_dir=...)` dans `backend/app/serializers.py` exposant `has_custom_cover` et `cover_url` anti-cache (`/api/docs/{slug}/cover.webp?v={ts}`) ; nouveaux endpoints `POST /api/visual-docs/{doc_id}/cover`, `DELETE /api/visual-docs/{doc_id}/cover` et champ optionnel `cover_image` sur `POST /api/visual-docs` dans `backend/app/routers/visual_docs.py`.
+  - Frontend : nouveau composant dédié `frontend/components/visual-doc-gallery.tsx` (+ `.module.css`) avec cartes éditoriales haute qualité (effet de survol, boutons rapides Changer/Réinitialiser la couverture, Poser des questions, Mode Vocal, Supprimer, recherche instantanée et filtres par catégorie, carte `+ Nouveau document`) ; `VisualDocModal` élargi (`min(96vw, 1340px)` × `min(92vh, 880px)`), navigation fluide **Galerie → Document pleine largeur** avec bouton `← Bibliothèque`, bouton `Couverture` dans l'en-tête détail et sélecteur d'image de couverture optionnel à l'ingestion.
 - **Liens complémentaires & Documents complémentaires (FAQ, Errata, Extensions) sur les Documents Illustrés** :
   - Backend : module `backend/app/visual_doc_links.py` + `normalize_unlocked_pdf` dans `backend/app/documents.py` (déverrouillage automatique des PDF d'éditeurs protégés uniquement par permissions InDesign/Acrobat avec `user_password=""` et réécriture d'un flux PDF propre non chiffré pour Mistral OCR, tolérance aux octets avant `%PDF-`, isolation des erreurs CMap/polices page par page et filet de sécurité `pypdfium2`). Chaque document complémentaire PDF/image est désormais compilé intégralement via `ingest_visual_document(..., asset_prefix="supp_<8hex>_")` (pages WebP `supp_<8hex>_page_N.webp`, schémas WebP, Markdown compilé, `pages` et résumé IA) et les fichiers texte/Word/Markdown sont paginés en pages de livre lisibles dans la Liseuse 3D.
   - Frontend : panneau `VisualDocLinksPanel` + **barre de sélection de volume (`volumeBar`)** dans `VisualDocModal` permettant d'ouvrir n'importe quel document complémentaire directement dans **📖 Liseuse 3D** (pages qui se tournent, 5 thèmes, Plein écran), **Schémas extraits**, **Pages originales** et **Markdown compilé** (boutons dédiés « 📖 Lire en Livre 3D » et « 📝 Markdown compilé » sur chaque carte).
@@ -52,6 +61,7 @@ Application de chat IA multi-fournisseurs (`tchataiperso`) composée d'un backen
 
 ## 5. Modified Files
 - Créés (session courante) :
+  - `frontend/components/visual-doc-gallery.tsx`, `frontend/components/visual-doc-gallery.module.css`.
   - `backend/app/visual_doc_links.py`, `backend/app/visual_doc_profiles.py`.
   - `backend/migrations/versions/0029_add_visual_doc_category.py`, `backend/migrations/versions/0030_add_visual_doc_links.py`.
   - `frontend/components/visual-doc-links-panel.tsx`, `frontend/components/visual-doc-links-panel.module.css`.
@@ -66,10 +76,10 @@ Application de chat IA multi-fournisseurs (`tchataiperso`) composée d'un backen
   - `scripts/install.sh`, `scripts/install_lib/*`, `.env.example`, `README.md`, `backend/app/voice_sanitize.py`, `backend/app/routers/finance.py`, `backend/app/routers/system.py`, `frontend/components/voice-fullscreen-modal.tsx`, `frontend/components/finance-reports-panel.tsx`, etc.
 
 ## 6. Verification
-- `cd backend && .venv/bin/python -m pytest tests/test_visual_documents.py tests/test_context.py tests/test_settings.py tests/test_voice.py tests/test_migrations.py -q` : **RÉUSSI**.
+- `cd backend && .venv/bin/python -m pytest tests/test_visual_documents.py tests/test_context.py -q` : **RÉUSSI** (`39 passed`, incluant `test_visual_doc_custom_cover_upload_serve_and_reset` et `test_filter_visual_doc_forum_sources_drops_offtopic_results`).
 - `cd frontend && npx tsc --noEmit` : **RÉUSSI** (0 erreur).
-- `cd frontend && npx eslint components/visual-doc-book-reader.tsx components/visual-doc-modal.tsx` : **RÉUSSI** (0 erreur).
-- Non exécutés : redémarrage des conteneurs Docker `clair-api` / `clair-web` si l'instance Docker tourne en parallèle.
+- `cd frontend && npx eslint lib/visual-doc-markdown.ts` : **RÉUSSI** (0 erreur).
+- Non exécutés : redémarrage des conteneurs Docker `clair-api` / `clair-web` (`./scripts/compose.sh up -d --build clair-api clair-web`).
 
 ## 7. Known Issues and Risks
 - Sur un PC Windows, exécuter `./scripts/install.sh` depuis **WSL2** (Ubuntu/Debian) avec Docker Desktop actif côté Windows.

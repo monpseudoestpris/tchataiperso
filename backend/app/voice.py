@@ -405,7 +405,7 @@ async def synthesize_speech_google(
         for chunk in chunks:
             gemini_text = f"{tone_prefix}{chunk}" if tone_prefix else chunk
             gemini_ga_body = {
-                "contents": [{"parts": [{"text": gemini_text}]}],
+                "contents": [{"role": "user", "parts": [{"text": gemini_text}]}],
                 "generationConfig": {
                     "responseModalities": ["AUDIO"],
                     "speechConfig": {
@@ -419,7 +419,7 @@ async def synthesize_speech_google(
                 },
             }
             gemini_preview_body = {
-                "contents": [{"parts": [{"text": gemini_text}]}],
+                "contents": [{"role": "user", "parts": [{"text": gemini_text}]}],
                 "generationConfig": {
                     "responseModalities": ["AUDIO"],
                     "speechConfig": {

@@ -436,8 +436,63 @@ async def generate_visual_doc_forum_queries(
         queries = providers._parse_search_queries_response(raw_content, fallback_query="")
         cleaned = [q.strip() for q in queries if isinstance(q, str) and q.strip()]
         if cleaned:
+            # Garde-fou : s'assurer que le sujet du document (ex. "Res Arcana") figure bien dans chaque requête
+            if subject:
+                subj_tokens = [t.lower() for t in re.findall(r"[a-zA-ZÀ-ÿ0-9]{3,}", subject)]
+                anchored: list[str] = []
+                subj_part = f'"{subject}"' if " " in subject else subject
+                for q in cleaned[:2]:
+                    q_low = q.lower()
+                    if subj_tokens and not any(tok in q_low for tok in subj_tokens):
+                        if q_low.startswith("site:"):
+                            parts = q.split(" ", 1)
+                            q = f"{parts[0]} {subj_part} {parts[1] if len(parts) > 1 else ''}".strip()
+                        else:
+                            q = f"{subj_part} {q}".strip()
+                    anchored.append(q[:240])
+                return anchored, forum_label
             return cleaned[:2], forum_label
     except Exception as exc:
         _logger.debug("Repli sur requêtes forums déterministes (%s)", exc)
 
     return fallback, forum_label
+
+
+def filter_visual_doc_forum_sources(
+    sources: list[dict[str, Any]],
+    docs: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Écarte les résultats web manifestement hors-sujet par rapport aux documents illustrés attachés.
+
+    Exige qu'au moins un terme distinctif du sujet du document (ex. `arcana` pour `Res Arcana`)
+    apparaisse dans le titre, le snippet ou l'URL du résultat.
+    """
+    if not sources or not docs:
+        return sources or []
+
+    # Préserver les domaines de test / mocks (RFC 2606)
+    test_hosts = ("example.org", "example.com", "example.net", "localhost", "127.0.0.1")
+
+    subject_tokens: set[str] = set()
+    for doc in docs:
+        subj = clean_doc_subject_for_search(str(doc.get("title") or ""))
+        for tok in re.findall(r"[a-zA-ZÀ-ÿ0-9]{3,}", subj.lower()):
+            if tok not in _NOISE_TITLE_TOKENS:
+                subject_tokens.add(tok)
+
+    if not subject_tokens:
+        return sources
+
+    # Prioriser les tokens distinctifs (>= 4 car.) s'il y en a, sinon garder ceux >= 3 car.
+    strong_tokens = {t for t in subject_tokens if len(t) >= 4} or subject_tokens
+
+    kept: list[dict[str, Any]] = []
+    for src in sources:
+        url_low = str(src.get("url") or "").lower()
+        if any(host in url_low for host in test_hosts):
+            kept.append(src)
+            continue
+        haystack = f"{src.get('title') or ''} {src.get('snippet') or ''} {url_low}".lower()
+        if any(tok in haystack for tok in strong_tokens):
+            kept.append(src)
+    return kept

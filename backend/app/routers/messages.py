@@ -36,6 +36,7 @@ from ..finance import process_message_finance_inquiries
 from ..google_cloud import has_llm_access
 from ..memory_agent import process_memory_turn
 from ..visual_doc_profiles import (
+    filter_visual_doc_forum_sources,
     generate_visual_doc_forum_queries,
     should_auto_search_visual_doc_forums,
 )
@@ -684,6 +685,9 @@ async def send_message(
                     query = effective_user_query[:1000]
                     queries = [query]
                     if visual_doc_forum_mode and attached_vdocs_meta:
+                        # En mode forums dédiés d'un Document Illustré, les schémas authentiques
+                        # proviennent déjà du livret compilé : ne pas polluer avec des images web SearXNG aléatoires.
+                        should_fetch_images = False
                         forum_queries, forum_label = await generate_visual_doc_forum_queries(
                             settings,
                             attached_vdocs_meta,
@@ -742,7 +746,8 @@ async def send_message(
                                     elif isinstance(r, BaseException) and not raw_sources:
                                         raise r
                                 sources = providers.filter_irrelevant_web_sources(raw_sources, queries)
-                                web_imgs = list(img_res) if isinstance(img_res, list) else []
+                                raw_imgs = list(img_res) if isinstance(img_res, list) else []
+                                web_imgs = providers.filter_irrelevant_web_sources(raw_imgs, queries) if raw_imgs else []
                             else:
                                 text_res, img_res = await asyncio.gather(
                                     providers.search_web(settings, primary_query),
@@ -752,7 +757,8 @@ async def send_message(
                                 if isinstance(text_res, BaseException):
                                     raise text_res
                                 sources = providers.filter_irrelevant_web_sources(list(text_res), queries)
-                                web_imgs = list(img_res) if isinstance(img_res, list) else []
+                                raw_imgs = list(img_res) if isinstance(img_res, list) else []
+                                web_imgs = providers.filter_irrelevant_web_sources(raw_imgs, queries) if raw_imgs else []
                         else:
                             if len(queries) > 1:
                                 search_results = await asyncio.gather(
@@ -769,6 +775,8 @@ async def send_message(
                             else:
                                 raw_sources = await providers.search_web(settings, primary_query)
                                 sources = providers.filter_irrelevant_web_sources(raw_sources, queries)
+                        if visual_doc_forum_mode and attached_vdocs_meta and sources:
+                            sources = filter_visual_doc_forum_sources(sources, attached_vdocs_meta)
                     except providers.ProviderError as exc:
                         if body.web_search:
                             raise
