@@ -21,6 +21,7 @@ import httpx
 from pypdf import PdfReader
 
 from .config import Settings
+from .documents import normalize_unlocked_pdf
 from .google_cloud import has_llm_access, post_chat_completion
 from .providers import _check_response, _json, _key
 
@@ -277,35 +278,23 @@ def extract_report_text(content: bytes, filename: str) -> tuple[str, str]:
     """
     suffix = Path(filename).suffix.lower()
     if suffix == ".pdf":
-        try:
-            if not content.startswith(b"%PDF-"):
-                raise ValueError("Signature PDF invalide")
-            reader = PdfReader(io.BytesIO(content))
-            if reader.is_encrypted:
-                raise HTTPException(422, "Déverrouillez le PDF avant de l'importer.")
-            if len(reader.pages) > _MAX_REPORT_PAGES:
-                raise HTTPException(422, f"Le rapport PDF dépasse la limite de {_MAX_REPORT_PAGES} pages.")
-            sections: list[str] = []
-            total = 0
-            for idx, page in enumerate(reader.pages, start=1):
-                txt = (page.extract_text() or "").strip()
-                if txt:
-                    block = f"[Page {idx}]\n{txt}"
-                    sections.append(block)
-                    total += len(block)
-                if total >= MAX_REPORT_EXTRACTED_CHARS:
-                    break
-            extracted = "\n\n".join(sections)[:MAX_REPORT_EXTRACTED_CHARS].strip()
-            if not extracted:
-                raise HTTPException(
-                    422,
-                    "Aucun texte extractible trouvé dans ce PDF (PDF scanné ?). Configurez MISTRAL_API_KEY pour activer Mistral OCR ou importez un PDF textuel.",
-                )
-            return "pdf", extracted
-        except HTTPException:
-            raise
-        except Exception as exc:
-            raise HTTPException(422, "PDF illisible ou corrompu.") from exc
+        _norm_bytes, _page_count, page_texts = normalize_unlocked_pdf(content, max_pages=_MAX_REPORT_PAGES)
+        sections: list[str] = []
+        total = 0
+        for idx, txt in enumerate(page_texts, start=1):
+            if txt:
+                block = f"[Page {idx}]\n{txt}"
+                sections.append(block)
+                total += len(block)
+            if total >= MAX_REPORT_EXTRACTED_CHARS:
+                break
+        extracted = "\n\n".join(sections)[:MAX_REPORT_EXTRACTED_CHARS].strip()
+        if not extracted:
+            raise HTTPException(
+                422,
+                "Aucun texte extractible trouvé dans ce PDF (PDF scanné ?). Configurez MISTRAL_API_KEY pour activer Mistral OCR ou importez un PDF textuel.",
+            )
+        return "pdf", extracted
 
     if suffix == ".docx":
         try:
@@ -442,21 +431,7 @@ async def extract_report_content(settings: Settings, content: bytes, filename: s
     if suffix != ".pdf":
         return extract_report_text(content, filename)
 
-    try:
-        if not content.startswith(b"%PDF-"):
-            raise ValueError("Signature PDF invalide")
-        reader = PdfReader(io.BytesIO(content))
-        if reader.is_encrypted:
-            raise HTTPException(422, "Déverrouillez le PDF avant de l'importer.")
-        page_count = len(reader.pages)
-        if page_count < 1:
-            raise HTTPException(422, "Le rapport PDF ne contient aucune page.")
-        if page_count > _MAX_REPORT_PAGES:
-            raise HTTPException(422, f"Le rapport PDF dépasse la limite de {_MAX_REPORT_PAGES} pages.")
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(422, "PDF illisible ou corrompu.") from exc
+    content, page_count, _local_pages = normalize_unlocked_pdf(content, max_pages=_MAX_REPORT_PAGES)
 
     if not settings.demo_mode and settings.enabled(settings.mistral_api_key):
         try:

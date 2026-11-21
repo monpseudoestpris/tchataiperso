@@ -889,6 +889,7 @@ class UserSettingsResponse(BaseModel):
     system_prompt: str
     prompt_cache_enabled: bool
     auto_memory_enabled: bool = True
+    default_voice: str = "Aoede"
     default_system_prompt: str
     prompt_presets: list[dict[str, str]]
 
@@ -897,6 +898,7 @@ class UpdateUserSettingsRequest(BaseModel):
     system_prompt: str | None = Field(default=None, max_length=12000)
     prompt_cache_enabled: bool | None = None
     auto_memory_enabled: bool | None = None
+    default_voice: str | None = Field(default=None, max_length=40)
 
 
 class CreateTopicSpace(BaseModel):
@@ -1345,6 +1347,7 @@ class AnalyzeStockMoatRequest(BaseModel):
 
 class UpdateVisualDocumentRequest(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=200)
+    doc_category: str | None = Field(default=None, max_length=40)
     compiled_markdown: str | None = Field(default=None, max_length=2_000_000)
 
     @field_validator("title")
@@ -1356,6 +1359,24 @@ class UpdateVisualDocumentRequest(BaseModel):
         if not cleaned:
             raise ValueError("Le titre du document ne peut pas être vide.")
         return cleaned
+
+    @field_validator("doc_category")
+    @classmethod
+    def validate_visual_doc_category(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        from .visual_doc_profiles import VISUAL_DOC_CATEGORIES
+        cleaned = value.strip().lower()
+        valid_ids = {c["id"] for c in VISUAL_DOC_CATEGORIES}
+        if cleaned not in valid_ids:
+            raise ValueError(f"Catégorie de document invalide ({cleaned}).")
+        return cleaned
+
+
+class AddVisualDocLinksRequest(BaseModel):
+    urls: list[str] = Field(default_factory=list, max_length=25)
+    url: str | None = Field(default=None, max_length=2048)
+    title: str | None = Field(default=None, max_length=200)
 
 
 

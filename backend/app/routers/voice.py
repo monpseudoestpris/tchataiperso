@@ -34,7 +34,7 @@ class TTSRequest(BaseModel):
 @router.post("/api/voice/tts")
 async def tts_endpoint(
     body: TTSRequest,
-    _user: User = Depends(current_user),
+    user: User = Depends(current_user),
     settings: Settings = Depends(get_settings),
 ):
     if not has_tts_access(settings):
@@ -42,11 +42,12 @@ async def tts_endpoint(
             503,
             "La synthèse vocale nécessite GOOGLE_API_KEY (ou Google Cloud Vertex AI) configurée côté serveur.",
         )
+    effective_voice = (body.voice or "").strip() or getattr(user, "default_voice", None)
     try:
         audio_bytes, media_type = await synthesize_speech_google(
             settings,
             body.text,
-            voice=body.voice,
+            voice=effective_voice,
             tone=body.tone,
         )
     except ValueError as exc:

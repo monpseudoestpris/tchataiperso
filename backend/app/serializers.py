@@ -67,6 +67,7 @@ def user_json(user: User) -> dict:
         "system_prompt": effective_prompt,
         "prompt_cache_enabled": getattr(user, "prompt_cache_enabled", True),
         "auto_memory_enabled": getattr(user, "auto_memory_enabled", True),
+        "default_voice": getattr(user, "default_voice", None),
     }
 
 
@@ -264,16 +265,25 @@ def blog_json(item: Blog, include_posts: bool = False) -> dict:
 
 
 def visual_doc_json(item: VisualDocument, detail: bool = False) -> dict:
+    from .visual_doc_profiles import get_visual_doc_category_spec, normalize_visual_doc_category
+
+    cat_id = normalize_visual_doc_category(getattr(item, "doc_category", None))
+    cat_spec = get_visual_doc_category_spec(cat_id)
+    raw_links = item.external_links if isinstance(getattr(item, "external_links", None), list) else []
     data = {
         "id": item.id,
         "slug": item.slug,
         "title": item.title,
         "filename": item.filename,
         "source_type": item.source_type or "pdf",
+        "doc_category": cat_id,
+        "doc_category_label": cat_spec["short_label"],
+        "forum_label": cat_spec["forum_label"],
         "ocr_model": item.ocr_model or "",
         "vision_enriched": bool(item.vision_enriched),
         "page_count": int(item.page_count or 0),
         "figure_count": int(item.figure_count or 0),
+        "link_count": len(raw_links),
         "cover_url": f"/api/docs/{item.slug}/page_1.webp" if (item.page_count or 0) > 0 else None,
         "compiled_chars": len(item.compiled_markdown or ""),
         "warnings": item.warnings if isinstance(item.warnings, list) else [],
@@ -283,6 +293,7 @@ def visual_doc_json(item: VisualDocument, detail: bool = False) -> dict:
     if detail:
         data["compiled_markdown"] = item.compiled_markdown or ""
         data["pages"] = item.pages_meta if isinstance(item.pages_meta, list) else []
+        data["external_links"] = raw_links
     return data
 
 

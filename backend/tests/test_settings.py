@@ -112,11 +112,13 @@ def test_user_json_serialization_includes_settings():
         password_hash="hash",
         system_prompt="Mon prompt custom",
         prompt_cache_enabled=True,
+        default_voice="Kore",
     )
     serialized = user_json(user)
     assert serialized["username"] == "alice"
     assert serialized["system_prompt"] == "Mon prompt custom"
     assert serialized["prompt_cache_enabled"] is True
+    assert serialized["default_voice"] == "Kore"
 
 
 def test_settings_api_get_and_patch(tmp_path):
@@ -144,6 +146,7 @@ def test_settings_api_get_and_patch(tmp_path):
     with TestClient(app, base_url=origin, headers={"Origin": origin}) as client:
         login_res = client.post("/api/auth/login", json={"username": "testadmin", "password": "adminpassword123"})
         assert login_res.status_code == 200
+        assert login_res.json()["default_voice"] is None
 
         # GET /api/settings
         res = client.get("/api/settings")
@@ -151,25 +154,38 @@ def test_settings_api_get_and_patch(tmp_path):
         data = res.json()
         assert data["system_prompt"] == "Initial prompt"
         assert data["prompt_cache_enabled"] is True
+        assert data["default_voice"] == "Aoede"
         assert len(data["prompt_presets"]) >= 4
 
-        # PATCH /api/settings
+        # PATCH /api/settings with valid default_voice
         patch_res = client.patch(
             "/api/settings",
             json={
                 "system_prompt": "Nouveau prompt général : réponds en français et concis.",
                 "prompt_cache_enabled": False,
+                "default_voice": "Sulafat",
             },
         )
         assert patch_res.status_code == 200
         updated = patch_res.json()
         assert updated["system_prompt"] == "Nouveau prompt général : réponds en français et concis."
         assert updated["prompt_cache_enabled"] is False
+        assert updated["default_voice"] == "Sulafat"
 
         # Verify GET reflects update
         verify_res = client.get("/api/settings")
         assert verify_res.json()["system_prompt"] == "Nouveau prompt général : réponds en français et concis."
         assert verify_res.json()["prompt_cache_enabled"] is False
+        assert verify_res.json()["default_voice"] == "Sulafat"
+
+        # Invalid voice is rejected
+        bad_voice_res = client.patch("/api/settings", json={"default_voice": "VoixInexistante"})
+        assert bad_voice_res.status_code == 400
+
+        # Empty string resets to server default
+        reset_voice_res = client.patch("/api/settings", json={"default_voice": ""})
+        assert reset_voice_res.status_code == 200
+        assert reset_voice_res.json()["default_voice"] == "Aoede"
 
 
 def test_settings_llm_timeout_seconds_default_and_bounds():

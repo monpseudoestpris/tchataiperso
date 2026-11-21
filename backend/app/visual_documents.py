@@ -33,7 +33,7 @@ import pypdfium2 as pdfium
 
 from . import providers
 from .config import Settings
-from .documents import _PDF_RENDER_LOCK
+from .documents import _PDF_RENDER_LOCK, normalize_unlocked_pdf
 from .google_cloud import has_llm_access, post_chat_completion, should_route_to_google_cloud
 
 _logger = logging.getLogger("uvicorn.error")
@@ -46,9 +46,10 @@ MIN_FIGURE_DIMENSION_PX = 24
 DEFAULT_WEBP_QUALITY = 85
 MAX_PAGE_RENDER_DIM = 2048
 MAX_FIGURE_RENDER_DIM = 1600
-MAX_VISUAL_CONTEXT_CHARS = 120_000
+MAX_VISUAL_CONTEXT_CHARS = 450_000
 
-ASSET_NAME_RE = re.compile(r"^(?:page_\d{1,4}|p\d{1,4}_fig\d{1,4})\.webp$")
+ASSET_NAME_RE = re.compile(r"^(?:supp_[a-f0-9]{8}_)?(?:page_\d{1,4}|p\d{1,4}_fig\d{1,4})\.webp$")
+SUPP_ASSET_PREFIX_RE = re.compile(r"^supp_[a-f0-9]{8}_$")
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,78}[a-z0-9]$")
 _INLINE_MD_IMG_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
 
@@ -120,6 +121,22 @@ def remove_visual_doc_dir(app_data_dir: Path, doc_id: str) -> None:
         pass
 
 
+def remove_visual_doc_prefixed_assets(app_data_dir: Path, doc_id: str, asset_prefix: str | None) -> None:
+    """Supprime en toute sécurité tous les fichiers `.webp` d'un document complémentaire (`supp_<8hex>_*.webp`)."""
+    if not asset_prefix or not SUPP_ASSET_PREFIX_RE.fullmatch(asset_prefix):
+        return
+    try:
+        root = get_visual_docs_root(app_data_dir)
+        doc_dir = (root / doc_id).resolve()
+        if doc_dir.parent != root or not doc_dir.is_dir():
+            return
+        for candidate in doc_dir.glob(f"{asset_prefix}*.webp"):
+            if candidate.parent == doc_dir and candidate.is_file():
+                candidate.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
 def resolve_visual_doc_asset(app_data_dir: Path, doc_id: str, asset_name: str) -> Path | None:
     """Résout en toute sécurité un fichier `.webp` appartenant au document (protection anti-traversal)."""
     if not ASSET_NAME_RE.fullmatch(asset_name or ""):
@@ -171,24 +188,14 @@ def _validate_image_bytes(content: bytes, filename: str) -> str:
         ) from exc
 
 
-def render_pdf_pages_to_webp(pdf_bytes: bytes, doc_dir: Path) -> tuple[int, list[str], list[str]]:
-    """Valide le PDF, rend chaque page en `page_N.webp` et extrait le texte brut local en secours."""
-    if not pdf_bytes.startswith(b"%PDF-"):
-        raise HTTPException(422, "Le fichier fourni n'est pas un PDF valide.")
-    try:
-        reader = PdfReader(io.BytesIO(pdf_bytes))
-        if reader.is_encrypted:
-            raise HTTPException(422, "Déverrouillez le PDF avant de l'ingérer.")
-        page_count = len(reader.pages)
-        if page_count < 1:
-            raise HTTPException(422, "Le PDF ne contient aucune page.")
-        if page_count > MAX_VISUAL_DOC_PAGES:
-            raise HTTPException(422, f"Le PDF dépasse la limite de {MAX_VISUAL_DOC_PAGES} pages.")
-        local_texts = [(page.extract_text() or "").strip() for page in reader.pages]
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(422, "PDF illisible ou corrompu.") from exc
+def render_pdf_pages_to_webp(
+    pdf_bytes: bytes,
+    doc_dir: Path,
+    *,
+    asset_prefix: str = "",
+) -> tuple[int, list[str], list[str], bytes]:
+    """Valide et déverrouille (si permissions éditeur) le PDF, rend chaque page en `page_N.webp` et extrait le texte brut local."""
+    pdf_bytes, page_count, local_texts = normalize_unlocked_pdf(pdf_bytes, max_pages=MAX_VISUAL_DOC_PAGES)
 
     saved_pages: list[str] = []
     try:
@@ -206,7 +213,7 @@ def render_pdf_pages_to_webp(pdf_bytes: bytes, doc_dir: Path) -> tuple[int, list
                         try:
                             pil_img = bitmap.to_pil()
                             try:
-                                filename = f"page_{idx + 1}.webp"
+                                filename = f"{asset_prefix}page_{idx + 1}.webp"
                                 _save_pil_webp(pil_img, doc_dir / filename, MAX_PAGE_RENDER_DIM)
                                 saved_pages.append(filename)
                             finally:
@@ -225,12 +232,14 @@ def render_pdf_pages_to_webp(pdf_bytes: bytes, doc_dir: Path) -> tuple[int, list
     except Exception as exc:
         raise HTTPException(422, "Impossible de convertir les pages du PDF en images WebP.") from exc
 
-    return page_count, saved_pages, local_texts
+    return page_count, saved_pages, local_texts, pdf_bytes
 
 
 def normalize_uploaded_images_to_webp(
     images: list[tuple[str, bytes]],
     doc_dir: Path,
+    *,
+    asset_prefix: str = "",
 ) -> list[dict[str, Any]]:
     """Valide une liste ordonnée d'images et sauvegarde chaque page en `page_N.webp`."""
     if not images:
@@ -243,7 +252,7 @@ def normalize_uploaded_images_to_webp(
         if not raw:
             raise HTTPException(422, f"L'image « {filename} » est vide.")
         mime = _validate_image_bytes(raw, filename)
-        page_filename = f"page_{idx + 1}.webp"
+        page_filename = f"{asset_prefix}page_{idx + 1}.webp"
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
             with Image.open(io.BytesIO(raw)) as pil_img:
@@ -630,10 +639,13 @@ async def ingest_visual_document(
     files: list[tuple[str, bytes]],
     *,
     enrich_vision: bool = True,
+    asset_prefix: str = "",
 ) -> dict[str, Any]:
     """Pipeline complet d'ingestion : PDF ou liste ordonnée d'images -> WebP + Markdown compilé."""
     if not files:
         raise HTTPException(422, "Fournissez un PDF ou une liste d'images (PNG, JPEG, WebP).")
+    if asset_prefix and not SUPP_ASSET_PREFIX_RE.fullmatch(asset_prefix):
+        raise ValueError("Préfixe d'asset invalide")
 
     suffixes = [Path(name).suffix.lower() for name, _ in files]
     is_pdf = len(files) == 1 and suffixes[0] == ".pdf"
@@ -650,12 +662,14 @@ async def ingest_visual_document(
     try:
         if is_pdf:
             pdf_bytes = files[0][1]
-            page_count, saved_page_files, local_texts = await asyncio.to_thread(
-                render_pdf_pages_to_webp, pdf_bytes, doc_dir
+            page_count, saved_page_files, local_texts, pdf_bytes = await asyncio.to_thread(
+                render_pdf_pages_to_webp, pdf_bytes, doc_dir, asset_prefix=asset_prefix
             )
             image_pages_data = None
         else:
-            image_pages_data = await asyncio.to_thread(normalize_uploaded_images_to_webp, files, doc_dir)
+            image_pages_data = await asyncio.to_thread(
+                normalize_uploaded_images_to_webp, files, doc_dir, asset_prefix=asset_prefix
+            )
             page_count = len(image_pages_data)
             saved_page_files = [item["page_filename"] for item in image_pages_data]
             local_texts = ["" for _ in image_pages_data]
@@ -717,7 +731,7 @@ async def ingest_visual_document(
                     if not isinstance(raw_fig, dict):
                         continue
                     next_num = fig_counter + 1
-                    fig_filename = f"p{page_num}_fig{next_num}.webp"
+                    fig_filename = f"{asset_prefix}p{page_num}_fig{next_num}.webp"
                     fig_path = doc_dir / fig_filename
                     saved_size = await asyncio.to_thread(
                         _save_figure_from_ocr,
@@ -732,7 +746,7 @@ async def ingest_visual_document(
                     annotation = _parse_figure_annotation(raw_fig.get("image_annotation"))
                     short_title, rich_alt, visible_text = _build_base_figure_alt(annotation, page_num, fig_counter)
                     fig_entry = {
-                        "id": f"p{page_num}_fig{fig_counter}",
+                        "id": f"{asset_prefix}p{page_num}_fig{fig_counter}",
                         "ocr_id": str(raw_fig.get("id") or ""),
                         "filename": fig_filename,
                         "url": f"/api/docs/{slug}/{fig_filename}",
@@ -799,7 +813,10 @@ async def ingest_visual_document(
             "warnings": warnings_list,
         }
     except Exception:
-        remove_visual_doc_dir(app_data_dir, doc_id)
+        if asset_prefix:
+            remove_visual_doc_prefixed_assets(app_data_dir, doc_id, asset_prefix)
+        else:
+            remove_visual_doc_dir(app_data_dir, doc_id)
         raise
 
 
@@ -855,9 +872,9 @@ def compile_finance_report_to_visual_doc(
     local_pdf_texts: list[str] = []
 
     try:
-        if pdf_bytes and pdf_bytes.startswith(b"%PDF-"):
+        if pdf_bytes and b"%PDF-" in pdf_bytes[:1024]:
             try:
-                _pcount, rendered_pages, local_pdf_texts = render_pdf_pages_to_webp(pdf_bytes, doc_dir)
+                _pcount, rendered_pages, local_pdf_texts, pdf_bytes = render_pdf_pages_to_webp(pdf_bytes, doc_dir)
             except Exception as exc:
                 warnings_list.append(
                     f"Rendu visuel des pages PDF ignoré ({getattr(exc, 'detail', str(exc))}) — texte OCR et tableaux conservés."
@@ -951,9 +968,97 @@ def compile_finance_report_to_visual_doc(
         raise
 
 
+_EXPLICIT_PAGE_REF_RE = re.compile(r"\b(?:page|pages|p\.?)\s*(\d{1,4})\b", flags=re.IGNORECASE)
+
+
 def _tokenize_query(text: str) -> set[str]:
     norm = unicodedata.normalize("NFKD", (text or "").lower()).encode("ascii", "ignore").decode("ascii")
-    return {tok for tok in re.findall(r"[a-z0-9]{3,}", norm)}
+    tokens: set[str] = set()
+    for tok in re.findall(r"[a-z0-9]{3,}", norm):
+        tokens.add(tok)
+        if len(tok) >= 4 and tok.endswith(("s", "x")):
+            tokens.add(tok[:-1])
+    return tokens
+
+
+def _extract_explicit_page_numbers(text: str) -> set[int]:
+    pages: set[int] = set()
+    for match in _EXPLICIT_PAGE_REF_RE.finditer(text or ""):
+        try:
+            pnum = int(match.group(1))
+            if pnum >= 1:
+                pages.add(pnum)
+        except ValueError:
+            pass
+    return pages
+
+
+def _compact_page_figure_alts(page: dict[str, Any]) -> str:
+    """Version allégée d'une page : garde 100 % du texte et des URLs d'images `.webp`, mais remplace
+    les descriptions anatomiques longues (900 car.) par le titre court de chaque figure.
+    """
+    full_md = str(page.get("compiled_markdown") or "").strip()
+    if not full_md:
+        return ""
+    figures = page.get("figures") if isinstance(page.get("figures"), list) else []
+    short_by_url: dict[str, str] = {}
+    for fig in figures:
+        if not isinstance(fig, dict):
+            continue
+        url = str(fig.get("url") or "").strip()
+        if not url:
+            continue
+        short = str(fig.get("short_title") or "").strip()
+        if not short:
+            raw_alt = str(fig.get("alt") or "").strip()
+            short = raw_alt.split(" : ", 1)[0].split(" — ", 1)[0][:140].strip() or "Illustration"
+        short_by_url[url] = _sanitize_alt_text(short, max_len=140)
+
+    def _repl(match: re.Match[str]) -> str:
+        orig_alt = (match.group(1) or "").strip()
+        url = (match.group(2) or "").strip()
+        short = short_by_url.get(url)
+        if not short:
+            short = orig_alt.split(" : ", 1)[0].split(" — ", 1)[0][:140].strip() or "Illustration"
+        return f"![{short}]({url})"
+
+    return _INLINE_MD_IMG_RE.sub(_repl, full_md)
+
+
+def _format_attached_external_links(external_links: list[dict[str, Any]], max_links_budget: int) -> str:
+    """Formate les liens externes rattachés au document (forums, sites, vidéos YouTube) avec leur résumé et extraits."""
+    if not external_links or max_links_budget <= 300:
+        return ""
+    valid = [l for l in external_links if isinstance(l, dict) and l.get("url")]
+    if not valid:
+        return ""
+    per_link_budget = max(600, max_links_budget // len(valid))
+    parts: list[str] = [
+        "=== RESSOURCES COMPLÉMENTAIRES ATTACHÉES AU DOCUMENT (FORUMS, SITES, VIDÉOS YOUTUBE — DONNÉES EXTERNES) ==="
+    ]
+    for idx, link in enumerate(valid, start=1):
+        ltype = str(link.get("link_type") or "site")
+        if ltype == "document":
+            kind_badge = str(link.get("doc_role_label") or "Document complémentaire")
+        else:
+            kind_badge = {"youtube": "Vidéo YouTube", "forum": "Forum", "site": "Site / FAQ"}.get(ltype, "Lien")
+        ltitle = str(link.get("title") or link.get("filename") or link.get("domain") or "Source")
+        lurl = str(link.get("url") or "")
+        fname_info = f" · Fichier : {link['filename']}" if link.get("filename") else ""
+        duration = f" · Durée : {link['duration']}" if link.get("duration") else ""
+        author = f" · Auteur : {link['author']}" if link.get("author") else ""
+        summary_md = str(link.get("summary_markdown") or "").strip()
+        raw_text = str(link.get("compiled_markdown") or link.get("extracted_text") or "").strip()
+
+        entry_header = f"--- [Ressource liée R{idx} · {kind_badge}] {ltitle}{fname_info}{author}{duration}\nSource : {lurl}\n"
+        body = ""
+        if summary_md:
+            body += f"Résumé synthétique :\n{summary_md}\n"
+        remaining_for_raw = per_link_budget - len(entry_header) - len(body) - 60
+        if raw_text and remaining_for_raw > 300:
+            body += f"\nExtrait / Transcription source :\n{raw_text[:remaining_for_raw]}"
+        parts.append((entry_header + body)[:per_link_budget])
+    return "\n\n".join(parts)
 
 
 def build_visual_docs_context(
@@ -968,6 +1073,7 @@ def build_visual_docs_context(
     blocks: list[str] = []
     per_doc_budget = max_chars // max(1, len(docs))
     query_tokens = _tokenize_query(query_text)
+    explicit_pages = _extract_explicit_page_numbers(query_text)
 
     for doc in docs:
         title = str(doc.get("title") or "Document illustré")
@@ -976,56 +1082,95 @@ def build_visual_docs_context(
         figure_count = int(doc.get("figure_count") or 0)
         compiled = str(doc.get("compiled_markdown") or "").strip()
         pages_meta = doc.get("pages_meta") if isinstance(doc.get("pages_meta"), list) else []
+        ext_links = doc.get("external_links") if isinstance(doc.get("external_links"), list) else []
+
+        links_budget = min(90_000, per_doc_budget // 3) if ext_links else 0
+        links_section = _format_attached_external_links(ext_links, links_budget) if ext_links else ""
+        doc_pages_budget = max(500, per_doc_budget - (len(links_section) + 4 if links_section else 0))
 
         header = (
             f"=== DOCUMENT ILLUSTRÉ COMPILÉ : {title} ===\n"
             f"Slug : `{slug}` · {page_count} page(s) · {figure_count} schéma(s) WebP · "
             f"Pages originales : `/api/docs/{slug}/page_<N>.webp`\n"
         )
+        suffix = f"\n\n{links_section}" if links_section else ""
 
-        if compiled and len(header) + len(compiled) <= per_doc_budget:
-            blocks.append(header + "\n" + compiled)
+        if compiled and len(header) + len(compiled) <= doc_pages_budget:
+            blocks.append(header + "\n" + compiled + suffix)
             continue
 
         if not pages_meta:
-            blocks.append(header + "\n" + compiled[: max(0, per_doc_budget - len(header))])
+            blocks.append(header + "\n" + compiled[: max(0, doc_pages_budget - len(header))] + suffix)
             continue
 
-        # Sélection intelligente des pages les plus pertinentes (avec voisinage ±1) sur gros manuels
+        # Score de pertinence de chaque page par rapport à la question
         scored: list[tuple[float, int]] = []
         for idx, page in enumerate(pages_meta):
+            pnum = int(page.get("page") or (idx + 1))
             page_text = str(page.get("compiled_markdown") or "")
             fig_text = " ".join(str(f.get("alt") or "") for f in (page.get("figures") or []))
             haystack_tokens = _tokenize_query(page_text + " " + fig_text)
             overlap = len(query_tokens & haystack_tokens) if query_tokens else 0
+            explicit_bonus = 100.0 if pnum in explicit_pages else 0.0
             # Léger bonus pour les pages contenant des schémas ou la page 1 (sommaire/mise en place)
-            score = float(overlap * 3) + (0.5 if page.get("figures") else 0.0) + (0.8 if idx == 0 else 0.0)
+            score = explicit_bonus + float(overlap * 3) + (0.5 if page.get("figures") else 0.0) + (0.8 if idx == 0 else 0.0)
             scored.append((score, idx))
 
         scored.sort(key=lambda item: (-item[0], item[1]))
+        ordered_candidates = [idx for _, idx in scored]
+
+        # Niveau 1 (Hybride toutes-pages) : conserver 100 % des pages (texte intégral + URLs images),
+        # avec descriptions anatomiques longues sur les pages les plus pertinentes et titres courts ailleurs.
+        compact_chunks = [_compact_page_figure_alts(p) for p in pages_meta]
+        full_chunks = [str(p.get("compiled_markdown") or "").strip() for p in pages_meta]
+        hybrid_note = (
+            f"[Intégralité des {len(pages_meta)} pages incluse : descriptions anatomiques complètes sur les pages "
+            "les plus pertinentes et légendes condensées sur les autres pages.]\n"
+        )
+        base_hybrid_len = (
+            len(header)
+            + len(hybrid_note)
+            + sum(len(c) for c in compact_chunks)
+            + max(0, len(compact_chunks) - 1) * 2
+        )
+
+        if base_hybrid_len <= doc_pages_budget:
+            chosen_chunks = list(compact_chunks)
+            upgraded_indices: set[int] = set()
+            current_len = base_hybrid_len
+            for idx in ordered_candidates:
+                for neighbor in (idx, idx - 1, idx + 1):
+                    if 0 <= neighbor < len(pages_meta) and neighbor not in upgraded_indices:
+                        delta = len(full_chunks[neighbor]) - len(compact_chunks[neighbor])
+                        if current_len + max(0, delta) <= doc_pages_budget:
+                            chosen_chunks[neighbor] = full_chunks[neighbor]
+                            upgraded_indices.add(neighbor)
+                            current_len += max(0, delta)
+            blocks.append(header + hybrid_note + "\n\n".join(c for c in chosen_chunks if c) + suffix)
+            continue
+
+        # Niveau 2 (Repli ultime si le budget max_chars est très étroit) : sélection des meilleures pages
         chosen_indices: set[int] = set()
         used_chars = len(header) + 220
 
-        # Toujours privilégier la page 1 si elle tient
-        ordered_candidates = [idx for _, idx in scored]
         for idx in ordered_candidates:
             for neighbor in (idx, idx - 1, idx + 1):
                 if 0 <= neighbor < len(pages_meta) and neighbor not in chosen_indices:
-                    chunk = str(pages_meta[neighbor].get("compiled_markdown") or "")
-                    if used_chars + len(chunk) + 4 <= per_doc_budget:
+                    chunk = full_chunks[neighbor]
+                    if used_chars + len(chunk) + 4 <= doc_pages_budget:
                         chosen_indices.add(neighbor)
                         used_chars += len(chunk) + 4
-            if used_chars >= per_doc_budget - 600:
+            if used_chars >= doc_pages_budget - 600:
                 break
 
         selected_chunks = [
-            str(pages_meta[i].get("compiled_markdown") or "")
+            full_chunks[i]
             for i in sorted(chosen_indices)
         ]
         note = (
             f"[Sélection ciblée : {len(selected_chunks)}/{len(pages_meta)} pages affichées intégralement "
             "pour respecter la fenêtre de contexte sans couper aucune balise image.]\n"
         )
-        blocks.append(header + note + "\n\n".join(selected_chunks))
+        blocks.append(header + note + "\n\n".join(selected_chunks) + suffix)
 
     return "\n\n".join(blocks)

@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   ArrowDown,
   ArrowUp,
@@ -8,9 +10,12 @@ import {
   BookOpen,
   Check,
   CircleAlert,
+  Code2,
   Copy,
+  Eye,
   FileImage,
   FileText,
+  Globe,
   Image as ImageIcon,
   Layers,
   Link2,
@@ -31,9 +36,13 @@ import {
   ingestVisualDoc,
   listVisualDocs,
   updateVisualDoc,
+  VISUAL_DOC_CATEGORIES,
+  type VisualDocCategoryId,
   type VisualDocDetail,
   type VisualDocSummary,
 } from "@/lib/api";
+import { VisualDocBookReader } from "./visual-doc-book-reader";
+import { VisualDocLinksPanel } from "./visual-doc-links-panel";
 import styles from "./visual-doc-modal.module.css";
 
 export interface VisualDocModalProps {
@@ -57,6 +66,23 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} Mo`;
 }
 
+function guessCategoryFromName(name: string): VisualDocCategoryId | null {
+  const low = name.toLowerCase();
+  if (/\b(regles?|règles?|rulebook|rules|plateau|cartes|extension|bgg)\b/.test(low)) return "boardgame";
+  if (/\b(jdr|ttrpg|donjons?|campagne|bestiaire|pathfinder|cthulhu)\b/.test(low)) return "rpg_lore";
+  if (/\b(semestriel|trimestriel|annuel|urd|10-k|10-q|earnings|financier|bilan)\b/.test(low)) return "financial";
+  if (/\b(arxiv|étude|etude|study|thesis|thèse|pubmed|preprint|scientifique)\b/.test(low)) return "scientific";
+  if (/\b(contrat|bail|cgv|cgu|juridique|décret|decret|assurance)\b/.test(low)) return "legal";
+  if (/\b(posologie|clinique|protocole|médical|medical|notice|patient)\b/.test(low)) return "medical";
+  if (/\b(cours|chapitre|exercice|examen|corrigé|corrige|td|tp)\b/.test(low)) return "educational";
+  if (/\b(datasheet|installation|câblage|cablage|firmware|api|manuel)\b/.test(low)) return "technical";
+  return null;
+}
+
+function findCategorySpec(catId?: string) {
+  return VISUAL_DOC_CATEGORIES.find((c) => c.id === catId) || VISUAL_DOC_CATEGORIES[VISUAL_DOC_CATEGORIES.length - 1];
+}
+
 export function VisualDocModal({
   isOpen,
   onClose,
@@ -77,8 +103,10 @@ export function VisualDocModal({
   const [selectedDocId, setSelectedDocId] = useState<string | null>(initialDocId);
   const [detail, setDetail] = useState<VisualDocDetail | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
-  const [detailSubTab, setDetailSubTab] = useState<"figures" | "pages" | "markdown">("figures");
+  const [detailSubTab, setDetailSubTab] = useState<"book" | "links" | "figures" | "pages" | "markdown">("book");
+  const [activeVolumeId, setActiveVolumeId] = useState<string | null>(null);
   const [markdownDraft, setMarkdownDraft] = useState("");
+  const [markdownEditMode, setMarkdownEditMode] = useState(false);
   const [savingMd, setSavingMd] = useState(false);
   const [copiedMd, setCopiedMd] = useState(false);
   const [error, setError] = useState("");
@@ -86,7 +114,11 @@ export function VisualDocModal({
 
   // État d'ingestion
   const [queuedFiles, setQueuedFiles] = useState<File[]>([]);
+  const [queuedSuppFiles, setQueuedSuppFiles] = useState<File[]>([]);
   const [titleInput, setTitleInput] = useState("");
+  const [categoryInput, setCategoryInput] = useState<VisualDocCategoryId>("boardgame");
+  const [queuedLinks, setQueuedLinks] = useState<string[]>([]);
+  const [linkDraftInput, setLinkDraftInput] = useState("");
   const [enrichVision, setEnrichVision] = useState(true);
   const [ingesting, setIngesting] = useState(false);
   const [dragActive, setDragActive] = useState(false);
@@ -94,6 +126,7 @@ export function VisualDocModal({
 
   const pdfInputRef = useRef<HTMLInputElement>(null);
   const imgInputRef = useRef<HTMLInputElement>(null);
+  const suppIngestInputRef = useRef<HTMLInputElement>(null);
 
   // Aperçus miniatures temporaires pour la file d'images à ingérer
   const previewUrls = useMemo(
@@ -148,8 +181,9 @@ export function VisualDocModal({
         const loaded = await getVisualDoc(selectedDocId);
         if (cancelled) return;
         setDetail(loaded);
+        setActiveVolumeId(null);
         setMarkdownDraft(loaded.compiled_markdown || "");
-        setDetailSubTab(loaded.figure_count > 0 ? "figures" : "pages");
+        setDetailSubTab("book");
       } catch (err) {
         if (!cancelled) setError(errorMessage(err));
       } finally {
@@ -175,10 +209,47 @@ export function VisualDocModal({
 
   const activeDetail = selectedDocId && detail?.id === selectedDocId ? detail : null;
 
-  const allFigures = useMemo(() => {
-    if (!activeDetail?.pages) return [];
-    return activeDetail.pages.flatMap((p) => (p.figures || []).map((fig) => ({ ...fig, page: p.page })));
+  const supplementaryDocs = useMemo(() => {
+    if (!activeDetail?.external_links) return [];
+    return activeDetail.external_links.filter((l) => l.link_type === "document");
   }, [activeDetail]);
+
+  const activeSuppDoc = useMemo(() => {
+    if (!activeVolumeId) return null;
+    return supplementaryDocs.find((s) => s.id === activeVolumeId) || null;
+  }, [activeVolumeId, supplementaryDocs]);
+
+  const displayedDoc = useMemo<VisualDocDetail | null>(() => {
+    if (!activeDetail) return null;
+    if (!activeSuppDoc) return activeDetail;
+    const suppMd = activeSuppDoc.compiled_markdown || activeSuppDoc.extracted_text || activeSuppDoc.summary_markdown || "";
+    const suppPages =
+      Array.isArray(activeSuppDoc.pages) && activeSuppDoc.pages.length > 0
+        ? activeSuppDoc.pages
+        : [
+            {
+              page: 1,
+              page_image: "",
+              page_image_url: "",
+              compiled_markdown: `## [p. 1]\n\n${suppMd}`,
+              figures: [],
+            },
+          ];
+    return {
+      ...activeDetail,
+      id: `${activeDetail.id}:${activeSuppDoc.id}`,
+      title: `${activeSuppDoc.title}${activeSuppDoc.doc_role_label ? ` — ${activeSuppDoc.doc_role_label}` : ""}`,
+      page_count: activeSuppDoc.page_count || suppPages.length,
+      figure_count: activeSuppDoc.figure_count || suppPages.reduce((acc, p) => acc + (p.figures?.length || 0), 0),
+      compiled_markdown: suppMd,
+      pages: suppPages,
+    };
+  }, [activeDetail, activeSuppDoc]);
+
+  const allFigures = useMemo(() => {
+    if (!displayedDoc?.pages) return [];
+    return displayedDoc.pages.flatMap((p) => (p.figures || []).map((fig) => ({ ...fig, page: p.page })));
+  }, [displayedDoc]);
 
   if (!isOpen) return null;
 
@@ -191,9 +262,12 @@ export function VisualDocModal({
     const pdf = incoming.find((f) => f.name.toLowerCase().endsWith(".pdf") || f.type === "application/pdf");
     if (pdf) {
       setQueuedFiles([pdf]);
+      const cleanedTitle = pdf.name.replace(/\.pdf$/i, "").replace(/[_-]+/g, " ").trim();
       if (!titleInput.trim()) {
-        setTitleInput(pdf.name.replace(/\.pdf$/i, "").replace(/[_-]+/g, " ").trim());
+        setTitleInput(cleanedTitle);
       }
+      const guessed = guessCategoryFromName(cleanedTitle);
+      if (guessed) setCategoryInput(guessed);
       return;
     }
 
@@ -206,8 +280,13 @@ export function VisualDocModal({
       const base = prev.length === 1 && prev[0].name.toLowerCase().endsWith(".pdf") ? [] : prev;
       return [...base, ...images].slice(0, 100);
     });
-    if (!titleInput.trim() && images[0]) {
-      setTitleInput(images[0].name.replace(/\.(png|jpe?g|webp)$/i, "").replace(/[_-]+/g, " ").trim());
+    if (images[0]) {
+      const cleanedImgTitle = images[0].name.replace(/\.(png|jpe?g|webp)$/i, "").replace(/[_-]+/g, " ").trim();
+      if (!titleInput.trim()) {
+        setTitleInput(cleanedImgTitle);
+      }
+      const guessed = guessCategoryFromName(cleanedImgTitle);
+      if (guessed) setCategoryInput(guessed);
     }
   }
 
@@ -226,23 +305,44 @@ export function VisualDocModal({
     setQueuedFiles((prev) => prev.filter((_, idx) => idx !== index));
   }
 
+  function addQueuedLinksFromDraft() {
+    const incoming = linkDraftInput
+      .split(/[\r\n,\s]+/)
+      .map((u) => u.trim())
+      .filter((u) => /^https?:\/\//i.test(u));
+    if (!incoming.length) return;
+    setQueuedLinks((prev) => Array.from(new Set([...prev, ...incoming])).slice(0, 25));
+    setLinkDraftInput("");
+  }
+
   async function handleIngestSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!queuedFiles.length || ingesting) return;
     setIngesting(true);
     setError("");
+    const pendingDraftUrls = linkDraftInput
+      .split(/[\r\n,\s]+/)
+      .map((u) => u.trim())
+      .filter((u) => /^https?:\/\//i.test(u));
+    const allInitialLinks = Array.from(new Set([...queuedLinks, ...pendingDraftUrls])).slice(0, 25);
     try {
       const created = await ingestVisualDoc({
         files: queuedFiles,
+        supplementaryFiles: queuedSuppFiles.length > 0 ? queuedSuppFiles : undefined,
         title: titleInput.trim() || undefined,
+        docCategory: categoryInput,
+        links: allInitialLinks.length > 0 ? allInitialLinks : undefined,
         enrichVision,
       });
       setDocs((prev) => [created, ...prev.filter((item) => item.id !== created.id)]);
       setSelectedDocId(created.id);
       setDetail(created);
       setMarkdownDraft(created.compiled_markdown || "");
-      setDetailSubTab(created.figure_count > 0 ? "figures" : "pages");
+      setDetailSubTab("book");
       setQueuedFiles([]);
+      setQueuedSuppFiles([]);
+      setQueuedLinks([]);
+      setLinkDraftInput("");
       setTitleInput("");
       setTab("library");
     } catch (err) {
@@ -264,6 +364,17 @@ export function VisualDocModal({
       setError(errorMessage(err));
     } finally {
       setSavingMd(false);
+    }
+  }
+
+  async function handleChangeCategory(docId: string, nextCategory: string) {
+    setError("");
+    try {
+      const updated = await updateVisualDoc(docId, { doc_category: nextCategory });
+      setDetail(updated);
+      setDocs((prev) => prev.map((d) => (d.id === updated.id ? { ...d, ...updated } : d)));
+    } catch (err) {
+      setError(errorMessage(err));
     }
   }
 
@@ -506,16 +617,52 @@ export function VisualDocModal({
                 </div>
               )}
 
+              <div className={styles.categoryPickerBlock}>
+                <div className={styles.categoryPickerHeader}>
+                  <label>Type de document &amp; Forums spécialisés associés</label>
+                  <span className={styles.categoryForumHint}>
+                    <Globe size={12} />
+                    <span>
+                      Sources interrogées en renfort :{" "}
+                      <strong>{findCategorySpec(categoryInput).forumLabel}</strong>
+                    </span>
+                  </span>
+                </div>
+                <div className={styles.categoryGrid} role="radiogroup" aria-label="Type de document">
+                  {VISUAL_DOC_CATEGORIES.map((cat) => {
+                    const active = categoryInput === cat.id;
+                    return (
+                      <button
+                        key={cat.id}
+                        type="button"
+                        role="radio"
+                        aria-checked={active}
+                        disabled={ingesting}
+                        className={`${styles.categoryChip} ${active ? styles.categoryChipActive : ""}`}
+                        onClick={() => setCategoryInput(cat.id)}
+                        title={`${cat.label} — Forums : ${cat.forumLabel}`}
+                      >
+                        <span className={styles.categoryEmoji}>{cat.emoji}</span>
+                        <span className={styles.categoryChipText}>
+                          <strong>{cat.shortLabel}</strong>
+                          <small>{cat.forumLabel}</small>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
               <div className={styles.formGrid}>
                 <div className={styles.field}>
-                  <label htmlFor="vdoc-title">Nom du document / jeu (optionnel)</label>
+                  <label htmlFor="vdoc-title">Nom du document / jeu / étude (recommandé pour cibler les forums)</label>
                   <input
                     id="vdoc-title"
                     type="text"
                     className={styles.textInput}
                     value={titleInput}
                     onChange={(e) => setTitleInput(e.target.value)}
-                    placeholder="Ex : Catan — Règles de base, Wingspan, Manuel chaudière…"
+                    placeholder="Ex : Res Arcana, Wingspan, Air Liquide S1 2026, Étude CRISPR…"
                     maxLength={200}
                     disabled={ingesting}
                   />
@@ -528,6 +675,101 @@ export function VisualDocModal({
                   {ingesting ? <LoaderCircle size={16} className="spin" /> : <Sparkles size={16} />}
                   <span>{ingesting ? "Compilation Mistral OCR + WebP…" : "Ingérer & Compiler"}</span>
                 </button>
+              </div>
+
+              <div className={styles.ingestLinksBox}>
+                <input
+                  ref={suppIngestInputRef}
+                  type="file"
+                  multiple
+                  accept=".pdf,.docx,.txt,.md,.csv,.json,.png,.jpg,.jpeg,.webp"
+                  style={{ display: "none" }}
+                  onChange={(e) => {
+                    if (e.target.files && e.target.files.length > 0) {
+                      const incoming = Array.from(e.target.files);
+                      setQueuedSuppFiles((prev) => [...prev, ...incoming].slice(0, 15));
+                    }
+                    e.target.value = "";
+                  }}
+                />
+                <div className={styles.categoryPickerHeader}>
+                  <label htmlFor="vdoc-initial-links">
+                    Documents complémentaires (FAQ, Errata, Extension…) &amp; Liens (Forums, YouTube) — Optionnel, ajoutable aussi après coup
+                  </label>
+                  <button
+                    type="button"
+                    className={styles.secondaryBtn}
+                    disabled={ingesting}
+                    onClick={() => suppIngestInputRef.current?.click()}
+                  >
+                    <Plus size={13} />
+                    <span>Joindre FAQ / Doc (PDF, Word, MD…)</span>
+                  </button>
+                </div>
+                <div className={styles.ingestLinksInputRow}>
+                  <input
+                    id="vdoc-initial-links"
+                    type="text"
+                    className={styles.textInput}
+                    value={linkDraftInput}
+                    onChange={(e) => setLinkDraftInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        addQueuedLinksFromDraft();
+                      }
+                    }}
+                    placeholder="Ou collez un lien BoardGameGeek, site ou vidéo YouTube (https://…) puis Entrée"
+                    disabled={ingesting}
+                  />
+                  <button
+                    type="button"
+                    className={styles.secondaryBtn}
+                    disabled={!linkDraftInput.trim() || ingesting}
+                    onClick={addQueuedLinksFromDraft}
+                  >
+                    <Plus size={14} />
+                    <span>Ajouter le lien</span>
+                  </button>
+                </div>
+                {(queuedSuppFiles.length > 0 || queuedLinks.length > 0) && (
+                  <div className={styles.queuedLinksPills}>
+                    {queuedSuppFiles.map((sf, idx) => (
+                      <span key={`sf-${sf.name}-${idx}`} className={styles.queuedLinkChip} title={sf.name}>
+                        <span>📜</span>
+                        <span className={styles.queuedLinkUrl}>
+                          {sf.name} ({formatBytes(sf.size)})
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setQueuedSuppFiles((prev) => prev.filter((_, i) => i !== idx))}
+                          disabled={ingesting}
+                          aria-label="Retirer ce document complémentaire"
+                        >
+                          <X size={12} />
+                        </button>
+                      </span>
+                    ))}
+                    {queuedLinks.map((u, idx) => {
+                      const isYt = /youtube\.com|youtu\.be/i.test(u);
+                      const isForum = /boardgamegeek|reddit|trictrac|cwowd|stackoverflow|stackexchange|forum|thread/i.test(u);
+                      return (
+                        <span key={u} className={styles.queuedLinkChip} title={u}>
+                          <span>{isYt ? "🎬" : isForum ? "💬" : "🌐"}</span>
+                          <span className={styles.queuedLinkUrl}>{u}</span>
+                          <button
+                            type="button"
+                            onClick={() => setQueuedLinks((prev) => prev.filter((_, i) => i !== idx))}
+                            disabled={ingesting}
+                            aria-label="Retirer ce lien"
+                          >
+                            <X size={12} />
+                          </button>
+                        </span>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
 
               <label className={styles.checkboxCard}>
@@ -596,11 +838,15 @@ export function VisualDocModal({
                           <div className={styles.docCardMeta}>
                             <span className={styles.badge}>
                               {doc.page_count} p. · {doc.figure_count} schéma{doc.figure_count > 1 ? "s" : ""}
+                              {(doc.link_count ?? 0) > 0 ? ` · ${doc.link_count} lien${(doc.link_count ?? 0) > 1 ? "s" : ""}` : ""}
                             </span>
                             {isLinked && <span className={`${styles.badge} ${styles.badgeLinked}`}>Actif ici</span>}
                           </div>
                           <div className={styles.docCardMeta}>
-                            <span>{doc.source_type === "images" ? "Liste d'images" : "PDF"}</span>
+                            <span>
+                              {findCategorySpec(doc.doc_category).emoji}{" "}
+                              {doc.doc_category_label || findCategorySpec(doc.doc_category).shortLabel}
+                            </span>
                             {doc.vision_enriched && <span>· Vision IA</span>}
                           </div>
                         </div>
@@ -626,10 +872,29 @@ export function VisualDocModal({
                     <div className={styles.detailHeader}>
                       <div className={styles.detailTitleBlock}>
                         <h3>{activeDetail.title}</h3>
-                        <small>
-                          <code>/api/docs/{activeDetail.slug}/</code> · {activeDetail.page_count} page{activeDetail.page_count > 1 ? "s" : ""} ·{" "}
-                          {activeDetail.figure_count} schéma{activeDetail.figure_count > 1 ? "s" : ""} WebP
-                        </small>
+                        <div className={styles.detailSubMetaRow}>
+                          <select
+                            className={styles.categorySelectInline}
+                            value={activeDetail.doc_category || "general"}
+                            onChange={(e) => void handleChangeCategory(activeDetail.id, e.target.value)}
+                            aria-label="Type du document illustré"
+                            title="Changer le type du document et les forums spécialisés interrogés"
+                          >
+                            {VISUAL_DOC_CATEGORIES.map((cat) => (
+                              <option key={cat.id} value={cat.id}>
+                                {cat.emoji} {cat.shortLabel}
+                              </option>
+                            ))}
+                          </select>
+                          <small>
+                            {activeDetail.page_count} page{activeDetail.page_count > 1 ? "s" : ""} ·{" "}
+                            {activeDetail.figure_count} schéma{activeDetail.figure_count > 1 ? "s" : ""} ·{" "}
+                            <span className={styles.forumInlinePill}>
+                              <Globe size={11} />
+                              <span>{activeDetail.forum_label || findCategorySpec(activeDetail.doc_category).forumLabel}</span>
+                            </span>
+                          </small>
+                        </div>
                       </div>
                       <div className={styles.detailActions}>
                         <button
@@ -707,6 +972,20 @@ export function VisualDocModal({
                     <div className={styles.subTabs}>
                       <button
                         type="button"
+                        className={`${styles.subTab} ${detailSubTab === "book" ? styles.subTabActive : ""}`}
+                        onClick={() => setDetailSubTab("book")}
+                      >
+                        📖 Liseuse 3D ({displayedDoc?.pages.length ?? activeDetail.pages.length} p.)
+                      </button>
+                      <button
+                        type="button"
+                        className={`${styles.subTab} ${detailSubTab === "links" ? styles.subTabActive : ""}`}
+                        onClick={() => setDetailSubTab("links")}
+                      >
+                        📎 Docs, FAQ &amp; Liens ({activeDetail.external_links?.length ?? activeDetail.link_count ?? 0})
+                      </button>
+                      <button
+                        type="button"
                         className={`${styles.subTab} ${detailSubTab === "figures" ? styles.subTabActive : ""}`}
                         onClick={() => setDetailSubTab("figures")}
                       >
@@ -717,7 +996,7 @@ export function VisualDocModal({
                         className={`${styles.subTab} ${detailSubTab === "pages" ? styles.subTabActive : ""}`}
                         onClick={() => setDetailSubTab("pages")}
                       >
-                        Pages originales ({activeDetail.pages.length})
+                        Pages originales ({displayedDoc?.pages.filter((p) => Boolean(p.page_image_url)).length ?? activeDetail.pages.length})
                       </button>
                       <button
                         type="button"
@@ -728,7 +1007,68 @@ export function VisualDocModal({
                       </button>
                     </div>
 
-                    <div className={styles.detailContent}>
+                    {supplementaryDocs.length > 0 && detailSubTab !== "links" && (
+                      <div className={styles.volumeBar} role="tablist" aria-label="Choisir le volume à consulter">
+                        <span className={styles.volumeBarLabel}>Volume affiché :</span>
+                        <button
+                          type="button"
+                          role="tab"
+                          aria-selected={!activeSuppDoc}
+                          className={`${styles.volumePill} ${!activeSuppDoc ? styles.volumePillActive : ""}`}
+                          onClick={() => setActiveVolumeId(null)}
+                        >
+                          <span>📘 {activeDetail.title}</span>
+                          <small>{activeDetail.page_count} p.</small>
+                        </button>
+                        {supplementaryDocs.map((sDoc) => {
+                          const isCurrent = activeSuppDoc?.id === sDoc.id;
+                          return (
+                            <button
+                              key={sDoc.id}
+                              type="button"
+                              role="tab"
+                              aria-selected={isCurrent}
+                              className={`${styles.volumePill} ${isCurrent ? styles.volumePillActive : ""}`}
+                              onClick={() => setActiveVolumeId(sDoc.id)}
+                              title={sDoc.doc_role_label || sDoc.filename}
+                            >
+                              <span>📜 {sDoc.title}</span>
+                              {sDoc.page_count ? <small>{sDoc.page_count} p.</small> : null}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    <div className={`${styles.detailContent} ${detailSubTab === "book" ? styles.detailContentBook : ""}`}>
+                      {detailSubTab === "book" && displayedDoc && (
+                        <VisualDocBookReader
+                          key={displayedDoc.id}
+                          doc={displayedDoc}
+                          onZoomImage={(asset) => setZoomedAsset(asset)}
+                        />
+                      )}
+
+                      {detailSubTab === "links" && (
+                        <VisualDocLinksPanel
+                          doc={activeDetail}
+                          onDocUpdated={(updated) => {
+                            setDetail(updated);
+                            setDocs((prev) => prev.map((d) => (d.id === updated.id ? { ...d, ...updated } : d)));
+                          }}
+                          onError={setError}
+                          onOpenInBookReader={(linkId) => {
+                            setActiveVolumeId(linkId);
+                            setDetailSubTab("book");
+                          }}
+                          onOpenInMarkdown={(linkId) => {
+                            setActiveVolumeId(linkId);
+                            setMarkdownEditMode(false);
+                            setDetailSubTab("markdown");
+                          }}
+                        />
+                      )}
+
                       {detailSubTab === "figures" && (
                         allFigures.length === 0 ? (
                           <div className={styles.emptyState}>
@@ -762,47 +1102,73 @@ export function VisualDocModal({
                         )
                       )}
 
-                      {detailSubTab === "pages" && (
-                        <div className={styles.pagesGrid}>
-                          {activeDetail.pages.map((p) => (
-                            <button
-                              key={p.page}
-                              type="button"
-                              className={styles.pageCard}
-                              onClick={() =>
-                                setZoomedAsset({
-                                  src: p.page_image_url,
-                                  caption: `${activeDetail.title} — Page ${p.page} (original de secours)`,
-                                })
-                              }
-                            >
-                              <img
-                                src={p.page_image_url}
-                                alt={`Page ${p.page}`}
-                                className={styles.pageThumb}
-                                loading="lazy"
-                              />
-                              <div className={styles.pageLabel}>
-                                <span>Page {p.page}</span>
-                                <span>{p.figures.length} fig.</span>
-                              </div>
-                            </button>
-                          ))}
-                        </div>
+                      {detailSubTab === "pages" && displayedDoc && (
+                        displayedDoc.pages.some((p) => Boolean(p.page_image_url)) ? (
+                          <div className={styles.pagesGrid}>
+                            {displayedDoc.pages
+                              .filter((p) => Boolean(p.page_image_url))
+                              .map((p) => (
+                                <button
+                                  key={p.page}
+                                  type="button"
+                                  className={styles.pageCard}
+                                  onClick={() =>
+                                    setZoomedAsset({
+                                      src: p.page_image_url,
+                                      caption: `${displayedDoc.title} — Page ${p.page} (original de secours)`,
+                                    })
+                                  }
+                                >
+                                  <img
+                                    src={p.page_image_url}
+                                    alt={`Page ${p.page}`}
+                                    className={styles.pageThumb}
+                                    loading="lazy"
+                                  />
+                                  <div className={styles.pageLabel}>
+                                    <span>Page {p.page}</span>
+                                    <span>{p.figures.length} fig.</span>
+                                  </div>
+                                </button>
+                              ))}
+                          </div>
+                        ) : (
+                          <div className={styles.emptyState}>
+                            <FileText size={24} />
+                            <p>
+                              Ce document complémentaire est au format texte/Word (sans planches PDF scannées). Utilisez l&apos;onglet <strong>📖 Liseuse 3D</strong> pour le feuilleter en livre ou <strong>Markdown compilé</strong> pour le lire d&apos;un bloc.
+                            </p>
+                          </div>
+                        )
                       )}
 
-                      {detailSubTab === "markdown" && (
+                      {detailSubTab === "markdown" && displayedDoc && (
                         <div>
                           <div className={styles.markdownToolbar}>
                             <small>
-                              Vous pouvez affiner manuellement une description <code>![...](...)</code> puis enregistrer.
+                              {activeSuppDoc
+                                ? `Markdown compilé du document complémentaire « ${activeSuppDoc.title} » (${displayedDoc.page_count} p.).`
+                                : markdownEditMode
+                                  ? "Mode édition source : vous pouvez modifier une description puis enregistrer."
+                                  : "Rendu stylisé du document compilé (titres, gras, tableaux et descriptions anatomiques des images)."}
                             </small>
                             <div style={{ display: "flex", gap: 8 }}>
+                              {!activeSuppDoc && (
+                                <button
+                                  type="button"
+                                  className={styles.secondaryBtn}
+                                  onClick={() => setMarkdownEditMode((v) => !v)}
+                                >
+                                  {markdownEditMode ? <Eye size={13} /> : <Code2 size={13} />}
+                                  <span>{markdownEditMode ? "Vue stylisée" : "Éditer le code source"}</span>
+                                </button>
+                              )}
                               <button
                                 type="button"
                                 className={styles.secondaryBtn}
                                 onClick={() => {
-                                  navigator.clipboard?.writeText(markdownDraft).then(() => {
+                                  const toCopy = activeSuppDoc ? displayedDoc.compiled_markdown : markdownDraft;
+                                  navigator.clipboard?.writeText(toCopy).then(() => {
                                     setCopiedMd(true);
                                     setTimeout(() => setCopiedMd(false), 1800);
                                   });
@@ -811,23 +1177,65 @@ export function VisualDocModal({
                                 {copiedMd ? <Check size={13} /> : <Copy size={13} />}
                                 <span>{copiedMd ? "Copié" : "Copier"}</span>
                               </button>
-                              <button
-                                type="button"
-                                className={styles.primaryBtn}
-                                disabled={savingMd || markdownDraft === activeDetail.compiled_markdown}
-                                onClick={() => void handleSaveMarkdown()}
-                              >
-                                {savingMd ? <LoaderCircle size={14} className="spin" /> : <Save size={14} />}
-                                <span>Enregistrer</span>
-                              </button>
+                              {!activeSuppDoc && markdownEditMode && (
+                                <button
+                                  type="button"
+                                  className={styles.primaryBtn}
+                                  disabled={savingMd || markdownDraft === activeDetail.compiled_markdown}
+                                  onClick={() => void handleSaveMarkdown()}
+                                >
+                                  {savingMd ? <LoaderCircle size={14} className="spin" /> : <Save size={14} />}
+                                  <span>Enregistrer</span>
+                                </button>
+                              )}
                             </div>
                           </div>
-                          <textarea
-                            className={styles.markdownEditor}
-                            value={markdownDraft}
-                            onChange={(e) => setMarkdownDraft(e.target.value)}
-                            spellCheck={false}
-                          />
+                          {!activeSuppDoc && markdownEditMode ? (
+                            <textarea
+                              className={styles.markdownEditor}
+                              value={markdownDraft}
+                              onChange={(e) => setMarkdownDraft(e.target.value)}
+                              spellCheck={false}
+                            />
+                          ) : (
+                            <div className={styles.styledMarkdownDoc}>
+                              <ReactMarkdown
+                                remarkPlugins={[remarkGfm]}
+                                components={{
+                                  img: ({ src, alt }) => {
+                                    const imgSrc = typeof src === "string" ? src : "";
+                                    const imgAlt = alt || "Illustration";
+                                    if (!imgSrc) return null;
+                                    const shortTitle =
+                                      imgAlt.split(" : ")[0]?.split(" — ")[0]?.slice(0, 120) || "Illustration";
+                                    return (
+                                      <aside className={styles.styledDocFigureCard}>
+                                        <button
+                                          type="button"
+                                          className={styles.styledDocFigureThumbBtn}
+                                          onClick={() => setZoomedAsset({ src: imgSrc, caption: imgAlt })}
+                                          title="Cliquer pour agrandir"
+                                        >
+                                          <img
+                                            src={imgSrc}
+                                            alt={shortTitle}
+                                            className={styles.styledDocFigureThumb}
+                                            loading="lazy"
+                                          />
+                                        </button>
+                                        <div className={styles.styledDocFigureBody}>
+                                          <strong className={styles.styledDocFigureTitle}>{shortTitle}</strong>
+                                          <p className={styles.styledDocFigureDesc}>{imgAlt}</p>
+                                        </div>
+                                      </aside>
+                                    );
+                                  },
+                                }}
+                              >
+                                {activeSuppDoc ? displayedDoc.compiled_markdown : markdownDraft}
+                              </ReactMarkdown>
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>

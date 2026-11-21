@@ -177,6 +177,11 @@ def has_stt_access(settings: Any) -> bool:
     return resolve_stt_provider(settings) is not None
 
 
+def is_valid_voice_id(voice_id: str | None) -> bool:
+    """Vérifie qu'un identifiant de voix TTS appartient au catalogue supporté."""
+    return bool(voice_id and voice_id.strip() in _VALID_VOICE_IDS)
+
+
 def resolve_voice_name(settings: Any, requested: str | None = None) -> str:
     candidate = (requested or "").strip()
     if candidate in _VALID_VOICE_IDS:

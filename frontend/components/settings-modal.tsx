@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   Brain,
@@ -10,29 +10,44 @@ import {
   Cpu,
   Info,
   LoaderCircle,
+  Play,
   RotateCcw,
   Save,
   Settings,
   Sparkles,
+  Square,
   Trash2,
+  Volume2,
   Wand2,
   X,
   Zap,
 } from "lucide-react";
 import { api, errorMessage, type AgentTeamsResponse, type AuthUser, type PromptPreset, type UserSettings } from "@/lib/api";
+import { synthesizeSpeech, type VoiceOption } from "@/lib/voice-api";
 import { InterfaceThemePicker } from "@/components/interface-theme";
 
 type SettingsModalProps = {
   currentUser: AuthUser;
   isOpen: boolean;
   onClose: () => void;
-  onSettingsUpdated?: (updated: { system_prompt: string; prompt_cache_enabled: boolean; auto_memory_enabled: boolean }) => void;
+  voices?: VoiceOption[];
+  serverDefaultVoice?: string;
+  ttsEnabled?: boolean;
+  onSettingsUpdated?: (updated: {
+    system_prompt: string;
+    prompt_cache_enabled: boolean;
+    auto_memory_enabled: boolean;
+    default_voice?: string;
+  }) => void;
 };
 
 export function SettingsModal({
   currentUser,
   isOpen,
   onClose,
+  voices = [],
+  serverDefaultVoice = "Aoede",
+  ttsEnabled = false,
   onSettingsUpdated,
 }: SettingsModalProps) {
   const [loading, setLoading] = useState(true);
@@ -43,9 +58,35 @@ export function SettingsModal({
   const [systemPrompt, setSystemPrompt] = useState("");
   const [promptCacheEnabled, setPromptCacheEnabled] = useState(true);
   const [autoMemoryEnabled, setAutoMemoryEnabled] = useState(true);
+  const [defaultVoice, setDefaultVoice] = useState(currentUser.default_voice || serverDefaultVoice);
+  const [voiceFilter, setVoiceFilter] = useState("");
+  const [previewingVoice, setPreviewingVoice] = useState(false);
+  const [previewPlaying, setPreviewPlaying] = useState(false);
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const previewAbortRef = useRef<AbortController | null>(null);
+  const previewUrlRef = useRef<string | null>(null);
+
   const [defaultSystemPrompt, setDefaultSystemPrompt] = useState("");
   const [presets, setPresets] = useState<PromptPreset[]>([]);
   const [personas, setPersonas] = useState<Array<{ id: string; name: string; role: string; avatar: string; prompt: string }>>([]);
+
+  function stopVoicePreview() {
+    if (previewAbortRef.current) {
+      previewAbortRef.current.abort();
+      previewAbortRef.current = null;
+    }
+    if (previewAudioRef.current) {
+      previewAudioRef.current.pause();
+      previewAudioRef.current.currentTime = 0;
+      previewAudioRef.current = null;
+    }
+    if (previewUrlRef.current) {
+      URL.revokeObjectURL(previewUrlRef.current);
+      previewUrlRef.current = null;
+    }
+    setPreviewingVoice(false);
+    setPreviewPlaying(false);
+  }
 
   useEffect(() => {
     if (!isOpen) return;
@@ -64,6 +105,7 @@ export function SettingsModal({
         setSystemPrompt(data.system_prompt || "");
         setPromptCacheEnabled(data.prompt_cache_enabled ?? true);
         setAutoMemoryEnabled(data.auto_memory_enabled ?? true);
+        setDefaultVoice(data.default_voice || currentUser.default_voice || serverDefaultVoice);
         setDefaultSystemPrompt(data.default_system_prompt || "");
         setPresets(data.prompt_presets || []);
         if (teamsRes?.templates) {
@@ -76,6 +118,7 @@ export function SettingsModal({
         setSystemPrompt(currentUser.system_prompt || "");
         setPromptCacheEnabled(currentUser.prompt_cache_enabled ?? true);
         setAutoMemoryEnabled(currentUser.auto_memory_enabled ?? true);
+        setDefaultVoice(currentUser.default_voice || serverDefaultVoice);
         setError(`Impossible de charger les paramètres : ${errorMessage(err)}`);
       })
       .finally(() => {
@@ -84,8 +127,54 @@ export function SettingsModal({
 
     return () => {
       active = false;
+      stopVoicePreview();
     };
-  }, [isOpen, currentUser]);
+  }, [isOpen, currentUser, serverDefaultVoice]);
+
+  const filteredVoices = useMemo(() => {
+    const q = voiceFilter.trim().toLowerCase();
+    if (!q) return voices;
+    return voices.filter(
+      (v) => v.name.toLowerCase().includes(q) || v.tone.toLowerCase().includes(q),
+    );
+  }, [voices, voiceFilter]);
+
+  const activeVoiceOption = useMemo(
+    () => voices.find((v) => v.id === defaultVoice) ?? null,
+    [voices, defaultVoice],
+  );
+
+  async function handlePreviewVoice() {
+    if (previewPlaying || previewingVoice) {
+      stopVoicePreview();
+      return;
+    }
+    if (!ttsEnabled) return;
+    stopVoicePreview();
+    setError(null);
+    setPreviewingVoice(true);
+    const controller = new AbortController();
+    previewAbortRef.current = controller;
+    try {
+      const sampleText = `Bonjour ! Je suis ${defaultVoice}, votre voix par défaut sur cLAIr.`;
+      const blob = await synthesizeSpeech(sampleText, defaultVoice, "natural", controller.signal);
+      if (controller.signal.aborted) return;
+      const url = URL.createObjectURL(blob);
+      previewUrlRef.current = url;
+      const audio = new Audio(url);
+      previewAudioRef.current = audio;
+      setPreviewingVoice(false);
+      setPreviewPlaying(true);
+      audio.onended = () => stopVoicePreview();
+      audio.onerror = () => stopVoicePreview();
+      await audio.play();
+    } catch (err) {
+      if ((err as Error)?.name !== "AbortError") {
+        setError(`Impossible d'écouter l'aperçu vocal : ${errorMessage(err)}`);
+      }
+      stopVoicePreview();
+    }
+  }
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -111,12 +200,14 @@ export function SettingsModal({
           system_prompt: systemPrompt,
           prompt_cache_enabled: promptCacheEnabled,
           auto_memory_enabled: autoMemoryEnabled,
+          default_voice: defaultVoice,
         }),
       });
 
       setSystemPrompt(res.system_prompt || "");
       setPromptCacheEnabled(res.prompt_cache_enabled ?? true);
       setAutoMemoryEnabled(res.auto_memory_enabled ?? true);
+      setDefaultVoice(res.default_voice || serverDefaultVoice);
       setSuccessMessage("Paramètres enregistrés avec succès !");
 
       if (onSettingsUpdated) {
@@ -124,6 +215,7 @@ export function SettingsModal({
           system_prompt: res.system_prompt || "",
           prompt_cache_enabled: res.prompt_cache_enabled ?? true,
           auto_memory_enabled: res.auto_memory_enabled ?? true,
+          default_voice: res.default_voice || serverDefaultVoice,
         });
       }
 
@@ -178,7 +270,7 @@ export function SettingsModal({
                 <h2 id="settings-modal-title">Paramètres & Personnalisation</h2>
                 <span className="settings-user-pill">Compte : {currentUser.username}</span>
               </div>
-              <p>Configurez votre prompt général permanent et l’optimisation de coût par cache de prompt.</p>
+              <p>Configurez votre prompt général, votre voix par défaut, la mémoire et l’optimisation par cache de prompt.</p>
             </div>
           </div>
           <button
@@ -332,7 +424,119 @@ export function SettingsModal({
                 </div>
               </section>
 
-              {/* SECTION 2 : Gestion du Cache de Prompt (Prompt Caching) */}
+              {/* SECTION 2 : Voix IA par défaut (Synthèse vocale) */}
+              <section className="settings-section">
+                <div className="settings-section-header">
+                  <div className="settings-section-title-wrap">
+                    <span className="settings-section-icon"><Volume2 size={18} /></span>
+                    <div>
+                      <div className="settings-title-with-badge">
+                        <h3>Voix IA par défaut (Synthèse vocale)</h3>
+                        <span className="settings-voice-current-badge">
+                          {defaultVoice}
+                          {activeVoiceOption ? ` · ${activeVoiceOption.tone}` : ""}
+                        </span>
+                      </div>
+                      <p>
+                        Choisissez la voix utilisée automatiquement pour la lecture des réponses et le Mode Vocal Plein Écran sur tous vos appareils.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="settings-voice-toolbar">
+                  <input
+                    type="search"
+                    className="settings-voice-search"
+                    value={voiceFilter}
+                    onChange={(e) => setVoiceFilter(e.target.value)}
+                    placeholder="Rechercher une voix (ex. Sulafat, grave, douce…)"
+                    aria-label="Rechercher une voix par défaut"
+                  />
+
+                  <div className="settings-voice-toolbar-actions">
+                    <button
+                      type="button"
+                      className={`settings-voice-preview-btn ${previewPlaying ? "is-playing" : ""}`}
+                      onClick={() => void handlePreviewVoice()}
+                      disabled={!ttsEnabled}
+                      title={
+                        ttsEnabled
+                          ? previewPlaying
+                            ? "Arrêter l'aperçu vocal"
+                            : `Écouter un aperçu de la voix ${defaultVoice}`
+                          : "Synthèse vocale indisponible : configurez GOOGLE_API_KEY"
+                      }
+                    >
+                      {previewingVoice ? (
+                        <>
+                          <LoaderCircle size={14} className="spin" />
+                          <span>Chargement…</span>
+                        </>
+                      ) : previewPlaying ? (
+                        <>
+                          <Square size={12} fill="currentColor" />
+                          <span>Arrêter</span>
+                        </>
+                      ) : (
+                        <>
+                          <Play size={13} fill="currentColor" />
+                          <span>Tester {defaultVoice}</span>
+                        </>
+                      )}
+                    </button>
+
+                    {defaultVoice !== serverDefaultVoice && (
+                      <button
+                        type="button"
+                        className="settings-link-btn"
+                        onClick={() => {
+                          stopVoicePreview();
+                          setDefaultVoice(serverDefaultVoice);
+                        }}
+                        title={`Revenir à la voix par défaut du serveur (${serverDefaultVoice})`}
+                      >
+                        <RotateCcw size={13} />
+                        <span>Défaut ({serverDefaultVoice})</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {voices.length > 0 ? (
+                  <div className="settings-voice-grid" role="radiogroup" aria-label="Voix IA par défaut">
+                    {filteredVoices.map((voice) => {
+                      const isSelected = voice.id === defaultVoice;
+                      return (
+                        <button
+                          key={voice.id}
+                          type="button"
+                          role="radio"
+                          aria-checked={isSelected}
+                          className={`settings-voice-card ${isSelected ? "is-selected" : ""}`}
+                          onClick={() => {
+                            stopVoicePreview();
+                            setDefaultVoice(voice.id);
+                          }}
+                        >
+                          <div className="settings-voice-card-text">
+                            <strong>{voice.name}</strong>
+                            <span>{voice.tone}</span>
+                          </div>
+                          {isSelected && <Check size={15} className="settings-voice-check" />}
+                        </button>
+                      );
+                    })}
+                    {filteredVoices.length === 0 && (
+                      <div className="settings-voice-empty">Aucune voix ne correspond à « {voiceFilter} ».</div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="settings-voice-empty">Catalogue de voix indisponible pour le moment.</div>
+                )}
+              </section>
+
+              {/* SECTION 3 : Gestion du Cache de Prompt (Prompt Caching) */}
               <section className="settings-section">
                 <div className="settings-section-header">
                   <div className="settings-section-title-wrap">

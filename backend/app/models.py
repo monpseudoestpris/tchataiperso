@@ -42,6 +42,7 @@ class User(Base):
     system_prompt: Mapped[str] = mapped_column(Text, default=BASE_USER_PROMPT, server_default=BASE_USER_PROMPT)
     prompt_cache_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
     auto_memory_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
+    default_voice: Mapped[str | None] = mapped_column(String(40), nullable=True, default=None)
 
 
 class AuthSession(Base):
@@ -510,13 +511,15 @@ class VisualDocument(Base):
     slug: Mapped[str] = mapped_column(String(80), unique=True, index=True)
     title: Mapped[str] = mapped_column(String(200))
     filename: Mapped[str] = mapped_column(String(255))
-    source_type: Mapped[str] = mapped_column(String(20), default="pdf")  # pdf | images
+    source_type: Mapped[str] = mapped_column(String(20), default="pdf")  # pdf | images | finance
+    doc_category: Mapped[str] = mapped_column(String(40), default="general")
     ocr_model: Mapped[str] = mapped_column(String(120), default="")
     vision_enriched: Mapped[bool] = mapped_column(Boolean, default=False)
     page_count: Mapped[int] = mapped_column(Integer, default=0)
     figure_count: Mapped[int] = mapped_column(Integer, default=0)
     compiled_markdown: Mapped[str] = mapped_column(Text, default="")
     pages_meta: Mapped[list] = mapped_column(JSON, default=list)
+    external_links: Mapped[list] = mapped_column(JSON, default=list)
     warnings: Mapped[list] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)

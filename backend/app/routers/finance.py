@@ -1652,6 +1652,7 @@ async def ensure_visual_doc_from_finance_report(
                 title=doc_title,
                 filename=report_snapshot["filename"][:255],
                 source_type=compiled["source_type"],
+                doc_category="financial",
                 ocr_model=compiled["ocr_model"],
                 vision_enriched=compiled["vision_enriched"],
                 page_count=compiled["page_count"],

@@ -14549,6 +14549,200 @@ svg { flex-shrink: 0; }
   color: #f8fafc;
 }
 
+/* Default Voice Picker inside Settings Modal */
+.settings-voice-current-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  background: #eef2ff;
+  color: #4f46e5;
+}
+
+:root[data-theme="dark"] .settings-voice-current-badge {
+  background: rgba(99, 102, 241, 0.2);
+  color: #a5b4fc;
+}
+
+.settings-voice-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.settings-voice-search {
+  flex: 1 1 220px;
+  min-width: 0;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #0f172a;
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.settings-voice-search:focus {
+  border-color: #4f46e5;
+}
+
+:root[data-theme="dark"] .settings-voice-search {
+  background: #0f172a;
+  border-color: #334155;
+  color: #f8fafc;
+}
+
+.settings-voice-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.settings-voice-preview-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 13px;
+  border-radius: 9px;
+  border: 1px solid #c7d2fe;
+  background: #eef2ff;
+  color: #4338ca;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.settings-voice-preview-btn:hover:not(:disabled) {
+  background: #e0e7ff;
+  border-color: #818cf8;
+}
+
+.settings-voice-preview-btn.is-playing {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #dc2626;
+}
+
+.settings-voice-preview-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+:root[data-theme="dark"] .settings-voice-preview-btn {
+  background: rgba(99, 102, 241, 0.18);
+  border-color: rgba(129, 140, 248, 0.35);
+  color: #c7d2fe;
+}
+
+:root[data-theme="dark"] .settings-voice-preview-btn.is-playing {
+  background: rgba(220, 38, 38, 0.2);
+  border-color: rgba(248, 113, 113, 0.4);
+  color: #fca5a5;
+}
+
+.settings-voice-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(175px, 1fr));
+  gap: 8px;
+  max-height: 228px;
+  overflow-y: auto;
+  padding: 2px;
+}
+
+.settings-voice-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 11px;
+  border-radius: 10px;
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+  color: #0f172a;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.settings-voice-card:hover {
+  border-color: #818cf8;
+  background: #f8fafc;
+}
+
+.settings-voice-card.is-selected {
+  border-color: #4f46e5;
+  background: #eef2ff;
+  box-shadow: 0 0 0 1px #4f46e5;
+}
+
+:root[data-theme="dark"] .settings-voice-card {
+  background: #0f172a;
+  border-color: #334155;
+  color: #f8fafc;
+}
+
+:root[data-theme="dark"] .settings-voice-card:hover {
+  border-color: #818cf8;
+  background: #1e293b;
+}
+
+:root[data-theme="dark"] .settings-voice-card.is-selected {
+  border-color: #818cf8;
+  background: rgba(99, 102, 241, 0.22);
+  box-shadow: 0 0 0 1px #818cf8;
+}
+
+.settings-voice-card-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.settings-voice-card-text strong {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.settings-voice-card-text span {
+  font-size: 11.5px;
+  color: #64748b;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+:root[data-theme="dark"] .settings-voice-card-text span {
+  color: #94a3b8;
+}
+
+.settings-voice-check {
+  flex-shrink: 0;
+  color: #4f46e5;
+}
+
+:root[data-theme="dark"] .settings-voice-check {
+  color: #a5b4fc;
+}
+
+.settings-voice-empty {
+  grid-column: 1 / -1;
+  padding: 16px 12px;
+  text-align: center;
+  font-size: 12.5px;
+  color: #64748b;
+}
+
 /* Modal Footer */
 .settings-modal-footer {
   display: flex;

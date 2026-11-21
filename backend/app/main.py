@@ -107,6 +107,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 conn.execute(text("ALTER TABLE users ADD COLUMN prompt_cache_enabled BOOLEAN NOT NULL DEFAULT TRUE"))
             if "auto_memory_enabled" not in user_columns:
                 conn.execute(text("ALTER TABLE users ADD COLUMN auto_memory_enabled BOOLEAN NOT NULL DEFAULT TRUE"))
+            if "default_voice" not in user_columns:
+                conn.execute(text("ALTER TABLE users ADD COLUMN default_voice VARCHAR(40)"))
             conn.execute(
                 text("UPDATE users SET system_prompt = :prompt WHERE system_prompt = '' OR system_prompt IS NULL"),
                 {"prompt": BASE_USER_PROMPT},
@@ -174,6 +176,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     conn.execute(text("ALTER TABLE finance_quarterly_reports ADD COLUMN extracted_tables JSON"))
                 if "extracted_at" not in fqr_columns:
                     conn.execute(text(f"ALTER TABLE finance_quarterly_reports ADD COLUMN extracted_at {dt_type}"))
+        if "visual_documents" in inspector.get_table_names():
+            vdoc_columns = {column["name"] for column in inspector.get_columns("visual_documents")}
+            with engine.begin() as conn:
+                if "doc_category" not in vdoc_columns:
+                    conn.execute(
+                        text("ALTER TABLE visual_documents ADD COLUMN doc_category VARCHAR(40) NOT NULL DEFAULT 'general'")
+                    )
+                    conn.execute(
+                        text(
+                            "UPDATE visual_documents SET doc_category = 'financial' "
+                            "WHERE doc_category = 'general' AND (ocr_model = 'finance-report' OR source_type = 'finance')"
+                        )
+                    )
+                    conn.execute(
+                        text(
+                            "UPDATE visual_documents SET doc_category = 'boardgame' "
+                            "WHERE doc_category = 'general' AND ("
+                            "LOWER(title) LIKE '%regle%' OR LOWER(title) LIKE '%règle%' OR LOWER(title) LIKE '%rule%'"
+                            ")"
+                        )
+                    )
+                if "external_links" not in vdoc_columns:
+                    conn.execute(
+                        text("ALTER TABLE visual_documents ADD COLUMN external_links JSON NOT NULL DEFAULT '[]'")
+                    )
         if "finance_watchlist_items" in inspector.get_table_names():
             wl_columns = {column["name"] for column in inspector.get_columns("finance_watchlist_items")}
             wl_uqs = {u["name"]: u.get("column_names") or [] for u in inspector.get_unique_constraints("finance_watchlist_items") if u.get("name")}

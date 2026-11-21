@@ -553,6 +553,7 @@ export type UserSettings = {
   system_prompt: string;
   prompt_cache_enabled: boolean;
   auto_memory_enabled: boolean;
+  default_voice?: string;
   default_system_prompt: string;
   prompt_presets: PromptPreset[];
 };
@@ -561,6 +562,7 @@ export type UpdateUserSettings = {
   system_prompt?: string;
   prompt_cache_enabled?: boolean;
   auto_memory_enabled?: boolean;
+  default_voice?: string;
 };
 
 export type AuthUser = {
@@ -572,6 +574,7 @@ export type AuthUser = {
   system_prompt?: string;
   prompt_cache_enabled?: boolean;
   auto_memory_enabled?: boolean;
+  default_voice?: string | null;
 };
 export type FamilyMember = {
   id: string;
@@ -2868,16 +2871,149 @@ export type VisualDocPage = {
   figures: VisualDocFigure[];
 };
 
+export type VisualDocCategoryId =
+  | "boardgame"
+  | "rpg_lore"
+  | "scientific"
+  | "financial"
+  | "technical"
+  | "legal"
+  | "medical"
+  | "educational"
+  | "general";
+
+export type VisualDocCategorySpec = {
+  id: VisualDocCategoryId;
+  emoji: string;
+  label: string;
+  shortLabel: string;
+  forumLabel: string;
+  autoForumSearch: boolean;
+};
+
+export const VISUAL_DOC_CATEGORIES: VisualDocCategorySpec[] = [
+  {
+    id: "boardgame",
+    emoji: "🎲",
+    label: "Règle de jeu de société / Cartes / Wargame",
+    shortLabel: "Jeu de société",
+    forumLabel: "BoardGameGeek (Rules & FAQ), CWOWD, TricTrac",
+    autoForumSearch: true,
+  },
+  {
+    id: "rpg_lore",
+    emoji: "🐉",
+    label: "Jeu de Rôle (JdR / TTRPG) & Livre d'univers",
+    shortLabel: "Jeu de Rôle (JdR)",
+    forumLabel: "RPG StackExchange, Reddit r/rpg, CasusNO, BGG",
+    autoForumSearch: true,
+  },
+  {
+    id: "scientific",
+    emoji: "🔬",
+    label: "Rapport / Article scientifique & Recherche",
+    shortLabel: "Rapport scientifique",
+    forumLabel: "PubMed, arXiv, Semantic Scholar, PubPeer, StackExchange",
+    autoForumSearch: true,
+  },
+  {
+    id: "financial",
+    emoji: "📈",
+    label: "Rapport financier / Bourse / Résultats",
+    shortLabel: "Rapport financier",
+    forumLabel: "ZoneBourse, Seeking Alpha, Boursorama, AMF/SEC",
+    autoForumSearch: true,
+  },
+  {
+    id: "technical",
+    emoji: "🛠️",
+    label: "Manuel technique / Matériel / Logiciel",
+    shortLabel: "Manuel technique",
+    forumLabel: "StackOverflow, GitHub Discussions, SuperUser, Reddit Tech",
+    autoForumSearch: true,
+  },
+  {
+    id: "legal",
+    emoji: "⚖️",
+    label: "Contrat / Texte juridique / Fiscalité / Assurance",
+    shortLabel: "Juridique & Contrat",
+    forumLabel: "Légifrance, Service-Public, Cour de cassation, Village de la Justice",
+    autoForumSearch: true,
+  },
+  {
+    id: "medical",
+    emoji: "🩺",
+    label: "Document médical / Protocole clinique / Notice",
+    shortLabel: "Médical & Santé",
+    forumLabel: "HAS, ANSM, Vidal, PubMed, Cochrane",
+    autoForumSearch: true,
+  },
+  {
+    id: "educational",
+    emoji: "🎓",
+    label: "Cours / Manuel scolaire / Support pédagogique",
+    shortLabel: "Cours & Pédagogie",
+    forumLabel: "StackExchange, Bibm@th, Wikipédia, Éduscol",
+    autoForumSearch: true,
+  },
+  {
+    id: "general",
+    emoji: "📄",
+    label: "Autre document illustré / Livre / Magazine",
+    shortLabel: "Document général",
+    forumLabel: "Recherche web générale & forums pertinents",
+    autoForumSearch: false,
+  },
+];
+
+export type SupplementaryDocRoleId = "faq_errata" | "aide_de_jeu" | "extension" | "annexe";
+
+export const SUPPLEMENTARY_DOC_ROLES: { id: SupplementaryDocRoleId; emoji: string; label: string }[] = [
+  { id: "faq_errata", emoji: "📜", label: "FAQ / Errata officiel" },
+  { id: "aide_de_jeu", emoji: "🧭", label: "Aide de jeu / Référence" },
+  { id: "extension", emoji: "🧩", label: "Extension / Module" },
+  { id: "annexe", emoji: "📄", label: "Document / Annexe" },
+];
+
+export type VisualDocExternalLink = {
+  id: string;
+  url: string;
+  link_type: "youtube" | "forum" | "site" | "document" | string;
+  doc_role?: SupplementaryDocRoleId | string;
+  doc_role_label?: string;
+  filename?: string;
+  mime_type?: string;
+  file_size?: number;
+  asset_prefix?: string;
+  page_count?: number;
+  figure_count?: number;
+  compiled_markdown?: string;
+  pages?: VisualDocPage[];
+  domain?: string;
+  title: string;
+  video_id?: string | null;
+  duration?: string | null;
+  author?: string | null;
+  summary_markdown: string;
+  extracted_text?: string;
+  extracted_chars?: number;
+  created_at?: string;
+};
+
 export type VisualDocSummary = {
   id: string;
   slug: string;
   title: string;
   filename: string;
   source_type: "pdf" | "images" | string;
+  doc_category?: VisualDocCategoryId | string;
+  doc_category_label?: string;
+  forum_label?: string;
   ocr_model?: string;
   vision_enriched?: boolean;
   page_count: number;
   figure_count: number;
+  link_count?: number;
   cover_url?: string | null;
   compiled_chars?: number;
   warnings?: string[];
@@ -2888,6 +3024,7 @@ export type VisualDocSummary = {
 export type VisualDocDetail = VisualDocSummary & {
   compiled_markdown: string;
   pages: VisualDocPage[];
+  external_links?: VisualDocExternalLink[];
 };
 
 export async function listVisualDocs(): Promise<VisualDocSummary[]> {
@@ -2900,15 +3037,29 @@ export async function getVisualDoc(docId: string): Promise<VisualDocDetail> {
 
 export async function ingestVisualDoc(params: {
   files: File[];
+  supplementaryFiles?: File[];
   title?: string;
+  docCategory?: string;
+  links?: string[];
   enrichVision?: boolean;
 }): Promise<VisualDocDetail> {
   const form = new FormData();
   for (const file of params.files) {
     form.append("files", file);
   }
+  if (params.supplementaryFiles && params.supplementaryFiles.length > 0) {
+    for (const sFile of params.supplementaryFiles) {
+      form.append("supplementary_files", sFile);
+    }
+  }
   if (params.title?.trim()) {
     form.append("title", params.title.trim());
+  }
+  if (params.docCategory?.trim()) {
+    form.append("doc_category", params.docCategory.trim());
+  }
+  if (params.links && params.links.length > 0) {
+    form.append("links", JSON.stringify(params.links));
   }
   form.append("enrich_vision", params.enrichVision === false ? "false" : "true");
   return api<VisualDocDetail>("/visual-docs", {
@@ -2917,9 +3068,62 @@ export async function ingestVisualDoc(params: {
   });
 }
 
+export async function uploadVisualDocSupplementaryFiles(
+  docId: string,
+  params: {
+    files: File[];
+    docRole?: string;
+    title?: string;
+  },
+): Promise<VisualDocDetail> {
+  const form = new FormData();
+  for (const file of params.files) {
+    form.append("files", file);
+  }
+  if (params.docRole?.trim()) {
+    form.append("doc_role", params.docRole.trim());
+  }
+  if (params.title?.trim()) {
+    form.append("title", params.title.trim());
+  }
+  return api<VisualDocDetail>(`/visual-docs/${docId}/supplementary-files`, {
+    method: "POST",
+    body: form,
+  });
+}
+
+export async function addVisualDocLinks(
+  docId: string,
+  urls: string[],
+  title?: string,
+): Promise<VisualDocDetail> {
+  return api<VisualDocDetail>(`/visual-docs/${docId}/links`, {
+    method: "POST",
+    body: JSON.stringify({ urls, title: title?.trim() || undefined }),
+  });
+}
+
+export async function refreshVisualDocLink(
+  docId: string,
+  linkId: string,
+): Promise<VisualDocDetail> {
+  return api<VisualDocDetail>(`/visual-docs/${docId}/links/${linkId}/refresh`, {
+    method: "POST",
+  });
+}
+
+export async function deleteVisualDocLink(
+  docId: string,
+  linkId: string,
+): Promise<VisualDocDetail> {
+  return api<VisualDocDetail>(`/visual-docs/${docId}/links/${linkId}`, {
+    method: "DELETE",
+  });
+}
+
 export async function updateVisualDoc(
   docId: string,
-  body: { title?: string; compiled_markdown?: string },
+  body: { title?: string; doc_category?: string; compiled_markdown?: string },
 ): Promise<VisualDocDetail> {
   return api<VisualDocDetail>(`/visual-docs/${docId}`, {
     method: "PATCH",

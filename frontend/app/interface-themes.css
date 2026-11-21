@@ -54,6 +54,7 @@
   .model-modal-header, .model-modal-toolbar, .model-modal-footer,
   .composer-attach-popover, .message-export-popover, .auth-form input,
   .invitation-output input, .modal input, .modal-select, .settings-prompt-textarea,
+  .settings-voice-search, .settings-voice-card,
   .skill-editor input, .skill-editor textarea, .memory-form textarea,
   .settings-cancel-btn, .history-space-count, .history-theme-count,
   .history-space-action-btn, .admin-user-action
@@ -100,7 +101,8 @@
 
 :root[data-palette]:not([data-palette="light"]) :is(
   .history-item.is-active, .history-view-toggle button.is-active,
-  .sidebar-topic-item.is-active, .model-card.is-selected, .settings-section-icon
+  .sidebar-topic-item.is-active, .model-card.is-selected, .settings-section-icon,
+  .settings-voice-card.is-selected, .settings-voice-current-badge, .settings-voice-preview-btn:not(.is-playing)
 ) { background: var(--soft); color: var(--primary); border-color: var(--primary); }
 :root[data-palette]:not([data-palette="light"]) .history-item.is-active .history-select { color: var(--primary); }
 :root[data-palette]:not([data-palette="light"]) :is(.icon-button, .tool-button, .history-item, .sidebar-topic-item, .settings-cancel-btn):hover:not(:disabled) { background: var(--soft); color: var(--ink); }

@@ -1503,6 +1503,21 @@ export function ChatApp() {
     }
     return "Aoede";
   });
+
+  useEffect(() => {
+    const preferredVoice = user?.default_voice?.trim();
+    if (preferredVoice) {
+      setTtsVoice(preferredVoice);
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem("clair_tts_voice", preferredVoice);
+      }
+      return;
+    }
+    const serverVoice = config?.voice?.default_voice?.trim();
+    if (serverVoice && typeof window !== "undefined" && !window.localStorage.getItem("clair_tts_voice")) {
+      setTtsVoice(serverVoice);
+    }
+  }, [user?.id, user?.default_voice, config?.voice?.default_voice]);
   const [ttsTone, setTtsTone] = useState<string>(() => {
     if (typeof window !== "undefined") {
       return window.localStorage.getItem("clair_tts_tone") || "natural";
@@ -4277,8 +4292,14 @@ export function ChatApp() {
         currentUser={user}
         isOpen={settingsModalOpen}
         onClose={() => setSettingsModalOpen(false)}
+        voices={config?.voice?.voices ?? []}
+        serverDefaultVoice={config?.voice?.default_voice ?? "Aoede"}
+        ttsEnabled={Boolean(config?.features?.tts)}
         onSettingsUpdated={(updated) => {
           setUser(prev => prev ? { ...prev, ...updated } : prev);
+          if (updated.default_voice) {
+            handleSelectVoice(updated.default_voice);
+          }
         }}
       />
     )}

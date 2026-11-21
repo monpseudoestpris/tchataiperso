@@ -35,6 +35,10 @@ from ..documents import extraction_text
 from ..finance import process_message_finance_inquiries
 from ..google_cloud import has_llm_access
 from ..memory_agent import process_memory_turn
+from ..visual_doc_profiles import (
+    generate_visual_doc_forum_queries,
+    should_auto_search_visual_doc_forums,
+)
 from ..models import (
     Attachment,
     Conversation,
@@ -626,6 +630,10 @@ async def send_message(
                     and (body.auto_web_search is True or body.web_search_mode == "auto" or getattr(settings, "auto_web_search", True))
                 )
                 auto_search_reason = ""
+                visual_doc_forum_mode = False
+                attached_vdocs_meta: list[dict[str, str]] = []
+                search_summary = ""
+                search_context: list[dict[str, str]] = []
                 effective_user_query = body.content.strip()
                 if image_attachment_hints and providers.stream_chat is _DEFAULT_STREAM_CHAT:
                     effective_user_query = (
@@ -633,7 +641,7 @@ async def send_message(
                         if effective_user_query
                         else " | ".join(image_attachment_hints)
                     )
-                if auto_search_allowed:
+                if perform_search or auto_search_allowed:
                     with sessions() as db:
                         conversation = get_conversation(db, conversation_id, user.id)
                         search_summary = conversation.summary
@@ -641,6 +649,22 @@ async def send_message(
                             {"role": item.role, "content": item.content}
                             for item in conversation.messages[:-1][-4:]
                         ]
+                        attached_vdocs_meta = [
+                            {
+                                "id": vdoc.id,
+                                "title": vdoc.title,
+                                "slug": vdoc.slug,
+                                "doc_category": getattr(vdoc, "doc_category", "general") or "general",
+                            }
+                            for vdoc in conversation.visual_docs
+                        ]
+                    if settings.web_search_enabled and should_auto_search_visual_doc_forums(
+                        attached_vdocs_meta, effective_user_query
+                    ):
+                        perform_search = True
+                        visual_doc_forum_mode = True
+
+                if auto_search_allowed and not perform_search:
                     yield sse("status", {"message": "Agent Web : analyse de l’intention et des critères de recherche…"})
                     try:
                         should_search, reason = await providers.decide_web_search(
@@ -658,15 +682,22 @@ async def send_message(
 
                 if perform_search:
                     query = effective_user_query[:1000]
-                    with sessions() as db:
-                        conversation = get_conversation(db, conversation_id, user.id)
-                        search_summary = conversation.summary
-                        search_context = [
-                            {"role": item.role, "content": item.content}
-                            for item in conversation.messages[:-1][-4:]
-                        ]
                     queries = [query]
-                    if (
+                    if visual_doc_forum_mode and attached_vdocs_meta:
+                        forum_queries, forum_label = await generate_visual_doc_forum_queries(
+                            settings,
+                            attached_vdocs_meta,
+                            query,
+                            summary=search_summary,
+                            recent_turns=search_context,
+                        )
+                        queries = forum_queries or [query]
+                        auto_search_reason = f"Forums dédiés ({forum_label})"
+                        yield sse(
+                            "status",
+                            {"message": f"Consultation des forums dédiés ({forum_label})…"},
+                        )
+                    elif (
                         providers.stream_chat is _DEFAULT_STREAM_CHAT
                         or providers.rewrite_search_query is not _DEFAULT_REWRITE_SEARCH_QUERY
                         or getattr(providers, "rewrite_smart_search_queries", None) is not _DEFAULT_REWRITE_SMART_SEARCH_QUERIES
@@ -693,49 +724,56 @@ async def send_message(
                         "status",
                         {"message": f"Recherche web & images : {queries_label}…" if should_fetch_images else f"Recherche web en cours : {queries_label}…"},
                     )
-                    if should_fetch_images:
-                        if len(queries) > 1:
-                            text_runs = [providers.search_web(settings, q, limit=4) for q in queries[:2]]
-                            all_runs = await asyncio.gather(
-                                *text_runs,
-                                providers.search_web_images(settings, primary_query, limit=6),
-                                return_exceptions=True,
-                            )
-                            img_res = all_runs[-1]
-                            raw_sources = []
-                            for r in all_runs[:-1]:
-                                if isinstance(r, list):
-                                    raw_sources = providers.merge_web_sources(raw_sources, r, limit=8)
-                                elif isinstance(r, BaseException) and not raw_sources:
-                                    raise r
-                            sources = providers.filter_irrelevant_web_sources(raw_sources, queries)
-                            web_imgs = list(img_res) if isinstance(img_res, list) else []
+                    web_imgs = []
+                    try:
+                        if should_fetch_images:
+                            if len(queries) > 1:
+                                text_runs = [providers.search_web(settings, q, limit=4) for q in queries[:2]]
+                                all_runs = await asyncio.gather(
+                                    *text_runs,
+                                    providers.search_web_images(settings, primary_query, limit=6),
+                                    return_exceptions=True,
+                                )
+                                img_res = all_runs[-1]
+                                raw_sources = []
+                                for r in all_runs[:-1]:
+                                    if isinstance(r, list):
+                                        raw_sources = providers.merge_web_sources(raw_sources, r, limit=8)
+                                    elif isinstance(r, BaseException) and not raw_sources:
+                                        raise r
+                                sources = providers.filter_irrelevant_web_sources(raw_sources, queries)
+                                web_imgs = list(img_res) if isinstance(img_res, list) else []
+                            else:
+                                text_res, img_res = await asyncio.gather(
+                                    providers.search_web(settings, primary_query),
+                                    providers.search_web_images(settings, primary_query, limit=6),
+                                    return_exceptions=True,
+                                )
+                                if isinstance(text_res, BaseException):
+                                    raise text_res
+                                sources = providers.filter_irrelevant_web_sources(list(text_res), queries)
+                                web_imgs = list(img_res) if isinstance(img_res, list) else []
                         else:
-                            text_res, img_res = await asyncio.gather(
-                                providers.search_web(settings, primary_query),
-                                providers.search_web_images(settings, primary_query, limit=6),
-                                return_exceptions=True,
-                            )
-                            if isinstance(text_res, BaseException):
-                                raise text_res
-                            sources = providers.filter_irrelevant_web_sources(list(text_res), queries)
-                            web_imgs = list(img_res) if isinstance(img_res, list) else []
-                    else:
-                        if len(queries) > 1:
-                            search_results = await asyncio.gather(
-                                *[providers.search_web(settings, q, limit=4) for q in queries[:2]],
-                                return_exceptions=True,
-                            )
-                            raw_sources = []
-                            for r in search_results:
-                                if isinstance(r, list):
-                                    raw_sources = providers.merge_web_sources(raw_sources, r, limit=8)
-                                elif isinstance(r, BaseException) and not raw_sources:
-                                    raise r
-                            sources = providers.filter_irrelevant_web_sources(raw_sources, queries)
-                        else:
-                            raw_sources = await providers.search_web(settings, primary_query)
-                            sources = providers.filter_irrelevant_web_sources(raw_sources, queries)
+                            if len(queries) > 1:
+                                search_results = await asyncio.gather(
+                                    *[providers.search_web(settings, q, limit=4) for q in queries[:2]],
+                                    return_exceptions=True,
+                                )
+                                raw_sources = []
+                                for r in search_results:
+                                    if isinstance(r, list):
+                                        raw_sources = providers.merge_web_sources(raw_sources, r, limit=8)
+                                    elif isinstance(r, BaseException) and not raw_sources:
+                                        raise r
+                                sources = providers.filter_irrelevant_web_sources(raw_sources, queries)
+                            else:
+                                raw_sources = await providers.search_web(settings, primary_query)
+                                sources = providers.filter_irrelevant_web_sources(raw_sources, queries)
+                    except providers.ProviderError as exc:
+                        if body.web_search:
+                            raise
+                        _logger.warning("Recherche externe automatique ignorée (%s)", exc)
+                        sources = []
                         web_imgs = []
                     if auto_search_reason and sources:
                         for s in sources:
@@ -865,10 +903,12 @@ async def send_message(
                         "id": vdoc.id,
                         "slug": vdoc.slug,
                         "title": vdoc.title,
+                        "doc_category": getattr(vdoc, "doc_category", "general") or "general",
                         "page_count": vdoc.page_count,
                         "figure_count": vdoc.figure_count,
                         "compiled_markdown": vdoc.compiled_markdown,
                         "pages_meta": vdoc.pages_meta if isinstance(vdoc.pages_meta, list) else [],
+                        "external_links": vdoc.external_links if isinstance(getattr(vdoc, "external_links", None), list) else [],
                     }
                     for vdoc in conversation.visual_docs
                 ]

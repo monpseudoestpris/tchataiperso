@@ -10,7 +10,7 @@ from threading import Lock
 from docx import Document
 from fastapi import HTTPException
 from PIL import Image
-from pypdf import PdfReader
+from pypdf import PdfReader, PdfWriter
 import pypdfium2 as pdfium
 
 from . import providers
@@ -19,6 +19,110 @@ from .schemas import DocumentExtraction, ExtractedPage
 
 MAX_EXTRACTED_CHARS = 40000
 _PDF_RENDER_LOCK = Lock()
+
+
+def normalize_unlocked_pdf(content: bytes, max_pages: int = 300) -> tuple[bytes, int, list[str]]:
+    """Valide et normalise un PDF :
+    - Tolère les octets d'en-tête avant `%PDF-` (norme ISO 32000 : dans les 1024 premiers octets).
+    - Déverrouille automatiquement les PDF protégés uniquement par permissions éditeur (mot de passe ouverture vide `""`,
+      très fréquent sur les livrets de règles, FAQ officielles et rapports financiers exportés depuis InDesign/Acrobat)
+      et réécrit un flux PDF propre non chiffré pour Mistral OCR.
+    - Isole les erreurs de polices/CMap page par page lors de `extract_text()`.
+    - Utilise `pypdfium2` en filet de sécurité si la table xref `pypdf` est atypique.
+    """
+    header_idx = content.find(b"%PDF-", 0, 1024) if content else -1
+    if header_idx < 0:
+        raise HTTPException(422, "Le fichier fourni n'est pas un PDF valide.")
+    if header_idx > 0:
+        content = content[header_idx:]
+
+    try:
+        reader = PdfReader(io.BytesIO(content), strict=False)
+        was_owner_encrypted = False
+        if reader.is_encrypted:
+            try:
+                dec_status = reader.decrypt("")
+            except Exception as exc:
+                raise HTTPException(
+                    422,
+                    "Ce PDF est protégé par un chiffrement non supporté ou un mot de passe d'ouverture.",
+                ) from exc
+            if not dec_status:
+                raise HTTPException(
+                    422,
+                    "Ce PDF exige un mot de passe d'ouverture. Déverrouillez-le avant de l'importer.",
+                )
+            was_owner_encrypted = True
+
+        page_count = len(reader.pages)
+        if page_count < 1:
+            raise HTTPException(422, "Le PDF ne contient aucune page.")
+        if page_count > max_pages:
+            raise HTTPException(422, f"Le PDF dépasse la limite de {max_pages} pages ({page_count} pages détectées).")
+
+        page_texts: list[str] = []
+        total_chars = 0
+        for page in reader.pages:
+            if total_chars < MAX_EXTRACTED_CHARS * 2:
+                try:
+                    txt = (page.extract_text() or "").strip()
+                except Exception:
+                    txt = ""
+            else:
+                txt = ""
+            page_texts.append(txt)
+            total_chars += len(txt)
+
+        if was_owner_encrypted:
+            try:
+                writer = PdfWriter()
+                for page in reader.pages:
+                    writer.add_page(page)
+                out = io.BytesIO()
+                writer.write(out)
+                unlocked_bytes = out.getvalue()
+                if unlocked_bytes.startswith(b"%PDF-"):
+                    content = unlocked_bytes
+            except Exception:
+                pass
+
+        return content, page_count, page_texts
+    except HTTPException:
+        raise
+    except Exception:
+        # Filet de sécurité via le moteur C++ PDFium (Chrome) si pypdf échoue sur une table xref atypique
+        try:
+            with _PDF_RENDER_LOCK:
+                doc = pdfium.PdfDocument(content)
+                try:
+                    page_count = len(doc)
+                    if page_count < 1:
+                        raise HTTPException(422, "Le PDF ne contient aucune page.")
+                    if page_count > max_pages:
+                        raise HTTPException(422, f"Le PDF dépasse la limite de {max_pages} pages.")
+                    page_texts = []
+                    for idx in range(page_count):
+                        page = doc[idx]
+                        try:
+                            textpage = page.get_textpage()
+                            try:
+                                page_texts.append((textpage.get_text_range() or "").strip())
+                            finally:
+                                if hasattr(textpage, "close"):
+                                    textpage.close()
+                        except Exception:
+                            page_texts.append("")
+                        finally:
+                            if hasattr(page, "close"):
+                                page.close()
+                    return content, page_count, page_texts
+                finally:
+                    if hasattr(doc, "close"):
+                        doc.close()
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(422, "PDF illisible ou protégé par un mot de passe d'ouverture.") from exc
 
 
 def inspect_document(content: bytes, filename: str) -> tuple[str, str]:
@@ -36,27 +140,8 @@ def inspect_document(content: bytes, filename: str) -> tuple[str, str]:
         except Exception as exc:
             raise HTTPException(422, "Image invalide ou dimensions excessives. Formats acceptés : PNG, JPEG, WebP.") from exc
     if suffix == ".pdf":
-        try:
-            if not content.startswith(b"%PDF-"):
-                raise ValueError()
-            reader = PdfReader(io.BytesIO(content))
-            if reader.is_encrypted:
-                raise HTTPException(422, "Déverrouillez le PDF avant de le joindre.")
-            if len(reader.pages) > 300:
-                raise HTTPException(422, "Le PDF dépasse la limite de 300 pages.")
-            chunks: list[str] = []
-            length = 0
-            for page in reader.pages:
-                text = page.extract_text() or ""
-                chunks.append(text)
-                length += len(text)
-                if length >= MAX_EXTRACTED_CHARS:
-                    break
-            return "application/pdf", "\n".join(chunks)[:MAX_EXTRACTED_CHARS]
-        except HTTPException:
-            raise
-        except Exception as exc:
-            raise HTTPException(422, "PDF illisible ou non pris en charge.") from exc
+        _norm_bytes, _page_count, page_texts = normalize_unlocked_pdf(content, max_pages=300)
+        return "application/pdf", "\n".join(t for t in page_texts if t)[:MAX_EXTRACTED_CHARS]
     if suffix == ".docx":
         try:
             with zipfile.ZipFile(io.BytesIO(content)) as archive:
@@ -156,7 +241,13 @@ def normalize_vision_image(content: bytes) -> bytes:
 
 
 async def extract_document(settings: Settings, content: bytes, filename: str, mode: str = "auto") -> tuple[str, str, dict | None]:
-    mime, text = await asyncio.to_thread(inspect_document, content, filename)
+    pdf_page_count = 1
+    if Path(filename).suffix.lower() == ".pdf":
+        content, pdf_page_count, page_texts = await asyncio.to_thread(normalize_unlocked_pdf, content, 300)
+        mime = "application/pdf"
+        text = "\n".join(t for t in page_texts if t)[:MAX_EXTRACTED_CHARS]
+    else:
+        mime, text = await asyncio.to_thread(inspect_document, content, filename)
     visual = mime == "application/pdf" or mime.startswith("image/")
     if mime.startswith("image/") and len(content) > 8 * 1024 * 1024:
         raise HTTPException(413, "Les images sont limitées à 8 Mo pour la vision")
@@ -205,20 +296,23 @@ async def extract_document(settings: Settings, content: bytes, filename: str, mo
     try:
         if not settings.enabled(settings.mistral_api_key):
             raise HTTPException(422, "Configurez MISTRAL_API_KEY pour analyser les PDF et images avec OCR 4.1.")
-        page_count = await asyncio.to_thread(lambda: len(PdfReader(io.BytesIO(content)).pages)) if mime == "application/pdf" else 1
+        page_count = pdf_page_count if mime == "application/pdf" else 1
         async def _do_ocr():
             ext = await providers.extract_ocr(settings, content, mime, page_count=page_count)
             for page in ext.pages:
                 readable = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", page.markdown)
-                if not any(character.isalnum() for character in readable):
-                    if mime == "application/pdf":
-                        image = await asyncio.to_thread(render_pdf_page, content, page.index)
-                        image_mime = "image/png"
-                    else:
-                        image = await asyncio.to_thread(normalize_vision_image, content)
-                        image_mime = "image/jpeg"
-                    page.vision_description = await providers.describe_image(settings, image, image_mime)
-                    page.method = "vision"
+                if not any(character.isalnum() for character in readable) and settings.vision_model:
+                    try:
+                        if mime == "application/pdf":
+                            image = await asyncio.to_thread(render_pdf_page, content, page.index)
+                            image_mime = "image/png"
+                        else:
+                            image = await asyncio.to_thread(normalize_vision_image, content)
+                            image_mime = "image/jpeg"
+                        page.vision_description = await providers.describe_image(settings, image, image_mime)
+                        page.method = "vision"
+                    except Exception:
+                        pass
             return ext
 
         extraction = await asyncio.wait_for(_do_ocr(), timeout=600)
