@@ -26,6 +26,8 @@ from .finance_warehouse import (
 )
 
 _logger = logging.getLogger("uvicorn.error")
+_DAILY_SYNC_LOCK = asyncio.Lock()
+_DAILY_SYNC_RUNNING = False
 
 _USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -271,6 +273,7 @@ async def get_daily_sync_state(settings: Settings) -> dict[str, Any]:
     ]
     return {
         "preferences": prefs,
+        "is_running": _DAILY_SYNC_RUNNING,
         "available_indices": available_indices,
         "available_exchanges": _build_supported_exchanges_status(all_meta),
     }
@@ -292,9 +295,16 @@ async def run_daily_sync_now(
     refresh: bool = False,
     respect_enabled: bool = False,
 ) -> dict[str, Any]:
-    """Exécute la synchronisation quotidienne selon les choix utilisateur (indices de base + sélections)."""
+    """Exécute la synchronisation quotidienne selon les choix utilisateur (principaux indices + compositions + Screener)."""
+    global _DAILY_SYNC_RUNNING
     from types import SimpleNamespace
-    from .finance_indices import get_index_performances, list_eodhd_indx_catalog, list_principal_indices
+    from .finance_indices import (
+        INDEX_DEFINITIONS,
+        get_index_performances,
+        list_eodhd_indx_catalog,
+        list_principal_indices,
+    )
+    from .finance_screener import hydrate_screener_universe
     from .finance_watchlist import fetch_watchlist_quotes
 
     db_path = warehouse_db_path(settings)
@@ -305,81 +315,137 @@ async def run_daily_sync_now(
             "summary": {"skipped": True, "reason": "disabled"},
         }
 
-    summary: dict[str, Any] = {
-        "skipped": False,
-        "principal_indices_count": 0,
-        "indx_catalog_total": 0,
-        "indices": {},
-        "watchlist_items_count": 0,
-        "exchanges": {},
-        "errors": [],
-    }
+    if _DAILY_SYNC_LOCK.locked():
+        return {
+            **(await get_daily_sync_state(settings)),
+            "summary": {"skipped": True, "reason": "already_running"},
+        }
 
-    if prefs.get("principal_indices"):
+    async with _DAILY_SYNC_LOCK:
+        _DAILY_SYNC_RUNNING = True
         try:
-            idx_res = await list_principal_indices(settings, include_quotes=True, tier="major")
-            summary["principal_indices_count"] = len(idx_res.get("indices") or [])
-        except Exception as exc:
-            summary["errors"].append(f"indices: {exc}")
+            summary: dict[str, Any] = {
+                "skipped": False,
+                "principal_indices_count": 0,
+                "indx_catalog_total": 0,
+                "indices": {},
+                "screener_fundamentals": {
+                    "enriched": 0,
+                    "cached": 0,
+                    "errors": 0,
+                },
+                "watchlist_items_count": 0,
+                "exchanges": {},
+                "errors": [],
+            }
 
-    if prefs.get("indx_catalog"):
-        try:
-            cat_res = await list_eodhd_indx_catalog(settings, limit=50, refresh=refresh)
-            summary["indx_catalog_total"] = int(cat_res.get("total") or 0)
-        except Exception as exc:
-            summary["errors"].append(f"indx_catalog: {exc}")
+            if prefs.get("principal_indices"):
+                try:
+                    idx_res = await list_principal_indices(settings, include_quotes=True, tier="major")
+                    summary["principal_indices_count"] = len(idx_res.get("indices") or [])
+                except Exception as exc:
+                    summary["errors"].append(f"indices: {exc}")
 
-    for code in prefs.get("index_codes") or []:
-        try:
-            perf_res = await get_index_performances(settings, code, refresh=refresh)
-            if perf_res:
-                s_perf = perf_res.get("summary") or {}
-                summary["indices"][code] = {
-                    "loaded_count": int(s_perf.get("loaded_count") or 0),
-                    "from_cache_count": int(s_perf.get("from_cache_count") or 0),
-                    "fetched_count": int(s_perf.get("fetched_count") or 0),
-                }
-        except Exception as exc:
-            summary["errors"].append(f"index:{code}: {exc}")
+            if prefs.get("indx_catalog"):
+                try:
+                    cat_res = await list_eodhd_indx_catalog(settings, limit=50, refresh=refresh)
+                    summary["indx_catalog_total"] = int(cat_res.get("total") or 0)
+                except Exception as exc:
+                    summary["errors"].append(f"indx_catalog: {exc}")
 
-    if prefs.get("watchlists"):
-        try:
-            raw_items = list_warehouse_watchlist_items_for_sync(db_path)
-            if raw_items:
-                wl_objs = [SimpleNamespace(**it) for it in raw_items]
-                enriched = await fetch_watchlist_quotes(settings, wl_objs, refresh=refresh)
-                summary["watchlist_items_count"] = len(enriched)
-        except Exception as exc:
-            summary["errors"].append(f"watchlists: {exc}")
+            # Contenu complet des principaux indices (activé par défaut) + indices supplémentaires cochés
+            target_index_codes: list[str] = []
+            seen_idx: set[str] = set()
+            if prefs.get("major_indices_constituents", True):
+                for defn in INDEX_DEFINITIONS:
+                    if defn.get("tier") == "major":
+                        c = str(defn["code"]).upper()
+                        if c not in seen_idx:
+                            seen_idx.add(c)
+                            target_index_codes.append(c)
+            for code in prefs.get("index_codes") or []:
+                c = str(code or "").strip().upper()
+                if c and c not in seen_idx:
+                    seen_idx.add(c)
+                    target_index_codes.append(c)
 
-    exch_codes: list[str] = []
-    seen_exch: set[str] = set()
-    for code in [*(prefs.get("exchanges") or []), *parse_auto_sync_exchange_codes(settings)]:
-        clean_c = str(code or "").strip().upper()
-        if clean_c and clean_c != "ALL" and _EXCHANGE_CODE_RE.fullmatch(clean_c) and clean_c not in seen_exch:
-            seen_exch.add(clean_c)
-            exch_codes.append(clean_c)
+            synced_symbols: list[str] = []
+            seen_syms: set[str] = set()
+            for code in target_index_codes:
+                try:
+                    perf_res = await get_index_performances(settings, code, refresh=refresh)
+                    if perf_res:
+                        s_perf = perf_res.get("summary") or {}
+                        summary["indices"][code] = {
+                            "loaded_count": int(s_perf.get("loaded_count") or 0),
+                            "from_cache_count": int(s_perf.get("from_cache_count") or 0),
+                            "fetched_count": int(s_perf.get("fetched_count") or 0),
+                        }
+                        for item in perf_res.get("items") or []:
+                            sym = str(item.get("eod_ticker") or item.get("symbol") or "").strip().upper()
+                            if sym and sym not in seen_syms:
+                                seen_syms.add(sym)
+                                synced_symbols.append(sym)
+                except Exception as exc:
+                    summary["errors"].append(f"index:{code}: {exc}")
 
-    if exch_codes:
-        exch_res = await sync_configured_exchange_catalogs(settings, refresh=refresh, codes=exch_codes)
-        summary["exchanges"] = exch_res.get("exchanges") or {}
+            # Enrichissement progressif quotidien des fondamentaux (+ historique 10 ans) pour le Screener
+            if prefs.get("screener_fundamentals", True) and synced_symbols and not settings.demo_mode:
+                try:
+                    daily_cap = max(5, min(200, int(prefs.get("screener_fundamentals_daily_cap") or 40)))
+                    hyd_res = await hydrate_screener_universe(
+                        settings,
+                        universe_type="watchlist",
+                        watchlist_symbols=synced_symbols,
+                        include_fundamentals=True,
+                        max_fundamentals=daily_cap,
+                        refresh_eod=False,
+                    )
+                    summary["screener_fundamentals"] = {
+                        "enriched": int(hyd_res.get("fundamentals_enriched") or 0),
+                        "cached": int(hyd_res.get("fundamentals_cached") or 0),
+                        "errors": int(hyd_res.get("fundamentals_errors") or 0),
+                    }
+                except Exception as exc:
+                    summary["errors"].append(f"screener_fundamentals: {exc}")
 
-    record_sync_run_status(db_path, summary)
+            if prefs.get("watchlists"):
+                try:
+                    raw_items = list_warehouse_watchlist_items_for_sync(db_path)
+                    if raw_items:
+                        wl_objs = [SimpleNamespace(**it) for it in raw_items]
+                        enriched = await fetch_watchlist_quotes(settings, wl_objs, refresh=refresh)
+                        summary["watchlist_items_count"] = len(enriched)
+                except Exception as exc:
+                    summary["errors"].append(f"watchlists: {exc}")
+
+            exch_codes: list[str] = []
+            seen_exch: set[str] = set()
+            for code in [*(prefs.get("exchanges") or []), *parse_auto_sync_exchange_codes(settings)]:
+                clean_c = str(code or "").strip().upper()
+                if clean_c and clean_c != "ALL" and _EXCHANGE_CODE_RE.fullmatch(clean_c) and clean_c not in seen_exch:
+                    seen_exch.add(clean_c)
+                    exch_codes.append(clean_c)
+
+            if exch_codes:
+                exch_res = await sync_configured_exchange_catalogs(settings, refresh=refresh, codes=exch_codes)
+                summary["exchanges"] = exch_res.get("exchanges") or {}
+
+            record_sync_run_status(db_path, summary)
+        finally:
+            _DAILY_SYNC_RUNNING = False
+
     state = await get_daily_sync_state(settings)
     return {**state, "summary": summary}
 
 
 async def run_daily_exchange_catalog_sync_loop(settings: Settings) -> None:
-    """Tâche de fond quotidienne exécutant uniquement les éléments sélectionnés par l'utilisateur (indices par défaut)."""
+    """Tâche de fond quotidienne récupérant automatiquement les principaux indices, leur contenu et les sélections."""
     try:
         await asyncio.sleep(15.0)
         while True:
             try:
-                if (
-                    not settings.demo_mode
-                    and getattr(settings, "finance_exchange_auto_sync_enabled", True)
-                    and settings.enabled(settings.eod_historical_data_key)
-                ):
+                if not settings.demo_mode and getattr(settings, "finance_exchange_auto_sync_enabled", True):
                     db_path = warehouse_db_path(settings)
                     prefs = get_sync_preferences(db_path)
                     today_prefix = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
@@ -390,10 +456,12 @@ async def run_daily_exchange_catalog_sync_loop(settings: Settings) -> None:
                         res = await run_daily_sync_now(settings, refresh=False, respect_enabled=True)
                         s_info = res.get("summary") or {}
                         if not s_info.get("skipped"):
+                            sf = s_info.get("screener_fundamentals") or {}
                             _logger.info(
-                                "Synchro quotidienne terminée (indices=%s, constituants=%d, watchlist=%d, marchés=%d).",
+                                "Synchro quotidienne terminée (indices=%s, compositions=%d, fondamentaux=%d, watchlist=%d, marchés=%d).",
                                 s_info.get("principal_indices_count", 0),
                                 len(s_info.get("indices") or {}),
+                                sf.get("enriched", 0),
                                 s_info.get("watchlist_items_count", 0),
                                 len(s_info.get("exchanges") or {}),
                             )
@@ -401,7 +469,7 @@ async def run_daily_exchange_catalog_sync_loop(settings: Settings) -> None:
                 raise
             except Exception as exc:
                 _logger.warning("Erreur boucle synchro quotidienne finance: %s", exc)
-            sleep_sec = min(_exchange_ttl_seconds(settings), 6 * 3600)
+            sleep_sec = min(_exchange_ttl_seconds(settings), 4 * 3600)
             await asyncio.sleep(sleep_sec)
     except asyncio.CancelledError:
         return

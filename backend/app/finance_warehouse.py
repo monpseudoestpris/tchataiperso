@@ -330,6 +330,50 @@ CREATE INDEX IF NOT EXISTS idx_fin_scr_pe ON finance_screener_snapshots (pe_ttm)
 CREATE INDEX IF NOT EXISTS idx_fin_scr_roic ON finance_screener_snapshots (roic_pct);
 CREATE INDEX IF NOT EXISTS idx_fin_scr_rsi ON finance_screener_snapshots (rsi_14);
 CREATE INDEX IF NOT EXISTS idx_fin_scr_scores ON finance_screener_snapshots (ih_score, piotroski_f);
+
+CREATE TABLE IF NOT EXISTS finance_screener_technicals (
+    symbol TEXT NOT NULL,
+    timeframe TEXT NOT NULL,
+    price REAL,
+    rel_volume_20d REAL,
+    sma20 REAL,
+    sma50 REAL,
+    sma200 REAL,
+    ema20 REAL,
+    ema50 REAL,
+    dist_sma50_pct REAL,
+    dist_sma200_pct REAL,
+    rsi_14 REAL,
+    macd_line REAL,
+    macd_signal REAL,
+    macd_hist REAL,
+    macd_cross INTEGER,
+    sma_golden_cross INTEGER,
+    boll_pct_b REAL,
+    boll_width_pct REAL,
+    adx_14 REAL,
+    stoch_k REAL,
+    atr_pct REAL,
+    roc_12 REAL,
+    supertrend_dir INTEGER,
+    isopressure_raw REAL,
+    isopressure_p5 REAL,
+    isopressure_p20 REAL,
+    isopressure_p50 REAL,
+    isopressure_p100 REAL,
+    isopressure_p200 REAL,
+    isopressure_20_50_diff REAL,
+    isopressure_20_50_dir INTEGER,
+    isopressure_20_50_cross INTEGER,
+    isopressure_5_20_cross INTEGER,
+    bars_count INTEGER NOT NULL DEFAULT 0,
+    bars_date TEXT,
+    computed_at TEXT NOT NULL,
+    PRIMARY KEY (symbol, timeframe)
+) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS idx_fin_scr_tech_tf_rsi ON finance_screener_technicals (timeframe, rsi_14);
+CREATE INDEX IF NOT EXISTS idx_fin_scr_tech_tf_iso ON finance_screener_technicals (timeframe, isopressure_20_50_dir, isopressure_20_50_diff);
 """
 
 
@@ -1903,6 +1947,9 @@ def lookup_exchange_symbol(
 DEFAULT_SYNC_PREFERENCES: dict[str, Any] = {
     "enabled": True,
     "principal_indices": True,
+    "major_indices_constituents": True,
+    "screener_fundamentals": True,
+    "screener_fundamentals_daily_cap": 40,
     "indx_catalog": True,
     "index_codes": [],
     "watchlists": False,
@@ -1926,11 +1973,24 @@ def _normalize_sync_preferences(raw: dict[str, Any] | None) -> dict[str, Any]:
             out.append(code)
         return out
 
+    raw_cap = src.get("screener_fundamentals_daily_cap", DEFAULT_SYNC_PREFERENCES["screener_fundamentals_daily_cap"])
+    try:
+        daily_cap = max(5, min(200, int(raw_cap)))
+    except (TypeError, ValueError):
+        daily_cap = int(DEFAULT_SYNC_PREFERENCES["screener_fundamentals_daily_cap"])
+
     return {
         "enabled": bool(src.get("enabled", DEFAULT_SYNC_PREFERENCES["enabled"])),
         "principal_indices": bool(
             src.get("principal_indices", DEFAULT_SYNC_PREFERENCES["principal_indices"])
         ),
+        "major_indices_constituents": bool(
+            src.get("major_indices_constituents", DEFAULT_SYNC_PREFERENCES["major_indices_constituents"])
+        ),
+        "screener_fundamentals": bool(
+            src.get("screener_fundamentals", DEFAULT_SYNC_PREFERENCES["screener_fundamentals"])
+        ),
+        "screener_fundamentals_daily_cap": daily_cap,
         "indx_catalog": bool(src.get("indx_catalog", DEFAULT_SYNC_PREFERENCES["indx_catalog"])),
         "index_codes": _clean_list(src.get("index_codes")),
         "watchlists": bool(src.get("watchlists", DEFAULT_SYNC_PREFERENCES["watchlists"])),
@@ -2243,6 +2303,91 @@ def upsert_screener_snapshots(
         return 0
 
     step = max(1, int(batch_size or 40))
+    for i in range(0, len(prepared), step):
+        chunk = prepared[i : i + step]
+        with _connect(db_path) as conn:
+            conn.executemany(sql, chunk)
+    return len(prepared)
+
+
+_SCREENER_TECH_COLS: tuple[str, ...] = (
+    "symbol",
+    "timeframe",
+    "price",
+    "rel_volume_20d",
+    "sma20",
+    "sma50",
+    "sma200",
+    "ema20",
+    "ema50",
+    "dist_sma50_pct",
+    "dist_sma200_pct",
+    "rsi_14",
+    "macd_line",
+    "macd_signal",
+    "macd_hist",
+    "macd_cross",
+    "sma_golden_cross",
+    "boll_pct_b",
+    "boll_width_pct",
+    "adx_14",
+    "stoch_k",
+    "atr_pct",
+    "roc_12",
+    "supertrend_dir",
+    "isopressure_raw",
+    "isopressure_p5",
+    "isopressure_p20",
+    "isopressure_p50",
+    "isopressure_p100",
+    "isopressure_p200",
+    "isopressure_20_50_diff",
+    "isopressure_20_50_dir",
+    "isopressure_20_50_cross",
+    "isopressure_5_20_cross",
+    "bars_count",
+    "bars_date",
+    "computed_at",
+)
+
+
+def upsert_screener_technicals(
+    db_path: Path,
+    rows: list[dict[str, Any]],
+    *,
+    batch_size: int = 80,
+) -> int:
+    """Insère ou met à jour par micro-lots les indicateurs techniques multi-unités (`day`/`week`/`month`/`quarter`)."""
+    if not rows:
+        return 0
+    now_iso = _utc_iso()
+    col_list = ", ".join(_SCREENER_TECH_COLS)
+    placeholders = ", ".join("?" for _ in _SCREENER_TECH_COLS)
+    updates = ", ".join(
+        f"{c} = excluded.{c}" for c in _SCREENER_TECH_COLS if c not in ("symbol", "timeframe")
+    )
+    sql = (
+        f"INSERT INTO finance_screener_technicals ({col_list}) VALUES ({placeholders}) "
+        f"ON CONFLICT(symbol, timeframe) DO UPDATE SET {updates}"
+    )
+    prepared: list[tuple[Any, ...]] = []
+    for row in rows:
+        sym = _norm_sym(str(row.get("symbol") or ""))
+        tf = str(row.get("timeframe") or "").strip().lower()
+        if not sym or tf not in ("day", "week", "month", "quarter"):
+            continue
+        payload = {
+            **row,
+            "symbol": sym,
+            "timeframe": tf,
+            "bars_count": int(row.get("bars_count") or 0),
+            "computed_at": row.get("computed_at") or now_iso,
+        }
+        prepared.append(tuple(payload.get(col) for col in _SCREENER_TECH_COLS))
+
+    if not prepared:
+        return 0
+    step = max(1, int(batch_size or 80))
     for i in range(0, len(prepared), step):
         chunk = prepared[i : i + step]
         with _connect(db_path) as conn:

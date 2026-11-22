@@ -270,7 +270,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if (
             not settings.demo_mode
             and settings.finance_exchange_auto_sync_enabled
-            and settings.enabled(settings.eod_historical_data_key)
         ):
             from .finance_funds import run_daily_exchange_catalog_sync_loop
 

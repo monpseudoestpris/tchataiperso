@@ -2171,6 +2171,9 @@ export type FinanceSyncRunSummary = {
 export type FinanceSyncPreferences = {
   enabled: boolean;
   principal_indices: boolean;
+  major_indices_constituents: boolean;
+  screener_fundamentals: boolean;
+  screener_fundamentals_daily_cap: number;
   indx_catalog: boolean;
   index_codes: string[];
   watchlists: boolean;
@@ -2191,9 +2194,16 @@ export type FinanceSyncAvailableIndex = {
 
 export type FinanceSyncStateResponse = {
   preferences: FinanceSyncPreferences;
+  is_running?: boolean;
   available_indices: FinanceSyncAvailableIndex[];
   available_exchanges: SupportedExchangeInfo[];
-  summary?: FinanceSyncRunSummary;
+  summary?: FinanceSyncRunSummary & {
+    screener_fundamentals?: {
+      enriched: number;
+      cached: number;
+      errors: number;
+    };
+  };
 };
 
 export async function fetchFinanceSyncPreferences(): Promise<FinanceSyncStateResponse> {
@@ -2203,7 +2213,15 @@ export async function fetchFinanceSyncPreferences(): Promise<FinanceSyncStateRes
 export async function updateFinanceSyncPreferences(
   prefs: Pick<
     FinanceSyncPreferences,
-    "enabled" | "principal_indices" | "indx_catalog" | "index_codes" | "watchlists" | "exchanges"
+    | "enabled"
+    | "principal_indices"
+    | "major_indices_constituents"
+    | "screener_fundamentals"
+    | "screener_fundamentals_daily_cap"
+    | "indx_catalog"
+    | "index_codes"
+    | "watchlists"
+    | "exchanges"
   >,
 ): Promise<FinanceSyncStateResponse> {
   return api<FinanceSyncStateResponse>("/finance/sync-preferences", {
@@ -3194,6 +3212,8 @@ export async function detachVisualDocFromConversation(
 // Screener boursier intégré (Fondamentaux & Indicateurs techniques)
 // ---------------------------------------------------------------------------
 
+export type ScreenerTimeframe = "day" | "week" | "month" | "quarter";
+
 export type ScreenerFieldOption = {
   value: number;
   label: string;
@@ -3207,6 +3227,8 @@ export type ScreenerFieldMeta = {
   unit?: string;
   scale?: number;
   comparable?: boolean;
+  compare_group?: "price" | "isopressure";
+  supports_timeframe?: boolean;
   options?: ScreenerFieldOption[];
   description?: string;
 };
@@ -3218,6 +3240,7 @@ export type ScreenerRule =
       op: "gt" | "gte" | "lt" | "lte" | "eq" | "neq" | "between" | "is_not_null";
       value?: number;
       value_max?: number;
+      timeframe?: ScreenerTimeframe;
     }
   | {
       kind: "compare";
@@ -3225,12 +3248,14 @@ export type ScreenerRule =
       op: "gt" | "gte" | "lt" | "lte";
       right: string;
       multiplier?: number;
+      timeframe?: ScreenerTimeframe;
     }
   | {
       kind: "signal";
       field: string;
       op: "eq" | "in";
       value: number | number[];
+      timeframe?: ScreenerTimeframe;
     };
 
 export type ScreenerPreset = {
@@ -3255,6 +3280,7 @@ export type ScreenerCoverage = {
 
 export type ScreenerMetaResponse = {
   fields: ScreenerFieldMeta[];
+  timeframes?: Array<{ key: ScreenerTimeframe; label: string }>;
   presets: ScreenerPreset[];
   coverage: ScreenerCoverage;
   formula_engine: {
@@ -3275,6 +3301,8 @@ export type ScreenerRow = {
   industry: string;
   cap_category: string;
   indices: string[];
+  timeframe?: ScreenerTimeframe;
+  tf_bars_count?: number;
   market_cap: number | null;
   market_cap_m: number | null;
   price: number | null;
@@ -3330,6 +3358,16 @@ export type ScreenerRow = {
   atr_pct: number | null;
   roc_12: number | null;
   supertrend_dir: number | null;
+  isopressure_raw: number | null;
+  isopressure_p5: number | null;
+  isopressure_p20: number | null;
+  isopressure_p50: number | null;
+  isopressure_p100: number | null;
+  isopressure_p200: number | null;
+  isopressure_20_50_diff: number | null;
+  isopressure_20_50_dir: number | null;
+  isopressure_20_50_cross: number | null;
+  isopressure_5_20_cross: number | null;
   has_fundamentals: boolean;
   bars_count: number;
   bars_date: string | null;
@@ -3339,6 +3377,7 @@ export type ScreenerRow = {
 };
 
 export type ScreenerQueryRequest = {
+  timeframe?: ScreenerTimeframe;
   universe_type?: "all" | "index" | "watchlist" | "exchange";
   universe_value?: string | null;
   search?: string;
@@ -3354,6 +3393,7 @@ export type ScreenerQueryRequest = {
 };
 
 export type ScreenerQueryResponse = {
+  timeframe?: ScreenerTimeframe;
   total: number;
   universe_total: number;
   offset: number;

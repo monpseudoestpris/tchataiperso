@@ -6,10 +6,13 @@ import datetime
 
 from app.finance_technicals import (
     adx,
+    aggregate_bars,
     atr,
     bollinger,
+    compute_multi_timeframe_technicals,
     compute_technical_snapshot,
     ema,
+    iso_pressure,
     macd,
     rsi,
     sma,
@@ -103,3 +106,44 @@ def test_oscillators_alignment_lengths():
     assert len(adx(h, l, c)["adx"]) == 60
     assert len(stochastic(h, l, c)["k"]) == 60
     assert len(supertrend(h, l, c)["direction"]) == 60
+
+
+def test_aggregate_bars_week_month_quarter():
+    bars = _make_trend_bars(400, start=100.0, step=0.2)
+    w_bars = aggregate_bars(bars, "week")
+    m_bars = aggregate_bars(bars, "month")
+    q_bars = aggregate_bars(bars, "quarter")
+
+    assert 50 <= len(w_bars) <= 65
+    assert 12 <= len(m_bars) <= 15
+    assert 4 <= len(q_bars) <= 6
+    # Le close agrégé de la dernière barre doit égaler le dernier close journalier
+    assert w_bars[-1]["close"] == bars[-1]["close"]
+    assert m_bars[-1]["close"] == bars[-1]["close"]
+    assert q_bars[-1]["close"] == bars[-1]["close"]
+
+
+def test_isopressure_and_multi_timeframe_technicals():
+    # ~6 ans de séances quotidiennes pour avoir des barres week, month et quarter substantielles
+    bars = _make_trend_bars(2200, start=50.0, step=0.15)
+    h = [b["high"] for b in bars]
+    l = [b["low"] for b in bars]
+    c = [b["close"] for b in bars]
+    v = [b["volume"] for b in bars]
+
+    ip = iso_pressure(h, l, c, v)
+    assert len(ip["p20"]) == len(bars)
+    assert ip["p5"][-1] is not None
+    assert ip["p20"][-1] is not None
+    assert ip["p50"][-1] is not None
+
+    mtf = compute_multi_timeframe_technicals(bars)
+    assert set(mtf.keys()) == {"day", "week", "month", "quarter"}
+    assert mtf["day"]["isopressure_p20"] is not None
+    assert mtf["day"]["isopressure_p50"] is not None
+    assert mtf["week"]["isopressure_p20"] is not None
+    assert mtf["week"]["isopressure_p50"] is not None
+    assert mtf["month"]["isopressure_p20"] is not None
+    assert mtf["month"]["isopressure_p50"] is not None
+    assert mtf["quarter"]["bars_count"] >= 20
+    assert mtf["quarter"]["isopressure_p5"] is not None

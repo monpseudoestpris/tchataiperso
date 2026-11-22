@@ -28,6 +28,7 @@ export function FinanceSyncPanel({
   const [indices, setIndices] = useState<FinanceSyncAvailableIndex[]>([]);
   const [exchanges, setExchanges] = useState<SupportedExchangeInfo[]>([]);
   const [showAllIndices, setShowAllIndices] = useState(false);
+  const [bgRunning, setBgRunning] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
@@ -40,6 +41,7 @@ export function FinanceSyncPanel({
       .then(res => {
         if (cancelled) return;
         setPrefs(res.preferences);
+        setBgRunning(Boolean(res.is_running));
         setIndices(res.available_indices || []);
         setExchanges(res.available_exchanges || []);
       })
@@ -65,12 +67,16 @@ export function FinanceSyncPanel({
       const res = await updateFinanceSyncPreferences({
         enabled: next.enabled,
         principal_indices: next.principal_indices,
+        major_indices_constituents: next.major_indices_constituents,
+        screener_fundamentals: next.screener_fundamentals,
+        screener_fundamentals_daily_cap: next.screener_fundamentals_daily_cap,
         indx_catalog: next.indx_catalog,
         index_codes: next.index_codes,
         watchlists: next.watchlists,
         exchanges: next.exchanges,
       });
       setPrefs(res.preferences);
+      setBgRunning(Boolean(res.is_running));
       setExchanges(res.available_exchanges || []);
       setSavedBanner("Préférences enregistrées.");
     } catch (err) {
@@ -80,7 +86,15 @@ export function FinanceSyncPanel({
     }
   }
 
-  function toggleBool(key: "enabled" | "principal_indices" | "indx_catalog" | "watchlists") {
+  function toggleBool(
+    key:
+      | "enabled"
+      | "principal_indices"
+      | "major_indices_constituents"
+      | "screener_fundamentals"
+      | "indx_catalog"
+      | "watchlists",
+  ) {
     if (!prefs || saving || running) return;
     void persistPrefs({ ...prefs, [key]: !prefs[key] });
   }
@@ -101,13 +115,19 @@ export function FinanceSyncPanel({
     try {
       const res = await runFinanceSyncNow(forceRefresh);
       setPrefs(res.preferences);
+      setBgRunning(Boolean(res.is_running));
       setExchanges(res.available_exchanges || []);
       const s = res.summary;
-      const idxCount = Object.keys(s?.indices || {}).length;
-      const exchCount = Object.keys(s?.exchanges || {}).length;
-      setSavedBanner(
-        `Synchronisation terminée (${s?.principal_indices_count ?? 0} indices, ${idxCount} compositions complètes, ${s?.watchlist_items_count ?? 0} suivi(s), ${exchCount} marché(s)).`,
-      );
+      if (s?.skipped && s.reason === "already_running") {
+        setSavedBanner("Une synchronisation quotidienne est déjà en cours en arrière-plan.");
+      } else {
+        const idxCount = Object.keys(s?.indices || {}).length;
+        const exchCount = Object.keys(s?.exchanges || {}).length;
+        const fundEnriched = s?.screener_fundamentals?.enriched ?? 0;
+        setSavedBanner(
+          `Synchronisation terminée (${s?.principal_indices_count ?? 0} indices, ${idxCount} compositions complètes + technique multi-unités, ${fundEnriched} fondamentaux enrichis, ${s?.watchlist_items_count ?? 0} suivi(s), ${exchCount} marché(s)).`,
+        );
+      }
       if (onSynced) onSynced();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Échec de la synchronisation immédiate.");
@@ -217,10 +237,10 @@ export function FinanceSyncPanel({
             </div>
           </div>
 
-          {/* Bloc 2 : Constituants complets d'indices (cours EOD + Tableau Perfos) */}
+          {/* Bloc 2 : Constituants complets d'indices (cours EOD + Screener + Tableau Perfos) */}
           <div className="finance-sync-card">
             <div className="finance-sync-card-head">
-              <strong>2. Actions complètes d&apos;indices (Tableau Perfos prêt d&apos;avance)</strong>
+              <strong>2. Contenu complet des indices (cours EOD, Screener &amp; Tableau Perfos)</strong>
               <button
                 type="button"
                 className="finance-tf-btn"
@@ -229,24 +249,76 @@ export function FinanceSyncPanel({
                 {showAllIndices ? "Indices principaux uniquement" : `Tous les indices (${indices.length})`}
               </button>
             </div>
+            <div className="finance-sync-check-row">
+              <label className="finance-sync-check">
+                <input
+                  type="checkbox"
+                  checked={prefs.major_indices_constituents}
+                  disabled={saving || running}
+                  onChange={() => toggleBool("major_indices_constituents")}
+                />
+                <span>
+                  Récupérer automatiquement chaque jour le contenu des 9 principaux indices (CAC 40, S&amp;P 500, NASDAQ 100, Dow Jones 30, EURO STOXX 50, DAX 40, FTSE 100, SMI 20, Nikkei 225)
+                </span>
+              </label>
+              <label className="finance-sync-check">
+                <input
+                  type="checkbox"
+                  checked={prefs.screener_fundamentals}
+                  disabled={saving || running}
+                  onChange={() => toggleBool("screener_fundamentals")}
+                />
+                <span>
+                  Enrichir progressivement les fondamentaux &amp; historiques 10 ans pour le Screener (
+                  <select
+                    value={prefs.screener_fundamentals_daily_cap}
+                    disabled={saving || running || !prefs.screener_fundamentals}
+                    onClick={e => e.stopPropagation()}
+                    onChange={e =>
+                      void persistPrefs({
+                        ...prefs,
+                        screener_fundamentals_daily_cap: Number(e.target.value) || 40,
+                      })
+                    }
+                    aria-label="Nombre maximal de dossiers fondamentaux enrichis par jour"
+                  >
+                    <option value={20}>20 / jour</option>
+                    <option value={40}>40 / jour</option>
+                    <option value={80}>80 / jour</option>
+                    <option value={120}>120 / jour</option>
+                  </select>
+                  , cache 15 jours)
+                </span>
+              </label>
+            </div>
+            {bgRunning && (
+              <div className="finance-index-import-banner">
+                <LoaderCircle size={12} className="spin" /> Synchronisation automatique en cours en arrière-plan…
+              </div>
+            )}
             <div className="finance-sync-pills-grid">
               {displayedIndices.map(idx => {
-                const checked = prefs.index_codes.includes(idx.code.toUpperCase());
+                const autoIncluded = prefs.major_indices_constituents && idx.tier === "major";
+                const checked = autoIncluded || prefs.index_codes.includes(idx.code.toUpperCase());
                 return (
                   <label
                     key={idx.code}
                     className={`finance-sync-pill ${checked ? "is-checked" : ""}`}
-                    title={`${idx.name} (${idx.constituents_count} actions)`}
+                    title={
+                      autoIncluded
+                        ? `${idx.name} (${idx.constituents_count} actions) — inclus automatiquement chaque jour`
+                        : `${idx.name} (${idx.constituents_count} actions)`
+                    }
                   >
                     <input
                       type="checkbox"
                       checked={checked}
-                      disabled={saving || running}
+                      disabled={saving || running || autoIncluded}
                       onChange={() => toggleListCode("index_codes", idx.code)}
                     />
                     <span>{idx.flag}</span>
                     <span>{idx.name}</span>
-                    <small>({idx.constituents_count})</small>
+                    <small>{autoIncluded ? `Auto · ${idx.constituents_count}` : `(${idx.constituents_count})`}</small>
                   </label>
                 );
               })}

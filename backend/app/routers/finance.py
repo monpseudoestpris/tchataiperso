@@ -1856,6 +1856,7 @@ def query_finance_screener(
     try:
         return query_screener(
             settings,
+            timeframe=str(body.get("timeframe") or "day"),
             universe_type=universe_type,
             universe_value=universe_value,
             watchlist_symbols=wl_symbols,

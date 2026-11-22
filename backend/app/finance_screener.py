@@ -1,10 +1,11 @@
-"""Moteur du Screener Boursier intégré (Fondamentaux + Scores + Technique).
+"""Moteur du Screener Boursier intégré (Fondamentaux + Scores + Technique multi-unités).
 
 Architecture évolutive en 2 passes pensée dès la V1 pour accueillir des formules
 personnalisées en V2 sans modification de schéma ni d'API :
   - Passe 1 (SQL SQLite WAL < 10 ms) : applique les filtres d'univers, de métriques
     (`kind="metric"`), de comparaisons entre champs (`kind="compare"`) et de signaux
-    techniques (`kind="signal"`) sur la table matérialisée `finance_screener_snapshots`.
+    techniques (`kind="signal"`) sur `finance_screener_snapshots` + `finance_screener_technicals`
+    (unités `day`, `week`, `month`, `quarter` = 3 mois, incluant IsoPressure 5/20/50/100/200).
   - Passe 2 (Post-filtre Python extensible) : exécute les évaluateurs enregistrés via
     `register_post_filter_evaluator(...)` (ex. futures règles `kind="formula"` /
     `kind="custom_indicator"`) uniquement sur les candidats survivants de la Passe 1.
@@ -13,7 +14,6 @@ personnalisées en V2 sans modification de schéma ni d'API :
 from __future__ import annotations
 
 import asyncio
-import datetime
 import json
 import logging
 import math
@@ -21,7 +21,11 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .config import Settings
-from .finance_technicals import compute_technical_snapshot
+from .finance_technicals import (
+    SUPPORTED_TIMEFRAMES,
+    compute_multi_timeframe_technicals,
+    compute_technical_snapshot,
+)
 from .finance_warehouse import (
     _connect,
     _norm_sym,
@@ -35,10 +39,82 @@ from .finance_warehouse import (
     load_fundamental_series,
     resolve_canonical_symbol,
     upsert_screener_snapshots,
+    upsert_screener_technicals,
     warehouse_db_path,
 )
 
 _logger = logging.getLogger("uvicorn.error")
+
+TIMEFRAME_LABELS: dict[str, str] = {
+    "day": "Jour",
+    "week": "Semaine",
+    "month": "Mois",
+    "quarter": "3 Mois",
+}
+
+# Colonnes techniques stockées par unité dans `finance_screener_technicals`
+_TF_TECH_COLUMNS: frozenset[str] = frozenset(
+    {
+        "rel_volume_20d",
+        "sma20",
+        "sma50",
+        "sma200",
+        "ema20",
+        "ema50",
+        "dist_sma50_pct",
+        "dist_sma200_pct",
+        "rsi_14",
+        "macd_line",
+        "macd_signal",
+        "macd_hist",
+        "macd_cross",
+        "sma_golden_cross",
+        "boll_pct_b",
+        "boll_width_pct",
+        "adx_14",
+        "stoch_k",
+        "atr_pct",
+        "roc_12",
+        "supertrend_dir",
+        "isopressure_raw",
+        "isopressure_p5",
+        "isopressure_p20",
+        "isopressure_p50",
+        "isopressure_p100",
+        "isopressure_p200",
+        "isopressure_20_50_diff",
+        "isopressure_20_50_dir",
+        "isopressure_20_50_cross",
+        "isopressure_5_20_cross",
+    }
+)
+
+# Sous-ensemble présent aussi directement sur `finance_screener_snapshots` (repli mode `day`)
+_SNAPSHOT_FALLBACK_TECH_COLUMNS: frozenset[str] = frozenset(
+    {
+        "rel_volume_20d",
+        "sma20",
+        "sma50",
+        "sma200",
+        "ema20",
+        "ema50",
+        "dist_sma50_pct",
+        "dist_sma200_pct",
+        "rsi_14",
+        "macd_line",
+        "macd_signal",
+        "macd_hist",
+        "macd_cross",
+        "sma_golden_cross",
+        "boll_pct_b",
+        "boll_width_pct",
+        "adx_14",
+        "stoch_k",
+        "atr_pct",
+        "roc_12",
+        "supertrend_dir",
+    }
+)
 
 # ---------------------------------------------------------------------------
 # Registre extensible Passe 2 (point d'ancrage V2 pour formules personnalisées)
@@ -66,7 +142,7 @@ def list_registered_post_filter_kinds() -> list[str]:
 
 SCREENER_FIELDS: tuple[dict[str, Any], ...] = (
     # Performance & Prix
-    {"key": "price", "label": "Cours", "category": "performance", "type": "number", "unit": "currency", "comparable": True, "description": "Dernier cours de clôture EOD"},
+    {"key": "price", "label": "Cours", "category": "performance", "type": "number", "unit": "currency", "comparable": True, "compare_group": "price", "description": "Dernier cours de clôture EOD"},
     {"key": "market_cap", "label": "Capitalisation (M)", "category": "valuation", "type": "number", "unit": "millions", "scale": 1e6, "description": "Capitalisation boursière exprimée en millions"},
     {"key": "change_1d_pct", "label": "Variation 1J (%)", "category": "performance", "type": "number", "unit": "pct", "description": "Variation journalière (%)"},
     {"key": "change_1w_pct", "label": "Variation 1 Sem. (%)", "category": "performance", "type": "number", "unit": "pct", "description": "Variation sur 1 semaine (%)"},
@@ -76,7 +152,7 @@ SCREENER_FIELDS: tuple[dict[str, Any], ...] = (
     {"key": "change_1y_pct", "label": "Variation 1 An (%)", "category": "performance", "type": "number", "unit": "pct", "description": "Variation sur 1 an (%)"},
     {"key": "dist_52w_high_pct", "label": "Écart Plus-Haut 52S (%)", "category": "performance", "type": "number", "unit": "pct", "description": "Distance en % par rapport au plus haut 52 semaines"},
     {"key": "dist_52w_low_pct", "label": "Écart Plus-Bas 52S (%)", "category": "performance", "type": "number", "unit": "pct", "description": "Distance en % par rapport au plus bas 52 semaines"},
-    {"key": "rel_volume_20d", "label": "Volume relatif (×20j)", "category": "technical", "type": "number", "unit": "ratio", "description": "Dernier volume / moyenne 20 séances"},
+    {"key": "rel_volume_20d", "label": "Volume relatif (×20)", "category": "technical", "type": "number", "unit": "ratio", "supports_timeframe": True, "description": "Dernier volume / moyenne des 20 dernières barres"},
     # Valorisation
     {"key": "pe_ttm", "label": "PER (TTM)", "category": "valuation", "type": "number", "unit": "ratio", "description": "Ratio Cours / Bénéfice glissant 12 mois"},
     {"key": "pe_forward", "label": "PER Forward", "category": "valuation", "type": "number", "unit": "ratio", "description": "PER estimé sur les bénéfices futurs"},
@@ -102,25 +178,36 @@ SCREENER_FIELDS: tuple[dict[str, Any], ...] = (
     {"key": "piotroski_f", "label": "Piotroski F-Score (/9)", "category": "scores", "type": "number", "unit": "score9", "description": "Score de solidité financière Piotroski sur 9"},
     {"key": "altman_z", "label": "Altman Z-Score", "category": "scores", "type": "number", "unit": "ratio", "description": "Indicateur de solvabilité (> 3 = zone sûre)"},
     {"key": "mos_intrinsic_pct", "label": "Marge de Sécurité (%)", "category": "scores", "type": "number", "unit": "pct", "description": "Décote / surcote vs valeur intrinsèque pondérée (%)"},
-    # Indicateurs techniques & Signaux
-    {"key": "sma20", "label": "SMA 20", "category": "technical", "type": "number", "unit": "currency", "comparable": True, "description": "Moyenne mobile simple 20 séances"},
-    {"key": "sma50", "label": "SMA 50", "category": "technical", "type": "number", "unit": "currency", "comparable": True, "description": "Moyenne mobile simple 50 séances"},
-    {"key": "sma200", "label": "SMA 200", "category": "technical", "type": "number", "unit": "currency", "comparable": True, "description": "Moyenne mobile simple 200 séances"},
-    {"key": "ema20", "label": "EMA 20", "category": "technical", "type": "number", "unit": "currency", "comparable": True, "description": "Moyenne mobile exponentielle 20 séances"},
-    {"key": "ema50", "label": "EMA 50", "category": "technical", "type": "number", "unit": "currency", "comparable": True, "description": "Moyenne mobile exponentielle 50 séances"},
-    {"key": "dist_sma50_pct", "label": "Écart SMA 50 (%)", "category": "technical", "type": "number", "unit": "pct", "description": "Position du cours par rapport à la SMA 50 (%)"},
-    {"key": "dist_sma200_pct", "label": "Écart SMA 200 (%)", "category": "technical", "type": "number", "unit": "pct", "description": "Position du cours par rapport à la SMA 200 (%)"},
-    {"key": "rsi_14", "label": "RSI (14)", "category": "technical", "type": "number", "unit": "index", "description": "Relative Strength Index (< 30 survente, > 70 surachat)"},
-    {"key": "macd_hist", "label": "MACD Histogramme", "category": "technical", "type": "number", "unit": "ratio", "description": "Écart MACD − Signal (> 0 momentum haussier)"},
-    {"key": "macd_cross", "label": "Croisement MACD (3j)", "category": "technical", "type": "signal", "options": [{"value": 1, "label": "Croisement haussier récent"}, {"value": -1, "label": "Croisement baissier récent"}], "description": "Signal de croisement MACD/Signal sur les 3 dernières séances"},
-    {"key": "sma_golden_cross", "label": "Tendance SMA 50/200", "category": "technical", "type": "signal", "options": [{"value": 2, "label": "Golden Cross récent (≤ 5j)"}, {"value": 1, "label": "SMA 50 > SMA 200 (Haussier)"}, {"value": -1, "label": "SMA 50 < SMA 200 (Baissier)"}, {"value": -2, "label": "Death Cross récent (≤ 5j)"}], "description": "Position et croisement récent SMA 50 vs SMA 200"},
-    {"key": "boll_pct_b", "label": "Bollinger %B (%)", "category": "technical", "type": "number", "unit": "pct", "description": "Position dans les bandes (0% = bande basse, 100% = bande haute)"},
-    {"key": "boll_width_pct", "label": "Largeur Bollinger (%)", "category": "technical", "type": "number", "unit": "pct", "description": "Écart relatif des bandes (squeeze si faible)"},
-    {"key": "adx_14", "label": "ADX (14)", "category": "technical", "type": "number", "unit": "index", "description": "Force de la tendance (> 25 tendance marquée)"},
-    {"key": "stoch_k", "label": "Stochastique %K", "category": "technical", "type": "number", "unit": "index", "description": "Oscillateur stochastique 14j (0–100)"},
-    {"key": "atr_pct", "label": "Volatilité ATR (%)", "category": "technical", "type": "number", "unit": "pct", "description": "ATR(14) rapporté au cours (%)"},
-    {"key": "roc_12", "label": "ROC 12j (%)", "category": "technical", "type": "number", "unit": "pct", "description": "Momentum Rate of Change sur 12 séances"},
-    {"key": "supertrend_dir", "label": "Supertrend (10, 3)", "category": "technical", "type": "signal", "options": [{"value": 1, "label": "Haussier (+1)"}, {"value": -1, "label": "Baissier (-1)"}], "description": "Direction courante du Supertrend"},
+    # Indicateurs techniques & IsoPressure (multi-unités : Jour / Semaine / Mois / 3 Mois)
+    {"key": "sma20", "label": "SMA 20", "category": "technical", "type": "number", "unit": "currency", "comparable": True, "compare_group": "price", "supports_timeframe": True, "description": "Moyenne mobile simple 20 périodes"},
+    {"key": "sma50", "label": "SMA 50", "category": "technical", "type": "number", "unit": "currency", "comparable": True, "compare_group": "price", "supports_timeframe": True, "description": "Moyenne mobile simple 50 périodes"},
+    {"key": "sma200", "label": "SMA 200", "category": "technical", "type": "number", "unit": "currency", "comparable": True, "compare_group": "price", "supports_timeframe": True, "description": "Moyenne mobile simple 200 périodes"},
+    {"key": "ema20", "label": "EMA 20", "category": "technical", "type": "number", "unit": "currency", "comparable": True, "compare_group": "price", "supports_timeframe": True, "description": "Moyenne mobile exponentielle 20 périodes"},
+    {"key": "ema50", "label": "EMA 50", "category": "technical", "type": "number", "unit": "currency", "comparable": True, "compare_group": "price", "supports_timeframe": True, "description": "Moyenne mobile exponentielle 50 périodes"},
+    {"key": "dist_sma50_pct", "label": "Écart SMA 50 (%)", "category": "technical", "type": "number", "unit": "pct", "supports_timeframe": True, "description": "Position du cours par rapport à la SMA 50 (%)"},
+    {"key": "dist_sma200_pct", "label": "Écart SMA 200 (%)", "category": "technical", "type": "number", "unit": "pct", "supports_timeframe": True, "description": "Position du cours par rapport à la SMA 200 (%)"},
+    {"key": "rsi_14", "label": "RSI (14)", "category": "technical", "type": "number", "unit": "index", "supports_timeframe": True, "description": "Relative Strength Index (< 30 survente, > 70 surachat)"},
+    {"key": "macd_hist", "label": "MACD Histogramme", "category": "technical", "type": "number", "unit": "ratio", "supports_timeframe": True, "description": "Écart MACD − Signal (> 0 momentum haussier)"},
+    {"key": "macd_cross", "label": "Croisement MACD (3 barres)", "category": "technical", "type": "signal", "supports_timeframe": True, "options": [{"value": 1, "label": "Croisement haussier récent"}, {"value": -1, "label": "Croisement baissier récent"}], "description": "Signal de croisement MACD/Signal sur les 3 dernières barres"},
+    {"key": "sma_golden_cross", "label": "Tendance SMA 50/200", "category": "technical", "type": "signal", "supports_timeframe": True, "options": [{"value": 2, "label": "Golden Cross récent (≤ 5 barres)"}, {"value": 1, "label": "SMA 50 > SMA 200 (Haussier)"}, {"value": -1, "label": "SMA 50 < SMA 200 (Baissier)"}, {"value": -2, "label": "Death Cross récent (≤ 5 barres)"}], "description": "Position et croisement récent SMA 50 vs SMA 200"},
+    {"key": "boll_pct_b", "label": "Bollinger %B (%)", "category": "technical", "type": "number", "unit": "pct", "supports_timeframe": True, "description": "Position dans les bandes (0% = bande basse, 100% = bande haute)"},
+    {"key": "boll_width_pct", "label": "Largeur Bollinger (%)", "category": "technical", "type": "number", "unit": "pct", "supports_timeframe": True, "description": "Écart relatif des bandes (squeeze si faible)"},
+    {"key": "adx_14", "label": "ADX (14)", "category": "technical", "type": "number", "unit": "index", "supports_timeframe": True, "description": "Force de la tendance (> 25 tendance marquée)"},
+    {"key": "stoch_k", "label": "Stochastique %K", "category": "technical", "type": "number", "unit": "index", "supports_timeframe": True, "description": "Oscillateur stochastique 14 périodes (0–100)"},
+    {"key": "atr_pct", "label": "Volatilité ATR (%)", "category": "technical", "type": "number", "unit": "pct", "supports_timeframe": True, "description": "ATR(14) rapporté au cours (%)"},
+    {"key": "roc_12", "label": "ROC 12 (%)", "category": "technical", "type": "number", "unit": "pct", "supports_timeframe": True, "description": "Momentum Rate of Change sur 12 périodes"},
+    {"key": "supertrend_dir", "label": "Supertrend (10, 3)", "category": "technical", "type": "signal", "supports_timeframe": True, "options": [{"value": 1, "label": "Haussier (+1)"}, {"value": -1, "label": "Baissier (-1)"}], "description": "Direction courante du Supertrend"},
+    # IsoPressure
+    {"key": "isopressure_raw", "label": "IsoPressure Brute", "category": "technical", "type": "number", "unit": "index", "comparable": True, "compare_group": "isopressure", "supports_timeframe": True, "description": "Pression IsoPressure brute avant lissage"},
+    {"key": "isopressure_p5", "label": "IsoPressure 5", "category": "technical", "type": "number", "unit": "index", "comparable": True, "compare_group": "isopressure", "supports_timeframe": True, "description": "Courbe IsoPressure lissée 5 périodes"},
+    {"key": "isopressure_p20", "label": "IsoPressure 20", "category": "technical", "type": "number", "unit": "index", "comparable": True, "compare_group": "isopressure", "supports_timeframe": True, "description": "Courbe IsoPressure lissée 20 périodes"},
+    {"key": "isopressure_p50", "label": "IsoPressure 50", "category": "technical", "type": "number", "unit": "index", "comparable": True, "compare_group": "isopressure", "supports_timeframe": True, "description": "Courbe IsoPressure lissée 50 périodes"},
+    {"key": "isopressure_p100", "label": "IsoPressure 100", "category": "technical", "type": "number", "unit": "index", "comparable": True, "compare_group": "isopressure", "supports_timeframe": True, "description": "Courbe IsoPressure lissée 100 périodes"},
+    {"key": "isopressure_p200", "label": "IsoPressure 200", "category": "technical", "type": "number", "unit": "index", "comparable": True, "compare_group": "isopressure", "supports_timeframe": True, "description": "Courbe IsoPressure lissée 200 périodes"},
+    {"key": "isopressure_20_50_diff", "label": "IsoPressure (20 − 50)", "category": "technical", "type": "number", "unit": "index", "supports_timeframe": True, "description": "Écart IsoPressure 20 moins IsoPressure 50 (> 0 haussier)"},
+    {"key": "isopressure_20_50_dir", "label": "IsoPressure 20 vs 50", "category": "technical", "type": "signal", "supports_timeframe": True, "options": [{"value": 1, "label": "IsoPressure 20 > 50 (Haussier)"}, {"value": -1, "label": "IsoPressure 20 < 50 (Baissier)"}], "description": "Position relative d'IsoPressure 20 par rapport à IsoPressure 50"},
+    {"key": "isopressure_20_50_cross", "label": "Croisement IsoPressure 20/50", "category": "technical", "type": "signal", "supports_timeframe": True, "options": [{"value": 1, "label": "Croisement haussier 20 > 50 (≤ 3 barres)"}, {"value": -1, "label": "Croisement baissier 20 < 50 (≤ 3 barres)"}], "description": "Croisement récent entre IsoPressure 20 et IsoPressure 50"},
+    {"key": "isopressure_5_20_cross", "label": "Croisement IsoPressure 5/20", "category": "technical", "type": "signal", "supports_timeframe": True, "options": [{"value": 1, "label": "Croisement haussier 5 > 20 (≤ 3 barres)"}, {"value": -1, "label": "Croisement baissier 5 < 20 (≤ 3 barres)"}], "description": "Croisement récent entre IsoPressure 5 et IsoPressure 20"},
 )
 
 _FIELD_BY_KEY: dict[str, dict[str, Any]] = {f["key"]: f for f in SCREENER_FIELDS}
@@ -141,6 +228,16 @@ _ALLOWED_METRIC_OPS: dict[str, str] = {
 }
 
 SCREENER_PRESETS: tuple[dict[str, Any], ...] = (
+    {
+        "id": "isopressure_20_50",
+        "name": "IsoPressure 20 > 50",
+        "description": "IsoPressure 20 au-dessus d'IsoPressure 50 sur l'unité choisie (Jour, Semaine, Mois ou 3 Mois).",
+        "sort_by": "isopressure_20_50_diff",
+        "sort_dir": "desc",
+        "rules": [
+            {"kind": "compare", "left": "isopressure_p20", "op": "gt", "right": "isopressure_p50"},
+        ],
+    },
     {
         "id": "quality_moat",
         "name": "Qualité & Moat (Buffett)",
@@ -286,6 +383,28 @@ def _extract_scores_compact(uncle_stock_scores: dict[str, Any] | None) -> dict[s
     return out
 
 
+def _normalize_timeframe(tf: Any, default: str = "day") -> str:
+    clean = str(tf or "").strip().lower()
+    if clean in ("3m", "3month", "3months", "3_months", "trimestre"):
+        return "quarter"
+    if clean in SUPPORTED_TIMEFRAMES:
+        return clean
+    if not clean:
+        return default
+    raise ValueError(f"Unité temporelle invalide : {tf!r} (attendu : day, week, month ou quarter).")
+
+
+def _build_mtf_rows(symbol: str, bars: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    if not symbol or not bars:
+        return []
+    mtf = compute_multi_timeframe_technicals(bars)
+    now_iso = _utc_iso()
+    return [
+        {**payload, "symbol": symbol, "timeframe": tf, "computed_at": now_iso}
+        for tf, payload in mtf.items()
+    ]
+
+
 def build_screener_snapshot_from_dossier(
     dossier: dict[str, Any],
     bars: list[dict[str, Any]] | None,
@@ -301,11 +420,10 @@ def build_screener_snapshot_from_dossier(
     stk = dossier.get("stakeholders") or {}
     intr = dossier.get("intrinsic_valuation") or {}
 
-    tech = compute_technical_snapshot(bars or [])
+    tech = compute_technical_snapshot(bars or [], interval="day")
     price = _num(cap.get("price")) or tech["price"]
     market_cap = _num(cap.get("market_cap")) or _num(hdr.get("market_cap"))
 
-    # FCF Yield = dernier FCF annuel / Market Cap (%)
     latest_fcf = _find_table_latest(ann.get("distribution"), "fcf")
     fcf_yield_pct = (
         round((latest_fcf / market_cap) * 100.0, 2)
@@ -313,7 +431,6 @@ def build_screener_snapshot_from_dossier(
         else None
     )
 
-    # CAGR 3A CA & BPA depuis les tableaux annuels si présents
     rev_row = next((r for r in (ann.get("summary") or []) if r.get("key") in ("rev", "revenue")), None)
     eps_row = next((r for r in (ann.get("summary") or []) if r.get("key") in ("eps", "diluted_eps")), None)
 
@@ -447,7 +564,7 @@ def sync_screener_snapshot_from_dossier(
     dossier: dict[str, Any],
     bars: list[dict[str, Any]] | None,
 ) -> None:
-    """Met à jour immédiatement la ligne Screener suite au calcul d'un dossier boursier."""
+    """Met à jour immédiatement la ligne Screener + les 4 unités techniques suite au calcul d'un dossier."""
     canonical = _norm_sym(str(dossier.get("symbol") or ""))
     if not canonical:
         return
@@ -456,6 +573,9 @@ def sync_screener_snapshot_from_dossier(
     indices = idx_map.get(canonical) or idx_map.get(_norm_sym(str((meta or {}).get("eod_ticker") or ""))) or []
     row = build_screener_snapshot_from_dossier(dossier, bars, meta=meta, indices_list=indices)
     upsert_screener_snapshots(db_path, [row], preserve_fundamentals_if_missing=False)
+    mtf_rows = _build_mtf_rows(canonical, bars)
+    if mtf_rows:
+        upsert_screener_technicals(db_path, mtf_rows)
 
 
 def build_screener_snapshot_from_warehouse(
@@ -463,8 +583,8 @@ def build_screener_snapshot_from_warehouse(
     symbol: str,
     *,
     indices_map: dict[str, list[str]] | None = None,
-) -> dict[str, Any] | None:
-    """Reconstruit une ligne Screener 100 % localement depuis `finance_warehouse.db` (0 appel réseau)."""
+) -> tuple[dict[str, Any], list[dict[str, Any]]] | None:
+    """Reconstruit une ligne Screener + ses 4 unités techniques (`day`/`week`/`month`/`quarter`) 100 % localement."""
     from .finance_dossier import _cap_category, _compute_annual_dossier_tables, _dedupe_annual_series_by_year
     from .finance_eodhd_extras import resolve_country_iso3
     from .finance_intrinsic import compute_intrinsic_valuations
@@ -473,7 +593,8 @@ def build_screener_snapshot_from_warehouse(
     if not canonical:
         return None
     meta = get_instrument_meta(db_path, canonical) or {}
-    bars = get_stored_eod_bars(db_path, canonical, limit=600)
+    # Charger tout l'historique EOD disponible pour alimenter les unités Mois et 3 Mois sans troncature
+    bars = get_stored_eod_bars(db_path, canonical, limit=None)
     ann_series, ann_curr, _, ann_upd = load_fundamental_series(db_path, canonical, "annual")
     eod_snap = get_snapshot(db_path, canonical, "fundamentals", provider="eodhd", include_raw=True)
     eod_fund = eod_snap.get("raw") if (eod_snap and isinstance(eod_snap.get("raw"), dict)) else None
@@ -483,7 +604,9 @@ def build_screener_snapshot_from_warehouse(
     if not bars and not ann_series and not eod_fund and not yahoo_sum:
         return None
 
-    tech = compute_technical_snapshot(bars)
+    tech = compute_technical_snapshot(bars, interval="day")
+    mtf_rows = _build_mtf_rows(canonical, bars)
+
     gen = (eod_fund or {}).get("General") or {}
     hl = (eod_fund or {}).get("Highlights") or {}
     val = (eod_fund or {}).get("Valuation") or {}
@@ -609,7 +732,7 @@ def build_screener_snapshot_from_warehouse(
         or ann_upd
     )
 
-    return {
+    snap_row = {
         "symbol": canonical,
         "eod_ticker": _norm_sym(str(meta.get("eod_ticker") or canonical)) or canonical,
         "yahoo_symbol": _norm_sym(str(meta.get("yahoo_symbol") or canonical)) or canonical,
@@ -690,13 +813,14 @@ def build_screener_snapshot_from_warehouse(
         "scores_json": {},
         "sparkline_json": tech["sparkline"],
     }
+    return snap_row, mtf_rows
 
 
 def rebuild_screener_snapshots_from_warehouse(
     db_path: Path,
     symbols: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Reconstruit la table matérialisée du Screener depuis les données locales (0 appel réseau)."""
+    """Reconstruit les tables matérialisées du Screener (`snapshots` + 4 unités techniques) depuis le cache local."""
     target_syms = (
         [_norm_sym(s) for s in symbols if _norm_sym(s)]
         if symbols is not None
@@ -706,29 +830,55 @@ def rebuild_screener_snapshots_from_warehouse(
         return {"indexed_count": 0, "coverage": get_screener_coverage(db_path)}
 
     idx_map = get_symbol_indices_map(db_path)
-    rows: list[dict[str, Any]] = []
+    snap_rows: list[dict[str, Any]] = []
+    tech_rows: list[dict[str, Any]] = []
     for sym in target_syms:
         try:
-            snap = build_screener_snapshot_from_warehouse(db_path, sym, indices_map=idx_map)
-            if snap:
-                rows.append(snap)
+            built = build_screener_snapshot_from_warehouse(db_path, sym, indices_map=idx_map)
+            if built:
+                s_row, mtf_list = built
+                snap_rows.append(s_row)
+                tech_rows.extend(mtf_list)
         except Exception as exc:
             _logger.debug("Snapshot screener ignoré pour %s: %s", sym, exc)
 
-    indexed = upsert_screener_snapshots(db_path, rows, preserve_fundamentals_if_missing=True, batch_size=40)
+    indexed = upsert_screener_snapshots(db_path, snap_rows, preserve_fundamentals_if_missing=True, batch_size=40)
+    if tech_rows:
+        upsert_screener_technicals(db_path, tech_rows, batch_size=80)
     return {"indexed_count": indexed, "coverage": get_screener_coverage(db_path)}
 
 
 # ---------------------------------------------------------------------------
-# Moteur de requête Screener (Passe 1 SQL whitelistée + Passe 2 extensible)
+# Moteur de requête Screener (Passe 1 SQL whitelistée multi-unités + Passe 2)
 # ---------------------------------------------------------------------------
 
-def _compile_rule_sql(rule: dict[str, Any]) -> tuple[str | None, list[Any], bool]:
-    """Compile une règle déclarative en clause SQL paramétrée sûre.
+def _col_expr(col: str, tf: str, main_tf: str, extra_tfs: set[str]) -> str:
+    """Résout une colonne whitelistée vers son expression SQL (`s.col` ou `t_{tf}.col`)."""
+    if col in _TF_TECH_COLUMNS:
+        if tf == main_tf:
+            if main_tf == "day" and col in _SNAPSHOT_FALLBACK_TECH_COLUMNS:
+                return f"COALESCE(t_main.{col}, s.{col})"
+            return f"t_main.{col}"
+        extra_tfs.add(tf)
+        alias = f"t_{tf}"
+        if tf == "day" and col in _SNAPSHOT_FALLBACK_TECH_COLUMNS:
+            return f"COALESCE({alias}.{col}, s.{col})"
+        return f"{alias}.{col}"
+    if col == "price":
+        if tf != main_tf:
+            extra_tfs.add(tf)
+            return f"COALESCE(t_{tf}.price, s.price)"
+        return "COALESCE(t_main.price, s.price)"
+    return f"s.{col}"
 
-    Retourne `(sql_clause, params, is_post_filter)`.
-    Lève `ValueError` sur tout champ ou opérateur hors whitelist.
-    """
+
+def _compile_rule_sql(
+    rule: dict[str, Any],
+    *,
+    main_tf: str,
+    extra_tfs: set[str],
+) -> tuple[str | None, list[Any], bool]:
+    """Compile une règle déclarative en clause SQL paramétrée sûre (multi-unités)."""
     if not isinstance(rule, dict):
         raise ValueError("Règle de filtrage invalide.")
     kind = str(rule.get("kind") or "metric").strip().lower()
@@ -740,6 +890,8 @@ def _compile_rule_sql(rule: dict[str, Any]) -> tuple[str | None, list[Any], bool
             )
         return None, [], True
 
+    rule_tf = _normalize_timeframe(rule.get("timeframe"), default=main_tf)
+
     if kind == "compare":
         left = str(rule.get("left") or "").strip()
         right = str(rule.get("right") or "").strip()
@@ -748,11 +900,13 @@ def _compile_rule_sql(rule: dict[str, Any]) -> tuple[str | None, list[Any], bool
             raise ValueError(f"Comparaison inter-indicateurs non autorisée : {left!r} / {right!r}.")
         if op not in ("gt", "gte", "lt", "lte"):
             raise ValueError(f"Opérateur de comparaison invalide : {op!r}.")
+        left_expr = _col_expr(left, rule_tf, main_tf, extra_tfs)
+        right_expr = _col_expr(right, rule_tf, main_tf, extra_tfs)
         mult = _num(rule.get("multiplier"))
         sql_op = _ALLOWED_METRIC_OPS[op]
         if mult is not None and mult != 1.0:
-            return f"({left} IS NOT NULL AND {right} IS NOT NULL AND {left} {sql_op} ({right} * ?))", [mult], False
-        return f"({left} IS NOT NULL AND {right} IS NOT NULL AND {left} {sql_op} {right})", [], False
+            return f"({left_expr} IS NOT NULL AND {right_expr} IS NOT NULL AND {left_expr} {sql_op} ({right_expr} * ?))", [mult], False
+        return f"({left_expr} IS NOT NULL AND {right_expr} IS NOT NULL AND {left_expr} {sql_op} {right_expr})", [], False
 
     field = str(rule.get("field") or "").strip()
     meta = _FIELD_BY_KEY.get(field)
@@ -760,16 +914,17 @@ def _compile_rule_sql(rule: dict[str, Any]) -> tuple[str | None, list[Any], bool
         raise ValueError(f"Champ de screening inconnu : {field!r}.")
     op = str(rule.get("op") or "").strip().lower()
     scale = float(meta.get("scale") or 1.0)
+    col_sql = _col_expr(field, rule_tf, main_tf, extra_tfs)
 
     if op == "is_not_null":
-        return f"{field} IS NOT NULL", [], False
+        return f"{col_sql} IS NOT NULL", [], False
 
     if kind == "signal" or meta.get("type") == "signal":
         if op == "eq":
             val = _num(rule.get("value"))
             if val is None:
                 raise ValueError(f"Valeur requise pour le signal {field}.")
-            return f"{field} = ?", [int(val)], False
+            return f"{col_sql} = ?", [int(val)], False
         if op == "in":
             raw_vals = rule.get("value")
             if not isinstance(raw_vals, list) or not raw_vals:
@@ -778,7 +933,7 @@ def _compile_rule_sql(rule: dict[str, Any]) -> tuple[str | None, list[Any], bool
             if not ints:
                 raise ValueError(f"Valeurs invalides pour {field}.")
             marks = ", ".join("?" for _ in ints)
-            return f"{field} IN ({marks})", ints, False
+            return f"{col_sql} IN ({marks})", ints, False
         raise ValueError(f"Opérateur de signal invalide pour {field} : {op!r}.")
 
     if op == "between":
@@ -787,18 +942,18 @@ def _compile_rule_sql(rule: dict[str, Any]) -> tuple[str | None, list[Any], bool
         if lo is None or hi is None:
             raise ValueError(f"Bornes min et max requises pour « between » sur {field}.")
         low_v, high_v = (lo * scale, hi * scale) if lo <= hi else (hi * scale, lo * scale)
-        return f"({field} IS NOT NULL AND {field} BETWEEN ? AND ?)", [low_v, high_v], False
+        return f"({col_sql} IS NOT NULL AND {col_sql} BETWEEN ? AND ?)", [low_v, high_v], False
 
     if op in _ALLOWED_METRIC_OPS:
         val = _num(rule.get("value"))
         if val is None:
             raise ValueError(f"Valeur numérique requise pour {field}.")
-        return f"({field} IS NOT NULL AND {field} {_ALLOWED_METRIC_OPS[op]} ?)", [val * scale], False
+        return f"({col_sql} IS NOT NULL AND {col_sql} {_ALLOWED_METRIC_OPS[op]} ?)", [val * scale], False
 
     raise ValueError(f"Opérateur invalide pour {field} : {op!r}.")
 
 
-def _row_to_screener_dict(row: Any) -> dict[str, Any]:
+def _row_to_screener_dict(row: Any, *, main_tf: str) -> dict[str, Any]:
     d = dict(row)
     try:
         d["sparkline"] = json.loads(d.pop("sparkline_json", "[]") or "[]")
@@ -811,6 +966,7 @@ def _row_to_screener_dict(row: Any) -> dict[str, Any]:
     d["has_fundamentals"] = bool(d.get("has_fundamentals"))
     raw_idx = str(d.pop("indices_csv", "") or "")
     d["indices"] = [p for p in raw_idx.split(",") if p]
+    d["timeframe"] = main_tf
     if d.get("market_cap") is not None:
         d["market_cap_m"] = round(float(d["market_cap"]) / 1e6, 1)
     else:
@@ -818,9 +974,87 @@ def _row_to_screener_dict(row: Any) -> dict[str, Any]:
     return d
 
 
+def _ensure_mtf_backfilled_if_needed(db_path: Path) -> None:
+    """Remplit automatiquement `finance_screener_technicals` si l'entrepôt a des barres mais pas encore de lignes multi-unités."""
+    if not db_path.exists():
+        return
+    with _connect(db_path) as conn:
+        tech_cnt = int(conn.execute("SELECT COUNT(*) FROM finance_screener_technicals").fetchone()[0] or 0)
+        if tech_cnt > 0:
+            return
+        bars_syms = int(conn.execute("SELECT COUNT(DISTINCT symbol) FROM finance_eod_bars").fetchone()[0] or 0)
+    if bars_syms > 0:
+        rebuild_screener_snapshots_from_warehouse(db_path)
+
+
+def _select_projection_sql(main_tf: str) -> str:
+    base_cols = [
+        "s.symbol",
+        "s.eod_ticker",
+        "s.yahoo_symbol",
+        "s.name",
+        "s.exchange",
+        "s.country",
+        "s.currency",
+        "s.sector",
+        "s.industry",
+        "s.cap_category",
+        "s.indices_csv",
+        "s.market_cap",
+        "COALESCE(t_main.price, s.price) AS price",
+        "s.volume",
+        "s.avg_volume_20d",
+        "s.change_1d_pct",
+        "s.change_1w_pct",
+        "s.change_1m_pct",
+        "s.change_3m_pct",
+        "s.change_ytd_pct",
+        "s.change_1y_pct",
+        "s.dist_52w_high_pct",
+        "s.dist_52w_low_pct",
+        "s.pe_ttm",
+        "s.pe_forward",
+        "s.peg_ratio",
+        "s.ev_ebitda",
+        "s.pb_ratio",
+        "s.fcf_yield_pct",
+        "s.dividend_yield_pct",
+        "s.roic_pct",
+        "s.roe_pct",
+        "s.op_margin_pct",
+        "s.net_margin_pct",
+        "s.net_debt_ebitda",
+        "s.debt_to_equity_pct",
+        "s.current_ratio",
+        "s.rev_cagr_3y_pct",
+        "s.eps_cagr_3y_pct",
+        "s.beta",
+        "s.analyst_upside_pct",
+        "s.ih_score",
+        "s.piotroski_f",
+        "s.altman_z",
+        "s.mos_intrinsic_pct",
+        "s.has_fundamentals",
+        "COALESCE(t_main.bars_count, s.bars_count) AS tf_bars_count",
+        "s.bars_count",
+        "COALESCE(t_main.bars_date, s.bars_date) AS bars_date",
+        "s.fundamentals_updated_at",
+        "s.computed_at",
+        "s.scores_json",
+        "s.sparkline_json",
+    ]
+    for col in sorted(_TF_TECH_COLUMNS):
+        if main_tf == "day" and col in _SNAPSHOT_FALLBACK_TECH_COLUMNS:
+            base_cols.append(f"COALESCE(t_main.{col}, s.{col}) AS {col}")
+        else:
+            base_cols.append(f"t_main.{col} AS {col}")
+    return ", ".join(base_cols)
+
+
 def query_screener(
     settings: Settings,
     *,
+    timeframe: str = "day",
     universe_type: str = "all",
     universe_value: str | None = None,
     watchlist_symbols: list[str] | None = None,
@@ -836,12 +1070,16 @@ def query_screener(
     offset: int = 0,
     auto_backfill: bool = True,
 ) -> dict[str, Any]:
-    """Exécute une requête multi-critères (Passe 1 SQLite + Passe 2 extensible) sur `finance_screener_snapshots`."""
+    """Exécute une requête multi-critères & multi-unités (`day`/`week`/`month`/`quarter`) sur le Screener."""
+    main_tf = _normalize_timeframe(timeframe, default="day")
     db_path = warehouse_db_path(settings)
     cov = get_screener_coverage(db_path)
-    if auto_backfill and cov["total_snapshots"] == 0 and cov["warehouse_symbols_count"] > 0:
-        rebuild_screener_snapshots_from_warehouse(db_path)
-        cov = get_screener_coverage(db_path)
+    if auto_backfill:
+        if cov["total_snapshots"] == 0 and cov["warehouse_symbols_count"] > 0:
+            rebuild_screener_snapshots_from_warehouse(db_path)
+            cov = get_screener_coverage(db_path)
+        else:
+            _ensure_mtf_backfilled_if_needed(db_path)
 
     clauses: list[str] = []
     params: list[Any] = []
@@ -849,15 +1087,16 @@ def query_screener(
     u_type = (universe_type or "all").strip().lower()
     u_val = _norm_sym(universe_value or "")
     if u_type == "index" and u_val:
-        clauses.append("indices_csv LIKE ?")
+        clauses.append("s.indices_csv LIKE ?")
         params.append(f"%,{u_val},%")
     elif u_type == "exchange" and u_val:
-        clauses.append("UPPER(exchange) = ?")
+        clauses.append("UPPER(s.exchange) = ?")
         params.append(u_val)
     elif u_type == "watchlist":
         wl_syms = sorted({_norm_sym(s) for s in (watchlist_symbols or []) if _norm_sym(s)})
         if not wl_syms:
             return {
+                "timeframe": main_tf,
                 "total": 0,
                 "universe_total": 0,
                 "offset": 0,
@@ -867,8 +1106,8 @@ def query_screener(
             }
         marks = ", ".join("?" for _ in wl_syms)
         clauses.append(
-            f"(UPPER(symbol) IN ({marks}) OR UPPER(COALESCE(eod_ticker, '')) IN ({marks}) "
-            f"OR UPPER(COALESCE(yahoo_symbol, '')) IN ({marks}))"
+            f"(UPPER(s.symbol) IN ({marks}) OR UPPER(COALESCE(s.eod_ticker, '')) IN ({marks}) "
+            f"OR UPPER(COALESCE(s.yahoo_symbol, '')) IN ({marks}))"
         )
         params.extend(wl_syms * 3)
 
@@ -878,23 +1117,24 @@ def query_screener(
     clean_search = (search or "").strip()
     if clean_search:
         like = f"%{clean_search.upper()}%"
-        clauses.append("(UPPER(symbol) LIKE ? OR UPPER(COALESCE(eod_ticker, '')) LIKE ? OR UPPER(name) LIKE ?)")
+        clauses.append("(UPPER(s.symbol) LIKE ? OR UPPER(COALESCE(s.eod_ticker, '')) LIKE ? OR UPPER(s.name) LIKE ?)")
         params.extend([like, like, like])
     if sector.strip():
-        clauses.append("LOWER(sector) = ?")
+        clauses.append("LOWER(s.sector) = ?")
         params.append(sector.strip().lower())
     if exchange.strip():
-        clauses.append("UPPER(exchange) = ?")
+        clauses.append("UPPER(s.exchange) = ?")
         params.append(exchange.strip().upper())
     if currency.strip():
-        clauses.append("UPPER(currency) = ?")
+        clauses.append("UPPER(s.currency) = ?")
         params.append(currency.strip().upper())
     if only_with_fundamentals:
-        clauses.append("has_fundamentals = 1")
+        clauses.append("s.has_fundamentals = 1")
 
+    extra_tfs: set[str] = set()
     post_rules: list[dict[str, Any]] = []
     for r in rules or []:
-        sql_part, sql_params, is_post = _compile_rule_sql(r)
+        sql_part, sql_params, is_post = _compile_rule_sql(r, main_tf=main_tf, extra_tfs=extra_tfs)
         if is_post:
             post_rules.append(r)
         elif sql_part:
@@ -904,15 +1144,29 @@ def query_screener(
     where_sql = " AND ".join(clauses) if clauses else "1=1"
 
     safe_sort = sort_by if sort_by in _SORTABLE_COLUMNS else "market_cap"
+    sort_expr = _col_expr(safe_sort, main_tf, main_tf, extra_tfs)
     safe_dir = "ASC" if str(sort_dir or "").strip().lower() == "asc" else "DESC"
-    # Placer toujours les NULL en fin de tri pour un classement financier lisible
-    order_sql = f"ORDER BY ({safe_sort} IS NULL) ASC, {safe_sort} {safe_dir}, symbol ASC"
+    order_sql = f"ORDER BY ({sort_expr} IS NULL) ASC, {sort_expr} {safe_dir}, s.symbol ASC"
+
+    join_sql_parts = [
+        "FROM finance_screener_snapshots s",
+        "LEFT JOIN finance_screener_technicals t_main ON t_main.symbol = s.symbol AND t_main.timeframe = ?",
+    ]
+    join_params: list[Any] = [main_tf]
+    for etf in sorted(extra_tfs):
+        if etf in SUPPORTED_TIMEFRAMES and etf != main_tf:
+            join_sql_parts.append(
+                f"LEFT JOIN finance_screener_technicals t_{etf} ON t_{etf}.symbol = s.symbol AND t_{etf}.timeframe = ?"
+            )
+            join_params.append(etf)
+    from_sql = " ".join(join_sql_parts)
 
     safe_limit = max(1, min(300, int(limit or 100)))
     safe_offset = max(0, int(offset or 0))
 
     if not db_path.exists():
         return {
+            "timeframe": main_tf,
             "total": 0,
             "universe_total": 0,
             "offset": safe_offset,
@@ -921,31 +1175,31 @@ def query_screener(
             "coverage": cov,
         }
 
+    projection = _select_projection_sql(main_tf)
     with _connect(db_path) as conn:
         u_total_row = conn.execute(
-            f"SELECT COUNT(*) AS cnt FROM finance_screener_snapshots WHERE {universe_where}",
+            f"SELECT COUNT(*) AS cnt FROM finance_screener_snapshots s WHERE {universe_where}",
             universe_params,
         ).fetchone()
         universe_total = int((u_total_row["cnt"] if u_total_row else 0) or 0)
 
         if not post_rules:
             total_row = conn.execute(
-                f"SELECT COUNT(*) AS cnt FROM finance_screener_snapshots WHERE {where_sql}",
-                params,
+                f"SELECT COUNT(*) AS cnt {from_sql} WHERE {where_sql}",
+                [*join_params, *params],
             ).fetchone()
             total = int((total_row["cnt"] if total_row else 0) or 0)
             raw_rows = conn.execute(
-                f"SELECT * FROM finance_screener_snapshots WHERE {where_sql} {order_sql} LIMIT ? OFFSET ?",
-                [*params, safe_limit, safe_offset],
+                f"SELECT {projection} {from_sql} WHERE {where_sql} {order_sql} LIMIT ? OFFSET ?",
+                [*join_params, *params, safe_limit, safe_offset],
             ).fetchall()
-            items = [_row_to_screener_dict(r) for r in raw_rows]
+            items = [_row_to_screener_dict(r, main_tf=main_tf) for r in raw_rows]
         else:
-            # Passe 2 : évaluation Python extensible sur les candidats survivants de la Passe 1
             raw_rows = conn.execute(
-                f"SELECT * FROM finance_screener_snapshots WHERE {where_sql} {order_sql}",
-                params,
+                f"SELECT {projection} {from_sql} WHERE {where_sql} {order_sql}",
+                [*join_params, *params],
             ).fetchall()
-            candidates = [_row_to_screener_dict(r) for r in raw_rows]
+            candidates = [_row_to_screener_dict(r, main_tf=main_tf) for r in raw_rows]
             for pr in post_rules:
                 kind = str(pr.get("kind") or "").strip().lower()
                 evaluator = _POST_FILTER_EVALUATORS.get(kind)
@@ -955,6 +1209,7 @@ def query_screener(
             items = candidates[safe_offset : safe_offset + safe_limit]
 
     return {
+        "timeframe": main_tf,
         "total": total,
         "universe_total": universe_total,
         "offset": safe_offset,
@@ -965,14 +1220,17 @@ def query_screener(
 
 
 def get_screener_metadata(settings: Settings) -> dict[str, Any]:
-    """Retourne le schéma des filtres, les presets et la couverture locale du Screener."""
+    """Retourne le schéma des filtres, les unités temporelles, les presets et la couverture locale du Screener."""
     db_path = warehouse_db_path(settings)
     cov = get_screener_coverage(db_path)
     if cov["total_snapshots"] == 0 and cov["warehouse_symbols_count"] > 0:
         rebuild_screener_snapshots_from_warehouse(db_path)
         cov = get_screener_coverage(db_path)
+    else:
+        _ensure_mtf_backfilled_if_needed(db_path)
     return {
         "fields": list(SCREENER_FIELDS),
+        "timeframes": [{"key": k, "label": TIMEFRAME_LABELS[k]} for k in SUPPORTED_TIMEFRAMES],
         "presets": list(SCREENER_PRESETS),
         "coverage": cov,
         "formula_engine": {
@@ -1016,7 +1274,6 @@ async def hydrate_screener_universe(
     else:
         target_symbols = list_warehouse_screener_symbols(db_path)
 
-    # Indexer d'abord tout ce qui est déjà en cache (cours + techniques)
     rebuild_res = rebuild_screener_snapshots_from_warehouse(db_path, target_symbols or None)
 
     fundamentals_enriched = 0

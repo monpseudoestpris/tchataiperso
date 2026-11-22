@@ -3,6 +3,7 @@
 import {
   ArrowDown,
   ArrowUp,
+  CalendarClock,
   Database,
   Download,
   Filter,
@@ -18,6 +19,8 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { FinanceSyncPanel } from "@/components/finance-sync-panel";
+
 import {
   exportScreenerToWatchlist,
   fetchFinanceScreenerMeta,
@@ -31,6 +34,7 @@ import {
   type ScreenerPreset,
   type ScreenerRow,
   type ScreenerRule,
+  type ScreenerTimeframe,
 } from "@/lib/api";
 
 import styles from "./finance-screener-panel.module.css";
@@ -54,6 +58,21 @@ type EditableRule = {
   valueMax: string;
   left: string;
   right: string;
+  timeframe: "" | ScreenerTimeframe;
+};
+
+const TIMEFRAME_OPTIONS: ReadonlyArray<{ key: ScreenerTimeframe; label: string }> = [
+  { key: "day", label: "Jour" },
+  { key: "week", label: "Semaine" },
+  { key: "month", label: "Mois" },
+  { key: "quarter", label: "3 Mois" },
+];
+
+const TIMEFRAME_SHORT: Record<ScreenerTimeframe, string> = {
+  day: "Jour",
+  week: "Sem.",
+  month: "Mois",
+  quarter: "3 Mois",
 };
 
 const CATEGORY_LABELS: Record<ScreenerFieldMeta["category"], string> = {
@@ -61,7 +80,7 @@ const CATEGORY_LABELS: Record<ScreenerFieldMeta["category"], string> = {
   valuation: "Valorisation",
   quality: "Qualité, Rentabilité & Bilan",
   scores: "Scores & Intrinsèque",
-  technical: "Indicateurs Techniques",
+  technical: "Indicateurs Techniques & IsoPressure",
 };
 
 const METRIC_OPS = [
@@ -87,6 +106,7 @@ function nextRuleId(): string {
 }
 
 function ruleToEditable(rule: ScreenerRule): EditableRule {
+  const tf = rule.timeframe ?? "";
   if (rule.kind === "compare") {
     return {
       id: nextRuleId(),
@@ -97,6 +117,7 @@ function ruleToEditable(rule: ScreenerRule): EditableRule {
       valueMax: "",
       left: rule.left,
       right: rule.right,
+      timeframe: tf,
     };
   }
   if (rule.kind === "signal") {
@@ -110,6 +131,7 @@ function ruleToEditable(rule: ScreenerRule): EditableRule {
       valueMax: "",
       left: "price",
       right: "sma200",
+      timeframe: tf,
     };
   }
   return {
@@ -121,12 +143,14 @@ function ruleToEditable(rule: ScreenerRule): EditableRule {
     valueMax: rule.value_max != null ? String(rule.value_max) : "",
     left: "price",
     right: "sma200",
+    timeframe: tf,
   };
 }
 
 function editableToApiRules(rules: EditableRule[], fieldsByKey: Map<string, ScreenerFieldMeta>): ScreenerRule[] {
   const out: ScreenerRule[] = [];
   for (const r of rules) {
+    const tfPart = r.timeframe ? { timeframe: r.timeframe } : {};
     if (r.kind === "compare") {
       if (r.left && r.right && r.left !== r.right) {
         out.push({
@@ -134,6 +158,7 @@ function editableToApiRules(rules: EditableRule[], fieldsByKey: Map<string, Scre
           left: r.left,
           op: (["gt", "gte", "lt", "lte"].includes(r.op) ? r.op : "gt") as "gt" | "gte" | "lt" | "lte",
           right: r.right,
+          ...tfPart,
         });
       }
       continue;
@@ -143,7 +168,7 @@ function editableToApiRules(rules: EditableRule[], fieldsByKey: Map<string, Scre
     if (r.kind === "signal" || meta.type === "signal") {
       const n = Number(r.value);
       if (Number.isFinite(n)) {
-        out.push({ kind: "signal", field: r.field, op: "eq", value: n });
+        out.push({ kind: "signal", field: r.field, op: "eq", value: n, ...tfPart });
       }
       continue;
     }
@@ -151,7 +176,7 @@ function editableToApiRules(rules: EditableRule[], fieldsByKey: Map<string, Scre
       const lo = Number(r.value.replace(",", "."));
       const hi = Number(r.valueMax.replace(",", "."));
       if (Number.isFinite(lo) && Number.isFinite(hi)) {
-        out.push({ kind: "metric", field: r.field, op: "between", value: lo, value_max: hi });
+        out.push({ kind: "metric", field: r.field, op: "between", value: lo, value_max: hi, ...tfPart });
       }
       continue;
     }
@@ -168,6 +193,7 @@ function editableToApiRules(rules: EditableRule[], fieldsByKey: Map<string, Scre
           | "eq"
           | "neq",
         value: v,
+        ...tfPart,
       });
     }
   }
@@ -222,7 +248,7 @@ function MiniSparkline({ points }: { points: number[] }) {
 }
 
 /**
- * Onglet Screener Boursier intégré (V1 simple + contrat extensible pour formules personnalisées).
+ * Onglet Screener Boursier intégré (multi-unités Jour / Semaine / Mois / 3 Mois + IsoPressure + Fondamentaux).
  */
 export function FinanceScreenerPanel({
   indices,
@@ -235,6 +261,7 @@ export function FinanceScreenerPanel({
   const [presets, setPresets] = useState<ScreenerPreset[]>([]);
   const [coverage, setCoverage] = useState<ScreenerCoverage | null>(null);
 
+  const [timeframe, setTimeframe] = useState<ScreenerTimeframe>("day");
   const [universeType, setUniverseType] = useState<"all" | "index" | "watchlist">("all");
   const [universeValue, setUniverseValue] = useState<string>("");
   const [searchText, setSearchText] = useState<string>("");
@@ -252,6 +279,7 @@ export function FinanceScreenerPanel({
   const [loading, setLoading] = useState<boolean>(false);
   const [hydrating, setHydrating] = useState<boolean>(false);
   const [exporting, setExporting] = useState<boolean>(false);
+  const [syncPanelOpen, setSyncPanelOpen] = useState<boolean>(false);
   const [banner, setBanner] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -261,17 +289,18 @@ export function FinanceScreenerPanel({
     return m;
   }, [fields]);
 
-  const comparableFields = useMemo(
-    () => fields.filter(f => f.comparable),
-    [fields],
-  );
+  const comparableGrouped = useMemo(() => {
+    const priceItems = fields.filter(f => f.comparable && f.compare_group !== "isopressure");
+    const isoItems = fields.filter(f => f.comparable && f.compare_group === "isopressure");
+    return { priceItems, isoItems };
+  }, [fields]);
 
   const fieldsGrouped = useMemo(() => {
     const order: ScreenerFieldMeta["category"][] = [
+      "technical",
       "valuation",
       "quality",
       "scores",
-      "technical",
       "performance",
     ];
     return order
@@ -290,6 +319,7 @@ export function FinanceScreenerPanel({
     setError(null);
     try {
       const res = await queryFinanceScreener({
+        timeframe,
         universe_type: universeType,
         universe_value: universeType === "all" ? null : universeValue || null,
         search: searchText,
@@ -310,9 +340,8 @@ export function FinanceScreenerPanel({
     } finally {
       setLoading(false);
     }
-  }, [universeType, universeValue, searchText, sectorFilter, onlyWithFundamentals, apiRules, sortBy, sortDir]);
+  }, [timeframe, universeType, universeValue, searchText, sectorFilter, onlyWithFundamentals, apiRules, sortBy, sortDir]);
 
-  // Charge les métadonnées (champs, presets, couverture) à l'ouverture
   useEffect(() => {
     let cancelled = false;
     fetchFinanceScreenerMeta()
@@ -332,7 +361,6 @@ export function FinanceScreenerPanel({
     };
   }, []);
 
-  // Exécute la requête avec un court debounce dès qu'un filtre change
   useEffect(() => {
     const timer = window.setTimeout(() => {
       void runQuery();
@@ -345,6 +373,9 @@ export function FinanceScreenerPanel({
     setRules(preset.rules.map(ruleToEditable));
     setSortBy(preset.sort_by || "market_cap");
     setSortDir(preset.sort_dir || "desc");
+    if (preset.id === "isopressure_20_50" || preset.id === "breakout_supertrend" || preset.id === "oversold_uptrend") {
+      setColumnGroup("technical");
+    }
     setBanner(null);
   }
 
@@ -372,11 +403,12 @@ export function FinanceScreenerPanel({
         valueMax: "",
         left: "price",
         right: "sma200",
+        timeframe: "",
       },
     ]);
   }
 
-  function handleAddCompareRule() {
+  function handleAddCompareRule(presetPair: "price" | "isopressure" = "price") {
     setActivePresetId(null);
     setRules(prev => [
       ...prev,
@@ -387,8 +419,9 @@ export function FinanceScreenerPanel({
         op: "gt",
         value: "",
         valueMax: "",
-        left: "price",
-        right: "sma200",
+        left: presetPair === "isopressure" ? "isopressure_p20" : "price",
+        right: presetPair === "isopressure" ? "isopressure_p50" : "sma200",
+        timeframe: "",
       },
     ]);
   }
@@ -437,7 +470,7 @@ export function FinanceScreenerPanel({
     try {
       const res = await rebuildFinanceScreener();
       setCoverage(res.coverage);
-      setBanner(`Index local reconstruit : ${res.indexed_count} valeur(s) analysée(s) depuis l'entrepôt SQLite (0 appel réseau).`);
+      setBanner(`Index local reconstruit (Jour, Semaine, Mois, 3 Mois + IsoPressure) : ${res.indexed_count} valeur(s) analysée(s) depuis SQLite.`);
       await runQuery();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Échec de reconstruction locale.");
@@ -462,8 +495,8 @@ export function FinanceScreenerPanel({
       setCoverage(res.coverage);
       setBanner(
         includeFundamentals
-          ? `Synchronisation terminée : ${res.indexed_count} titres indexés, ${res.fundamentals_enriched} dossiers fondamentaux enrichis (${res.fundamentals_cached} déjà en cache).`
-          : `Cours & indicateurs techniques actualisés pour ${res.indexed_count} titre(s).`,
+          ? `Synchronisation terminée : ${res.indexed_count} titres indexés (4 unités), ${res.fundamentals_enriched} dossiers fondamentaux + historiques longs enrichis (${res.fundamentals_cached} déjà en cache).`
+          : `Cours & indicateurs techniques (4 unités) actualisés pour ${res.indexed_count} titre(s).`,
       );
       await runQuery();
     } catch (err: unknown) {
@@ -480,9 +513,10 @@ export function FinanceScreenerPanel({
     setError(null);
     try {
       const activePreset = presets.find(p => p.id === activePresetId);
+      const tfLabel = TIMEFRAME_SHORT[timeframe];
       const listName = activePreset
-        ? `Screener · ${activePreset.name}`
-        : `Screener (${new Date().toLocaleDateString("fr-FR")})`;
+        ? `Screener · ${activePreset.name} (${tfLabel})`
+        : `Screener ${tfLabel} (${new Date().toLocaleDateString("fr-FR")})`;
       const res = await exportScreenerToWatchlist({
         list_name: listName,
         items: items.slice(0, 80).map(it => ({
@@ -512,6 +546,30 @@ export function FinanceScreenerPanel({
     return sortDir === "asc" ? <ArrowUp size={12} /> : <ArrowDown size={12} />;
   }
 
+  function renderIso2050Badge(row: ScreenerRow) {
+    if (row.isopressure_20_50_dir === 1) {
+      return (
+        <span
+          className={styles.badgePos}
+          title={`Iso20=${fmtNum(row.isopressure_p20, 1)} · Iso50=${fmtNum(row.isopressure_p50, 1)}`}
+        >
+          20 &gt; 50 ({row.isopressure_20_50_diff != null ? `+${row.isopressure_20_50_diff.toFixed(1)}` : ""})
+        </span>
+      );
+    }
+    if (row.isopressure_20_50_dir === -1) {
+      return (
+        <span
+          className={styles.badgeNeg}
+          title={`Iso20=${fmtNum(row.isopressure_p20, 1)} · Iso50=${fmtNum(row.isopressure_p50, 1)}`}
+        >
+          20 &lt; 50 ({row.isopressure_20_50_diff != null ? row.isopressure_20_50_diff.toFixed(1) : ""})
+        </span>
+      );
+    }
+    return <span className={styles.muted}>—</span>;
+  }
+
   return (
     <div className={styles.root}>
       {/* En-tête Univers & Couverture */}
@@ -524,18 +582,29 @@ export function FinanceScreenerPanel({
             <div>
               <h3>Screener Boursier · Fondamentaux &amp; Technique</h3>
               <p className={styles.subtitle}>
-                Filtrage instantané sur l&apos;entrepôt SQLite local · architecture prête pour vos futures formules personnalisées
+                Filtrage instantané multi-unités (Jour · Semaine · Mois · 3 Mois) · IsoPressure &amp; fondamentaux en entrepôt SQLite
               </p>
             </div>
           </div>
 
           <div className={styles.coveragePills}>
+            <div className={styles.tfSelectorGroup} role="group" aria-label="Unité des indicateurs techniques">
+              <span className={styles.tfLabel}>Unité tech.</span>
+              {TIMEFRAME_OPTIONS.map(opt => (
+                <button
+                  key={opt.key}
+                  type="button"
+                  className={`${styles.tfBtn} ${timeframe === opt.key ? styles.tfBtnActive : ""}`}
+                  onClick={() => setTimeframe(opt.key)}
+                  title={`Calculer et afficher les indicateurs techniques en barres « ${opt.label} »`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
             <span className={styles.coveragePill} title="Titres indexés dans la table matérialisée du Screener">
               <Database size={12} />
               <strong>{coverage?.total_snapshots ?? 0}</strong> indexés
-            </span>
-            <span className={styles.coveragePill} title="Titres disposant de suffisamment de séances EOD pour les indicateurs techniques">
-              Technique : <strong>{coverage?.with_technicals ?? 0}</strong>
             </span>
             <span className={styles.coveragePill} title="Titres disposant de leurs ratios fondamentaux et scores en cache">
               Fondamentaux : <strong>{coverage?.with_fundamentals ?? 0}</strong>
@@ -640,9 +709,18 @@ export function FinanceScreenerPanel({
             <button
               type="button"
               className={styles.secondaryBtn}
+              onClick={() => setSyncPanelOpen(prev => !prev)}
+              title="Configurer la récupération quotidienne automatique du contenu des principaux indices"
+            >
+              <CalendarClock size={13} />
+              <span>Synchro auto 24h</span>
+            </button>
+            <button
+              type="button"
+              className={styles.secondaryBtn}
               onClick={() => void handleRebuildLocal()}
               disabled={hydrating}
-              title="Recalcule tous les indicateurs techniques et fondamentaux depuis le cache SQLite (0 appel API)"
+              title="Recalcule tous les indicateurs (Jour, Semaine, Mois, 3 Mois + IsoPressure) depuis le cache SQLite (0 appel API)"
             >
               {hydrating ? <LoaderCircle size={13} className="spin" /> : <RefreshCw size={13} />}
               <span>Indexer cache</span>
@@ -652,13 +730,22 @@ export function FinanceScreenerPanel({
               className={styles.primaryBtn}
               onClick={() => void handleHydrateUniverse(true)}
               disabled={hydrating}
-              title="Télécharge les cours EOD manquants et enrichit jusqu'à 40 dossiers fondamentaux de l'univers choisi (TTL 15j)"
+              title="Télécharge les cours EOD manquants et enrichit jusqu'à 40 dossiers fondamentaux (10 ans d'historique pour Mois / 3 Mois)"
             >
               {hydrating ? <LoaderCircle size={13} className="spin" /> : <Download size={13} />}
               <span>Enrichir univers</span>
             </button>
           </div>
         </div>
+
+        {syncPanelOpen && (
+          <FinanceSyncPanel
+            onSynced={() => {
+              void runQuery();
+            }}
+            onClose={() => setSyncPanelOpen(false)}
+          />
+        )}
 
         {/* Presets en 1 clic */}
         {presets.length > 0 && (
@@ -695,21 +782,28 @@ export function FinanceScreenerPanel({
         <div className={styles.rulesHeader}>
           <div className={styles.rulesTitle}>
             <Filter size={14} />
-            <strong>Critères de sélection ({apiRules.length} actif{apiRules.length > 1 ? "s" : ""})</strong>
+            <strong>
+              Critères de sélection ({apiRules.length} actif{apiRules.length > 1 ? "s" : ""}) · Unité par défaut :{" "}
+              {TIMEFRAME_SHORT[timeframe]}
+            </strong>
           </div>
           <div className={styles.rulesButtons}>
             <button type="button" className={styles.addRuleBtn} onClick={handleAddMetricRule}>
-              <Plus size={13} /> Critère (Fondamental / Technique)
+              <Plus size={13} /> Critère
             </button>
-            <button type="button" className={styles.addRuleBtn} onClick={handleAddCompareRule}>
-              <Plus size={13} /> Comparer cours / MM
+            <button type="button" className={styles.addRuleBtn} onClick={() => handleAddCompareRule("isopressure")}>
+              <Plus size={13} /> IsoPressure 20 &gt; 50
+            </button>
+            <button type="button" className={styles.addRuleBtn} onClick={() => handleAddCompareRule("price")}>
+              <Plus size={13} /> Comparer Cours / MM
             </button>
           </div>
         </div>
 
         {rules.length === 0 ? (
           <p className={styles.emptyRulesHint}>
-            Aucun filtre actif : toutes les valeurs de l&apos;univers s&apos;affichent. Choisissez un preset ci-dessus ou ajoutez un critère (ex. <code>ROIC ≥ 12 %</code>, <code>Cours &gt; SMA 200</code>, <code>RSI (14) ≤ 35</code>).
+            Aucun filtre actif : toutes les valeurs de l&apos;univers s&apos;affichent. Choisissez un preset (ex.{" "}
+            <strong>IsoPressure 20 &gt; 50</strong>) ou ajoutez un critère en choisissant son unité (Jour, Semaine, Mois ou 3 Mois).
           </p>
         ) : (
           <div className={styles.rulesList}>
@@ -723,11 +817,22 @@ export function FinanceScreenerPanel({
                       value={r.left}
                       onChange={e => handleUpdateRule(r.id, { left: e.target.value })}
                     >
-                      {comparableFields.map(f => (
-                        <option key={f.key} value={f.key}>
-                          {f.label}
-                        </option>
-                      ))}
+                      {comparableGrouped.isoItems.length > 0 && (
+                        <optgroup label="IsoPressure">
+                          {comparableGrouped.isoItems.map(f => (
+                            <option key={f.key} value={f.key}>
+                              {f.label}
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
+                      <optgroup label="Cours & Moyennes Mobiles">
+                        {comparableGrouped.priceItems.map(f => (
+                          <option key={f.key} value={f.key}>
+                            {f.label}
+                          </option>
+                        ))}
+                      </optgroup>
                     </select>
                     <select
                       className={styles.opSelect}
@@ -745,9 +850,34 @@ export function FinanceScreenerPanel({
                       value={r.right}
                       onChange={e => handleUpdateRule(r.id, { right: e.target.value })}
                     >
-                      {comparableFields.map(f => (
-                        <option key={f.key} value={f.key}>
-                          {f.label}
+                      {comparableGrouped.isoItems.length > 0 && (
+                        <optgroup label="IsoPressure">
+                          {comparableGrouped.isoItems.map(f => (
+                            <option key={f.key} value={f.key}>
+                              {f.label}
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
+                      <optgroup label="Cours & Moyennes Mobiles">
+                        {comparableGrouped.priceItems.map(f => (
+                          <option key={f.key} value={f.key}>
+                            {f.label}
+                          </option>
+                        ))}
+                      </optgroup>
+                    </select>
+                    <select
+                      className={styles.ruleTfSelect}
+                      value={r.timeframe}
+                      onChange={e => handleUpdateRule(r.id, { timeframe: e.target.value as "" | ScreenerTimeframe })}
+                      title="Unité de temps de cette règle (par défaut : unité globale du screener)"
+                      aria-label="Unité de temps de la règle"
+                    >
+                      <option value="">Unité : {TIMEFRAME_SHORT[timeframe]}</option>
+                      {TIMEFRAME_OPTIONS.map(opt => (
+                        <option key={opt.key} value={opt.key}>
+                          {opt.label}
                         </option>
                       ))}
                     </select>
@@ -765,6 +895,7 @@ export function FinanceScreenerPanel({
 
               const meta = fieldsByKey.get(r.field);
               const isSignal = r.kind === "signal" || meta?.type === "signal";
+              const supportsTf = Boolean(meta?.supports_timeframe);
 
               return (
                 <div key={r.id} className={styles.ruleRow}>
@@ -834,6 +965,23 @@ export function FinanceScreenerPanel({
                     </>
                   )}
 
+                  {supportsTf && (
+                    <select
+                      className={styles.ruleTfSelect}
+                      value={r.timeframe}
+                      onChange={e => handleUpdateRule(r.id, { timeframe: e.target.value as "" | ScreenerTimeframe })}
+                      title="Unité de temps de cette règle (par défaut : unité globale du screener)"
+                      aria-label="Unité de temps de la règle"
+                    >
+                      <option value="">Unité : {TIMEFRAME_SHORT[timeframe]}</option>
+                      {TIMEFRAME_OPTIONS.map(opt => (
+                        <option key={opt.key} value={opt.key}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+
                   {meta?.description && (
                     <span className={styles.ruleHint} title={meta.description}>
                       {meta.description}
@@ -868,7 +1016,10 @@ export function FinanceScreenerPanel({
           <div className={styles.resultsCount}>
             {loading && <LoaderCircle size={14} className="spin" />}
             <strong>{total}</strong> résultat{total > 1 ? "s" : ""}
-            <span className={styles.muted}>sur {universeTotal} titre{universeTotal > 1 ? "s" : ""}</span>
+            <span className={styles.muted}>
+              sur {universeTotal} titre{universeTotal > 1 ? "s" : ""} · Technique :{" "}
+              <strong>{TIMEFRAME_SHORT[timeframe]}</strong>
+            </span>
           </div>
 
           <div className={styles.colGroupTabs} role="tablist" aria-label="Vue des colonnes">
@@ -877,7 +1028,7 @@ export function FinanceScreenerPanel({
                 ["overview", "Synthèse"],
                 ["valuation", "Valorisation"],
                 ["quality", "Qualité & Scores"],
-                ["technical", "Technique"],
+                ["technical", `Technique (${TIMEFRAME_SHORT[timeframe]})`],
               ] as const
             ).map(([gid, label]) => (
               <button
@@ -916,7 +1067,14 @@ export function FinanceScreenerPanel({
                   </p>
                 </>
               ) : (
-                <p>Aucune valeur ne correspond à l&apos;ensemble de vos critères actifs.</p>
+                <>
+                  <p>Aucune valeur ne correspond à l&apos;ensemble de vos critères actifs ({TIMEFRAME_SHORT[timeframe]}).</p>
+                  {(timeframe === "month" || timeframe === "quarter") && (
+                    <p className={styles.muted}>
+                      Astuce : les indicateurs longs (ex. IsoPressure 50 ou SMA 50) en <strong>Mois</strong> ou <strong>3 Mois</strong> nécessitent un historique pluriannuel (~5 à 15 ans). Cliquez sur <strong>« Enrichir univers »</strong> pour charger l&apos;historique long.
+                    </p>
+                  )}
+                </>
               )}
             </div>
           ) : (
@@ -954,8 +1112,8 @@ export function FinanceScreenerPanel({
                       <th className={styles.numCol} onClick={() => handleToggleSort("rsi_14")}>
                         RSI 14 {renderSortIcon("rsi_14")}
                       </th>
-                      <th className={styles.numCol} onClick={() => handleToggleSort("dist_sma200_pct")}>
-                        vs SMA200 {renderSortIcon("dist_sma200_pct")}
+                      <th onClick={() => handleToggleSort("isopressure_20_50_diff")}>
+                        Iso 20/50 {renderSortIcon("isopressure_20_50_diff")}
                       </th>
                       <th>Supertrend</th>
                     </>
@@ -1021,6 +1179,18 @@ export function FinanceScreenerPanel({
 
                   {columnGroup === "technical" && (
                     <>
+                      <th className={styles.numCol} onClick={() => handleToggleSort("isopressure_p5")}>
+                        Iso 5 {renderSortIcon("isopressure_p5")}
+                      </th>
+                      <th className={styles.numCol} onClick={() => handleToggleSort("isopressure_p20")}>
+                        Iso 20 {renderSortIcon("isopressure_p20")}
+                      </th>
+                      <th className={styles.numCol} onClick={() => handleToggleSort("isopressure_p50")}>
+                        Iso 50 {renderSortIcon("isopressure_p50")}
+                      </th>
+                      <th onClick={() => handleToggleSort("isopressure_20_50_diff")}>
+                        Iso 20/50 {renderSortIcon("isopressure_20_50_diff")}
+                      </th>
                       <th className={styles.numCol} onClick={() => handleToggleSort("rsi_14")}>
                         RSI 14 {renderSortIcon("rsi_14")}
                       </th>
@@ -1031,16 +1201,7 @@ export function FinanceScreenerPanel({
                         vs SMA200 {renderSortIcon("dist_sma200_pct")}
                       </th>
                       <th className={styles.numCol} onClick={() => handleToggleSort("macd_hist")}>
-                        MACD Hist {renderSortIcon("macd_hist")}
-                      </th>
-                      <th className={styles.numCol} onClick={() => handleToggleSort("adx_14")}>
-                        ADX 14 {renderSortIcon("adx_14")}
-                      </th>
-                      <th className={styles.numCol} onClick={() => handleToggleSort("boll_pct_b")}>
-                        Boll %B {renderSortIcon("boll_pct_b")}
-                      </th>
-                      <th className={styles.numCol} onClick={() => handleToggleSort("rel_volume_20d")}>
-                        Vol. rel. {renderSortIcon("rel_volume_20d")}
+                        MACD {renderSortIcon("macd_hist")}
                       </th>
                       <th>Supertrend</th>
                     </>
@@ -1120,9 +1281,7 @@ export function FinanceScreenerPanel({
                               "—"
                             )}
                           </td>
-                          <td className={`${styles.numCol} ${(row.dist_sma200_pct ?? 0) >= 0 ? styles.pos : styles.neg}`}>
-                            {fmtSignedPct(row.dist_sma200_pct, 1)}
-                          </td>
+                          <td>{renderIso2050Badge(row)}</td>
                           <td>
                             {row.supertrend_dir === 1 ? (
                               <span className={styles.badgePos}>Haussier</span>
@@ -1165,6 +1324,10 @@ export function FinanceScreenerPanel({
 
                       {columnGroup === "technical" && (
                         <>
+                          <td className={styles.numCol}>{fmtNum(row.isopressure_p5, 1)}</td>
+                          <td className={styles.numCol}>{fmtNum(row.isopressure_p20, 1)}</td>
+                          <td className={styles.numCol}>{fmtNum(row.isopressure_p50, 1)}</td>
+                          <td>{renderIso2050Badge(row)}</td>
                           <td className={styles.numCol}>{fmtNum(row.rsi_14, 1)}</td>
                           <td className={`${styles.numCol} ${(row.dist_sma50_pct ?? 0) >= 0 ? styles.pos : styles.neg}`}>
                             {fmtSignedPct(row.dist_sma50_pct, 1)}
@@ -1175,9 +1338,6 @@ export function FinanceScreenerPanel({
                           <td className={`${styles.numCol} ${(row.macd_hist ?? 0) >= 0 ? styles.pos : styles.neg}`}>
                             {fmtNum(row.macd_hist, 3)}
                           </td>
-                          <td className={styles.numCol}>{fmtNum(row.adx_14, 1)}</td>
-                          <td className={styles.numCol}>{fmtNum(row.boll_pct_b, 0, "%")}</td>
-                          <td className={styles.numCol}>{fmtNum(row.rel_volume_20d, 2, "×")}</td>
                           <td>
                             {row.supertrend_dir === 1 ? (
                               <span className={styles.badgePos}>Haussier</span>
