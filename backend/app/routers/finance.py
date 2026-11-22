@@ -692,11 +692,12 @@ async def sync_exchange_catalogs_endpoint(
 
 @router.get("/sync-preferences")
 async def get_finance_sync_preferences_endpoint(
+    refresh_catalogs: bool = Query(False, description="Actualiser les listes complètes d'indices et de places EODHD"),
     settings: Settings = Depends(get_settings),
     user: User = Depends(current_user),
 ) -> dict[str, Any]:
     """Retourne les réglages de synchronisation quotidienne automatique (indices activés par défaut)."""
-    return await get_daily_sync_state(settings)
+    return await get_daily_sync_state(settings, refresh_catalogs=refresh_catalogs)
 
 
 @router.put("/sync-preferences")
@@ -720,10 +721,15 @@ def get_finance_sync_status_endpoint(
 @router.post("/sync-preferences/run")
 async def run_finance_sync_now_endpoint(
     refresh: bool = Query(False, description="Forcer le re-téléchargement même si déjà sauvegardé aujourd'hui"),
+    background: bool = Query(True, description="Exécuter en tâche de fond détachée (résiste aux changements d'onglet)"),
     settings: Settings = Depends(get_settings),
     user: User = Depends(current_user),
 ) -> dict[str, Any]:
     """Déclenche immédiatement la synchronisation selon la sélection enregistrée."""
+    if background:
+        from ..finance_funds import start_daily_sync_background
+
+        return await start_daily_sync_background(settings, refresh=refresh, respect_enabled=False)
     return await run_daily_sync_now(settings, refresh=refresh, respect_enabled=False)
 
 
@@ -734,16 +740,18 @@ async def upgrade_finance_warehouse_eodhd_endpoint(
     user: User = Depends(current_user),
 ) -> dict[str, Any]:
     """Met à jour en lot les cours EOD et états financiers de l'entrepôt local depuis EODHD."""
-    from ..finance_funds import upgrade_warehouse_to_eodhd
+    from ..finance_funds import start_eodhd_upgrade_background, upgrade_warehouse_to_eodhd
 
-    return await upgrade_warehouse_to_eodhd(
-        settings,
-        include_bars=bool(body.get("include_bars", True)),
-        include_fundamentals=bool(body.get("include_fundamentals", True)),
-        force_all_fundamentals=bool(body.get("force_all_fundamentals", False)),
-        max_fundamentals=int(body.get("max_fundamentals") or 250),
-        max_bars=int(body.get("max_bars") or 600),
-    )
+    kwargs = {
+        "include_bars": bool(body.get("include_bars", True)),
+        "include_fundamentals": bool(body.get("include_fundamentals", True)),
+        "force_all_fundamentals": bool(body.get("force_all_fundamentals", False)),
+        "max_fundamentals": int(body.get("max_fundamentals") or 250),
+        "max_bars": int(body.get("max_bars") or 600),
+    }
+    if bool(body.get("background", True)):
+        return await start_eodhd_upgrade_background(settings, **kwargs)
+    return await upgrade_warehouse_to_eodhd(settings, **kwargs)
 
 
 @router.get("/funds/eufund")
@@ -1888,6 +1896,10 @@ def query_finance_screener(
             universe_type=universe_type,
             universe_value=universe_value,
             watchlist_symbols=wl_symbols,
+            index_code=str(body.get("index_code") or ""),
+            market_zone=str(body.get("market_zone") or ""),
+            country=str(body.get("country") or ""),
+            cap_category=str(body.get("cap_category") or ""),
             search=str(body.get("search") or ""),
             sector=str(body.get("sector") or ""),
             exchange=str(body.get("exchange") or ""),
@@ -1942,6 +1954,18 @@ async def hydrate_finance_screener(
             ]
 
     try:
+        if bool(body.get("background", False)):
+            from ..finance_funds import start_screener_hydrate_background
+
+            return await start_screener_hydrate_background(
+                settings,
+                universe_type=universe_type,
+                universe_value=universe_value,
+                watchlist_symbols=wl_symbols,
+                include_fundamentals=bool(body.get("include_fundamentals", True)),
+                max_fundamentals=int(body.get("max_fundamentals") or 40),
+                refresh_eod=bool(body.get("refresh_eod", False)),
+            )
         return await hydrate_screener_universe(
             settings,
             universe_type=universe_type,

@@ -3,14 +3,11 @@
 import {
   ArrowDown,
   ArrowUp,
-  CalendarClock,
   Database,
-  Download,
   Filter,
   LineChart,
   LoaderCircle,
   Plus,
-  RefreshCw,
   RotateCcw,
   Search,
   SlidersHorizontal,
@@ -19,14 +16,12 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { FinanceSyncPanel } from "@/components/finance-sync-panel";
-
 import {
   exportScreenerToWatchlist,
   fetchFinanceScreenerMeta,
-  hydrateFinanceScreener,
+  fetchFinanceSyncStatus,
   queryFinanceScreener,
-  rebuildFinanceScreener,
+  type FinanceSyncProgress,
   type FinanceWatchlistMeta,
   type PrincipalIndexInfo,
   type ScreenerCoverage,
@@ -45,6 +40,7 @@ type FinanceScreenerPanelProps = {
   activeListId: string | null;
   onOpenStock: (target: string, displayName: string, openTab: "fundamentals" | "chart_tech") => void | Promise<void>;
   onWatchlistExported: (listId: string) => void | Promise<void>;
+  onOpenDataSync?: () => void;
 };
 
 type ColumnGroup = "overview" | "valuation" | "quality" | "technical";
@@ -256,14 +252,21 @@ export function FinanceScreenerPanel({
   activeListId,
   onOpenStock,
   onWatchlistExported,
+  onOpenDataSync,
 }: FinanceScreenerPanelProps) {
   const [fields, setFields] = useState<ScreenerFieldMeta[]>([]);
   const [presets, setPresets] = useState<ScreenerPreset[]>([]);
   const [coverage, setCoverage] = useState<ScreenerCoverage | null>(null);
 
   const [timeframe, setTimeframe] = useState<ScreenerTimeframe>("day");
-  const [universeType, setUniverseType] = useState<"all" | "index" | "watchlist">("all");
+  const [universeType, setUniverseType] = useState<"all" | "watchlist">("all");
   const [universeValue, setUniverseValue] = useState<string>("");
+  const [indexFilter, setIndexFilter] = useState<string>("");
+  const [marketZoneFilter, setMarketZoneFilter] = useState<string>("");
+  const [countryFilter, setCountryFilter] = useState<string>("");
+  const [exchangeFilter, setExchangeFilter] = useState<string>("");
+  const [currencyFilter, setCurrencyFilter] = useState<string>("");
+  const [capCategoryFilter, setCapCategoryFilter] = useState<string>("");
   const [searchText, setSearchText] = useState<string>("");
   const [sectorFilter, setSectorFilter] = useState<string>("");
   const [onlyWithFundamentals, setOnlyWithFundamentals] = useState<boolean>(false);
@@ -277,11 +280,12 @@ export function FinanceScreenerPanel({
   const [total, setTotal] = useState<number>(0);
   const [universeTotal, setUniverseTotal] = useState<number>(0);
   const [loading, setLoading] = useState<boolean>(false);
-  const [hydrating, setHydrating] = useState<boolean>(false);
+  const [bgProgress, setBgProgress] = useState<FinanceSyncProgress | null>(null);
   const [exporting, setExporting] = useState<boolean>(false);
-  const [syncPanelOpen, setSyncPanelOpen] = useState<boolean>(false);
   const [banner, setBanner] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const isBgRunning = Boolean(bgProgress?.is_running);
 
   const fieldsByKey = useMemo(() => {
     const m = new Map<string, ScreenerFieldMeta>();
@@ -314,6 +318,32 @@ export function FinanceScreenerPanel({
 
   const apiRules = useMemo(() => editableToApiRules(rules, fieldsByKey), [rules, fieldsByKey]);
 
+  const indexOptions = useMemo(() => {
+    const map = new Map<string, { code: string; name: string; flag: string; count: number | null }>();
+    for (const idx of coverage?.indices || []) {
+      map.set(idx.code, { code: idx.code, name: idx.name, flag: idx.flag || "📊", count: idx.count });
+    }
+    for (const idx of indices) {
+      if (!map.has(idx.code)) {
+        map.set(idx.code, { code: idx.code, name: idx.name, flag: idx.flag || "📊", count: null });
+      }
+    }
+    return Array.from(map.values());
+  }, [coverage?.indices, indices]);
+
+  const hasAnyActiveFilter = Boolean(
+    rules.length > 0 ||
+      searchText ||
+      indexFilter ||
+      marketZoneFilter ||
+      countryFilter ||
+      exchangeFilter ||
+      currencyFilter ||
+      capCategoryFilter ||
+      sectorFilter ||
+      onlyWithFundamentals,
+  );
+
   const runQuery = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -322,6 +352,12 @@ export function FinanceScreenerPanel({
         timeframe,
         universe_type: universeType,
         universe_value: universeType === "all" ? null : universeValue || null,
+        index_code: indexFilter,
+        market_zone: marketZoneFilter,
+        country: countryFilter,
+        exchange: exchangeFilter,
+        currency: currencyFilter,
+        cap_category: capCategoryFilter,
         search: searchText,
         sector: sectorFilter,
         only_with_fundamentals: onlyWithFundamentals,
@@ -340,7 +376,23 @@ export function FinanceScreenerPanel({
     } finally {
       setLoading(false);
     }
-  }, [timeframe, universeType, universeValue, searchText, sectorFilter, onlyWithFundamentals, apiRules, sortBy, sortDir]);
+  }, [
+    timeframe,
+    universeType,
+    universeValue,
+    indexFilter,
+    marketZoneFilter,
+    countryFilter,
+    exchangeFilter,
+    currencyFilter,
+    capCategoryFilter,
+    searchText,
+    sectorFilter,
+    onlyWithFundamentals,
+    apiRules,
+    sortBy,
+    sortDir,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -368,6 +420,35 @@ export function FinanceScreenerPanel({
     return () => window.clearTimeout(timer);
   }, [runQuery]);
 
+  // Suit l'avancement en arrière-plan (survit aux changements d'onglets)
+  useEffect(() => {
+    let cancelled = false;
+    const poll = () => {
+      fetchFinanceSyncStatus()
+        .then(st => {
+          if (cancelled) return;
+          setBgProgress(prev => {
+            if (prev?.is_running && !st.is_running) {
+              if (st.last_message) {
+                setBanner(st.last_message);
+              }
+              void runQuery();
+            }
+            return st;
+          });
+        })
+        .catch(() => {});
+    };
+    poll();
+    const timer = window.setInterval(poll, isBgRunning ? 2000 : 12000);
+    window.addEventListener("finance-sync-started", poll);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener("finance-sync-started", poll);
+    };
+  }, [isBgRunning, runQuery]);
+
   function handleApplyPreset(preset: ScreenerPreset) {
     setActivePresetId(preset.id);
     setRules(preset.rules.map(ruleToEditable));
@@ -382,6 +463,12 @@ export function FinanceScreenerPanel({
   function handleResetFilters() {
     setActivePresetId(null);
     setRules([]);
+    setIndexFilter("");
+    setMarketZoneFilter("");
+    setCountryFilter("");
+    setExchangeFilter("");
+    setCurrencyFilter("");
+    setCapCategoryFilter("");
     setSearchText("");
     setSectorFilter("");
     setOnlyWithFundamentals(false);
@@ -460,49 +547,6 @@ export function FinanceScreenerPanel({
     } else {
       setSortBy(column);
       setSortDir(column === "symbol" || column === "name" || column === "rsi_14" || column === "pe_ttm" ? "asc" : "desc");
-    }
-  }
-
-  async function handleRebuildLocal() {
-    setHydrating(true);
-    setBanner(null);
-    setError(null);
-    try {
-      const res = await rebuildFinanceScreener();
-      setCoverage(res.coverage);
-      setBanner(`Index local reconstruit (Jour, Semaine, Mois, 3 Mois + IsoPressure) : ${res.indexed_count} valeur(s) analysée(s) depuis SQLite.`);
-      await runQuery();
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Échec de reconstruction locale.");
-    } finally {
-      setHydrating(false);
-    }
-  }
-
-  async function handleHydrateUniverse(includeFundamentals: boolean) {
-    setHydrating(true);
-    setBanner(null);
-    setError(null);
-    try {
-      const targetType = universeType === "all" && indices.length > 0 ? "all" : universeType;
-      const res = await hydrateFinanceScreener({
-        universe_type: targetType,
-        universe_value: targetType === "all" ? null : universeValue || null,
-        include_fundamentals: includeFundamentals,
-        max_fundamentals: 40,
-        refresh_eod: false,
-      });
-      setCoverage(res.coverage);
-      setBanner(
-        includeFundamentals
-          ? `Synchronisation terminée : ${res.indexed_count} titres indexés (4 unités), ${res.fundamentals_enriched} dossiers fondamentaux + historiques longs enrichis (${res.fundamentals_cached} déjà en cache).`
-          : `Cours & indicateurs techniques (4 unités) actualisés pour ${res.indexed_count} titre(s).`,
-      );
-      await runQuery();
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Erreur lors de l'enrichissement de l'univers.");
-    } finally {
-      setHydrating(false);
     }
   }
 
@@ -612,7 +656,7 @@ export function FinanceScreenerPanel({
           </div>
         </div>
 
-        {/* Contrôles d'univers */}
+        {/* Contrôles d'univers & recherche */}
         <div className={styles.universeRow}>
           <div className={styles.controlGroup}>
             <label className={styles.label}>Univers</label>
@@ -620,11 +664,9 @@ export function FinanceScreenerPanel({
               className={styles.select}
               value={universeType}
               onChange={e => {
-                const next = e.target.value as "all" | "index" | "watchlist";
+                const next = e.target.value as "all" | "watchlist";
                 setUniverseType(next);
-                if (next === "index") {
-                  setUniverseValue(indices[0]?.code || "CAC40");
-                } else if (next === "watchlist") {
+                if (next === "watchlist") {
                   setUniverseValue(activeListId || watchlists[0]?.id || "");
                 } else {
                   setUniverseValue("");
@@ -632,24 +674,8 @@ export function FinanceScreenerPanel({
               }}
             >
               <option value="all">Tout l&apos;entrepôt local</option>
-              <option value="index">Par indice boursier</option>
               <option value="watchlist">Ma liste de suivi</option>
             </select>
-
-            {universeType === "index" && (
-              <select
-                className={styles.select}
-                value={universeValue}
-                onChange={e => setUniverseValue(e.target.value)}
-                aria-label="Choisir un indice"
-              >
-                {indices.map(idx => (
-                  <option key={idx.code} value={idx.code}>
-                    {idx.flag} {idx.name} ({idx.code})
-                  </option>
-                ))}
-              </select>
-            )}
 
             {universeType === "watchlist" && (
               <select
@@ -665,9 +691,7 @@ export function FinanceScreenerPanel({
                 ))}
               </select>
             )}
-          </div>
 
-          <div className={styles.controlGroup}>
             <div className={styles.searchWrap}>
               <Search size={13} className={styles.searchIcon} />
               <input
@@ -679,22 +703,6 @@ export function FinanceScreenerPanel({
               />
             </div>
 
-            {coverage && coverage.sectors.length > 0 && (
-              <select
-                className={styles.select}
-                value={sectorFilter}
-                onChange={e => setSectorFilter(e.target.value)}
-                aria-label="Filtrer par secteur"
-              >
-                <option value="">Tous les secteurs</option>
-                {coverage.sectors.map(sec => (
-                  <option key={sec} value={sec}>
-                    {sec}
-                  </option>
-                ))}
-              </select>
-            )}
-
             <label className={styles.checkboxLabel}>
               <input
                 type="checkbox"
@@ -705,46 +713,165 @@ export function FinanceScreenerPanel({
             </label>
           </div>
 
-          <div className={styles.syncActions}>
-            <button
-              type="button"
-              className={styles.secondaryBtn}
-              onClick={() => setSyncPanelOpen(prev => !prev)}
-              title="Configurer la récupération quotidienne automatique du contenu des principaux indices"
-            >
-              <CalendarClock size={13} />
-              <span>Synchro auto 24h</span>
-            </button>
-            <button
-              type="button"
-              className={styles.secondaryBtn}
-              onClick={() => void handleRebuildLocal()}
-              disabled={hydrating}
-              title="Recalcule tous les indicateurs (Jour, Semaine, Mois, 3 Mois + IsoPressure) depuis le cache SQLite (0 appel API)"
-            >
-              {hydrating ? <LoaderCircle size={13} className="spin" /> : <RefreshCw size={13} />}
-              <span>Indexer cache</span>
-            </button>
-            <button
-              type="button"
-              className={styles.primaryBtn}
-              onClick={() => void handleHydrateUniverse(true)}
-              disabled={hydrating}
-              title="Télécharge les cours EOD manquants et enrichit jusqu'à 40 dossiers fondamentaux (10 ans d'historique pour Mois / 3 Mois)"
-            >
-              {hydrating ? <LoaderCircle size={13} className="spin" /> : <Download size={13} />}
-              <span>Enrichir univers</span>
-            </button>
-          </div>
+          {onOpenDataSync && (
+            <div className={styles.syncActions}>
+              <button
+                type="button"
+                className={styles.secondaryBtn}
+                onClick={onOpenDataSync}
+                title="Ouvrir l'onglet 5 · Données & Synchro (EODHD, synchro auto 24h, enrichissement et indexation)"
+              >
+                <Database size={13} />
+                <span>Données &amp; Synchro</span>
+              </button>
+            </div>
+          )}
         </div>
 
-        {syncPanelOpen && (
-          <FinanceSyncPanel
-            onSynced={() => {
-              void runQuery();
-            }}
-            onClose={() => setSyncPanelOpen(false)}
-          />
+        {/* Filtres combinables : Indice, Zone boursière, Pays, Bourse, Secteur, Devise, Cap. */}
+        <div className={styles.geoFiltersRow}>
+          <span className={styles.label}>Marchés</span>
+
+          <select
+            className={`${styles.select} ${indexFilter ? styles.selectActive : ""}`}
+            value={indexFilter}
+            onChange={e => setIndexFilter(e.target.value)}
+            aria-label="Filtrer par indice boursier"
+            title="Filtrer par indice boursier (combinable avec les autres filtres)"
+          >
+            <option value="">Tous les indices</option>
+            {indexOptions.map(idx => (
+              <option key={idx.code} value={idx.code}>
+                {idx.flag} {idx.name}
+                {idx.count != null ? ` (${idx.count})` : ""}
+              </option>
+            ))}
+          </select>
+
+          <select
+            className={`${styles.select} ${marketZoneFilter ? styles.selectActive : ""}`}
+            value={marketZoneFilter}
+            onChange={e => setMarketZoneFilter(e.target.value)}
+            aria-label="Filtrer par zone boursière"
+            title="Filtrer par grande zone boursière (Zone Euro, Europe, Amérique du Nord, Asie-Pacifique…)"
+          >
+            <option value="">Toutes les zones</option>
+            {(coverage?.market_zones || []).map(z => (
+              <option key={z.code} value={z.code}>
+                {z.label} ({z.count})
+              </option>
+            ))}
+          </select>
+
+          <select
+            className={`${styles.select} ${countryFilter ? styles.selectActive : ""}`}
+            value={countryFilter}
+            onChange={e => setCountryFilter(e.target.value)}
+            aria-label="Filtrer par pays"
+            title="Filtrer par pays"
+          >
+            <option value="">Tous les pays</option>
+            {(coverage?.countries || []).map(c => (
+              <option key={c.code} value={c.code}>
+                {c.label} ({c.count})
+              </option>
+            ))}
+          </select>
+
+          {(coverage?.exchange_items?.length || coverage?.exchanges?.length || 0) > 0 && (
+            <select
+              className={`${styles.select} ${exchangeFilter ? styles.selectActive : ""}`}
+              value={exchangeFilter}
+              onChange={e => setExchangeFilter(e.target.value)}
+              aria-label="Filtrer par place boursière"
+              title="Filtrer par place boursière (Euronext Paris, NYSE/Nasdaq, XETRA, LSE…)"
+            >
+              <option value="">Toutes les bourses</option>
+              {coverage?.exchange_items && coverage.exchange_items.length > 0
+                ? coverage.exchange_items.map(ex => (
+                    <option key={ex.code} value={ex.code}>
+                      {ex.label} ({ex.count})
+                    </option>
+                  ))
+                : (coverage?.exchanges || []).map(ex => (
+                    <option key={ex} value={ex}>
+                      {ex}
+                    </option>
+                  ))}
+            </select>
+          )}
+
+          {coverage && coverage.sectors.length > 0 && (
+            <select
+              className={`${styles.select} ${sectorFilter ? styles.selectActive : ""}`}
+              value={sectorFilter}
+              onChange={e => setSectorFilter(e.target.value)}
+              aria-label="Filtrer par secteur"
+              title="Filtrer par secteur d'activité"
+            >
+              <option value="">Tous les secteurs</option>
+              {coverage.sectors.map(sec => (
+                <option key={sec} value={sec}>
+                  {sec}
+                </option>
+              ))}
+            </select>
+          )}
+
+          {coverage && coverage.currencies.length > 0 && (
+            <select
+              className={`${styles.select} ${currencyFilter ? styles.selectActive : ""}`}
+              value={currencyFilter}
+              onChange={e => setCurrencyFilter(e.target.value)}
+              aria-label="Filtrer par devise"
+              title="Filtrer par devise de cotation"
+            >
+              <option value="">Toutes devises</option>
+              {coverage.currencies.map(cur => (
+                <option key={cur} value={cur}>
+                  {cur}
+                </option>
+              ))}
+            </select>
+          )}
+
+          {coverage?.cap_categories && coverage.cap_categories.length > 0 && (
+            <select
+              className={`${styles.select} ${capCategoryFilter ? styles.selectActive : ""}`}
+              value={capCategoryFilter}
+              onChange={e => setCapCategoryFilter(e.target.value)}
+              aria-label="Filtrer par taille de capitalisation"
+              title="Filtrer par taille de capitalisation"
+            >
+              <option value="">Toutes cap.</option>
+              {coverage.cap_categories.map(cap => (
+                <option key={cap.code} value={cap.code}>
+                  {cap.label} ({cap.count})
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+
+        {isBgRunning && (
+          <div className="finance-sync-progress-box" role="status" aria-live="polite" style={{ marginBottom: 10 }}>
+            <div className="finance-sync-progress-head">
+              <span className="finance-sync-progress-title">
+                <LoaderCircle size={14} className="spin" />
+                <strong>Tâche en arrière-plan en cours</strong>
+                <span>· {bgProgress?.current_label || "Traitement des données…"}</span>
+              </span>
+              <span className="finance-sync-progress-pct">
+                {bgProgress?.total_steps ? `${bgProgress.percent}%` : ""}
+              </span>
+            </div>
+            <div className="finance-sync-progress-track">
+              <div
+                className="finance-sync-progress-fill"
+                style={{ width: `${Math.max(8, bgProgress?.percent || 10)}%` }}
+              />
+            </div>
+          </div>
         )}
 
         {/* Presets en 1 clic */}
@@ -764,7 +891,7 @@ export function FinanceScreenerPanel({
                 {p.name}
               </button>
             ))}
-            {(rules.length > 0 || searchText || sectorFilter || onlyWithFundamentals) && (
+            {hasAnyActiveFilter && (
               <button
                 type="button"
                 className={styles.resetChip}
@@ -1225,8 +1352,13 @@ export function FinanceScreenerPanel({
                           <div className={styles.stockMeta}>
                             <strong className={styles.stockName}>{row.name || row.symbol}</strong>
                             <small className={styles.stockSub}>
-                              {row.sector || row.exchange || "—"}
-                              {row.indices.length > 0 ? ` · ${row.indices.slice(0, 2).join(", ")}` : ""}
+                              {[
+                                row.country,
+                                row.sector || row.exchange,
+                                row.indices.length > 0 ? row.indices.slice(0, 2).join(", ") : "",
+                              ]
+                                .filter(Boolean)
+                                .join(" · ") || "—"}
                             </small>
                           </div>
                         </div>

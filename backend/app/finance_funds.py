@@ -16,11 +16,13 @@ import httpx
 from .config import Settings
 from .finance_warehouse import (
     get_exchange_catalog_meta,
+    get_snapshot,
     get_sync_preferences,
     get_warehouse_eod_source_breakdown,
     list_warehouse_watchlist_items_for_sync,
     record_sync_run_status,
     replace_exchange_symbols,
+    save_snapshot,
     save_sync_preferences,
     search_exchange_symbols,
     warehouse_db_path,
@@ -29,6 +31,7 @@ from .finance_warehouse import (
 _logger = logging.getLogger("uvicorn.error")
 _DAILY_SYNC_LOCK = asyncio.Lock()
 _DAILY_SYNC_RUNNING = False
+_ACTIVE_SYNC_TASK: asyncio.Task[Any] | None = None
 _DAILY_SYNC_PROGRESS: dict[str, Any] = {
     "is_running": False,
     "trigger": None,
@@ -43,6 +46,8 @@ _DAILY_SYNC_PROGRESS: dict[str, Any] = {
     "fundamentals_total": 0,
     "started_at": None,
     "updated_at": None,
+    "last_message": None,
+    "last_completed_at": None,
 }
 
 
@@ -301,6 +306,13 @@ async def sync_configured_exchange_catalogs(
             "source": source,
             "synced_at": _iso_from_ts(meta["fetched_at"]),
         }
+    # Référence immédiatement dans le Screener toutes les actions des catalogues (sans aucun appel réseau)
+    from .finance_warehouse import seed_screener_from_exchange_catalogs
+
+    try:
+        seed_screener_from_exchange_catalogs(warehouse_db_path(settings))
+    except Exception as exc:
+        _logger.warning("Référencement des catalogues de bourses dans le Screener ignoré: %s", exc)
     return {
         "codes": list(results.keys()),
         "fetched_exchanges": fetched_count,
@@ -308,17 +320,87 @@ async def sync_configured_exchange_catalogs(
     }
 
 
-async def get_daily_sync_state(settings: Settings) -> dict[str, Any]:
-    """Retourne les préférences de synchro quotidienne + la liste des indices et marchés disponibles."""
-    from .finance_indices import list_principal_indices
+_EXCHANGES_LIST_TTL_SEC = 7 * 24 * 3600.0
+
+
+async def list_eodhd_exchanges_catalog(
+    settings: Settings,
+    *,
+    refresh: bool = False,
+) -> list[dict[str, Any]]:
+    """Récupère et met en cache (7j) la liste complète des bourses/listes EODHD (`/api/exchanges-list/`)."""
+    db_path = warehouse_db_path(settings)
+    rows: list[dict[str, Any]] = []
+    if not refresh:
+        snap = get_snapshot(db_path, "EXCHANGES_LIST", "eodhd_exchanges_list", max_age_seconds=_EXCHANGES_LIST_TTL_SEC)
+        if snap and isinstance(snap.get("normalized"), list):
+            rows = snap["normalized"]
+
+    eod_key = (
+        settings.eod_historical_data_key.get_secret_value()
+        if settings.enabled(settings.eod_historical_data_key)
+        else ""
+    )
+    if not rows and eod_key and not settings.demo_mode:
+        url = f"https://eodhd.com/api/exchanges-list/?api_token={urllib.parse.quote(eod_key)}&fmt=json"
+        try:
+            async with httpx.AsyncClient(
+                headers={"User-Agent": _USER_AGENT},
+                follow_redirects=True,
+                timeout=15.0,
+            ) as client:
+                resp = await client.get(url)
+                if resp.status_code == 200:
+                    raw = resp.json()
+                    if isinstance(raw, list):
+                        for item in raw:
+                            if not isinstance(item, dict):
+                                continue
+                            code = str(item.get("Code") or "").strip().upper()
+                            if not code or not _EXCHANGE_CODE_RE.fullmatch(code):
+                                continue
+                            name = str(item.get("Name") or code).strip()
+                            country = str(item.get("Country") or "").strip()
+                            currency = str(item.get("Currency") or "").strip().upper()
+                            desc_parts = [p for p in (name, country, currency) if p]
+                            rows.append(
+                                {
+                                    "code": code,
+                                    "label": f"{name} ({code})" if name.upper() != code else code,
+                                    "description": " · ".join(desc_parts) or f"Marché {code}",
+                                    "country": country,
+                                    "currency": currency,
+                                }
+                            )
+                        if rows:
+                            save_snapshot(db_path, "EXCHANGES_LIST", "eodhd", "eodhd_exchanges_list", None, rows)
+        except Exception as exc:
+            _logger.debug("EODHD exchanges-list fallback: %s", exc)
+
+    return rows
+
+
+async def get_daily_sync_state(
+    settings: Settings,
+    *,
+    refresh_catalogs: bool = False,
+) -> dict[str, Any]:
+    """Retourne les préférences de synchro quotidienne + tous les indices et listes EODHD avec leur nombre de titres."""
+    from .finance_indices import list_eodhd_indx_catalog, list_principal_indices
+    from .finance_warehouse import get_index_constituents
 
     db_path = warehouse_db_path(settings)
     prefs = get_sync_preferences(db_path)
     all_meta = get_exchange_catalog_meta(db_path, "ALL")
-    indices_payload = await list_principal_indices(settings, include_quotes=False, tier="all")
+    indices_payload, eod_exchanges, indx_cat = await asyncio.gather(
+        list_principal_indices(settings, include_quotes=False, tier="all"),
+        list_eodhd_exchanges_catalog(settings, refresh=refresh_catalogs),
+        list_eodhd_indx_catalog(settings, limit=1, refresh=refresh_catalogs),
+    )
     available_indices = [
         {
             "code": idx["code"],
+            "eod_ticker": idx.get("eod_ticker") or idx["code"],
             "name": idx.get("name") or idx["code"],
             "flag": idx.get("flag") or "",
             "tier": idx.get("tier") or "major",
@@ -327,11 +409,31 @@ async def get_daily_sync_state(settings: Settings) -> dict[str, Any]:
         }
         for idx in (indices_payload.get("indices") or [])
     ]
+    known_idx_codes = {str(i["code"]).upper() for i in available_indices}
+    for custom_code in prefs.get("index_codes") or []:
+        c_up = str(custom_code or "").strip().upper()
+        if not c_up or c_up in known_idx_codes:
+            continue
+        known_idx_codes.add(c_up)
+        stored, _ = get_index_constituents(db_path, c_up, max_age_seconds=None)
+        available_indices.append(
+            {
+                "code": c_up,
+                "eod_ticker": c_up if "." in c_up else f"{c_up}.INDX",
+                "name": c_up.replace(".INDX", ""),
+                "flag": "🌐",
+                "tier": "minor",
+                "region": "EODHD .INDX",
+                "constituents_count": len(stored),
+            }
+        )
+
     src_breakdown = get_warehouse_eod_source_breakdown(db_path)
     return {
         "preferences": prefs,
         "is_running": _DAILY_SYNC_RUNNING,
         "progress": get_daily_sync_status(),
+        "eodhd_indx_catalog_total": int((indx_cat or {}).get("total") or 0),
         "warehouse_sources": {
             "eodhd_fundamentals_count": src_breakdown["eodhd_fundamentals_count"],
             "yahoo_only_fundamentals_count": src_breakdown["yahoo_only_fundamentals_count"],
@@ -341,7 +443,7 @@ async def get_daily_sync_state(settings: Settings) -> dict[str, Any]:
             "eodhd_configured": bool(settings.enabled(settings.eod_historical_data_key) and not settings.demo_mode),
         },
         "available_indices": available_indices,
-        "available_exchanges": _build_supported_exchanges_status(all_meta),
+        "available_exchanges": _build_supported_exchanges_status(all_meta, eod_exchanges=eod_exchanges),
     }
 
 
@@ -610,6 +712,22 @@ async def run_daily_sync_now(
                 _update_sync_progress(completed_steps=completed_steps)
 
             record_sync_run_status(db_path, summary, fundamentals_ran=fundamentals_ran)
+            idx_cnt = len(summary.get("indices") or {})
+            sf = summary.get("screener_fundamentals") or {}
+            fund_part = (
+                "fondamentaux à jour (cycle hebdomadaire)"
+                if sf.get("skipped")
+                else f"{sf.get('enriched', 0)} fondamentaux enrichis"
+            )
+            done_msg = (
+                f"Synchronisation terminée ({summary.get('principal_indices_count', 0)} indices, "
+                f"{idx_cnt} compositions + technique multi-unités, {fund_part}, "
+                f"{summary.get('watchlist_items_count', 0)} suivi(s))."
+            )
+            _update_sync_progress(
+                last_message=done_msg,
+                last_completed_at=datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+            )
         finally:
             _DAILY_SYNC_RUNNING = False
             _update_sync_progress(
@@ -802,6 +920,14 @@ async def upgrade_warehouse_to_eodhd(
             touched = sorted(set(bars_targets) | set(fund_targets))
             rebuild_screener_snapshots_from_warehouse(db_path, touched or None)
             completed_steps = total_steps
+            done_msg = (
+                f"Mise à jour EODHD terminée : {bars_upgraded}/{len(bars_targets)} cours EOD "
+                f"et {fundamentals_upgraded}/{len(fund_targets)} états financiers mis à jour depuis EODHD."
+            )
+            _update_sync_progress(
+                last_message=done_msg,
+                last_completed_at=datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+            )
         finally:
             _DAILY_SYNC_RUNNING = False
             _update_sync_progress(
@@ -826,6 +952,235 @@ async def upgrade_warehouse_to_eodhd(
             "fundamentals_errors": fundamentals_errors,
             "force_all_fundamentals": force_all_fundamentals,
         },
+    }
+
+
+def _is_background_sync_busy() -> bool:
+    return bool(
+        _DAILY_SYNC_RUNNING
+        or _DAILY_SYNC_LOCK.locked()
+        or (_ACTIVE_SYNC_TASK is not None and not _ACTIVE_SYNC_TASK.done())
+    )
+
+
+def _spawn_detached_sync_task(coro: Any, *, phase: str, label: str, trigger: str = "manual") -> bool:
+    """Lance une tâche asynchrone détachée de la requête HTTP afin qu'un changement d'onglet ne l'interrompe jamais."""
+    global _ACTIVE_SYNC_TASK
+    if _is_background_sync_busy():
+        coro.close()
+        return False
+
+    started_iso = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    _update_sync_progress(
+        is_running=True,
+        trigger=trigger,
+        phase=phase,
+        current_label=label,
+        completed_steps=0,
+        total_steps=1,
+        percent=4,
+        started_at=started_iso,
+    )
+
+    async def _runner() -> None:
+        global _DAILY_SYNC_RUNNING
+        try:
+            await coro
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            _logger.warning("Tâche financière en arrière-plan interrompue (%s): %s", phase, exc)
+            _update_sync_progress(
+                is_running=False,
+                phase="idle",
+                current_label="",
+                last_message=f"Erreur lors de la synchronisation : {exc}",
+                last_completed_at=datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+            )
+            _DAILY_SYNC_RUNNING = False
+
+    task = asyncio.create_task(_runner(), name=f"finance-{phase}")
+    _ACTIVE_SYNC_TASK = task
+    return True
+
+
+async def start_daily_sync_background(
+    settings: Settings,
+    *,
+    refresh: bool = False,
+    respect_enabled: bool = False,
+    trigger: str = "manual",
+) -> dict[str, Any]:
+    """Démarre la synchronisation quotidienne en tâche de fond détachée et répond immédiatement."""
+    started = _spawn_detached_sync_task(
+        run_daily_sync_now(settings, refresh=refresh, respect_enabled=respect_enabled, trigger=trigger),
+        phase="starting",
+        label="Démarrage de la synchronisation…",
+        trigger=trigger,
+    )
+    state = await get_daily_sync_state(settings)
+    if not started:
+        return {**state, "started": False, "summary": {"skipped": True, "reason": "already_running"}}
+    return {**state, "started": True, "summary": {"skipped": False, "background": True}}
+
+
+async def start_eodhd_upgrade_background(
+    settings: Settings,
+    *,
+    include_bars: bool = True,
+    include_fundamentals: bool = True,
+    force_all_fundamentals: bool = False,
+    max_fundamentals: int = 250,
+    max_bars: int = 600,
+) -> dict[str, Any]:
+    """Démarre la migration / mise à jour EODHD en tâche de fond détachée et répond immédiatement."""
+    eod_key = (
+        settings.eod_historical_data_key.get_secret_value()
+        if settings.enabled(settings.eod_historical_data_key)
+        else ""
+    )
+    if settings.demo_mode or not eod_key:
+        state = await get_daily_sync_state(settings)
+        return {
+            **state,
+            "started": False,
+            "summary": {
+                "skipped": True,
+                "reason": "eodhd_key_missing" if not eod_key else "demo_mode",
+            },
+        }
+    started = _spawn_detached_sync_task(
+        upgrade_warehouse_to_eodhd(
+            settings,
+            include_bars=include_bars,
+            include_fundamentals=include_fundamentals,
+            force_all_fundamentals=force_all_fundamentals,
+            max_fundamentals=max_fundamentals,
+            max_bars=max_bars,
+        ),
+        phase="eodhd_upgrade",
+        label="Migration de l'entrepôt vers EODHD…",
+        trigger="manual",
+    )
+    state = await get_daily_sync_state(settings)
+    if not started:
+        return {**state, "started": False, "summary": {"skipped": True, "reason": "already_running"}}
+    return {**state, "started": True, "summary": {"skipped": False, "background": True}}
+
+
+async def _run_screener_hydrate_tracked(
+    settings: Settings,
+    *,
+    universe_type: str,
+    universe_value: str | None,
+    watchlist_symbols: list[str] | None,
+    include_fundamentals: bool,
+    max_fundamentals: int,
+    refresh_eod: bool,
+) -> dict[str, Any]:
+    global _DAILY_SYNC_RUNNING
+    from .finance_screener import hydrate_screener_universe
+
+    async with _DAILY_SYNC_LOCK:
+        _DAILY_SYNC_RUNNING = True
+        started_iso = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+        label_scope = universe_value or ("tout l'entrepôt" if universe_type == "all" else universe_type)
+        _update_sync_progress(
+            is_running=True,
+            trigger="manual",
+            phase="screener_hydrate",
+            current_label=f"Screener ({label_scope}) : cours & technique…",
+            completed_steps=0,
+            total_steps=max(2, max_fundamentals + 1) if include_fundamentals else 2,
+            fundamentals_done=0,
+            fundamentals_total=max_fundamentals if include_fundamentals else 0,
+            started_at=started_iso,
+        )
+
+        def _on_progress(done_n: int, tot_n: int, sym: str) -> None:
+            _update_sync_progress(
+                phase="screener_hydrate",
+                current_label=f"Screener {sym} ({done_n}/{tot_n})…",
+                completed_steps=1 + done_n,
+                total_steps=max(2, 1 + tot_n),
+                fundamentals_done=done_n,
+                fundamentals_total=tot_n,
+            )
+
+        try:
+            res = await hydrate_screener_universe(
+                settings,
+                universe_type=universe_type,
+                universe_value=universe_value,
+                watchlist_symbols=watchlist_symbols,
+                include_fundamentals=include_fundamentals,
+                max_fundamentals=max_fundamentals,
+                refresh_eod=refresh_eod,
+                on_progress=_on_progress,
+            )
+            done_msg = (
+                f"Enrichissement Screener terminé : {res.get('indexed_count', 0)} titres indexés (4 unités), "
+                f"{res.get('fundamentals_enriched', 0)} dossiers fondamentaux enrichis "
+                f"({res.get('fundamentals_cached', 0)} déjà en cache EODHD)."
+                if include_fundamentals
+                else f"Cours & indicateurs techniques (4 unités) actualisés pour {res.get('indexed_count', 0)} titre(s)."
+            )
+            _update_sync_progress(
+                last_message=done_msg,
+                last_completed_at=datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+            )
+            return res
+        finally:
+            _DAILY_SYNC_RUNNING = False
+            _update_sync_progress(
+                is_running=False,
+                phase="idle",
+                current_label="",
+                percent=100,
+            )
+
+
+async def start_screener_hydrate_background(
+    settings: Settings,
+    *,
+    universe_type: str = "index",
+    universe_value: str | None = None,
+    watchlist_symbols: list[str] | None = None,
+    include_fundamentals: bool = True,
+    max_fundamentals: int = 40,
+    refresh_eod: bool = False,
+) -> dict[str, Any]:
+    """Démarre l'enrichissement Screener en tâche de fond détachée et répond immédiatement."""
+    from .finance_warehouse import get_screener_coverage
+
+    db_path = warehouse_db_path(settings)
+    started = _spawn_detached_sync_task(
+        _run_screener_hydrate_tracked(
+            settings,
+            universe_type=universe_type,
+            universe_value=universe_value,
+            watchlist_symbols=watchlist_symbols,
+            include_fundamentals=include_fundamentals,
+            max_fundamentals=max_fundamentals,
+            refresh_eod=refresh_eod,
+        ),
+        phase="screener_hydrate",
+        label="Enrichissement du Screener en cours…",
+        trigger="manual",
+    )
+    return {
+        "started": started,
+        "already_running": not started,
+        "progress": get_daily_sync_status(),
+        "universe_type": universe_type,
+        "universe_value": universe_value,
+        "symbols_count": 0,
+        "eod_loaded": 0,
+        "indexed_count": 0,
+        "fundamentals_enriched": 0,
+        "fundamentals_cached": 0,
+        "fundamentals_errors": 0,
+        "coverage": get_screener_coverage(db_path),
     }
 
 
@@ -865,17 +1220,42 @@ async def run_daily_exchange_catalog_sync_loop(settings: Settings) -> None:
         return
 
 
-def _build_supported_exchanges_status(meta: dict[str, Any]) -> list[dict[str, Any]]:
+def _build_supported_exchanges_status(
+    meta: dict[str, Any],
+    *,
+    eod_exchanges: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     exch_map = meta.get("exchanges") or {}
+    eod_by_code = {str(e.get("code") or "").upper(): e for e in (eod_exchanges or []) if e.get("code")}
     out: list[dict[str, Any]] = []
     known_codes: set[str] = set()
     for entry in SUPPORTED_EXCHANGE_CATALOGS:
         c = entry["code"]
         known_codes.add(c)
         info = exch_map.get(c) or {}
+        eod_meta = eod_by_code.get(c) or {}
         out.append(
             {
                 **entry,
+                "country": eod_meta.get("country") or "",
+                "currency": eod_meta.get("currency") or "",
+                "total": int(info.get("total") or 0),
+                "synced_at": _iso_from_ts(info.get("fetched_at")),
+            }
+        )
+    for entry in sorted(eod_exchanges or [], key=lambda e: (str(e.get("country") or "ZZZ"), str(e.get("code") or ""))):
+        c = str(entry.get("code") or "").upper()
+        if not c or c in known_codes:
+            continue
+        known_codes.add(c)
+        info = exch_map.get(c) or {}
+        out.append(
+            {
+                "code": c,
+                "label": str(entry.get("label") or c),
+                "description": str(entry.get("description") or f"Marché {c}"),
+                "country": str(entry.get("country") or ""),
+                "currency": str(entry.get("currency") or ""),
                 "total": int(info.get("total") or 0),
                 "synced_at": _iso_from_ts(info.get("fetched_at")),
             }
@@ -887,6 +1267,8 @@ def _build_supported_exchanges_status(meta: dict[str, Any]) -> list[dict[str, An
                     "code": c,
                     "label": c,
                     "description": f"Marché {c}",
+                    "country": "",
+                    "currency": "",
                     "total": int(info.get("total") or 0),
                     "synced_at": _iso_from_ts(info.get("fetched_at")),
                 }

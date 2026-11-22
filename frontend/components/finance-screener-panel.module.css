@@ -133,6 +133,22 @@
   flex-wrap: wrap;
 }
 
+.geoFiltersRow {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  padding-top: 8px;
+  border-top: 1px solid #f1f5f9;
+}
+
+.selectActive {
+  border-color: #10b981 !important;
+  background: #ecfdf5 !important;
+  color: #065f46 !important;
+  font-weight: 600;
+}
+
 .controlGroup {
   display: flex;
   align-items: center;
@@ -707,8 +723,15 @@
   color: #6ee7b7;
 }
 
-:global(:root[data-theme="dark"]) .presetsRow {
+:global(:root[data-theme="dark"]) .presetsRow,
+:global(:root[data-theme="dark"]) .geoFiltersRow {
   border-top-color: #1e293b;
+}
+
+:global(:root[data-theme="dark"]) .selectActive {
+  background: rgba(16, 185, 129, 0.16) !important;
+  border-color: #10b981 !important;
+  color: #6ee7b7 !important;
 }
 
 :global(:root[data-theme="dark"]) .ruleRow {

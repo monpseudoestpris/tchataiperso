@@ -2094,6 +2094,8 @@ export type SupportedExchangeInfo = {
   code: string;
   label: string;
   description: string;
+  country?: string;
+  currency?: string;
   total: number;
   synced_at: string | null;
 };
@@ -2182,6 +2184,8 @@ export type FinanceSyncProgress = {
   fundamentals_total: number;
   started_at: string | null;
   updated_at: string | null;
+  last_message?: string | null;
+  last_completed_at?: string | null;
 };
 
 export type FinanceSyncPreferences = {
@@ -2203,6 +2207,7 @@ export type FinanceSyncPreferences = {
 
 export type FinanceSyncAvailableIndex = {
   code: string;
+  eod_ticker?: string;
   name: string;
   flag: string;
   tier: "major" | "minor";
@@ -2221,8 +2226,10 @@ export type FinanceWarehouseSourcesSummary = {
 
 export type FinanceSyncStateResponse = {
   preferences: FinanceSyncPreferences;
+  started?: boolean;
   is_running?: boolean;
   progress?: FinanceSyncProgress;
+  eodhd_indx_catalog_total?: number;
   warehouse_sources?: FinanceWarehouseSourcesSummary;
   available_indices: FinanceSyncAvailableIndex[];
   available_exchanges: SupportedExchangeInfo[];
@@ -2245,8 +2252,9 @@ export type FinanceSyncStateResponse = {
   };
 };
 
-export async function fetchFinanceSyncPreferences(): Promise<FinanceSyncStateResponse> {
-  return api<FinanceSyncStateResponse>("/finance/sync-preferences");
+export async function fetchFinanceSyncPreferences(refreshCatalogs = false): Promise<FinanceSyncStateResponse> {
+  const qs = refreshCatalogs ? "?refresh_catalogs=true" : "";
+  return api<FinanceSyncStateResponse>(`/finance/sync-preferences${qs}`);
 }
 
 export async function fetchFinanceSyncStatus(): Promise<FinanceSyncProgress> {
@@ -3324,6 +3332,30 @@ export type ScreenerPreset = {
   rules: ScreenerRule[];
 };
 
+export type ScreenerFacetItem = {
+  code: string;
+  label: string;
+  count: number;
+};
+
+export type ScreenerCountryFacet = ScreenerFacetItem & {
+  flag: string;
+};
+
+export type ScreenerZoneFacet = ScreenerFacetItem & {
+  name: string;
+  flag: string;
+};
+
+export type ScreenerIndexFacet = {
+  code: string;
+  name: string;
+  flag: string;
+  region: string;
+  tier: string;
+  count: number;
+};
+
 export type ScreenerCoverage = {
   total_snapshots: number;
   with_technicals: number;
@@ -3331,7 +3363,12 @@ export type ScreenerCoverage = {
   warehouse_symbols_count: number;
   sectors: string[];
   exchanges: string[];
+  exchange_items?: ScreenerFacetItem[];
   currencies: string[];
+  countries?: ScreenerCountryFacet[];
+  market_zones?: ScreenerZoneFacet[];
+  indices?: ScreenerIndexFacet[];
+  cap_categories?: ScreenerFacetItem[];
   last_computed_at: string | null;
 };
 
@@ -3353,6 +3390,7 @@ export type ScreenerRow = {
   name: string;
   exchange: string;
   country: string;
+  market_zone?: string;
   currency: string;
   sector: string;
   industry: string;
@@ -3435,8 +3473,12 @@ export type ScreenerRow = {
 
 export type ScreenerQueryRequest = {
   timeframe?: ScreenerTimeframe;
-  universe_type?: "all" | "index" | "watchlist" | "exchange";
+  universe_type?: "all" | "index" | "watchlist" | "exchange" | "zone" | "country";
   universe_value?: string | null;
+  index_code?: string;
+  market_zone?: string;
+  country?: string;
+  cap_category?: string;
   search?: string;
   sector?: string;
   exchange?: string;
@@ -3460,6 +3502,9 @@ export type ScreenerQueryResponse = {
 };
 
 export type ScreenerHydrateResponse = {
+  started?: boolean;
+  already_running?: boolean;
+  progress?: FinanceSyncProgress;
   universe_type: string;
   universe_value: string | null;
   symbols_count: number;
@@ -3499,6 +3544,7 @@ export async function hydrateFinanceScreener(body: {
   include_fundamentals?: boolean;
   max_fundamentals?: number;
   refresh_eod?: boolean;
+  background?: boolean;
 }): Promise<ScreenerHydrateResponse> {
   return api<ScreenerHydrateResponse>("/finance/screener/hydrate", {
     method: "POST",

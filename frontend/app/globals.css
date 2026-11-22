@@ -25180,8 +25180,8 @@ thead .finance-stmt-sticky-col {
 
 .finance-main-tabs-nav {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 7px;
   padding: 5px;
   border-radius: 14px;
   border: 1px solid var(--fin-border, #e2e8f0);
@@ -25196,9 +25196,9 @@ thead .finance-stmt-sticky-col {
 .finance-main-tab-btn {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   min-width: 0;
-  padding: 9px 14px;
+  padding: 9px 11px;
   border-radius: 10px;
   border: 1px solid transparent;
   background: transparent;

@@ -48,6 +48,7 @@ import {
   ChevronRight,
   ClipboardList,
   Copy,
+  Database,
   ExternalLink,
   FileText,
   HelpCircle,
@@ -128,7 +129,7 @@ type FinanceModalProps = {
   onOpenReportAsDoc?: (report: QuarterlyReport, openVoiceFullscreen?: boolean) => Promise<void> | void;
 };
 
-type MainTab = "search_indices" | "fundamentals" | "chart_tech" | "screener";
+type MainTab = "search_indices" | "fundamentals" | "chart_tech" | "screener" | "data_sync";
 
 type ActiveTab =
   | "dossier"
@@ -364,8 +365,20 @@ export function FinanceModal({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [mainTab, setMainTab] = useState<MainTab>("fundamentals");
+  const [mountedMainTabs, setMountedMainTabs] = useState<Partial<Record<MainTab, boolean>>>({
+    fundamentals: true,
+  });
+  if (!mountedMainTabs[mainTab]) {
+    setMountedMainTabs(prev => ({ ...prev, [mainTab]: true }));
+  }
   const [prevOpenSessionKey, setPrevOpenSessionKey] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<ActiveTab>("dossier");
+  const [mountedSubTabs, setMountedSubTabs] = useState<Partial<Record<ActiveTab, boolean>>>({
+    dossier: true,
+  });
+  if (!mountedSubTabs[activeTab]) {
+    setMountedSubTabs(prev => ({ ...prev, [activeTab]: true }));
+  }
   const [chartTabs, setChartTabs] = useState<ChartTabConfig[]>(() => loadSavedChartTabs());
   const [activeChartTabId, setActiveChartTabId] = useState<string>(() => {
     if (typeof window === "undefined") return "tab-daily";
@@ -415,7 +428,6 @@ export function FinanceModal({
   const [indexError, setIndexError] = useState<string | null>(null);
   const [indxCatalogOpen, setIndxCatalogOpen] = useState(false);
   const [eufundCatalogOpen, setEufundCatalogOpen] = useState(false);
-  const [syncPanelOpen, setSyncPanelOpen] = useState(false);
   const [syncProgress, setSyncProgress] = useState<FinanceSyncProgress | null>(null);
   const [watchlistSidebarOpen, setWatchlistSidebarOpen] = useState<boolean>(() => {
     if (typeof window === "undefined") return true;
@@ -554,9 +566,11 @@ export function FinanceModal({
     };
     poll();
     const timer = window.setInterval(poll, isBgSyncRunning ? 2500 : 18000);
+    window.addEventListener("finance-sync-started", poll);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
+      window.removeEventListener("finance-sync-started", poll);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, isBgSyncRunning]);
@@ -736,7 +750,6 @@ export function FinanceModal({
     }
     setIndxCatalogOpen(false);
     setEufundCatalogOpen(false);
-    setSyncPanelOpen(false);
     setActiveIndexCode(code);
     setIndexImportBanner(null);
     setIndexLoading(true);
@@ -1569,11 +1582,8 @@ export function FinanceModal({
                 <button
                   type="button"
                   className="finance-sync-live-pill"
-                  onClick={() => {
-                    setMainTab("search_indices");
-                    setSyncPanelOpen(true);
-                  }}
-                  title="Synchronisation automatique des indices en cours — cliquer pour voir le détail"
+                  onClick={() => switchMainTab("data_sync")}
+                  title="Synchronisation / mise à jour en cours — cliquer pour ouvrir l'onglet 5 · Données & Synchro"
                 >
                   <LoaderCircle size={13} className="spin" />
                   <span>
@@ -1680,6 +1690,20 @@ export function FinanceModal({
               <span className="finance-main-tab-label">Screener</span>
               <span className="finance-main-tab-meta">Fondamental · Tech</span>
             </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mainTab === "data_sync"}
+              className={`finance-main-tab-btn ${mainTab === "data_sync" ? "active" : ""}`}
+              onClick={() => switchMainTab("data_sync")}
+            >
+              <span className="finance-main-tab-num">5</span>
+              <Database size={15} />
+              <span className="finance-main-tab-label">Données &amp; Synchro</span>
+              <span className="finance-main-tab-meta">
+                {syncProgress?.is_running ? `En cours ${syncProgress.percent}%` : "EODHD · Auto 24h"}
+              </span>
+            </button>
           </nav>
         </div>
 
@@ -1696,8 +1720,8 @@ export function FinanceModal({
             )}
 
             {/* ONGLET 1 : Recherche, Suggestions, Indices & Catalogues */}
-            {mainTab === "search_indices" && (
-              <>
+            {(mainTab === "search_indices" || mountedMainTabs.search_indices) && (
+              <div hidden={mainTab !== "search_indices"}>
                 <div className="finance-modal-search-bar">
                   <div className="finance-search-autocomplete-wrap">
                     <form className="finance-search-form" onSubmit={handleSearchSubmit}>
@@ -1770,11 +1794,10 @@ export function FinanceModal({
                     loadingIndex={indexLoading}
                     catalogOpen={indxCatalogOpen}
                     eufundCatalogOpen={eufundCatalogOpen}
-                    syncOpen={syncPanelOpen}
+                    syncOpen={mainTab === "data_sync"}
                     onToggleIndex={code => void handleToggleIndex(code)}
                     onToggleCatalog={() => {
                       setEufundCatalogOpen(false);
-                      setSyncPanelOpen(false);
                       setIndxCatalogOpen(prev => {
                         const next = !prev;
                         if (next) {
@@ -1788,7 +1811,6 @@ export function FinanceModal({
                     }}
                     onToggleEufundCatalog={() => {
                       setIndxCatalogOpen(false);
-                      setSyncPanelOpen(false);
                       setActiveIndexCode(null);
                       setEufundCatalogOpen(prev => {
                         const next = !prev;
@@ -1801,18 +1823,7 @@ export function FinanceModal({
                       });
                     }}
                     onToggleSync={() => {
-                      setIndxCatalogOpen(false);
-                      setEufundCatalogOpen(false);
-                      setActiveIndexCode(null);
-                      setSyncPanelOpen(prev => {
-                        const next = !prev;
-                        if (next) {
-                          window.requestAnimationFrame(() => {
-                            modalBodyRef.current?.scrollTo({ top: 0, behavior: "smooth" });
-                          });
-                        }
-                        return next;
-                      });
+                      switchMainTab("data_sync");
                     }}
                     onOpenMinorTier={handleOpenMinorTier}
                   />
@@ -1836,15 +1847,6 @@ export function FinanceModal({
                     onSelectFund={item => void handleSelectEufund(item)}
                     onAddWatchlist={handleAddEufundToWatchlist}
                     onClose={() => setEufundCatalogOpen(false)}
-                  />
-                )}
-
-                {syncPanelOpen && (
-                  <FinanceSyncPanel
-                    onSynced={() => {
-                      void loadWorkspaceData(false);
-                    }}
-                    onClose={() => setSyncPanelOpen(false)}
                   />
                 )}
 
@@ -1879,7 +1881,7 @@ export function FinanceModal({
                   />
                 )}
 
-                {!activeIndexCode && !indxCatalogOpen && !eufundCatalogOpen && !syncPanelOpen && (
+                {!activeIndexCode && !indxCatalogOpen && !eufundCatalogOpen && (
                   <div className="finance-search-tab-hint">
                     <Search size={16} />
                     <div>
@@ -1892,35 +1894,51 @@ export function FinanceModal({
                     </div>
                   </div>
                 )}
-              </>
+              </div>
             )}
 
-            {mainTab !== "search_indices" && loading && !data && (
+            {mainTab !== "search_indices" && mainTab !== "data_sync" && loading && !data && (
               <div className="finance-modal-loading">
                 <LoaderCircle size={36} className="spin text-emerald" />
-                <p>Téléchargement des cours live (EOD) et des états financiers (Yahoo Finance)…</p>
+                <p>Téléchargement des cours live et des états financiers (EOD Historical Data)…</p>
               </div>
             )}
 
             {/* ONGLET 4 : Screener boursier multi-critères */}
-            {mainTab === "screener" && (
-              <FinanceScreenerPanel
-                indices={indices}
-                watchlists={watchlists}
-                activeListId={activeListId}
-                onOpenStock={async (target, displayName, openTab) => {
-                  setQuery(displayName || target);
-                  setMainTab(openTab);
-                  await loadDetails(target);
-                  window.requestAnimationFrame(() => {
-                    modalBodyRef.current?.scrollTo({ top: 0, behavior: "smooth" });
-                  });
-                }}
-                onWatchlistExported={async listId => {
-                  toggleWatchlistSidebar(true);
-                  await handleSelectWatchlistTab(listId);
-                }}
-              />
+            {(mainTab === "screener" || mountedMainTabs.screener) && (
+              <div hidden={mainTab !== "screener"}>
+                <FinanceScreenerPanel
+                  indices={indices}
+                  watchlists={watchlists}
+                  activeListId={activeListId}
+                  onOpenStock={async (target, displayName, openTab) => {
+                    setQuery(displayName || target);
+                    setMainTab(openTab);
+                    await loadDetails(target);
+                    window.requestAnimationFrame(() => {
+                      modalBodyRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+                    });
+                  }}
+                  onWatchlistExported={async listId => {
+                    toggleWatchlistSidebar(true);
+                    await handleSelectWatchlistTab(listId);
+                  }}
+                  onOpenDataSync={() => switchMainTab("data_sync")}
+                />
+              </div>
+            )}
+
+            {/* ONGLET 5 : Gestion des données, EODHD & Synchronisations */}
+            {(mainTab === "data_sync" || mountedMainTabs.data_sync) && (
+              <div hidden={mainTab !== "data_sync"}>
+                <FinanceSyncPanel
+                  watchlists={watchlists}
+                  activeListId={activeListId}
+                  onSynced={() => {
+                    void loadWorkspaceData(false);
+                  }}
+                />
+              </div>
             )}
 
             {/* ONGLET 3 : Cours & Indicateurs techniques */}
@@ -2254,8 +2272,8 @@ export function FinanceModal({
             )}
 
             {/* ONGLET 2 : Fondamentaux & Ratios classés par type */}
-            {mainTab === "fundamentals" && data && (
-              <>
+            {(mainTab === "fundamentals" || mountedMainTabs.fundamentals) && data && (
+              <div hidden={mainTab !== "fundamentals"}>
                 {renderHeroBanner(false)}
                 <div className="finance-stats-section">
                   <div className="finance-tabs-nav">
@@ -2358,8 +2376,8 @@ export function FinanceModal({
                   </div>
 
                 {/* Tab 0: Fiche Complète (Investisseur Institutionnel) */}
-                {activeTab === "dossier" && (
-                  <div className="finance-tab-content">
+                {(activeTab === "dossier" || mountedSubTabs.dossier) && (
+                  <div className="finance-tab-content" hidden={activeTab !== "dossier"}>
                     <FinanceDossierPanel
                       symbol={data.eod_ticker || data.yahoo_symbol || data.symbol}
                       onInsertIntoChat={onInsertIntoChat}
@@ -2369,8 +2387,8 @@ export function FinanceModal({
                 )}
 
                 {/* Tab 0b: Avis de l'expert (Buffett, Lynch, Munger, Graham, Damodaran...) */}
-                {activeTab === "experts" && (
-                  <div className="finance-tab-content">
+                {(activeTab === "experts" || mountedSubTabs.experts) && (
+                  <div className="finance-tab-content" hidden={activeTab !== "experts"}>
                     <FinanceExpertsPanel
                       symbol={data.eod_ticker || data.yahoo_symbol || data.symbol}
                       companyName={data.long_name || data.short_name || data.symbol}
@@ -2599,8 +2617,8 @@ export function FinanceModal({
                   )}
 
                 {/* Tab 3b: Historique complet des données fondamentales */}
-                {activeTab === "fundamentals" && (
-                  <div className="finance-tab-content">
+                {(activeTab === "fundamentals" || mountedSubTabs.fundamentals) && (
+                  <div className="finance-tab-content" hidden={activeTab !== "fundamentals"}>
                     <FinanceStatements
                       symbol={data.eod_ticker || data.yahoo_symbol || data.symbol}
                       currency={data.currency}
@@ -2709,8 +2727,8 @@ export function FinanceModal({
                 )}
 
                 {/* Tab 7: Analyse MOAT */}
-                {activeTab === "moat" && (
-                  <div className="finance-tab-content">
+                {(activeTab === "moat" || mountedSubTabs.moat) && (
+                  <div className="finance-tab-content" hidden={activeTab !== "moat"}>
                     <FinanceMoatPanel
                       symbol={data.yahoo_symbol || data.symbol}
                       companyName={data.long_name || data.short_name || data.symbol}
@@ -2721,8 +2739,8 @@ export function FinanceModal({
                 )}
 
                 {/* Tab 8: Actualités & Veille IA */}
-                {activeTab === "news" && (
-                  <div className="finance-tab-content">
+                {(activeTab === "news" || mountedSubTabs.news) && (
+                  <div className="finance-tab-content" hidden={activeTab !== "news"}>
                     <FinanceNewsPanel
                       symbol={data.eod_ticker || data.yahoo_symbol || data.symbol}
                       companyName={data.long_name || data.short_name || data.symbol}
@@ -2732,8 +2750,8 @@ export function FinanceModal({
                 )}
 
                 {/* Tab 8: Rapports trimestriels PDF / Texte */}
-                {activeTab === "reports" && (
-                  <div className="finance-tab-content">
+                {(activeTab === "reports" || mountedSubTabs.reports) && (
+                  <div className="finance-tab-content" hidden={activeTab !== "reports"}>
                     <FinanceReportsPanel
                       symbol={data.yahoo_symbol || data.symbol}
                       companyName={data.long_name || data.short_name || data.symbol}
@@ -2743,7 +2761,7 @@ export function FinanceModal({
                   </div>
                 )}
               </div>
-            </>
+            </div>
           )}
           </div>
 

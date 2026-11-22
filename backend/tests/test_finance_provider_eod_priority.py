@@ -231,3 +231,124 @@ def test_screener_hydrate_and_upgrade_warehouse_migrate_yahoo_to_eodhd(tmp_path:
     assert br_after["yahoo_only_fundamentals_count"] == 0
     assert br_after["eodhd_bars_symbols_count"] == 1
     assert br_after["eodhd_fundamentals_count"] == 1
+
+
+def test_background_eodhd_upgrade_and_screener_hydrate_detach_cleanly(tmp_path: Path):
+    from app import finance_funds
+    from app.finance_funds import (
+        get_daily_sync_status,
+        start_eodhd_upgrade_background,
+        start_screener_hydrate_background,
+    )
+
+    settings = Settings(
+        app_data_dir=tmp_path / "app",
+        finance_data_dir=tmp_path / "fin",
+        eod_historical_data_key=SecretStr("demo-eod-token"),
+        demo_mode=False,
+    )
+
+    async def _run() -> None:
+        res_up = await start_eodhd_upgrade_background(settings)
+        assert res_up["started"] is True
+        task = finance_funds._ACTIVE_SYNC_TASK
+        assert task is not None
+        await task
+        st = get_daily_sync_status()
+        assert st["is_running"] is False
+        assert st["last_message"] and "Mise à jour EODHD terminée" in st["last_message"]
+
+        with patch(
+            "app.finance_screener.hydrate_screener_universe",
+            new=AsyncMock(
+                return_value={
+                    "indexed_count": 5,
+                    "fundamentals_enriched": 2,
+                    "fundamentals_cached": 3,
+                    "fundamentals_errors": 0,
+                }
+            ),
+        ):
+            res_hy = await start_screener_hydrate_background(
+                settings,
+                universe_type="all",
+                include_fundamentals=True,
+                max_fundamentals=10,
+            )
+            assert res_hy["started"] is True
+            task2 = finance_funds._ACTIVE_SYNC_TASK
+            assert task2 is not None
+            await task2
+            st2 = get_daily_sync_status()
+            assert st2["is_running"] is False
+            assert st2["last_message"] and "Enrichissement Screener terminé" in st2["last_message"]
+
+    asyncio.run(_run())
+
+
+def test_russell_2000_composition_falls_back_to_iwm_etf_holdings(tmp_path: Path):
+    from app.finance_indices import get_index_composition
+
+    settings = Settings(
+        app_data_dir=tmp_path / "app",
+        finance_data_dir=tmp_path / "fin",
+        eod_historical_data_key=SecretStr("demo-eod-token"),
+        demo_mode=False,
+    )
+
+    called_urls: list[str] = []
+
+    class _FakeResp:
+        def __init__(self, status_code: int, payload: object):
+            self.status_code = status_code
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    async def _fake_get(self, url: str, **kwargs):
+        called_urls.append(url)
+        if "RUT.INDX" in url and "filter=Components" in url:
+            # Simuler l'indisponibilité licence FTSE Russell sur RUT.INDX
+            return _FakeResp(200, {})
+        if "IWM.US" in url and "filter=ETF_Data::Holdings" in url:
+            return _FakeResp(
+                200,
+                {
+                    "SMCI.US": {
+                        "Code": "SMCI",
+                        "Exchange": "US",
+                        "Name": "Super Micro Computer",
+                        "Sector": "Technology",
+                        "Industry": "Computer Hardware",
+                        "Assets_%": 0.45,
+                    },
+                    "FTAI.US": {
+                        "Code": "FTAI",
+                        "Exchange": "US",
+                        "Name": "FTAI Aviation",
+                        "Sector": "Industrials",
+                        "Industry": "Aerospace",
+                        "Assets_%": 0.52,
+                    },
+                    "CASH_USD": {
+                        "Code": "CASH",
+                        "Exchange": "US",
+                        "Name": "Cash",
+                        "Assets_%": 0.10,
+                    },
+                },
+            )
+        return _FakeResp(404, {})
+
+    with patch("httpx.AsyncClient.get", new=_fake_get):
+        res = asyncio.run(get_index_composition(settings, "RUT", refresh=True))
+
+    assert res is not None
+    assert res["index"]["source"] == "EODHD ETF (IWM.US)"
+    assert res["index"]["constituents_count"] == 2
+    # Trié par pondération décroissante et sans ligne CASH
+    assert [c["eod_ticker"] for c in res["constituents"]] == ["FTAI.US", "SMCI.US"]
+    assert res["constituents"][0]["weight_pct"] == 0.52
+    assert any("RUT.INDX" in u and "filter=Components" in u for u in called_urls)
+    assert any("IWM.US" in u and "filter=ETF_Data::Holdings" in u for u in called_urls)

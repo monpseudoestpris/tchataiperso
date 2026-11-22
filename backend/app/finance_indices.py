@@ -481,7 +481,7 @@ def _normalize_eodhd_component(raw: dict[str, Any], idx: int) -> dict[str, Any] 
         base = code
     y_suffix = _EOD_TO_YAHOO_SUFFIX.get(exch, f".{exch}" if exch else "")
     yahoo_symbol = f"{base}{y_suffix}" if y_suffix else base
-    weight = _safe_float(raw.get("Weight"))
+    weight = _safe_float(raw.get("Weight") if raw.get("Weight") is not None else raw.get("Assets_%"))
     return {
         "symbol": eod_ticker,
         "eod_ticker": eod_ticker,
@@ -493,6 +493,37 @@ def _normalize_eodhd_component(raw: dict[str, Any], idx: int) -> dict[str, Any] 
         "weight_pct": round(weight, 3) if weight is not None else None,
         "position": idx,
     }
+
+
+# ETFs physiques répliquant fidèlement les indices (contournement EODHD `ETF_Data::Holdings`
+# lorsque `Components` sur `.INDX` est restreint par licence, ex. Russell 2000 -> IWM.US).
+_ETF_PROXY_BY_INDEX_CODE: dict[str, list[str]] = {
+    "RUT": ["IWM.US", "VTWO.US"],
+    "SP400": ["IJH.US", "MDY.US"],
+    "SP600": ["IJR.US"],
+    "SP500": ["SPY.US", "IVV.US"],
+    "NASDAQ100": ["QQQ.US"],
+    "DJI": ["DIA.US"],
+    "CAC40": ["CAC.PA"],
+    "EUROSTOXX50": ["EXW1.XETRA", "MSE.PA", "FEZ.US"],
+    "STOXX600": ["EXSA.XETRA", "MEUD.PA"],
+    "DAX40": ["EXS1.XETRA"],
+    "MDAX": ["EXS3.XETRA"],
+    "TECDAX": ["EXS2.XETRA"],
+    "FTSE100": ["ISF.LSE"],
+    "FTSE250": ["MIDD.LSE"],
+    "SMI20": ["CSSMI.SW"],
+    "AEX25": ["IAEX.AS"],
+    "IBEX35": ["LYXIB.MC"],
+    "FTSEMIB": ["ETFMIB.MI"],
+    "ASX200": ["STW.AU"],
+    "HSI": ["2800.HK"],
+    "TSX": ["XIU.TO"],
+}
+
+_NON_EQUITY_HOLDING_CODES: frozenset[str] = frozenset(
+    {"CASH", "USD", "EUR", "GBP", "CHF", "JPY", "CAD", "AUD", "HKD", "OTHER", "UNKNOWN", "MARGIN"}
+)
 
 
 # ---------------------------------------------------------------------------
@@ -1130,28 +1161,32 @@ async def _fetch_eodhd_index_components(
     eod_ticker: str,
     api_key: str,
 ) -> list[dict[str, Any]]:
-    """Interroge `/api/fundamentals/{eod_ticker}` pour extraire `Components`."""
+    """Interroge `/api/fundamentals/{eod_ticker}?filter=Components` pour extraire rapidement `Components`."""
     if not api_key or not eod_ticker:
         return []
     url = (
         f"https://eodhd.com/api/fundamentals/{urllib.parse.quote(eod_ticker)}"
-        f"?api_token={urllib.parse.quote(api_key)}&fmt=json"
+        f"?api_token={urllib.parse.quote(api_key)}&fmt=json&filter=Components"
     )
     try:
-        resp = await client.get(url, timeout=14.0)
+        resp = await client.get(url, timeout=16.0)
         if resp.status_code != 200:
             return []
         payload = resp.json()
-        if not isinstance(payload, dict):
-            return []
-        raw_comp = payload.get("Components")
-        items: list[dict[str, Any]] = []
-        if isinstance(raw_comp, dict):
-            iterable = raw_comp.values()
-        elif isinstance(raw_comp, list):
-            iterable = raw_comp
+        raw_comp: Any = None
+        if isinstance(payload, dict):
+            # Avec `filter=Components`, EODHD renvoie soit directement `{ "0": {...}, ... }`, soit `{"Components": {...}}`
+            if "Components" in payload and isinstance(payload.get("Components"), (dict, list)):
+                raw_comp = payload.get("Components")
+            else:
+                raw_comp = payload
+        elif isinstance(payload, list):
+            raw_comp = payload
         else:
             return []
+
+        items: list[dict[str, Any]] = []
+        iterable = raw_comp.values() if isinstance(raw_comp, dict) else raw_comp
         for idx, entry in enumerate(iterable):
             if isinstance(entry, dict):
                 norm = _normalize_eodhd_component(entry, idx)
@@ -1160,6 +1195,66 @@ async def _fetch_eodhd_index_components(
         return items
     except Exception as exc:
         _logger.debug("EODHD index components fallback (%s): %s", eod_ticker, exc)
+        return []
+
+
+async def _fetch_eodhd_etf_holdings_components(
+    client: httpx.AsyncClient,
+    etf_ticker: str,
+    api_key: str,
+) -> list[dict[str, Any]]:
+    """Récupère les positions d'un ETF répliquant (`/api/fundamentals/{etf}?filter=ETF_Data::Holdings`)."""
+    if not api_key or not etf_ticker:
+        return []
+    url = (
+        f"https://eodhd.com/api/fundamentals/{urllib.parse.quote(etf_ticker)}"
+        f"?api_token={urllib.parse.quote(api_key)}&fmt=json&filter=ETF_Data::Holdings"
+    )
+    try:
+        resp = await client.get(url, timeout=22.0)
+        if resp.status_code != 200:
+            return []
+        payload = resp.json()
+        raw_holdings: Any = None
+        if isinstance(payload, dict):
+            if "Holdings" in payload and isinstance(payload.get("Holdings"), (dict, list)):
+                raw_holdings = payload.get("Holdings")
+            elif "ETF_Data" in payload and isinstance((payload.get("ETF_Data") or {}).get("Holdings"), (dict, list)):
+                raw_holdings = payload["ETF_Data"]["Holdings"]
+            else:
+                raw_holdings = payload
+        elif isinstance(payload, list):
+            raw_holdings = payload
+        else:
+            return []
+
+        items: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        entries = list(raw_holdings.items()) if isinstance(raw_holdings, dict) else [(None, v) for v in raw_holdings]
+        for idx, (holding_key, entry) in enumerate(entries):
+            if not isinstance(entry, dict):
+                continue
+            code = str(entry.get("Code") or "").strip().upper()
+            if not code and isinstance(holding_key, str) and "." in holding_key:
+                code = holding_key.strip().upper()
+            bare = code.split(".", 1)[0]
+            if not bare or bare in _NON_EQUITY_HOLDING_CODES or bare.startswith("CASH"):
+                continue
+            row_in = dict(entry)
+            if not row_in.get("Code"):
+                row_in["Code"] = code
+            norm = _normalize_eodhd_component(row_in, idx)
+            if not norm or norm["eod_ticker"] in seen:
+                continue
+            seen.add(norm["eod_ticker"])
+            items.append(norm)
+
+        items.sort(key=lambda r: (r["weight_pct"] is None, -(r["weight_pct"] or 0.0), r["symbol"]))
+        for pos, row in enumerate(items):
+            row["position"] = pos
+        return items
+    except Exception as exc:
+        _logger.debug("EODHD ETF holdings fallback (%s): %s", etf_ticker, exc)
         return []
 
 
@@ -1485,18 +1580,28 @@ async def get_index_composition(
 
     if not items and eod_key and not settings.demo_mode:
         candidate_tickers = [defn["eod_ticker"], *defn.get("eod_alt_tickers", [])]
+        etf_proxies = list(defn.get("etf_proxy_tickers") or _ETF_PROXY_BY_INDEX_CODE.get(code, []))
+        min_expected = 50 if code == "RUT" else 1
         async with httpx.AsyncClient(
             headers={"User-Agent": DEFAULT_USER_AGENT},
             follow_redirects=True,
-            timeout=14.0,
+            timeout=22.0,
         ) as client:
             for cand in candidate_tickers:
                 live_items = await _fetch_eodhd_index_components(client, cand, eod_key)
-                if live_items:
+                if live_items and len(live_items) >= min_expected:
                     items = live_items
                     source = f"EODHD ({cand})"
                     save_index_constituents(db_path, code, items)
                     break
+            if not items and etf_proxies:
+                for etf_t in etf_proxies:
+                    etf_items = await _fetch_eodhd_etf_holdings_components(client, etf_t, eod_key)
+                    if etf_items:
+                        items = etf_items
+                        source = f"EODHD ETF ({etf_t})"
+                        save_index_constituents(db_path, code, items)
+                        break
 
     if not items:
         fallback = [dict(r, position=idx) for idx, r in enumerate(_FALLBACK_CONSTITUENTS.get(code, []))]
@@ -1665,7 +1770,7 @@ async def get_index_performances(
     *,
     refresh: bool = False,
     cache_only: bool = False,
-    max_constituents: int = 550,
+    max_constituents: int = 2500,
 ) -> dict[str, Any] | None:
     """Charge toutes les actions d'un indice en entrepôt (ou lit la BDD locale) et calcule leurs performances."""
     comp = await get_index_composition(settings, index_code, refresh=refresh and not cache_only)

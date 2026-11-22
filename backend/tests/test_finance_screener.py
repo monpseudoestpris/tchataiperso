@@ -359,3 +359,186 @@ def test_daily_sync_auto_fetches_major_indices_constituents_and_fundamentals(tmp
     assert called_codes == ["SBF120"]
     assert hydrate_calls == []
     assert list(res2["summary"]["indices"].keys()) == ["SBF120"]
+
+
+def test_screener_filters_by_index_zone_country_exchange_currency_and_cap(tmp_path: Path):
+    settings = _settings_for(tmp_path)
+    db_path = warehouse_db_path(settings)
+
+    upsert_screener_snapshots(
+        db_path,
+        [
+            {
+                "symbol": "AI.PA",
+                "eod_ticker": "AI.PA",
+                "name": "Air Liquide",
+                "exchange": "PA",
+                "country": "",  # Déduit automatiquement de PA -> France / europe + eurozone
+                "currency": "EUR",
+                "sector": "Basic Materials",
+                "cap_category": "Large Cap",
+                "indices_csv": ",CAC40,EUROSTOXX50,",
+                "market_cap": 95_000_000_000,
+                "price": 175.0,
+                "has_fundamentals": 1,
+                "bars_count": 100,
+            },
+            {
+                "symbol": "SAP.XETRA",
+                "eod_ticker": "SAP.XETRA",
+                "name": "SAP SE",
+                "exchange": "XETRA",
+                "country": "Germany",  # Normalisé -> Allemagne / europe + eurozone
+                "currency": "EUR",
+                "sector": "Technology",
+                "cap_category": "Mega Cap",
+                "indices_csv": ",DAX40,EUROSTOXX50,",
+                "market_cap": 260_000_000_000,
+                "price": 220.0,
+                "has_fundamentals": 1,
+                "bars_count": 100,
+            },
+            {
+                "symbol": "NESN.SW",
+                "eod_ticker": "NESN.SW",
+                "name": "Nestlé",
+                "exchange": "SW",
+                "country": "Switzerland",  # Normalisé -> Suisse / europe (hors Zone Euro)
+                "currency": "CHF",
+                "sector": "Consumer Defensive",
+                "cap_category": "Mega Cap",
+                "indices_csv": ",SMI20,STOXX600,",
+                "market_cap": 230_000_000_000,
+                "price": 85.0,
+                "has_fundamentals": 1,
+                "bars_count": 100,
+            },
+            {
+                "symbol": "AAPL.US",
+                "eod_ticker": "AAPL.US",
+                "name": "Apple Inc.",
+                "exchange": "US",
+                "country": "USA",  # Normalisé -> États-Unis / north_america
+                "currency": "USD",
+                "sector": "Technology",
+                "cap_category": "Mega Cap",
+                "indices_csv": ",SP500,NASDAQ100,",
+                "market_cap": 3_400_000_000_000,
+                "price": 230.0,
+                "has_fundamentals": 1,
+                "bars_count": 100,
+            },
+            {
+                "symbol": "7203.T",
+                "eod_ticker": "7203.T",
+                "name": "Toyota Motor",
+                "exchange": "TSE",
+                "country": "",  # Déduit -> Japon / asia_pacific
+                "currency": "JPY",
+                "sector": "Consumer Cyclical",
+                "cap_category": "Mega Cap",
+                "indices_csv": ",NIKKEI225,",
+                "market_cap": 280_000_000_000,
+                "price": 2800.0,
+                "has_fundamentals": 1,
+                "bars_count": 100,
+            },
+        ],
+    )
+
+    # 1. Métadonnées / facettes enrichies
+    meta = get_screener_metadata(settings)
+    cov = meta["coverage"]
+    zone_map = {z["code"]: z["count"] for z in cov["market_zones"]}
+    assert zone_map["eurozone"] == 2
+    assert zone_map["europe"] == 3
+    assert zone_map["north_america"] == 1
+    assert zone_map["asia_pacific"] == 1
+
+    country_map = {c["code"]: c["count"] for c in cov["countries"]}
+    assert country_map["France"] == 1
+    assert country_map["Allemagne"] == 1
+    assert country_map["Suisse"] == 1
+    assert country_map["États-Unis"] == 1
+    assert country_map["Japon"] == 1
+
+    idx_map = {i["code"]: i["count"] for i in cov["indices"]}
+    assert idx_map["EUROSTOXX50"] == 2
+    assert idx_map["CAC40"] == 1
+    assert idx_map["STOXX600"] == 1
+
+    # 2. Filtre par zone boursière : Zone Euro vs Europe vs Amérique du Nord vs Asie-Pacifique
+    ez = query_screener(settings, market_zone="eurozone")
+    assert {r["symbol"] for r in ez["items"]} == {"AI.PA", "SAP.XETRA"}
+
+    eu = query_screener(settings, market_zone="europe")
+    assert {r["symbol"] for r in eu["items"]} == {"AI.PA", "SAP.XETRA", "NESN.SW"}
+
+    na = query_screener(settings, market_zone="north_america")
+    assert [r["symbol"] for r in na["items"]] == ["AAPL.US"]
+
+    apac = query_screener(settings, market_zone="asia_pacific")
+    assert [r["symbol"] for r in apac["items"]] == ["7203.T"]
+
+    # 3. Filtre par pays (nom français ou alias anglais acceptés)
+    fr = query_screener(settings, country="France")
+    assert [r["symbol"] for r in fr["items"]] == ["AI.PA"]
+    us_alias = query_screener(settings, country="USA")
+    assert [r["symbol"] for r in us_alias["items"]] == ["AAPL.US"]
+
+    # 4. Combinaison Indice + Pays + Devise + Cap
+    combo = query_screener(
+        settings,
+        index_code="EUROSTOXX50",
+        country="Allemagne",
+        currency="EUR",
+        cap_category="Mega Cap",
+    )
+    assert [r["symbol"] for r in combo["items"]] == ["SAP.XETRA"]
+    assert combo["items"][0]["market_zone"] == "europe"
+    assert combo["items"][0]["country"] == "Allemagne"
+
+
+def test_screener_lists_all_exchange_catalog_stocks_without_loading_prices(tmp_path: Path):
+    from app.finance_warehouse import replace_exchange_symbols, seed_screener_from_exchange_catalogs
+
+    settings = _settings_for(tmp_path)
+    db_path = warehouse_db_path(settings)
+
+    # Titre déjà indexé avec cours (constituant d'indice) + catalogue complet Euronext Paris
+    upsert_screener_snapshots(
+        db_path,
+        [{"symbol": "AI.PA", "eod_ticker": "AI.PA", "name": "Air Liquide", "exchange": "PA", "price": 175.0, "bars_count": 100}],
+    )
+    replace_exchange_symbols(
+        db_path,
+        "PA",
+        [
+            {"symbol": "AI", "eod_ticker": "AI.PA", "name": "Air Liquide", "country": "France", "currency": "EUR", "type": "Common Stock"},
+            {"symbol": "ALO", "eod_ticker": "ALO.PA", "name": "Alstom", "country": "France", "currency": "EUR", "type": "Common Stock"},
+            {"symbol": "VIRP", "eod_ticker": "VIRP.PA", "name": "Virbac", "country": "France", "currency": "EUR", "type": "Common Stock"},
+            {"symbol": "CW8", "eod_ticker": "CW8.PA", "name": "Amundi MSCI World", "country": "France", "currency": "EUR", "type": "ETF"},
+        ],
+    )
+    replace_exchange_symbols(
+        db_path,
+        "XETRA",
+        [{"symbol": "SAP", "eod_ticker": "SAP.XETRA", "name": "SAP SE", "country": "Germany", "currency": "EUR", "type": "Common Stock"}],
+    )
+
+    assert seed_screener_from_exchange_catalogs(db_path) == 3  # ALO, VIRP, SAP (AI.PA déjà présent, ETF exclu)
+    assert seed_screener_from_exchange_catalogs(db_path) == 0  # Idempotent
+
+    paris = query_screener(settings, exchange="PA")
+    assert paris["total"] == 3
+    assert paris["items"][0]["symbol"] == "AI.PA"  # Le titre avec données reste en tête (valeurs NULL en fin)
+    alstom = next(r for r in paris["items"] if r["symbol"] == "ALO.PA")
+    assert alstom["price"] is None and alstom["country"] == "France" and alstom["market_zone"] == "europe"
+
+    # Lorsque SAP est indexé ensuite sous une autre clé canonique, la ligne catalogue est remplacée (pas de doublon)
+    upsert_screener_snapshots(
+        db_path,
+        [{"symbol": "SAP.DE", "eod_ticker": "SAP.XETRA", "yahoo_symbol": "SAP.DE", "name": "SAP SE", "exchange": "XETRA", "price": 220.0, "bars_count": 100}],
+    )
+    de = query_screener(settings, country="Allemagne")
+    assert [r["symbol"] for r in de["items"]] == ["SAP.DE"]

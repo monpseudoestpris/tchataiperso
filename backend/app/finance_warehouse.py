@@ -256,6 +256,7 @@ CREATE TABLE IF NOT EXISTS finance_screener_snapshots (
     name TEXT NOT NULL DEFAULT '',
     exchange TEXT NOT NULL DEFAULT '',
     country TEXT NOT NULL DEFAULT '',
+    market_zone TEXT NOT NULL DEFAULT '',
     currency TEXT NOT NULL DEFAULT '',
     sector TEXT NOT NULL DEFAULT '',
     industry TEXT NOT NULL DEFAULT '',
@@ -449,6 +450,18 @@ def init_warehouse(db_path: Path) -> None:
         }
         if "last_fundamentals_run_at" not in sync_cols:
             conn.execute("ALTER TABLE finance_sync_preferences ADD COLUMN last_fundamentals_run_at TEXT")
+        scr_cols = {
+            str(r[1])
+            for r in conn.execute("PRAGMA table_info(finance_screener_snapshots)").fetchall()
+        }
+        if "market_zone" not in scr_cols:
+            conn.execute("ALTER TABLE finance_screener_snapshots ADD COLUMN market_zone TEXT NOT NULL DEFAULT ''")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_fin_scr_geo ON finance_screener_snapshots (market_zone, country, exchange)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_fin_scr_eod ON finance_screener_snapshots (eod_ticker)"
+        )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_fin_exch_sym_type ON finance_exchange_symbols (exchange_code, type)"
         )
@@ -2269,6 +2282,7 @@ _SCREENER_SNAPSHOT_COLS: tuple[str, ...] = (
     "name",
     "exchange",
     "country",
+    "market_zone",
     "currency",
     "sector",
     "industry",
@@ -2392,7 +2406,7 @@ def upsert_screener_snapshots(
     for col in _SCREENER_SNAPSHOT_COLS:
         if col == "symbol":
             continue
-        if col in ("name", "exchange", "country", "currency", "sector", "industry", "cap_category", "indices_csv"):
+        if col in ("name", "exchange", "country", "market_zone", "currency", "sector", "industry", "cap_category", "indices_csv"):
             update_parts.append(f"{col} = COALESCE(NULLIF(excluded.{col}, ''), finance_screener_snapshots.{col})")
         elif col == "has_fundamentals":
             update_parts.append("has_fundamentals = MAX(finance_screener_snapshots.has_fundamentals, excluded.has_fundamentals)")
@@ -2420,7 +2434,9 @@ def upsert_screener_snapshots(
         f"ON CONFLICT(symbol) DO UPDATE SET {', '.join(update_parts)}"
     )
 
-    non_null_text_cols = ("name", "exchange", "country", "currency", "sector", "industry", "cap_category", "indices_csv")
+    from .finance_geography import canonicalize_country, resolve_market_zone
+
+    non_null_text_cols = ("name", "exchange", "country", "market_zone", "currency", "sector", "industry", "cap_category", "indices_csv")
     prepared: list[tuple[Any, ...]] = []
     for row in rows:
         sym = _norm_sym(str(row.get("symbol") or ""))
@@ -2430,6 +2446,19 @@ def upsert_screener_snapshots(
         for txt_col in non_null_text_cols:
             if payload.get(txt_col) is None:
                 payload[txt_col] = ""
+        canon_country = canonicalize_country(
+            str(payload.get("country") or ""),
+            exchange=str(payload.get("exchange") or ""),
+            symbol=str(payload.get("eod_ticker") or sym),
+        )
+        if canon_country:
+            payload["country"] = canon_country
+        if not payload.get("market_zone"):
+            payload["market_zone"] = resolve_market_zone(
+                str(payload.get("country") or ""),
+                exchange=str(payload.get("exchange") or ""),
+                symbol=str(payload.get("eod_ticker") or sym),
+            )
         if isinstance(payload.get("scores_json"), dict):
             payload["scores_json"] = json.dumps(payload["scores_json"], ensure_ascii=False, separators=(",", ":"))
         elif not payload.get("scores_json"):
@@ -2445,11 +2474,34 @@ def upsert_screener_snapshots(
     if not prepared:
         return 0
 
+    # Supprime les lignes « catalogue » (sans cours ni fondamentaux) devenues des doublons d'un titre
+    # désormais indexé sous une autre clé canonique (ex. SAP.XETRA -> SAP.DE).
+    sym_idx = _SCREENER_SNAPSHOT_COLS.index("symbol")
+    eod_idx = _SCREENER_SNAPSHOT_COLS.index("eod_ticker")
+    yah_idx = _SCREENER_SNAPSHOT_COLS.index("yahoo_symbol")
+    dedup_params: list[tuple[str, str, str]] = []
+    for tup in prepared:
+        sym = str(tup[sym_idx] or "")
+        for alias in {str(tup[eod_idx] or ""), str(tup[yah_idx] or "")}:
+            alias_norm = _norm_sym(alias)
+            if alias_norm and alias_norm != sym:
+                dedup_params.append((sym, alias_norm, alias_norm))
+
     step = max(1, int(batch_size or 40))
     for i in range(0, len(prepared), step):
         chunk = prepared[i : i + step]
         with _connect(db_path) as conn:
             conn.executemany(sql, chunk)
+    if dedup_params:
+        with _connect(db_path) as conn:
+            conn.executemany(
+                """
+                DELETE FROM finance_screener_snapshots
+                WHERE symbol != ? AND (symbol = ? OR eod_ticker = ?)
+                  AND bars_count = 0 AND has_fundamentals = 0 AND price IS NULL
+                """,
+                dedup_params,
+            )
     return len(prepared)
 
 
@@ -2578,8 +2630,103 @@ def list_warehouse_screener_symbols(db_path: Path) -> list[str]:
     return [_norm_sym(str(r["symbol"])) for r in rows if r["symbol"]]
 
 
+def seed_screener_from_exchange_catalogs(db_path: Path) -> int:
+    """Référence dans le Screener toutes les actions ordinaires des catalogues de bourses synchronisés.
+
+    Insère des lignes « catalogue » légères (nom, place, pays, zone, devise) sans cours ni
+    fondamentaux : aucun appel réseau. Les données sont complétées plus tard, titre par titre,
+    lors d'une consultation ou d'un enrichissement. Les lignes déjà présentes ne sont jamais modifiées.
+    """
+    if not db_path.exists():
+        return 0
+    from .finance_geography import canonicalize_country, resolve_market_zone
+
+    now_iso = _utc_iso()
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT e.exchange_code, e.eod_ticker, e.name, e.country, e.currency
+            FROM finance_exchange_symbols e
+            WHERE LOWER(COALESCE(e.type, '')) = 'common stock'
+              AND e.exchange_code NOT IN ('EUFUND', 'CC')
+              AND NOT EXISTS (
+                  SELECT 1 FROM finance_screener_snapshots s
+                  WHERE s.symbol = e.eod_ticker OR s.eod_ticker = e.eod_ticker
+              )
+            """
+        ).fetchall()
+        payload: list[tuple[Any, ...]] = []
+        for r in rows:
+            eod = _norm_sym(str(r["eod_ticker"] or ""))
+            if not eod:
+                continue
+            exch = str(r["exchange_code"] or "").strip().upper()
+            country = canonicalize_country(str(r["country"] or ""), exchange=exch, symbol=eod)
+            zone = resolve_market_zone(country, exchange=exch, symbol=eod)
+            payload.append(
+                (
+                    eod,
+                    eod,
+                    str(r["name"] or eod).strip() or eod,
+                    exch,
+                    country,
+                    zone,
+                    str(r["currency"] or "").strip().upper(),
+                    now_iso,
+                )
+            )
+        if payload:
+            conn.executemany(
+                """
+                INSERT OR IGNORE INTO finance_screener_snapshots
+                    (symbol, eod_ticker, name, exchange, country, market_zone, currency, computed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                payload,
+            )
+    return len(payload)
+
+
+def backfill_screener_geography(db_path: Path) -> int:
+    """Normalise `country` et remplit `market_zone` sur les lignes existantes de `finance_screener_snapshots`."""
+    if not db_path.exists():
+        return 0
+    from .finance_geography import canonicalize_country, resolve_market_zone
+
+    updates: list[tuple[str, str, str]] = []
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT symbol, eod_ticker, exchange, country, market_zone FROM finance_screener_snapshots"
+        ).fetchall()
+        for r in rows:
+            sym = str(r["symbol"] or "")
+            raw_country = str(r["country"] or "")
+            raw_zone = str(r["market_zone"] or "")
+            exch = str(r["exchange"] or "")
+            eod = str(r["eod_ticker"] or sym)
+            canon_country = canonicalize_country(raw_country, exchange=exch, symbol=eod)
+            zone = resolve_market_zone(canon_country, exchange=exch, symbol=eod)
+            if canon_country != raw_country or zone != raw_zone:
+                updates.append((canon_country, zone, sym))
+        if updates:
+            conn.executemany(
+                "UPDATE finance_screener_snapshots SET country = ?, market_zone = ? WHERE symbol = ?",
+                updates,
+            )
+    return len(updates)
+
+
 def get_screener_coverage(db_path: Path) -> dict[str, Any]:
-    """Retourne la couverture actuelle de la table matérialisée `finance_screener_snapshots`."""
+    """Retourne la couverture actuelle et les facettes (indices, zones, pays, bourses, secteurs, devises) du Screener."""
+    from .finance_geography import (
+        EUROZONE_COUNTRIES,
+        MARKET_ZONES,
+        country_flag,
+        exchange_display_label,
+        format_market_zone_item,
+    )
+    from .finance_indices import INDEX_DEFINITIONS
+
     empty = {
         "total_snapshots": 0,
         "with_technicals": 0,
@@ -2587,7 +2734,12 @@ def get_screener_coverage(db_path: Path) -> dict[str, Any]:
         "warehouse_symbols_count": 0,
         "sectors": [],
         "exchanges": [],
+        "exchange_items": [],
         "currencies": [],
+        "countries": [],
+        "market_zones": [],
+        "indices": [],
+        "cap_categories": [],
         "last_computed_at": None,
     }
     if not db_path.exists():
@@ -2612,11 +2764,23 @@ def get_screener_coverage(db_path: Path) -> dict[str, Any]:
                 "SELECT DISTINCT sector FROM finance_screener_snapshots WHERE sector != '' ORDER BY sector ASC"
             ).fetchall()
         ]
-        exchanges = [
-            str(r["exchange"])
-            for r in conn.execute(
-                "SELECT DISTINCT exchange FROM finance_screener_snapshots WHERE exchange != '' ORDER BY exchange ASC"
-            ).fetchall()
+        exch_rows = conn.execute(
+            """
+            SELECT exchange, COUNT(*) AS cnt
+            FROM finance_screener_snapshots
+            WHERE exchange != ''
+            GROUP BY exchange
+            ORDER BY cnt DESC, exchange ASC
+            """
+        ).fetchall()
+        exchanges = sorted(str(r["exchange"]) for r in exch_rows)
+        exchange_items = [
+            {
+                "code": str(r["exchange"]),
+                "label": exchange_display_label(str(r["exchange"])),
+                "count": int(r["cnt"] or 0),
+            }
+            for r in exch_rows
         ]
         currencies = [
             str(r["currency"])
@@ -2624,6 +2788,86 @@ def get_screener_coverage(db_path: Path) -> dict[str, Any]:
                 "SELECT DISTINCT currency FROM finance_screener_snapshots WHERE currency != '' ORDER BY currency ASC"
             ).fetchall()
         ]
+        country_rows = conn.execute(
+            """
+            SELECT country, COUNT(*) AS cnt
+            FROM finance_screener_snapshots
+            WHERE country != ''
+            GROUP BY country
+            ORDER BY cnt DESC, country ASC
+            """
+        ).fetchall()
+        countries = [
+            {
+                "code": str(r["country"]),
+                "label": f"{country_flag(str(r['country']))} {r['country']}",
+                "flag": country_flag(str(r["country"])),
+                "count": int(r["cnt"] or 0),
+            }
+            for r in country_rows
+        ]
+        zone_rows = conn.execute(
+            """
+            SELECT market_zone, COUNT(*) AS cnt
+            FROM finance_screener_snapshots
+            WHERE market_zone != ''
+            GROUP BY market_zone
+            """
+        ).fetchall()
+        zone_counts: dict[str, int] = {str(r["market_zone"]): int(r["cnt"] or 0) for r in zone_rows}
+        eurozone_count = sum(
+            int(r["cnt"] or 0)
+            for r in country_rows
+            if str(r["country"]) in EUROZONE_COUNTRIES
+        )
+        if eurozone_count > 0:
+            zone_counts["eurozone"] = eurozone_count
+        market_zones = [
+            format_market_zone_item(z["code"], zone_counts[z["code"]])
+            for z in MARKET_ZONES
+            if zone_counts.get(z["code"], 0) > 0
+        ]
+
+        cap_rows = conn.execute(
+            """
+            SELECT cap_category, COUNT(*) AS cnt
+            FROM finance_screener_snapshots
+            WHERE cap_category != ''
+            GROUP BY cap_category
+            ORDER BY cnt DESC, cap_category ASC
+            """
+        ).fetchall()
+        cap_categories = [
+            {"code": str(r["cap_category"]), "label": str(r["cap_category"]), "count": int(r["cnt"] or 0)}
+            for r in cap_rows
+        ]
+
+        idx_counts: dict[str, int] = {}
+        for r in conn.execute(
+            "SELECT indices_csv FROM finance_screener_snapshots WHERE indices_csv != ''"
+        ).fetchall():
+            raw_csv = str(r["indices_csv"] or "")
+            for part in raw_csv.split(","):
+                code = part.strip().upper()
+                if code:
+                    idx_counts[code] = idx_counts.get(code, 0) + 1
+
+    idx_defs = {str(d["code"]).upper(): d for d in INDEX_DEFINITIONS}
+    def_order = {str(d["code"]).upper(): i for i, d in enumerate(INDEX_DEFINITIONS)}
+    indices_facets = []
+    for code, cnt in sorted(idx_counts.items(), key=lambda kv: (def_order.get(kv[0], 9999), -kv[1], kv[0])):
+        d = idx_defs.get(code) or {}
+        indices_facets.append(
+            {
+                "code": code,
+                "name": str(d.get("name") or code),
+                "flag": str(d.get("flag") or "📊"),
+                "region": str(d.get("region") or ""),
+                "tier": str(d.get("tier") or "custom"),
+                "count": cnt,
+            }
+        )
+
     return {
         "total_snapshots": int((agg["total"] if agg else 0) or 0),
         "with_technicals": int((agg["with_tech"] if agg else 0) or 0),
@@ -2631,6 +2875,11 @@ def get_screener_coverage(db_path: Path) -> dict[str, Any]:
         "warehouse_symbols_count": int((wh_cnt["cnt"] if wh_cnt else 0) or 0),
         "sectors": sectors,
         "exchanges": exchanges,
+        "exchange_items": exchange_items,
         "currencies": currencies,
+        "countries": countries,
+        "market_zones": market_zones,
+        "indices": indices_facets,
+        "cap_categories": cap_categories,
         "last_computed_at": str(agg["last_comp"]) if (agg and agg["last_comp"]) else None,
     }

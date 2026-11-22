@@ -1,39 +1,60 @@
 "use client";
 
-import { CalendarClock, Check, Database, LoaderCircle, Play, RefreshCw, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { CalendarClock, Check, Database, Download, LoaderCircle, Play, RefreshCw, Search, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 
 import {
+  fetchEodhdIndxCatalog,
+  fetchFinanceScreenerMeta,
   fetchFinanceSyncPreferences,
   fetchFinanceSyncStatus,
+  hydrateFinanceScreener,
+  rebuildFinanceScreener,
   runFinanceSyncNow,
   updateFinanceSyncPreferences,
   upgradeFinanceWarehouseToEodhd,
+  type EodhdIndxCatalogItem,
   type FinanceSyncAvailableIndex,
   type FinanceSyncPreferences,
   type FinanceSyncProgress,
   type FinanceWarehouseSourcesSummary,
+  type FinanceWatchlistMeta,
+  type ScreenerCoverage,
   type SupportedExchangeInfo,
 } from "@/lib/api";
 
 /**
- * Panneau de configuration de la synchronisation quotidienne automatique :
- * permet à l'utilisateur de choisir exactement ce qui doit être mis à jour chaque jour
- * (indices de base activés par défaut, actions d'indices, watchlists, et gros catalogues EODHD).
+ * Centre de contrôle des données & synchronisations financières (Onglet 5 · Données & Synchro) :
+ * gère la priorité / migration EODHD, la synchro quotidienne automatique des indices, la fréquence
+ * hebdomadaire des fondamentaux, les catalogues marchés et l'enrichissement / réindexation du Screener.
  */
 export function FinanceSyncPanel({
+  watchlists = [],
+  activeListId = null,
   onSynced,
   onClose,
 }: {
+  watchlists?: FinanceWatchlistMeta[];
+  activeListId?: string | null;
   onSynced?: () => void;
-  onClose: () => void;
+  onClose?: () => void;
 }) {
   const [prefs, setPrefs] = useState<FinanceSyncPreferences | null>(null);
   const [indices, setIndices] = useState<FinanceSyncAvailableIndex[]>([]);
   const [exchanges, setExchanges] = useState<SupportedExchangeInfo[]>([]);
-  const [showAllIndices, setShowAllIndices] = useState(false);
+  const [indxCatalogTotal, setIndxCatalogTotal] = useState<number>(0);
+  const [indexFilterMode, setIndexFilterMode] = useState<"all" | "major" | "selected" | "eodhd_indx">("all");
+  const [indexSearch, setIndexSearch] = useState<string>("");
+  const [eodhdIndxItems, setEodhdIndxItems] = useState<EodhdIndxCatalogItem[]>([]);
+  const [eodhdIndxLoading, setEodhdIndxLoading] = useState<boolean>(false);
+  const [exchangeFilterMode, setExchangeFilterMode] = useState<"all" | "loaded" | "selected">("all");
+  const [exchangeSearch, setExchangeSearch] = useState<string>("");
+  const [refreshingCatalogs, setRefreshingCatalogs] = useState<boolean>(false);
   const [liveProgress, setLiveProgress] = useState<FinanceSyncProgress | null>(null);
   const [warehouseSources, setWarehouseSources] = useState<FinanceWarehouseSourcesSummary | null>(null);
+  const [screenerCoverage, setScreenerCoverage] = useState<ScreenerCoverage | null>(null);
+  const [hydrateUniverseType, setHydrateUniverseType] = useState<"all" | "index" | "watchlist">("all");
+  const [hydrateUniverseValue, setHydrateUniverseValue] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
@@ -44,12 +65,17 @@ export function FinanceSyncPanel({
 
   useEffect(() => {
     let cancelled = false;
-    fetchFinanceSyncPreferences()
-      .then(res => {
+    Promise.all([
+      fetchFinanceSyncPreferences(),
+      fetchFinanceScreenerMeta().catch(() => null),
+    ])
+      .then(([res, meta]) => {
         if (cancelled) return;
         setPrefs(res.preferences);
         if (res.progress) setLiveProgress(res.progress);
         if (res.warehouse_sources) setWarehouseSources(res.warehouse_sources);
+        if (res.eodhd_indx_catalog_total != null) setIndxCatalogTotal(res.eodhd_indx_catalog_total);
+        if (meta?.coverage) setScreenerCoverage(meta.coverage);
         setIndices(res.available_indices || []);
         setExchanges(res.available_exchanges || []);
       })
@@ -76,11 +102,18 @@ export function FinanceSyncPanel({
           if (cancelled) return;
           setLiveProgress(prev => {
             if (prev?.is_running && !status.is_running) {
-              fetchFinanceSyncPreferences()
-                .then(res => {
+              if (status.last_message) {
+                setSavedBanner(status.last_message);
+              }
+              Promise.all([
+                fetchFinanceSyncPreferences(),
+                fetchFinanceScreenerMeta().catch(() => null),
+              ])
+                .then(([res, meta]) => {
                   if (cancelled) return;
                   setPrefs(res.preferences);
                   if (res.warehouse_sources) setWarehouseSources(res.warehouse_sources);
+                  if (meta?.coverage) setScreenerCoverage(meta.coverage);
                   setExchanges(res.available_exchanges || []);
                   if (onSynced) onSynced();
                 })
@@ -139,6 +172,80 @@ export function FinanceSyncPanel({
     void persistPrefs({ ...prefs, [key]: !prefs[key] });
   }
 
+  // Recherche dans le catalogue complet EODHD .INDX lorsque l'utilisateur filtre ou sélectionne l'onglet EODHD .INDX
+  useEffect(() => {
+    const q = indexSearch.trim();
+    if (indexFilterMode !== "eodhd_indx" && q.length < 2) {
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      setEodhdIndxLoading(true);
+      fetchEodhdIndxCatalog(q, 150, false)
+        .then(res => {
+          if (cancelled) return;
+          setEodhdIndxItems(res.items || []);
+          if (res.total) setIndxCatalogTotal(res.total);
+        })
+        .catch(() => {})
+        .finally(() => {
+          if (!cancelled) setEodhdIndxLoading(false);
+        });
+    }, 220);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [indexFilterMode, indexSearch]);
+
+  async function handleRefreshEodhdCatalogs() {
+    if (refreshingCatalogs || saving) return;
+    setRefreshingCatalogs(true);
+    setError(null);
+    setSavedBanner(null);
+    try {
+      const res = await fetchFinanceSyncPreferences(true);
+      setPrefs(res.preferences);
+      if (res.warehouse_sources) setWarehouseSources(res.warehouse_sources);
+      if (res.eodhd_indx_catalog_total != null) setIndxCatalogTotal(res.eodhd_indx_catalog_total);
+      setIndices(res.available_indices || []);
+      setExchanges(res.available_exchanges || []);
+      setSavedBanner(
+        `Listes EODHD actualisées (${res.available_exchanges.length} bourses/listes, ${res.eodhd_indx_catalog_total ?? 0} indices .INDX).`,
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Impossible d'actualiser les listes EODHD.");
+    } finally {
+      setRefreshingCatalogs(false);
+    }
+  }
+
+  function isIndexChecked(code: string, tier?: "major" | "minor"): boolean {
+    if (!prefs) return false;
+    const upper = code.toUpperCase();
+    if (prefs.major_indices_constituents && tier === "major") return true;
+    return prefs.index_codes.includes(upper);
+  }
+
+  function toggleIndexCode(code: string, tier?: "major" | "minor") {
+    if (!prefs || saving || running) return;
+    const upper = code.toUpperCase();
+    // Si "9 principaux auto" est actif et qu'on décoche un indice majeur, on bascule en sélection individuelle
+    if (prefs.major_indices_constituents && tier === "major") {
+      const majorCodes = indices.filter(i => i.tier === "major").map(i => i.code.toUpperCase());
+      const expanded = Array.from(new Set([...prefs.index_codes, ...majorCodes])).filter(c => c !== upper);
+      void persistPrefs({
+        ...prefs,
+        major_indices_constituents: false,
+        index_codes: expanded,
+      });
+      return;
+    }
+    const exists = prefs.index_codes.includes(upper);
+    const nextList = exists ? prefs.index_codes.filter(c => c !== upper) : [...prefs.index_codes, upper];
+    void persistPrefs({ ...prefs, index_codes: nextList });
+  }
+
   function toggleListCode(key: "index_codes" | "exchanges", code: string) {
     if (!prefs || saving || running) return;
     const upper = code.toUpperCase();
@@ -148,7 +255,7 @@ export function FinanceSyncPanel({
   }
 
   async function handleRunNow(forceRefresh = false) {
-    if (running || saving) return;
+    if (isSyncActive || saving) return;
     setRunning(true);
     setError(null);
     setSavedBanner(null);
@@ -160,7 +267,10 @@ export function FinanceSyncPanel({
       setExchanges(res.available_exchanges || []);
       const s = res.summary;
       if (s?.skipped && s.reason === "already_running") {
-        setSavedBanner("Une synchronisation quotidienne est déjà en cours en arrière-plan.");
+        setSavedBanner("Une synchronisation est déjà en cours en arrière-plan.");
+      } else if (res.started) {
+        if (typeof window !== "undefined") window.dispatchEvent(new Event("finance-sync-started"));
+        setSavedBanner("Synchronisation lancée en arrière-plan — vous pouvez changer d'onglet librement, elle continue sur le serveur.");
       } else {
         const idxCount = Object.keys(s?.indices || {}).length;
         const exchCount = Object.keys(s?.exchanges || {}).length;
@@ -171,8 +281,8 @@ export function FinanceSyncPanel({
         setSavedBanner(
           `Synchronisation terminée (${s?.principal_indices_count ?? 0} indices, ${idxCount} compositions + technique multi-unités, ${fundMsg}, ${s?.watchlist_items_count ?? 0} suivi(s), ${exchCount} marché(s)).`,
         );
+        if (onSynced) onSynced();
       }
-      if (onSynced) onSynced();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Échec de la synchronisation immédiate.");
     } finally {
@@ -181,7 +291,7 @@ export function FinanceSyncPanel({
   }
 
   async function handleUpgradeWarehouseToEodhd(forceAllFundamentals: boolean) {
-    if (running || saving) return;
+    if (isSyncActive || saving) return;
     setRunning(true);
     setError(null);
     setSavedBanner(null);
@@ -201,12 +311,15 @@ export function FinanceSyncPanel({
         setSavedBanner("Une synchronisation est déjà en cours en arrière-plan.");
       } else if (s?.skipped && s.reason === "eodhd_key_missing") {
         setError("Clé API EODHD (EOD_HISTORICAL_DATA_KEY) non configurée.");
+      } else if (res.started) {
+        if (typeof window !== "undefined") window.dispatchEvent(new Event("finance-sync-started"));
+        setSavedBanner("Mise à jour EODHD lancée en arrière-plan — vous pouvez changer d'onglet librement, elle continue sur le serveur.");
       } else {
         setSavedBanner(
           `Mise à jour EODHD terminée : ${s?.bars_upgraded ?? 0}/${s?.bars_targeted ?? 0} cours EOD mis à jour, ${s?.fundamentals_upgraded ?? 0}/${s?.fundamentals_targeted ?? 0} états financiers mis à jour depuis EODHD.`,
         );
+        if (onSynced) onSynced();
       }
-      if (onSynced) onSynced();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Échec de la mise à jour EODHD.");
     } finally {
@@ -214,7 +327,125 @@ export function FinanceSyncPanel({
     }
   }
 
-  const displayedIndices = showAllIndices ? indices : indices.filter(idx => idx.tier === "major");
+  async function handleRebuildScreenerCache() {
+    if (isSyncActive || saving) return;
+    setRunning(true);
+    setError(null);
+    setSavedBanner(null);
+    try {
+      const res = await rebuildFinanceScreener();
+      setScreenerCoverage(res.coverage);
+      setSavedBanner(
+        `Index local du Screener reconstruit (Jour, Semaine, Mois, 3 Mois + IsoPressure) : ${res.indexed_count} valeur(s) analysée(s) depuis SQLite.`,
+      );
+      if (onSynced) onSynced();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Échec de reconstruction locale du Screener.");
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  async function handleHydrateScreenerNow() {
+    if (isSyncActive || saving) return;
+    setRunning(true);
+    setError(null);
+    setSavedBanner(null);
+    try {
+      const res = await hydrateFinanceScreener({
+        universe_type: hydrateUniverseType,
+        universe_value: hydrateUniverseType === "all" ? null : hydrateUniverseValue || null,
+        include_fundamentals: true,
+        max_fundamentals: prefs?.screener_fundamentals_daily_cap || 40,
+        refresh_eod: false,
+        background: true,
+      });
+      if (res.progress) setLiveProgress(res.progress);
+      if (res.coverage) setScreenerCoverage(res.coverage);
+      if (res.already_running) {
+        setSavedBanner("Une synchronisation ou migration est déjà en cours en arrière-plan.");
+      } else if (res.started) {
+        if (typeof window !== "undefined") window.dispatchEvent(new Event("finance-sync-started"));
+        setSavedBanner("Enrichissement Screener lancé en arrière-plan — vous pouvez changer d'onglet librement, il continue sur le serveur.");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Échec de l'enrichissement Screener.");
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  const selectedIndicesSummary = useMemo(() => {
+    if (!prefs) return { count: 0, stocks: 0 };
+    let count = 0;
+    let stocks = 0;
+    const counted = new Set<string>();
+    for (const idx of indices) {
+      const c = idx.code.toUpperCase();
+      const checked = (prefs.major_indices_constituents && idx.tier === "major") || prefs.index_codes.includes(c);
+      if (checked && !counted.has(c)) {
+        counted.add(c);
+        count += 1;
+        stocks += idx.constituents_count || 0;
+      }
+    }
+    for (const extra of prefs.index_codes) {
+      const c = extra.toUpperCase();
+      if (!counted.has(c)) {
+        counted.add(c);
+        count += 1;
+      }
+    }
+    return { count, stocks };
+  }, [indices, prefs]);
+
+  const displayedIndices = useMemo(() => {
+    const needle = indexSearch.trim().toLowerCase();
+    return indices.filter(idx => {
+      if (indexFilterMode === "major" && idx.tier !== "major") return false;
+      if (indexFilterMode === "selected") {
+        const checked = Boolean(
+          prefs && ((prefs.major_indices_constituents && idx.tier === "major") || prefs.index_codes.includes(idx.code.toUpperCase())),
+        );
+        if (!checked) return false;
+      }
+      if (needle) {
+        const hay = `${idx.code} ${idx.eod_ticker || ""} ${idx.name} ${idx.region}`.toLowerCase();
+        if (!hay.includes(needle)) return false;
+      }
+      return true;
+    });
+  }, [indices, indexFilterMode, indexSearch, prefs]);
+
+  const displayedExchanges = useMemo(() => {
+    const needle = exchangeSearch.trim().toLowerCase();
+    return exchanges.filter(ex => {
+      if (exchangeFilterMode === "loaded" && ex.total <= 0) return false;
+      if (exchangeFilterMode === "selected" && !prefs?.exchanges.includes(ex.code.toUpperCase())) return false;
+      if (needle) {
+        const hay = `${ex.code} ${ex.label} ${ex.description} ${ex.country || ""} ${ex.currency || ""}`.toLowerCase();
+        if (!hay.includes(needle)) return false;
+      }
+      return true;
+    });
+  }, [exchanges, exchangeFilterMode, exchangeSearch, prefs]);
+
+  const totalWatchlistStocks = useMemo(
+    () => watchlists.reduce((acc, wl) => acc + (wl.items_count || 0), 0),
+    [watchlists],
+  );
+
+  const selectedExchangesSummary = useMemo(() => {
+    if (!prefs) return { count: 0, stocks: 0 };
+    const sel = new Set(prefs.exchanges.map(c => c.toUpperCase()));
+    let stocks = 0;
+    for (const ex of exchanges) {
+      if (sel.has(ex.code.toUpperCase())) {
+        stocks += ex.total || 0;
+      }
+    }
+    return { count: sel.size, stocks };
+  }, [exchanges, prefs]);
 
   return (
     <section className="finance-index-drawer finance-sync-drawer" aria-label="Configuration de la synchronisation quotidienne">
@@ -254,26 +485,28 @@ export function FinanceSyncPanel({
           <button
             type="button"
             className="finance-tf-btn active finance-stmt-refresh-btn"
-            disabled={loading || running || saving}
+            disabled={loading || isSyncActive || saving}
             onClick={() => void handleRunNow(false)}
             title="Exécuter maintenant la synchronisation pour les éléments cochés ci-dessous"
           >
-            {running ? <LoaderCircle size={12} className="spin" /> : <Play size={12} />}
-            <span>{running ? "Synchronisation…" : "Synchroniser maintenant"}</span>
+            {isSyncActive ? <LoaderCircle size={12} className="spin" /> : <Play size={12} />}
+            <span>{isSyncActive ? "Synchronisation…" : "Synchroniser maintenant"}</span>
           </button>
           <button
             type="button"
             className="finance-tf-btn finance-stmt-refresh-btn"
-            disabled={loading || running || saving}
+            disabled={loading || isSyncActive || saving}
             onClick={() => void handleRunNow(true)}
             title="Forcer le re-téléchargement réseau même pour les valeurs déjà en cache aujourd'hui"
           >
-            <RefreshCw size={12} className={running ? "spin" : ""} />
+            <RefreshCw size={12} className={isSyncActive ? "spin" : ""} />
             <span>Forcer</span>
           </button>
-          <button type="button" className="finance-tf-btn" onClick={onClose} aria-label="Fermer les réglages de synchro">
-            <X size={13} />
-          </button>
+          {onClose && (
+            <button type="button" className="finance-tf-btn" onClick={onClose} aria-label="Fermer les réglages de synchro">
+              <X size={13} />
+            </button>
+          )}
         </div>
       </div>
 
@@ -329,11 +562,11 @@ export function FinanceSyncPanel({
                 <button
                   type="button"
                   className="finance-tf-btn active"
-                  disabled={running || saving || !warehouseSources.eodhd_configured}
+                  disabled={isSyncActive || saving || !warehouseSources.eodhd_configured}
                   onClick={() => void handleUpgradeWarehouseToEodhd(false)}
                   title="Remplace uniquement les cours et états financiers encore issus de Yahoo Finance par des données EODHD"
                 >
-                  {running ? <LoaderCircle size={12} className="spin" /> : <RefreshCw size={12} />}
+                  {isSyncActive ? <LoaderCircle size={12} className="spin" /> : <RefreshCw size={12} />}
                   <span>
                     Migrer les données Yahoo vers EODHD (
                     {warehouseSources.yahoo_only_fundamentals_count + warehouseSources.yahoo_only_bars_symbols_count})
@@ -342,7 +575,7 @@ export function FinanceSyncPanel({
                 <button
                   type="button"
                   className="finance-tf-btn"
-                  disabled={running || saving || !warehouseSources.eodhd_configured}
+                  disabled={isSyncActive || saving || !warehouseSources.eodhd_configured}
                   onClick={() => void handleUpgradeWarehouseToEodhd(true)}
                   title="Re-télécharge tous les états financiers de l'entrepôt depuis EODHD et réindexe le Screener"
                 >
@@ -381,17 +614,44 @@ export function FinanceSyncPanel({
             </div>
           </div>
 
-          {/* Bloc 2 : Constituants complets d'indices (cours EOD + Screener + Tableau Perfos) */}
+          {/* Bloc 2 : Tous les indices boursiers EODHD (cochables un par un avec nombre d'actions) */}
           <div className="finance-sync-card">
             <div className="finance-sync-card-head">
-              <strong>2. Contenu complet des indices (cours EOD, Screener &amp; Tableau Perfos)</strong>
-              <button
-                type="button"
-                className="finance-tf-btn"
-                onClick={() => setShowAllIndices(prev => !prev)}
-              >
-                {showAllIndices ? "Indices principaux uniquement" : `Tous les indices (${indices.length})`}
-              </button>
+              <strong>
+                2. Indices boursiers EODHD ({selectedIndicesSummary.count} coché{selectedIndicesSummary.count > 1 ? "s" : ""} ·{" "}
+                {selectedIndicesSummary.stocks.toLocaleString("fr-FR")} actions)
+              </strong>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+                <button
+                  type="button"
+                  className={`finance-tf-btn ${indexFilterMode === "all" ? "active" : ""}`}
+                  onClick={() => setIndexFilterMode("all")}
+                >
+                  Tous ({indices.length})
+                </button>
+                <button
+                  type="button"
+                  className={`finance-tf-btn ${indexFilterMode === "major" ? "active" : ""}`}
+                  onClick={() => setIndexFilterMode("major")}
+                >
+                  9 principaux
+                </button>
+                <button
+                  type="button"
+                  className={`finance-tf-btn ${indexFilterMode === "selected" ? "active" : ""}`}
+                  onClick={() => setIndexFilterMode("selected")}
+                >
+                  Cochés ({selectedIndicesSummary.count})
+                </button>
+                <button
+                  type="button"
+                  className={`finance-tf-btn ${indexFilterMode === "eodhd_indx" ? "active" : ""}`}
+                  onClick={() => setIndexFilterMode("eodhd_indx")}
+                  title="Parcourir et cocher n'importe quel indice du catalogue complet EODHD .INDX"
+                >
+                  Catalogue EODHD .INDX ({indxCatalogTotal > 0 ? indxCatalogTotal.toLocaleString("fr-FR") : "…"})
+                </button>
+              </div>
             </div>
             <div className="finance-sync-check-row">
               <label className="finance-sync-check">
@@ -402,7 +662,7 @@ export function FinanceSyncPanel({
                   onChange={() => toggleBool("major_indices_constituents")}
                 />
                 <span>
-                  Récupérer automatiquement chaque jour le contenu des 9 principaux indices (CAC 40, S&amp;P 500, NASDAQ 100, Dow Jones 30, EURO STOXX 50, DAX 40, FTSE 100, SMI 20, Nikkei 225)
+                  Inclure automatiquement les 9 principaux indices chaque jour (ou décochez-en un ci-dessous pour choisir un par un)
                 </span>
               </label>
               <label className="finance-sync-check">
@@ -454,40 +714,153 @@ export function FinanceSyncPanel({
                 </span>
               </label>
             </div>
-            <div className="finance-sync-pills-grid">
-              {displayedIndices.map(idx => {
-                const autoIncluded = prefs.major_indices_constituents && idx.tier === "major";
-                const checked = autoIncluded || prefs.index_codes.includes(idx.code.toUpperCase());
-                return (
-                  <label
-                    key={idx.code}
-                    className={`finance-sync-pill ${checked ? "is-checked" : ""}`}
-                    title={
-                      autoIncluded
-                        ? `${idx.name} (${idx.constituents_count} actions) — inclus automatiquement chaque jour`
-                        : `${idx.name} (${idx.constituents_count} actions)`
-                    }
-                  >
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      disabled={saving || running || autoIncluded}
-                      onChange={() => toggleListCode("index_codes", idx.code)}
-                    />
-                    <span>{idx.flag}</span>
-                    <span>{idx.name}</span>
-                    <small>{autoIncluded ? `Auto · ${idx.constituents_count}` : `(${idx.constituents_count})`}</small>
-                  </label>
-                );
-              })}
+            <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "8px 0" }}>
+              <Search size={13} style={{ opacity: 0.65, flexShrink: 0 }} />
+              <input
+                type="text"
+                value={indexSearch}
+                onChange={e => setIndexSearch(e.target.value)}
+                placeholder="Filtrer un indice par nom, code ou pays (ex. CAC, S&P, DAX, STOXX, RUSSELL, MSCI)…"
+                style={{
+                  flex: 1,
+                  padding: "6px 10px",
+                  borderRadius: 8,
+                  border: "1px solid var(--fin-border, #cbd5e1)",
+                  background: "var(--fin-panel, transparent)",
+                  fontSize: 12.5,
+                }}
+              />
+              {indexSearch && (
+                <button type="button" className="finance-tf-btn" onClick={() => setIndexSearch("")}>
+                  Effacer
+                </button>
+              )}
             </div>
+
+            {indexFilterMode !== "eodhd_indx" && (
+              <div className="finance-sync-pills-grid" style={{ maxHeight: 260, overflowY: "auto", paddingRight: 4 }}>
+                {displayedIndices.map(idx => {
+                  const checked = isIndexChecked(idx.code, idx.tier);
+                  const countLabel =
+                    idx.constituents_count > 0
+                      ? `${idx.constituents_count.toLocaleString("fr-FR")} actions`
+                      : "composition EODHD";
+                  return (
+                    <label
+                      key={idx.code}
+                      className={`finance-sync-pill ${checked ? "is-checked" : ""}`}
+                      title={`${idx.name} (${idx.eod_ticker || idx.code}) — ${countLabel} · ${idx.region}`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        disabled={saving || running}
+                        onChange={() => toggleIndexCode(idx.code, idx.tier)}
+                      />
+                      <span>{idx.flag}</span>
+                      <span>{idx.name}</span>
+                      <small>{countLabel}</small>
+                    </label>
+                  );
+                })}
+                {displayedIndices.length === 0 && (
+                  <small style={{ opacity: 0.75, padding: "4px 2px" }}>
+                    Aucun indice prédéfini ne correspond — consultez les résultats EODHD .INDX ci-dessous.
+                  </small>
+                )}
+              </div>
+            )}
+
+            {(indexFilterMode === "eodhd_indx" || indexSearch.trim().length >= 2) && (
+              <div style={{ marginTop: 8 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                  <small style={{ fontWeight: 600, opacity: 0.85 }}>
+                    Indices du catalogue complet EODHD (.INDX)
+                    {eodhdIndxLoading ? " — recherche…" : ` (${eodhdIndxItems.length} affiché${eodhdIndxItems.length > 1 ? "s" : ""})`}
+                  </small>
+                </div>
+                <div className="finance-sync-pills-grid" style={{ maxHeight: 220, overflowY: "auto", paddingRight: 4 }}>
+                  {eodhdIndxItems.map(item => {
+                    const code = item.eod_ticker.toUpperCase();
+                    const known = indices.find(
+                      i => i.code.toUpperCase() === code || (i.eod_ticker || "").toUpperCase() === code,
+                    );
+                    const targetCode = known ? known.code : code;
+                    const checked = isIndexChecked(targetCode, known?.tier);
+                    const countLabel =
+                      known && known.constituents_count > 0
+                        ? `${known.constituents_count.toLocaleString("fr-FR")} actions`
+                        : item.country || "EODHD .INDX";
+                    return (
+                      <label
+                        key={code}
+                        className={`finance-sync-pill ${checked ? "is-checked" : ""}`}
+                        title={`${item.name} (${code}) · ${item.country} ${item.currency}`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          disabled={saving || running}
+                          onChange={() => toggleIndexCode(targetCode, known?.tier)}
+                        />
+                        <span>🌐</span>
+                        <span>{item.name}</span>
+                        <small>{code} · {countLabel}</small>
+                      </label>
+                    );
+                  })}
+                  {!eodhdIndxLoading && eodhdIndxItems.length === 0 && (
+                    <small style={{ opacity: 0.75 }}>Aucun indice .INDX trouvé pour cette recherche.</small>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
 
-          {/* Bloc 3 : Watchlists & Catalogues de marchés */}
+          {/* Bloc 3 : Watchlists & Toutes les bourses / listes présentes dans EODHD */}
           <div className="finance-sync-card">
             <div className="finance-sync-card-head">
-              <strong>3. Listes de suivi &amp; Catalogues complets de marchés</strong>
-              <small>Optionnel · Ne chargez que les places qui vous servent</small>
+              <strong>
+                3. Listes de suivi &amp; Toutes les bourses / listes EODHD ({selectedExchangesSummary.count} cochée
+                {selectedExchangesSummary.count > 1 ? "s" : ""}
+                {selectedExchangesSummary.stocks > 0
+                  ? ` · ${selectedExchangesSummary.stocks.toLocaleString("fr-FR")} titres en base`
+                  : ""}
+                )
+              </strong>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+                <button
+                  type="button"
+                  className={`finance-tf-btn ${exchangeFilterMode === "all" ? "active" : ""}`}
+                  onClick={() => setExchangeFilterMode("all")}
+                >
+                  Toutes ({exchanges.length})
+                </button>
+                <button
+                  type="button"
+                  className={`finance-tf-btn ${exchangeFilterMode === "loaded" ? "active" : ""}`}
+                  onClick={() => setExchangeFilterMode("loaded")}
+                >
+                  Chargées ({exchanges.filter(e => e.total > 0).length})
+                </button>
+                <button
+                  type="button"
+                  className={`finance-tf-btn ${exchangeFilterMode === "selected" ? "active" : ""}`}
+                  onClick={() => setExchangeFilterMode("selected")}
+                >
+                  Cochées ({selectedExchangesSummary.count})
+                </button>
+                <button
+                  type="button"
+                  className="finance-tf-btn"
+                  disabled={refreshingCatalogs || saving}
+                  onClick={() => void handleRefreshEodhdCatalogs()}
+                  title="Récupérer la liste complète à jour des bourses et indices disponibles sur EODHD"
+                >
+                  <RefreshCw size={11} className={refreshingCatalogs ? "spin" : ""} />
+                  <span>Actualiser listes EODHD</span>
+                </button>
+              </div>
             </div>
             <div className="finance-sync-check-row">
               <label className="finance-sync-check">
@@ -497,17 +870,46 @@ export function FinanceSyncPanel({
                   disabled={saving || running}
                   onChange={() => toggleBool("watchlists")}
                 />
-                <span>Cours quotidiens de toutes les valeurs présentes dans mes listes de suivi</span>
+                <span>
+                  Cours quotidiens de toutes mes listes de suivi
+                  {watchlists.length > 0
+                    ? ` (${totalWatchlistStocks.toLocaleString("fr-FR")} actions dans ${watchlists.length} liste${watchlists.length > 1 ? "s" : ""})`
+                    : ""}
+                </span>
               </label>
             </div>
-            <div className="finance-sync-pills-grid">
-              {exchanges.map(ex => {
+            <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "8px 0" }}>
+              <Search size={13} style={{ opacity: 0.65, flexShrink: 0 }} />
+              <input
+                type="text"
+                value={exchangeSearch}
+                onChange={e => setExchangeSearch(e.target.value)}
+                placeholder="Filtrer une bourse ou liste EODHD (ex. PA, US, XETRA, LSE, SW, EUFUND, France, EUR)…"
+                style={{
+                  flex: 1,
+                  padding: "6px 10px",
+                  borderRadius: 8,
+                  border: "1px solid var(--fin-border, #cbd5e1)",
+                  background: "var(--fin-panel, transparent)",
+                  fontSize: 12.5,
+                }}
+              />
+              {exchangeSearch && (
+                <button type="button" className="finance-tf-btn" onClick={() => setExchangeSearch("")}>
+                  Effacer
+                </button>
+              )}
+            </div>
+            <div className="finance-sync-pills-grid" style={{ maxHeight: 280, overflowY: "auto", paddingRight: 4 }}>
+              {displayedExchanges.map(ex => {
                 const checked = prefs.exchanges.includes(ex.code.toUpperCase());
+                const countText =
+                  ex.total > 0 ? `${ex.total.toLocaleString("fr-FR")} titres` : "non chargée";
                 return (
                   <label
                     key={ex.code}
                     className={`finance-sync-pill ${checked ? "is-checked" : ""}`}
-                    title={ex.description}
+                    title={`${ex.description} — ${countText}`}
                   >
                     <input
                       type="checkbox"
@@ -516,10 +918,100 @@ export function FinanceSyncPanel({
                       onChange={() => toggleListCode("exchanges", ex.code)}
                     />
                     <span>{ex.label}</span>
-                    {ex.total > 0 && <small>({ex.total.toLocaleString("fr-FR")})</small>}
+                    <small>
+                      {countText}
+                      {ex.currency ? ` · ${ex.currency}` : ""}
+                    </small>
                   </label>
                 );
               })}
+              {displayedExchanges.length === 0 && (
+                <small style={{ opacity: 0.75, padding: "4px 2px" }}>
+                  Aucune place boursière ne correspond à ce filtre.
+                </small>
+              )}
+            </div>
+          </div>
+
+          {/* Bloc 4 : Enrichissement manuel & Indexation du Screener */}
+          <div className="finance-sync-card">
+            <div className="finance-sync-card-head">
+              <strong>4. Enrichissement manuel &amp; Indexation du Screener</strong>
+              <small>
+                {screenerCoverage
+                  ? `${screenerCoverage.total_snapshots} titres indexés (4 unités + IsoPressure) · ${screenerCoverage.with_fundamentals} avec fondamentaux`
+                  : "Cours EOD + indicateurs multi-unités + états financiers EODHD"}
+              </small>
+            </div>
+            <div className="finance-sync-check-row" style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
+              <select
+                value={hydrateUniverseType}
+                disabled={isSyncActive || saving}
+                onChange={e => {
+                  const next = e.target.value as "all" | "index" | "watchlist";
+                  setHydrateUniverseType(next);
+                  if (next === "index") {
+                    setHydrateUniverseValue(indices[0]?.code || "CAC40");
+                  } else if (next === "watchlist") {
+                    setHydrateUniverseValue(activeListId || watchlists[0]?.id || "");
+                  } else {
+                    setHydrateUniverseValue("");
+                  }
+                }}
+                aria-label="Univers à enrichir"
+              >
+                <option value="all">Tout l&apos;entrepôt local</option>
+                <option value="index">Par indice boursier</option>
+                {watchlists.length > 0 && <option value="watchlist">Ma liste de suivi</option>}
+              </select>
+              {hydrateUniverseType === "index" && (
+                <select
+                  value={hydrateUniverseValue}
+                  disabled={isSyncActive || saving}
+                  onChange={e => setHydrateUniverseValue(e.target.value)}
+                  aria-label="Indice à enrichir"
+                >
+                  {indices.map(idx => (
+                    <option key={idx.code} value={idx.code}>
+                      {idx.flag} {idx.name} ({idx.code})
+                    </option>
+                  ))}
+                </select>
+              )}
+              {hydrateUniverseType === "watchlist" && watchlists.length > 0 && (
+                <select
+                  value={hydrateUniverseValue}
+                  disabled={isSyncActive || saving}
+                  onChange={e => setHydrateUniverseValue(e.target.value)}
+                  aria-label="Liste de suivi à enrichir"
+                >
+                  {watchlists.map(wl => (
+                    <option key={wl.id} value={wl.id}>
+                      {wl.name} ({wl.items_count})
+                    </option>
+                  ))}
+                </select>
+              )}
+              <button
+                type="button"
+                className="finance-tf-btn active"
+                disabled={isSyncActive || saving}
+                onClick={() => void handleHydrateScreenerNow()}
+                title="Télécharge les cours EOD manquants et enrichit les dossiers fondamentaux EODHD en arrière-plan"
+              >
+                {isSyncActive ? <LoaderCircle size={12} className="spin" /> : <Download size={12} />}
+                <span>Enrichir univers (EODHD)</span>
+              </button>
+              <button
+                type="button"
+                className="finance-tf-btn"
+                disabled={isSyncActive || saving}
+                onClick={() => void handleRebuildScreenerCache()}
+                title="Recalcule immédiatement tous les indicateurs (Jour, Semaine, Mois, 3 Mois + IsoPressure) depuis SQLite sans appel réseau"
+              >
+                <RefreshCw size={12} />
+                <span>Réindexer cache local</span>
+              </button>
             </div>
           </div>
         </div>

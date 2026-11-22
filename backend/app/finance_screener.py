@@ -21,6 +21,12 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .config import Settings
+from .finance_geography import (
+    EUROZONE_COUNTRIES,
+    canonicalize_country,
+    normalize_market_zone_filter,
+    resolve_market_zone,
+)
 from .finance_technicals import (
     SUPPORTED_TIMEFRAMES,
     compute_multi_timeframe_technicals,
@@ -30,6 +36,7 @@ from .finance_warehouse import (
     _connect,
     _norm_sym,
     _utc_iso,
+    backfill_screener_geography,
     get_instrument_meta,
     get_screener_coverage,
     get_snapshot,
@@ -38,6 +45,7 @@ from .finance_warehouse import (
     list_warehouse_screener_symbols,
     load_fundamental_series,
     resolve_canonical_symbol,
+    seed_screener_from_exchange_catalogs,
     upsert_screener_snapshots,
     upsert_screener_technicals,
     warehouse_db_path,
@@ -212,7 +220,19 @@ SCREENER_FIELDS: tuple[dict[str, Any], ...] = (
 
 _FIELD_BY_KEY: dict[str, dict[str, Any]] = {f["key"]: f for f in SCREENER_FIELDS}
 _SORTABLE_COLUMNS: frozenset[str] = frozenset(
-    {"symbol", "name", "exchange", "sector", "bars_date", "has_fundamentals", *_FIELD_BY_KEY.keys()}
+    {
+        "symbol",
+        "name",
+        "exchange",
+        "country",
+        "market_zone",
+        "currency",
+        "sector",
+        "cap_category",
+        "bars_date",
+        "has_fundamentals",
+        *_FIELD_BY_KEY.keys(),
+    }
 )
 _COMPARABLE_COLUMNS: frozenset[str] = frozenset(
     f["key"] for f in SCREENER_FIELDS if f.get("comparable")
@@ -482,13 +502,23 @@ def build_screener_snapshot_from_dossier(
         )
     )
 
+    exch_val = str((meta or {}).get("exchange") or "")
+    eod_tkr = _norm_sym(str((meta or {}).get("eod_ticker") or canonical)) or canonical
+    canon_country = canonicalize_country(
+        str((meta or {}).get("country") or ""),
+        exchange=exch_val,
+        symbol=eod_tkr,
+    )
+    market_zone = resolve_market_zone(canon_country, exchange=exch_val, symbol=eod_tkr)
+
     return {
         "symbol": canonical,
-        "eod_ticker": _norm_sym(str((meta or {}).get("eod_ticker") or canonical)) or canonical,
+        "eod_ticker": eod_tkr,
         "yahoo_symbol": _norm_sym(str((meta or {}).get("yahoo_symbol") or canonical)) or canonical,
         "name": str(hdr.get("name") or (meta or {}).get("long_name") or (meta or {}).get("short_name") or canonical),
-        "exchange": str((meta or {}).get("exchange") or ""),
-        "country": str((meta or {}).get("country") or ""),
+        "exchange": exch_val,
+        "country": canon_country,
+        "market_zone": market_zone,
         "currency": str(dossier.get("currency") or (meta or {}).get("currency") or ""),
         "sector": str(hdr.get("sector") or (meta or {}).get("sector") or ""),
         "industry": str(hdr.get("industry") or (meta or {}).get("industry") or ""),
@@ -732,9 +762,18 @@ def build_screener_snapshot_from_warehouse(
         or ann_upd
     )
 
+    exch_val = str(gen.get("Exchange") or meta.get("exchange") or "")
+    eod_tkr = _norm_sym(str(meta.get("eod_ticker") or canonical)) or canonical
+    canon_country = canonicalize_country(
+        str(gen.get("CountryName") or y_prof.get("country") or meta.get("country") or ""),
+        exchange=exch_val,
+        symbol=eod_tkr,
+    )
+    market_zone = resolve_market_zone(canon_country, exchange=exch_val, symbol=eod_tkr)
+
     snap_row = {
         "symbol": canonical,
-        "eod_ticker": _norm_sym(str(meta.get("eod_ticker") or canonical)) or canonical,
+        "eod_ticker": eod_tkr,
         "yahoo_symbol": _norm_sym(str(meta.get("yahoo_symbol") or canonical)) or canonical,
         "name": str(
             gen.get("Name")
@@ -743,8 +782,9 @@ def build_screener_snapshot_from_warehouse(
             or meta.get("short_name")
             or canonical
         ),
-        "exchange": str(gen.get("Exchange") or meta.get("exchange") or ""),
-        "country": str(gen.get("CountryName") or y_prof.get("country") or meta.get("country") or ""),
+        "exchange": exch_val,
+        "country": canon_country,
+        "market_zone": market_zone,
         "currency": currency,
         "sector": str(gen.get("Sector") or y_prof.get("sector") or meta.get("sector") or ""),
         "industry": str(gen.get("Industry") or y_prof.get("industry") or meta.get("industry") or ""),
@@ -845,6 +885,8 @@ def rebuild_screener_snapshots_from_warehouse(
     indexed = upsert_screener_snapshots(db_path, snap_rows, preserve_fundamentals_if_missing=True, batch_size=40)
     if tech_rows:
         upsert_screener_technicals(db_path, tech_rows, batch_size=80)
+    if symbols is None:
+        seed_screener_from_exchange_catalogs(db_path)
     return {"indexed_count": indexed, "coverage": get_screener_coverage(db_path)}
 
 
@@ -995,6 +1037,7 @@ def _select_projection_sql(main_tf: str) -> str:
         "s.name",
         "s.exchange",
         "s.country",
+        "s.market_zone",
         "s.currency",
         "s.sector",
         "s.industry",
@@ -1051,6 +1094,22 @@ def _select_projection_sql(main_tf: str) -> str:
     return ", ".join(base_cols)
 
 
+def _ensure_geography_backfilled_if_needed(db_path: Path) -> bool:
+    """Remplit rapidement `country` et `market_zone` si d'anciens snapshots n'ont pas encore été normalisés."""
+    if not db_path.exists():
+        return False
+    with _connect(db_path) as conn:
+        missing = int(
+            conn.execute(
+                "SELECT COUNT(*) FROM finance_screener_snapshots WHERE market_zone = '' AND (country != '' OR exchange != '' OR symbol LIKE '%.%')"
+            ).fetchone()[0]
+            or 0
+        )
+    if missing > 0:
+        return backfill_screener_geography(db_path) > 0
+    return False
+
+
 def query_screener(
     settings: Settings,
     *,
@@ -1058,6 +1117,10 @@ def query_screener(
     universe_type: str = "all",
     universe_value: str | None = None,
     watchlist_symbols: list[str] | None = None,
+    index_code: str = "",
+    market_zone: str = "",
+    country: str = "",
+    cap_category: str = "",
     search: str = "",
     sector: str = "",
     exchange: str = "",
@@ -1080,6 +1143,8 @@ def query_screener(
             cov = get_screener_coverage(db_path)
         else:
             _ensure_mtf_backfilled_if_needed(db_path)
+            if _ensure_geography_backfilled_if_needed(db_path):
+                cov = get_screener_coverage(db_path)
 
     clauses: list[str] = []
     params: list[Any] = []
@@ -1092,6 +1157,20 @@ def query_screener(
     elif u_type == "exchange" and u_val:
         clauses.append("UPPER(s.exchange) = ?")
         params.append(u_val)
+    elif u_type == "zone" and (universe_value or "").strip():
+        z_norm = normalize_market_zone_filter(universe_value)
+        if z_norm == "eurozone":
+            ez = sorted(EUROZONE_COUNTRIES)
+            marks = ", ".join("?" for _ in ez)
+            clauses.append(f"s.country IN ({marks})")
+            params.extend(ez)
+        elif z_norm:
+            clauses.append("LOWER(s.market_zone) = ?")
+            params.append(z_norm)
+    elif u_type == "country" and (universe_value or "").strip():
+        c_norm = canonicalize_country(universe_value)
+        clauses.append("(s.country = ? OR LOWER(s.country) = ?)")
+        params.extend([c_norm, c_norm.lower()])
     elif u_type == "watchlist":
         wl_syms = sorted({_norm_sym(s) for s in (watchlist_symbols or []) if _norm_sym(s)})
         if not wl_syms:
@@ -1113,6 +1192,33 @@ def query_screener(
 
     universe_where = " AND ".join(clauses) if clauses else "1=1"
     universe_params = list(params)
+
+    clean_index = _norm_sym(index_code or "")
+    if clean_index and not (u_type == "index" and u_val == clean_index):
+        clauses.append("s.indices_csv LIKE ?")
+        params.append(f"%,{clean_index},%")
+
+    clean_zone = normalize_market_zone_filter(market_zone)
+    if clean_zone:
+        if clean_zone == "eurozone":
+            ez = sorted(EUROZONE_COUNTRIES)
+            marks = ", ".join("?" for _ in ez)
+            clauses.append(f"s.country IN ({marks})")
+            params.extend(ez)
+        else:
+            clauses.append("LOWER(s.market_zone) = ?")
+            params.append(clean_zone)
+
+    clean_country = (country or "").strip()
+    if clean_country:
+        canon_c = canonicalize_country(clean_country)
+        clauses.append("(s.country = ? OR LOWER(s.country) = ?)")
+        params.extend([canon_c, canon_c.lower()])
+
+    clean_cap = (cap_category or "").strip()
+    if clean_cap:
+        clauses.append("LOWER(s.cap_category) = ?")
+        params.append(clean_cap.lower())
 
     clean_search = (search or "").strip()
     if clean_search:
@@ -1228,6 +1334,9 @@ def get_screener_metadata(settings: Settings) -> dict[str, Any]:
         cov = get_screener_coverage(db_path)
     else:
         _ensure_mtf_backfilled_if_needed(db_path)
+        seeded = seed_screener_from_exchange_catalogs(db_path)
+        if _ensure_geography_backfilled_if_needed(db_path) or seeded:
+            cov = get_screener_coverage(db_path)
     return {
         "fields": list(SCREENER_FIELDS),
         "timeframes": [{"key": k, "label": TIMEFRAME_LABELS[k]} for k in SUPPORTED_TIMEFRAMES],
