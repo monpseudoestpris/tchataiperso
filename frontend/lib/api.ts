@@ -1380,6 +1380,7 @@ export type FinancialDossier = {
   source_provider: string;
   source_label: string;
   warehouse_stats?: WarehouseStats;
+  fundamentals_schedule?: FundamentalsSchedule | null;
   header: {
     name: string;
     logo_url?: string | null;
@@ -2199,6 +2200,12 @@ export type FinanceSyncPreferences = {
   index_codes: string[];
   watchlists: boolean;
   exchanges: string[];
+  /** Bourses dont toutes les actions doivent avoir leurs données (complétion progressive quotidienne). */
+  full_data_exchanges: string[];
+  /** Budget quotidien des fondamentaux en % de la limite journalière du compte EODHD. */
+  fundamentals_budget_pct: number;
+  fundamentals_quota_safety_pct: number;
+  fundamentals_priority_order: Array<"watchlists" | "indices" | "full_exchanges">;
   last_run_at: string | null;
   last_fundamentals_run_at: string | null;
   last_status: FinanceSyncRunSummary | null;
@@ -2226,6 +2233,7 @@ export type FinanceWarehouseSourcesSummary = {
 
 export type FinanceSyncStateResponse = {
   preferences: FinanceSyncPreferences;
+  full_exchange_coverage?: Record<string, { total: number; with_data: number }>;
   started?: boolean;
   is_running?: boolean;
   progress?: FinanceSyncProgress;
@@ -2274,6 +2282,10 @@ export async function updateFinanceSyncPreferences(
     | "index_codes"
     | "watchlists"
     | "exchanges"
+    | "full_data_exchanges"
+    | "fundamentals_budget_pct"
+    | "fundamentals_quota_safety_pct"
+    | "fundamentals_priority_order"
   >,
 ): Promise<FinanceSyncStateResponse> {
   return api<FinanceSyncStateResponse>("/finance/sync-preferences", {
@@ -3495,6 +3507,7 @@ export type ScreenerQueryResponse = {
   timeframe?: ScreenerTimeframe;
   total: number;
   universe_total: number;
+  missing_data_count?: number;
   offset: number;
   limit: number;
   items: ScreenerRow[];
@@ -3571,4 +3584,107 @@ export async function exportScreenerToWatchlist(body: {
       body: JSON.stringify(body),
     },
   );
+}
+
+// ---------------------------------------------------------------------------
+// Consommation de l'API EODHD (quota, appels du jour, barème)
+// ---------------------------------------------------------------------------
+
+export type EodhdUsageEndpoint = {
+  endpoint: string;
+  label: string;
+  requests: number;
+  unit_cost: number;
+  calls: number;
+};
+
+export type EodhdUsageReport = {
+  account: {
+    subscription: string;
+    api_requests_today: number | null;
+    api_requests_date: string | null;
+    daily_limit: number | null;
+    extra_limit: number | null;
+    remaining_today: number | null;
+  } | null;
+  local: {
+    date: string;
+    total_requests: number;
+    total_calls: number;
+    by_endpoint: EodhdUsageEndpoint[];
+  };
+  cost_table: Array<{ endpoint: string; unit_cost: number; label: string }>;
+  sync_estimate: {
+    lines: Array<{ label: string; calls: number; periodic?: boolean }>;
+    max_daily_calls: number;
+    light_load_calls?: number;
+    full_dossier_calls_estimate?: number;
+    note: string;
+  };
+  source_url: string;
+};
+
+export async function fetchEodhdUsage(): Promise<EodhdUsageReport> {
+  return api<EodhdUsageReport>("/finance/eodhd-usage");
+}
+
+// ---------------------------------------------------------------------------
+// File priorisée des fondamentaux (budget quotidien, échéances intelligentes)
+// ---------------------------------------------------------------------------
+
+export type FundamentalsSchedule = {
+  symbol: string;
+  status: "pending" | "ok" | "error";
+  last_fetched_at: string | null;
+  last_period_end: string | null;
+  last_report_date: string | null;
+  cadence: "quarterly" | "semiannual" | "annual" | "";
+  next_due_at: string | null;
+  reported_pending: number;
+  priority: number;
+};
+
+export type FundamentalsQueueState = {
+  stats: {
+    tracked: number;
+    never_loaded: number;
+    reported: number;
+    due: number;
+    up_to_date: number;
+    errors: number;
+    boosted: number;
+    to_process: number;
+  };
+  budget: {
+    daily_limit: number;
+    daily_limit_known: boolean;
+    budget_calls: number;
+    spent_today: number;
+    remaining_budget: number;
+    titles_per_day: number;
+    safety_floor: number;
+    account_remaining: number | null;
+  };
+  estimated_days: number;
+  next_items: Array<{ symbol: string; priority: number; reason: string; why: string }>;
+};
+
+export async function fetchFundamentalsQueue(): Promise<FundamentalsQueueState> {
+  return api<FundamentalsQueueState>("/finance/fundamentals-queue");
+}
+
+export async function runFundamentalsQueueNow(): Promise<{ started: boolean; already_running: boolean }> {
+  return api<{ started: boolean; already_running: boolean }>("/finance/fundamentals-queue/run", { method: "POST" });
+}
+
+export async function boostFundamentalsQueue(body: {
+  symbols?: string[];
+  screener_filters?: ScreenerQueryRequest;
+  batch_size?: number;
+  run?: boolean;
+}): Promise<{ boosted: number; started: boolean; already_running: boolean }> {
+  return api<{ boosted: number; started: boolean; already_running: boolean }>("/finance/fundamentals-queue/boost", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
 }

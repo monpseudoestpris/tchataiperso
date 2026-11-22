@@ -21,6 +21,7 @@ from typing import Any
 import httpx
 
 from .config import Settings
+from .finance_eodhd_usage import record_eodhd_call
 from .finance import (
     DEFAULT_USER_AGENT,
     _safe_float,
@@ -1169,6 +1170,7 @@ async def _fetch_eodhd_index_components(
         f"?api_token={urllib.parse.quote(api_key)}&fmt=json&filter=Components"
     )
     try:
+        record_eodhd_call(url)
         resp = await client.get(url, timeout=16.0)
         if resp.status_code != 200:
             return []
@@ -1211,6 +1213,7 @@ async def _fetch_eodhd_etf_holdings_components(
         f"?api_token={urllib.parse.quote(api_key)}&fmt=json&filter=ETF_Data::Holdings"
     )
     try:
+        record_eodhd_call(url)
         resp = await client.get(url, timeout=22.0)
         if resp.status_code != 200:
             return []
@@ -1426,6 +1429,7 @@ async def list_eodhd_indx_catalog(
                 follow_redirects=True,
                 timeout=15.0,
             ) as client:
+                record_eodhd_call(url)
                 resp = await client.get(url)
                 if resp.status_code == 200:
                     raw = resp.json()

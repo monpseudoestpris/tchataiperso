@@ -718,6 +718,17 @@ def get_finance_sync_status_endpoint(
     return get_daily_sync_status()
 
 
+@router.get("/eodhd-usage")
+async def get_finance_eodhd_usage_endpoint(
+    settings: Settings = Depends(get_settings),
+    user: User = Depends(current_user),
+) -> dict[str, Any]:
+    """Consommation EODHD : quota réel du compte, appels émis aujourd'hui par l'app, barème et estimation de la synchro."""
+    from ..finance_eodhd_usage import get_eodhd_usage_report
+
+    return await get_eodhd_usage_report(settings)
+
+
 @router.post("/sync-preferences/run")
 async def run_finance_sync_now_endpoint(
     refresh: bool = Query(False, description="Forcer le re-téléchargement même si déjà sauvegardé aujourd'hui"),
@@ -1858,14 +1869,16 @@ def get_finance_screener_meta(
     return get_screener_metadata(settings)
 
 
-@router.post("/screener/query")
-def query_finance_screener(
-    body: dict[str, Any] = Body(default_factory=dict),
-    settings: Settings = Depends(get_settings),
-    user: User = Depends(current_user),
-    sessions: sessionmaker = Depends(get_sessions),
+def _run_screener_query_from_body(
+    body: dict[str, Any],
+    settings: Settings,
+    user: User,
+    sessions: sessionmaker,
+    *,
+    only_missing_data: bool = False,
+    limit_override: int | None = None,
 ) -> dict[str, Any]:
-    """Exécute un screening multi-critères (fondamentaux + technique) sur `finance_screener_snapshots`."""
+    """Traduit un corps de requête Screener (filtres UI) en appel `query_screener` (lève `ValueError`)."""
     from ..finance_screener import query_screener
 
     universe_type = str(body.get("universe_type") or "all").strip().lower()
@@ -1889,28 +1902,40 @@ def query_finance_screener(
                 if s and str(s).strip()
             ]
 
+    return query_screener(
+        settings,
+        timeframe=str(body.get("timeframe") or "day"),
+        universe_type=universe_type,
+        universe_value=universe_value,
+        watchlist_symbols=wl_symbols,
+        index_code=str(body.get("index_code") or ""),
+        market_zone=str(body.get("market_zone") or ""),
+        country=str(body.get("country") or ""),
+        cap_category=str(body.get("cap_category") or ""),
+        search=str(body.get("search") or ""),
+        sector=str(body.get("sector") or ""),
+        exchange=str(body.get("exchange") or ""),
+        currency=str(body.get("currency") or ""),
+        only_with_fundamentals=bool(body.get("only_with_fundamentals", False)),
+        only_missing_data=only_missing_data,
+        rules=[] if only_missing_data else (body.get("rules") if isinstance(body.get("rules"), list) else []),
+        sort_by=str(body.get("sort_by") or "market_cap"),
+        sort_dir=str(body.get("sort_dir") or "desc"),
+        limit=limit_override if limit_override is not None else int(body.get("limit") or 100),
+        offset=0 if only_missing_data else int(body.get("offset") or 0),
+    )
+
+
+@router.post("/screener/query")
+def query_finance_screener(
+    body: dict[str, Any] = Body(default_factory=dict),
+    settings: Settings = Depends(get_settings),
+    user: User = Depends(current_user),
+    sessions: sessionmaker = Depends(get_sessions),
+) -> dict[str, Any]:
+    """Exécute un screening multi-critères (fondamentaux + technique) sur `finance_screener_snapshots`."""
     try:
-        return query_screener(
-            settings,
-            timeframe=str(body.get("timeframe") or "day"),
-            universe_type=universe_type,
-            universe_value=universe_value,
-            watchlist_symbols=wl_symbols,
-            index_code=str(body.get("index_code") or ""),
-            market_zone=str(body.get("market_zone") or ""),
-            country=str(body.get("country") or ""),
-            cap_category=str(body.get("cap_category") or ""),
-            search=str(body.get("search") or ""),
-            sector=str(body.get("sector") or ""),
-            exchange=str(body.get("exchange") or ""),
-            currency=str(body.get("currency") or ""),
-            only_with_fundamentals=bool(body.get("only_with_fundamentals", False)),
-            rules=body.get("rules") if isinstance(body.get("rules"), list) else [],
-            sort_by=str(body.get("sort_by") or "market_cap"),
-            sort_dir=str(body.get("sort_dir") or "desc"),
-            limit=int(body.get("limit") or 100),
-            offset=int(body.get("offset") or 0),
-        )
+        return _run_screener_query_from_body(body, settings, user, sessions)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
@@ -1977,6 +2002,75 @@ async def hydrate_finance_screener(
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+
+
+@router.get("/fundamentals-queue")
+async def get_fundamentals_queue_endpoint(
+    settings: Settings = Depends(get_settings),
+    user: User = Depends(current_user),
+) -> dict[str, Any]:
+    """État de la file des fondamentaux : compteurs, budget du jour et prochains titres traités."""
+    from ..finance_fundamentals_queue import list_next_items, queue_stats
+    from ..finance_fundamentals_scheduler import compute_budget, refresh_queue_from_preferences
+
+    db_path = warehouse_db_path(settings)
+    refresh_queue_from_preferences(settings)
+    budget = await compute_budget(settings)
+    stats = queue_stats(db_path)
+    per_day = max(1, int(budget["titles_per_day"]))
+    return {
+        "stats": stats,
+        "budget": budget,
+        "estimated_days": -(-stats["to_process"] // per_day) if stats["to_process"] else 0,
+        "next_items": list_next_items(db_path, limit=30),
+    }
+
+
+@router.post("/fundamentals-queue/boost")
+async def boost_fundamentals_queue_endpoint(
+    body: dict[str, Any] = Body(default_factory=dict),
+    settings: Settings = Depends(get_settings),
+    user: User = Depends(current_user),
+    sessions: sessionmaker = Depends(get_sessions),
+) -> dict[str, Any]:
+    """Coup de pouce : place des titres (liste ou titres sans données des filtres Screener) en tête de file."""
+    from ..finance_fundamentals_queue import boost_symbols
+
+    symbols = [str(s).strip().upper() for s in (body.get("symbols") or []) if str(s).strip()][:500]
+    if isinstance(body.get("screener_filters"), dict):
+        batch_size = max(1, min(300, int(body.get("batch_size") or 50)))
+        try:
+            res = _run_screener_query_from_body(
+                body["screener_filters"], settings, user, sessions, only_missing_data=True, limit_override=batch_size
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        symbols += [
+            str(it.get("eod_ticker") or it.get("symbol") or "").strip().upper()
+            for it in res.get("items") or []
+            if (it.get("eod_ticker") or it.get("symbol"))
+        ]
+    if not symbols:
+        raise HTTPException(400, "Aucun titre à prioriser.")
+    boosted = boost_symbols(warehouse_db_path(settings), symbols)
+    started = False
+    if bool(body.get("run", True)):
+        from ..finance_funds import start_fundamentals_run_background
+
+        started = await start_fundamentals_run_background(settings)
+    return {"boosted": boosted, "started": started, "already_running": not started and bool(body.get("run", True))}
+
+
+@router.post("/fundamentals-queue/run")
+async def run_fundamentals_queue_endpoint(
+    settings: Settings = Depends(get_settings),
+    user: User = Depends(current_user),
+) -> dict[str, Any]:
+    """Lance immédiatement un passage de la file (dans la limite du budget du jour), en arrière-plan."""
+    from ..finance_funds import start_fundamentals_run_background
+
+    started = await start_fundamentals_run_background(settings)
+    return {"started": started, "already_running": not started}
 
 
 @router.post("/screener/export-watchlist", status_code=201)

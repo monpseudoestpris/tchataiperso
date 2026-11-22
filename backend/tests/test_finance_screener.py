@@ -275,13 +275,13 @@ def test_daily_sync_auto_fetches_major_indices_constituents_and_fundamentals(tmp
     )
     db_path = warehouse_db_path(settings)
 
-    # Par défaut : contenu complet des 9 principaux indices + fondamentaux Screener 1×/semaine (7 j)
+    # Par défaut : contenu complet des 9 principaux indices + file priorisée des fondamentaux (budget 10 %)
     defaults = get_sync_preferences(db_path)
     assert DEFAULT_SYNC_PREFERENCES["major_indices_constituents"] is True
     assert defaults["major_indices_constituents"] is True
     assert defaults["screener_fundamentals"] is True
-    assert defaults["screener_fundamentals_daily_cap"] == 40
-    assert defaults["screener_fundamentals_interval_days"] == 7
+    assert defaults["fundamentals_budget_pct"] == 10
+    assert defaults["fundamentals_priority_order"] == ["watchlists", "indices", "full_exchanges"]
 
     major_codes = [d["code"] for d in INDEX_DEFINITIONS if d.get("tier") == "major"]
     assert len(major_codes) == 9
@@ -295,48 +295,44 @@ def test_daily_sync_auto_fetches_major_indices_constituents_and_fundamentals(tmp
             "items": [{"symbol": f"TST_{code}.PA", "eod_ticker": f"TST_{code}.PA"}],
         }
 
-    hydrate_calls: list[dict] = []
+    budget_calls: list[int] = []
 
-    async def _fake_hydrate(_settings, **kwargs):
-        hydrate_calls.append(kwargs)
-        return {"fundamentals_enriched": 3, "fundamentals_cached": 6, "fundamentals_errors": 0}
+    async def _fake_budget(_settings, **_kwargs):
+        budget_calls.append(1)
+        return {"loaded": 3, "errors": 0, "calls": 33, "stopped_reason": "Budget du jour atteint"}
 
-    with (
-        patch("app.finance_indices.list_principal_indices", new=AsyncMock(return_value={"indices": [{"code": c} for c in major_codes]})),
-        patch("app.finance_indices.list_eodhd_indx_catalog", new=AsyncMock(return_value={"total": 100})),
-        patch("app.finance_indices.get_index_performances", side_effect=_fake_index_perf),
-        patch("app.finance_screener.hydrate_screener_universe", side_effect=_fake_hydrate),
-    ):
+    def _patches():
+        return (
+            patch("app.finance_indices.list_principal_indices", new=AsyncMock(return_value={"indices": [{"code": c} for c in major_codes]})),
+            patch("app.finance_indices.list_eodhd_indx_catalog", new=AsyncMock(return_value={"total": 100})),
+            patch("app.finance_indices.get_index_performances", side_effect=_fake_index_perf),
+            patch("app.finance_fundamentals_scheduler.run_fundamentals_budget", side_effect=_fake_budget),
+        )
+
+    p1, p2, p3, p4 = _patches()
+    with p1, p2, p3, p4:
         res = asyncio.run(run_daily_sync_now(settings, refresh=False, respect_enabled=True, trigger="auto"))
 
     assert res["summary"]["skipped"] is False
     assert called_codes == major_codes
     assert set(res["summary"]["indices"].keys()) == set(major_codes)
-    assert len(hydrate_calls) == 1
-    assert hydrate_calls[0]["max_fundamentals"] == 40
+    assert budget_calls == [1]
     assert res["summary"]["screener_fundamentals"]["enriched"] == 3
+    assert res["summary"]["screener_fundamentals"]["calls"] == 33
     assert res["preferences"]["last_fundamentals_run_at"] is not None
     status_after = get_daily_sync_status()
     assert status_after["is_running"] is False
     assert status_after["percent"] == 100
 
-    # Deuxième exécution dans la même semaine : les cours des 9 indices tournent, mais les fondamentaux sont sautés (1×/semaine)
+    # Deuxième exécution : la file est consultée chaque jour (c'est elle qui limite au budget et aux échéances)
     called_codes.clear()
-    hydrate_calls.clear()
-    with (
-        patch("app.finance_indices.list_principal_indices", new=AsyncMock(return_value={"indices": [{"code": c} for c in major_codes]})),
-        patch("app.finance_indices.list_eodhd_indx_catalog", new=AsyncMock(return_value={"total": 100})),
-        patch("app.finance_indices.get_index_performances", side_effect=_fake_index_perf),
-        patch("app.finance_screener.hydrate_screener_universe", side_effect=_fake_hydrate),
-    ):
-        res_week = asyncio.run(run_daily_sync_now(settings, refresh=False, respect_enabled=True, trigger="auto"))
-
+    p1, p2, p3, p4 = _patches()
+    with p1, p2, p3, p4:
+        asyncio.run(run_daily_sync_now(settings, refresh=False, respect_enabled=True, trigger="auto"))
     assert called_codes == major_codes
-    assert hydrate_calls == []
-    assert res_week["summary"]["screener_fundamentals"]["skipped"] is True
-    assert res_week["summary"]["screener_fundamentals"]["reason"] == "weekly_cooldown"
+    assert budget_calls == [1, 1]
 
-    # Si l'utilisateur désactive `major_indices_constituents`, seul `index_codes` est synchronisé
+    # Si l'utilisateur désactive `major_indices_constituents` et les fondamentaux, seul `index_codes` est synchronisé
     save_sync_preferences(
         db_path,
         {
@@ -349,15 +345,15 @@ def test_daily_sync_auto_fetches_major_indices_constituents_and_fundamentals(tmp
         },
     )
     called_codes.clear()
-    hydrate_calls.clear()
+    budget_calls.clear()
     with (
         patch("app.finance_indices.get_index_performances", side_effect=_fake_index_perf),
-        patch("app.finance_screener.hydrate_screener_universe", side_effect=_fake_hydrate),
+        patch("app.finance_fundamentals_scheduler.run_fundamentals_budget", side_effect=_fake_budget),
     ):
         res2 = asyncio.run(run_daily_sync_now(settings, refresh=False, respect_enabled=True))
 
     assert called_codes == ["SBF120"]
-    assert hydrate_calls == []
+    assert budget_calls == []
     assert list(res2["summary"]["indices"].keys()) == ["SBF120"]
 
 
@@ -542,3 +538,8 @@ def test_screener_lists_all_exchange_catalog_stocks_without_loading_prices(tmp_p
     )
     de = query_screener(settings, country="Allemagne")
     assert [r["symbol"] for r in de["items"]] == ["SAP.DE"]
+
+    # Compteur de titres sans données + sélection du lot à compléter (filtrée, sans les titres déjà chargés)
+    assert paris["missing_data_count"] == 2
+    missing = query_screener(settings, exchange="PA", only_missing_data=True, limit=50)
+    assert {r["symbol"] for r in missing["items"]} == {"ALO.PA", "VIRP.PA"}

@@ -23,6 +23,9 @@ import {
   type SupportedExchangeInfo,
 } from "@/lib/api";
 
+import { FinanceEodhdUsageCard } from "./finance-eodhd-usage-card";
+import { FinanceFundamentalsPlanCard } from "./finance-fundamentals-plan-card";
+
 /**
  * Centre de contrôle des données & synchronisations financières (Onglet 5 · Données & Synchro) :
  * gère la priorité / migration EODHD, la synchro quotidienne automatique des indices, la fréquence
@@ -60,6 +63,8 @@ export function FinanceSyncPanel({
   const [running, setRunning] = useState(false);
   const [savedBanner, setSavedBanner] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [fullCoverage, setFullCoverage] = useState<Record<string, { total: number; with_data: number }>>({});
+  const [usageRefreshKey, setUsageRefreshKey] = useState<number>(0);
 
   const isSyncActive = running || Boolean(liveProgress?.is_running);
 
@@ -72,6 +77,7 @@ export function FinanceSyncPanel({
       .then(([res, meta]) => {
         if (cancelled) return;
         setPrefs(res.preferences);
+        setFullCoverage(res.full_exchange_coverage || {});
         if (res.progress) setLiveProgress(res.progress);
         if (res.warehouse_sources) setWarehouseSources(res.warehouse_sources);
         if (res.eodhd_indx_catalog_total != null) setIndxCatalogTotal(res.eodhd_indx_catalog_total);
@@ -102,6 +108,7 @@ export function FinanceSyncPanel({
           if (cancelled) return;
           setLiveProgress(prev => {
             if (prev?.is_running && !status.is_running) {
+              setUsageRefreshKey(k => k + 1);
               if (status.last_message) {
                 setSavedBanner(status.last_message);
               }
@@ -112,6 +119,7 @@ export function FinanceSyncPanel({
                 .then(([res, meta]) => {
                   if (cancelled) return;
                   setPrefs(res.preferences);
+                  setFullCoverage(res.full_exchange_coverage || {});
                   if (res.warehouse_sources) setWarehouseSources(res.warehouse_sources);
                   if (meta?.coverage) setScreenerCoverage(meta.coverage);
                   setExchanges(res.available_exchanges || []);
@@ -147,8 +155,14 @@ export function FinanceSyncPanel({
         index_codes: next.index_codes,
         watchlists: next.watchlists,
         exchanges: next.exchanges,
+        full_data_exchanges: next.full_data_exchanges,
+        fundamentals_budget_pct: next.fundamentals_budget_pct,
+        fundamentals_quota_safety_pct: next.fundamentals_quota_safety_pct,
+        fundamentals_priority_order: next.fundamentals_priority_order,
       });
       setPrefs(res.preferences);
+      setFullCoverage(res.full_exchange_coverage || {});
+      setUsageRefreshKey(k => k + 1);
       if (res.progress) setLiveProgress(res.progress);
       setExchanges(res.available_exchanges || []);
       setSavedBanner("Préférences enregistrées.");
@@ -246,7 +260,7 @@ export function FinanceSyncPanel({
     void persistPrefs({ ...prefs, index_codes: nextList });
   }
 
-  function toggleListCode(key: "index_codes" | "exchanges", code: string) {
+  function toggleListCode(key: "index_codes" | "exchanges" | "full_data_exchanges", code: string) {
     if (!prefs || saving || running) return;
     const upper = code.toUpperCase();
     const exists = prefs[key].includes(upper);
@@ -542,6 +556,8 @@ export function FinanceSyncPanel({
         </div>
       ) : prefs ? (
         <div className="finance-sync-sections">
+          <FinanceEodhdUsageCard refreshKey={usageRefreshKey} />
+
           {/* Bloc 0 : Sources EODHD vs Yahoo Finance dans l'entrepôt */}
           {warehouseSources && (
             <div className="finance-sync-card">
@@ -673,44 +689,8 @@ export function FinanceSyncPanel({
                   onChange={() => toggleBool("screener_fundamentals")}
                 />
                 <span>
-                  Enrichir les fondamentaux &amp; historiques 10 ans pour le Screener :{" "}
-                  <select
-                    value={prefs.screener_fundamentals_interval_days}
-                    disabled={saving || running || !prefs.screener_fundamentals}
-                    onClick={e => e.stopPropagation()}
-                    onChange={e =>
-                      void persistPrefs({
-                        ...prefs,
-                        screener_fundamentals_interval_days: Number(e.target.value) || 7,
-                      })
-                    }
-                    aria-label="Fréquence de rafraîchissement des données fondamentales"
-                  >
-                    <option value={7}>1× / semaine (7 j)</option>
-                    <option value={14}>1× / 2 semaines (14 j)</option>
-                    <option value={30}>1× / mois (30 j)</option>
-                  </select>{" "}
-                  ·{" "}
-                  <select
-                    value={prefs.screener_fundamentals_daily_cap}
-                    disabled={saving || running || !prefs.screener_fundamentals}
-                    onClick={e => e.stopPropagation()}
-                    onChange={e =>
-                      void persistPrefs({
-                        ...prefs,
-                        screener_fundamentals_daily_cap: Number(e.target.value) || 40,
-                      })
-                    }
-                    aria-label="Nombre maximal de dossiers fondamentaux enrichis par passe"
-                  >
-                    <option value={20}>20 valeurs / passe</option>
-                    <option value={40}>40 valeurs / passe</option>
-                    <option value={80}>80 valeurs / passe</option>
-                    <option value={120}>120 valeurs / passe</option>
-                  </select>
-                  {prefs.last_fundamentals_run_at
-                    ? ` (dernière passe : ${new Date(prefs.last_fundamentals_run_at).toLocaleDateString("fr-FR")})`
-                    : ""}
+                  Charger les fondamentaux &amp; historiques pour le Screener via la file priorisée (voir « Plan de
+                  chargement des fondamentaux »)
                 </span>
               </label>
             </div>
@@ -932,6 +912,58 @@ export function FinanceSyncPanel({
               )}
             </div>
           </div>
+
+          {/* Bloc 3 bis : Bourses complètes (toutes les actions avec cours & fondamentaux, complétion progressive) */}
+          <div className="finance-sync-card">
+            <div className="finance-sync-card-head">
+              <strong>
+                Bourses complètes : toutes les actions avec cours &amp; fondamentaux (
+                {(prefs.full_data_exchanges || []).length} choisie
+                {(prefs.full_data_exchanges || []).length > 1 ? "s" : ""})
+              </strong>
+            </div>
+            <small style={{ opacity: 0.8, display: "block", marginBottom: 8 }}>
+              Chaque jour : cours du jour de toutes les actions déjà chargées (1 appel EODHD groupé par bourse, 100 calls).
+              Les actions encore vides entrent dans le « Plan de chargement des fondamentaux » ci-dessous et sont
+              chargées progressivement selon votre budget et vos priorités : rien n&apos;est chargé d&apos;un coup.
+            </small>
+            <div className="finance-sync-pills-grid" style={{ maxHeight: 200, overflowY: "auto", paddingRight: 4 }}>
+              {exchanges
+                .filter(ex => ex.total > 0 && !["EUFUND", "CC"].includes(ex.code.toUpperCase()))
+                .map(ex => {
+                  const code = ex.code.toUpperCase();
+                  const checked = (prefs.full_data_exchanges || []).includes(code);
+                  const cov = fullCoverage[code];
+                  return (
+                    <label
+                      key={code}
+                      className={`finance-sync-pill ${checked ? "is-checked" : ""}`}
+                      title={`${ex.description} — charger toutes les actions de cette bourse progressivement`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        disabled={saving || running}
+                        onChange={() => toggleListCode("full_data_exchanges", code)}
+                      />
+                      <span>{ex.label}</span>
+                      <small>
+                        {checked && cov
+                          ? `${cov.with_data.toLocaleString("fr-FR")} / ${cov.total.toLocaleString("fr-FR")} actions avec données`
+                          : "toutes les actions"}
+                      </small>
+                    </label>
+                  );
+                })}
+            </div>
+          </div>
+
+          <FinanceFundamentalsPlanCard
+            prefs={prefs}
+            disabled={saving || running}
+            refreshKey={usageRefreshKey}
+            onChangePrefs={next => void persistPrefs(next)}
+          />
 
           {/* Bloc 4 : Enrichissement manuel & Indexation du Screener */}
           <div className="finance-sync-card">

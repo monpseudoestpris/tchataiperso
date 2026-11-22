@@ -14,6 +14,7 @@ from typing import Any
 import httpx
 
 from .config import Settings
+from .finance_eodhd_usage import record_eodhd_call
 from .finance_warehouse import (
     get_exchange_catalog_meta,
     get_snapshot,
@@ -67,28 +68,6 @@ def get_daily_sync_status() -> dict[str, Any]:
     """Retourne instantanément l'état en direct de la synchronisation automatique (0 I/O)."""
     return dict(_DAILY_SYNC_PROGRESS)
 
-
-def _is_fundamentals_sync_due(
-    last_fundamentals_run_at: str | None,
-    interval_days: int,
-    *,
-    force: bool = False,
-) -> tuple[bool, str | None]:
-    """Vérifie si l'enrichissement fondamental périodique (par défaut 1×/semaine) est dû."""
-    if force or not last_fundamentals_run_at:
-        return True, None
-    try:
-        raw = str(last_fundamentals_run_at).strip()
-        if raw.endswith("Z"):
-            raw = raw[:-1] + "+00:00"
-        last_dt = datetime.datetime.fromisoformat(raw)
-        if last_dt.tzinfo is None:
-            last_dt = last_dt.replace(tzinfo=datetime.timezone.utc)
-        due_dt = last_dt + datetime.timedelta(days=max(1, int(interval_days or 7)))
-        now_dt = datetime.datetime.now(datetime.timezone.utc)
-        return now_dt >= due_dt, due_dt.isoformat(timespec="seconds").replace("+00:00", "Z")
-    except ValueError:
-        return True, None
 
 _USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -255,6 +234,7 @@ async def sync_exchange_catalog_if_needed(
             follow_redirects=True,
             timeout=120.0,
         ) as client:
+            record_eodhd_call(url)
             resp = await client.get(url)
             if resp.status_code == 200:
                 raw = resp.json()
@@ -349,6 +329,7 @@ async def list_eodhd_exchanges_catalog(
                 follow_redirects=True,
                 timeout=15.0,
             ) as client:
+                record_eodhd_call(url)
                 resp = await client.get(url)
                 if resp.status_code == 200:
                     raw = resp.json()
@@ -429,8 +410,11 @@ async def get_daily_sync_state(
         )
 
     src_breakdown = get_warehouse_eod_source_breakdown(db_path)
+    from .finance_exchange_full_sync import get_full_exchange_coverage
+
     return {
         "preferences": prefs,
+        "full_exchange_coverage": get_full_exchange_coverage(db_path, list(prefs.get("full_data_exchanges") or [])),
         "is_running": _DAILY_SYNC_RUNNING,
         "progress": get_daily_sync_status(),
         "eodhd_indx_catalog_total": int((indx_cat or {}).get("total") or 0),
@@ -473,7 +457,6 @@ async def run_daily_sync_now(
         list_eodhd_indx_catalog,
         list_principal_indices,
     )
-    from .finance_screener import hydrate_screener_universe
     from .finance_watchlist import fetch_watchlist_quotes
 
     db_path = warehouse_db_path(settings)
@@ -508,24 +491,19 @@ async def run_daily_sync_now(
 
     exch_codes: list[str] = []
     seen_exch: set[str] = set()
-    for code in [*(prefs.get("exchanges") or []), *parse_auto_sync_exchange_codes(settings)]:
+    full_data_codes = [
+        str(c or "").strip().upper()
+        for c in (prefs.get("full_data_exchanges") or [])
+        if _EXCHANGE_CODE_RE.fullmatch(str(c or "").strip().upper()) and str(c).strip().upper() not in ("ALL", "EUFUND", "CC")
+    ]
+    for code in [*(prefs.get("exchanges") or []), *full_data_codes, *parse_auto_sync_exchange_codes(settings)]:
         clean_c = str(code or "").strip().upper()
         if clean_c and clean_c != "ALL" and _EXCHANGE_CODE_RE.fullmatch(clean_c) and clean_c not in seen_exch:
             seen_exch.add(clean_c)
             exch_codes.append(clean_c)
 
-    fund_interval_days = int(prefs.get("screener_fundamentals_interval_days") or 7)
-    fund_due, fund_next_due_at = _is_fundamentals_sync_due(
-        prefs.get("last_fundamentals_run_at"),
-        fund_interval_days,
-        force=refresh,
-    )
-    will_run_fundamentals = bool(
-        prefs.get("screener_fundamentals", True)
-        and target_index_codes
-        and not settings.demo_mode
-        and fund_due
-    )
+    # Fondamentaux : file d'attente priorisée sous budget quotidien (remplace l'ancien cycle hebdomadaire)
+    will_run_fundamentals = bool(prefs.get("screener_fundamentals", True) and not settings.demo_mode)
 
     total_steps = (
         (1 if prefs.get("principal_indices") else 0)
@@ -534,6 +512,7 @@ async def run_daily_sync_now(
         + (1 if will_run_fundamentals else 0)
         + (1 if prefs.get("watchlists") else 0)
         + (1 if exch_codes else 0)
+        + (1 if full_data_codes and not settings.demo_mode else 0)
     )
     total_steps = max(1, total_steps)
     completed_steps = 0
@@ -564,7 +543,6 @@ async def run_daily_sync_now(
                 "screener_fundamentals": {
                     "skipped": False,
                     "reason": None,
-                    "next_due_at": fund_next_due_at,
                     "enriched": 0,
                     "cached": 0,
                     "errors": 0,
@@ -630,59 +608,6 @@ async def run_daily_sync_now(
                 completed_steps += 1
                 _update_sync_progress(indices_done=idx_pos, completed_steps=completed_steps)
 
-            # Enrichissement fondamental périodique (par défaut 1 fois / semaine, pas tous les jours)
-            if prefs.get("screener_fundamentals", True) and synced_symbols and not settings.demo_mode:
-                if not fund_due:
-                    summary["screener_fundamentals"] = {
-                        "skipped": True,
-                        "reason": "weekly_cooldown",
-                        "last_run_at": prefs.get("last_fundamentals_run_at"),
-                        "next_due_at": fund_next_due_at,
-                        "enriched": 0,
-                        "cached": 0,
-                        "errors": 0,
-                    }
-                else:
-                    daily_cap = max(5, min(200, int(prefs.get("screener_fundamentals_daily_cap") or 40)))
-                    _update_sync_progress(
-                        phase="screener_fundamentals",
-                        current_label="Fondamentaux hebdomadaires (Screener)…",
-                        fundamentals_done=0,
-                        fundamentals_total=min(daily_cap, len(synced_symbols)),
-                        completed_steps=completed_steps,
-                    )
-
-                    def _on_fund_progress(done_n: int, tot_n: int, sym: str) -> None:
-                        _update_sync_progress(
-                            phase="screener_fundamentals",
-                            current_label=f"Fondamentaux {sym} ({done_n}/{tot_n})…",
-                            fundamentals_done=done_n,
-                            fundamentals_total=tot_n,
-                        )
-
-                    try:
-                        hyd_res = await hydrate_screener_universe(
-                            settings,
-                            universe_type="watchlist",
-                            watchlist_symbols=synced_symbols,
-                            include_fundamentals=True,
-                            max_fundamentals=daily_cap,
-                            refresh_eod=False,
-                            on_progress=_on_fund_progress,
-                        )
-                        fundamentals_ran = True
-                        summary["screener_fundamentals"] = {
-                            "skipped": False,
-                            "reason": None,
-                            "enriched": int(hyd_res.get("fundamentals_enriched") or 0),
-                            "cached": int(hyd_res.get("fundamentals_cached") or 0),
-                            "errors": int(hyd_res.get("fundamentals_errors") or 0),
-                        }
-                    except Exception as exc:
-                        summary["errors"].append(f"screener_fundamentals: {exc}")
-                    completed_steps += 1
-                    _update_sync_progress(completed_steps=completed_steps)
-
             if prefs.get("watchlists"):
                 _update_sync_progress(
                     phase="watchlists",
@@ -711,14 +636,63 @@ async def run_daily_sync_now(
                 completed_steps += 1
                 _update_sync_progress(completed_steps=completed_steps)
 
+            # Bourses complètes (ex. tout Paris) : cours du jour en bulk (les fondamentaux passent par la file)
+            if full_data_codes and not settings.demo_mode:
+                from .finance_exchange_full_sync import run_full_exchange_sync
+
+                _update_sync_progress(
+                    phase="full_exchanges",
+                    current_label=f"Bourses complètes ({', '.join(full_data_codes)}) : cours du jour…",
+                    completed_steps=completed_steps,
+                )
+                try:
+                    summary["full_exchanges"] = await run_full_exchange_sync(settings, full_data_codes)
+                except Exception as exc:
+                    summary["errors"].append(f"full_exchanges: {exc}")
+                completed_steps += 1
+                _update_sync_progress(completed_steps=completed_steps)
+
+            # Fondamentaux : file priorisée, budget quotidien, calendrier des résultats
+            if will_run_fundamentals:
+                from .finance_fundamentals_scheduler import run_fundamentals_budget
+
+                _update_sync_progress(
+                    phase="screener_fundamentals",
+                    current_label="Fondamentaux : file d'attente priorisée…",
+                    fundamentals_done=0,
+                    fundamentals_total=0,
+                    completed_steps=completed_steps,
+                )
+
+                def _on_fund_progress(done_n: int, tot_n: int, sym: str) -> None:
+                    _update_sync_progress(
+                        phase="screener_fundamentals",
+                        current_label=f"Fondamentaux {sym} ({done_n}/{tot_n})…",
+                        fundamentals_done=done_n,
+                        fundamentals_total=tot_n,
+                    )
+
+                try:
+                    fund_res = await run_fundamentals_budget(settings, on_progress=_on_fund_progress)
+                    fundamentals_ran = True
+                    summary["screener_fundamentals"] = {
+                        "skipped": False,
+                        "reason": fund_res.get("stopped_reason"),
+                        "enriched": int(fund_res.get("loaded") or 0),
+                        "cached": 0,
+                        "errors": int(fund_res.get("errors") or 0),
+                        "calls": int(fund_res.get("calls") or 0),
+                        "reported_marked": int(fund_res.get("reported_marked") or 0),
+                    }
+                except Exception as exc:
+                    summary["errors"].append(f"screener_fundamentals: {exc}")
+                completed_steps += 1
+                _update_sync_progress(completed_steps=completed_steps)
+
             record_sync_run_status(db_path, summary, fundamentals_ran=fundamentals_ran)
             idx_cnt = len(summary.get("indices") or {})
             sf = summary.get("screener_fundamentals") or {}
-            fund_part = (
-                "fondamentaux à jour (cycle hebdomadaire)"
-                if sf.get("skipped")
-                else f"{sf.get('enriched', 0)} fondamentaux enrichis"
-            )
+            fund_part = f"{sf.get('enriched', 0)} fondamentaux chargés ({sf.get('calls', 0)} calls)"
             done_msg = (
                 f"Synchronisation terminée ({summary.get('principal_indices_count', 0)} indices, "
                 f"{idx_cnt} compositions + technique multi-unités, {fund_part}, "
@@ -1184,6 +1158,58 @@ async def start_screener_hydrate_background(
     }
 
 
+async def _run_fundamentals_queue_tracked(settings: Settings) -> dict[str, Any]:
+    global _DAILY_SYNC_RUNNING
+    from .finance_fundamentals_scheduler import run_fundamentals_budget
+
+    async with _DAILY_SYNC_LOCK:
+        _DAILY_SYNC_RUNNING = True
+        _update_sync_progress(
+            is_running=True,
+            trigger="manual",
+            phase="screener_fundamentals",
+            current_label="Fondamentaux : file d'attente priorisée…",
+            completed_steps=0,
+            total_steps=1,
+            fundamentals_done=0,
+            fundamentals_total=0,
+        )
+
+        def _on_progress(done_n: int, tot_n: int, sym: str) -> None:
+            _update_sync_progress(
+                current_label=f"Fondamentaux {sym} ({done_n}/{tot_n})…",
+                completed_steps=done_n,
+                total_steps=max(1, tot_n),
+                fundamentals_done=done_n,
+                fundamentals_total=tot_n,
+            )
+
+        try:
+            res = await run_fundamentals_budget(settings, on_progress=_on_progress)
+            reason = res.get("stopped_reason")
+            _update_sync_progress(
+                last_message=(
+                    f"Fondamentaux : {res.get('loaded', 0)} titre(s) chargé(s), {res.get('errors', 0)} échec(s), "
+                    f"{res.get('calls', 0)} calls EODHD" + (f" — {reason}." if reason else ".")
+                ),
+                last_completed_at=datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+            )
+            return res
+        finally:
+            _DAILY_SYNC_RUNNING = False
+            _update_sync_progress(is_running=False, phase="idle", current_label="", percent=100)
+
+
+async def start_fundamentals_run_background(settings: Settings) -> bool:
+    """Lance un passage de la file des fondamentaux en tâche de fond (retourne `False` si une synchro tourne déjà)."""
+    return _spawn_detached_sync_task(
+        _run_fundamentals_queue_tracked(settings),
+        phase="screener_fundamentals",
+        label="Fondamentaux : file d'attente priorisée…",
+        trigger="manual",
+    )
+
+
 async def run_daily_exchange_catalog_sync_loop(settings: Settings) -> None:
     """Tâche de fond quotidienne récupérant automatiquement les principaux indices, leur contenu et les sélections."""
     try:
@@ -1398,6 +1424,7 @@ async def search_eodhd_funds_live(
                 follow_redirects=True,
                 timeout=12.0,
             ) as client:
+                record_eodhd_call(url)
                 resp = await client.get(url)
                 if resp.status_code == 200:
                     raw = resp.json()

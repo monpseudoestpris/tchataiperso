@@ -17,6 +17,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
+  boostFundamentalsQueue,
   exportScreenerToWatchlist,
   fetchFinanceScreenerMeta,
   fetchFinanceSyncStatus,
@@ -27,6 +28,7 @@ import {
   type ScreenerCoverage,
   type ScreenerFieldMeta,
   type ScreenerPreset,
+  type ScreenerQueryRequest,
   type ScreenerRow,
   type ScreenerRule,
   type ScreenerTimeframe,
@@ -279,6 +281,9 @@ export function FinanceScreenerPanel({
   const [items, setItems] = useState<ScreenerRow[]>([]);
   const [total, setTotal] = useState<number>(0);
   const [universeTotal, setUniverseTotal] = useState<number>(0);
+  const [missingCount, setMissingCount] = useState<number>(0);
+  const [fillBatchSize, setFillBatchSize] = useState<number>(50);
+  const [fillingMissing, setFillingMissing] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(false);
   const [bgProgress, setBgProgress] = useState<FinanceSyncProgress | null>(null);
   const [exporting, setExporting] = useState<boolean>(false);
@@ -344,55 +349,85 @@ export function FinanceScreenerPanel({
       onlyWithFundamentals,
   );
 
+  const queryRequest = useMemo<ScreenerQueryRequest>(
+    () => ({
+      timeframe,
+      universe_type: universeType,
+      universe_value: universeType === "all" ? null : universeValue || null,
+      index_code: indexFilter,
+      market_zone: marketZoneFilter,
+      country: countryFilter,
+      exchange: exchangeFilter,
+      currency: currencyFilter,
+      cap_category: capCategoryFilter,
+      search: searchText,
+      sector: sectorFilter,
+      only_with_fundamentals: onlyWithFundamentals,
+      rules: apiRules,
+      sort_by: sortBy,
+      sort_dir: sortDir,
+      limit: 120,
+      offset: 0,
+    }),
+    [
+      timeframe,
+      universeType,
+      universeValue,
+      indexFilter,
+      marketZoneFilter,
+      countryFilter,
+      exchangeFilter,
+      currencyFilter,
+      capCategoryFilter,
+      searchText,
+      sectorFilter,
+      onlyWithFundamentals,
+      apiRules,
+      sortBy,
+      sortDir,
+    ],
+  );
+
   const runQuery = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const res = await queryFinanceScreener({
-        timeframe,
-        universe_type: universeType,
-        universe_value: universeType === "all" ? null : universeValue || null,
-        index_code: indexFilter,
-        market_zone: marketZoneFilter,
-        country: countryFilter,
-        exchange: exchangeFilter,
-        currency: currencyFilter,
-        cap_category: capCategoryFilter,
-        search: searchText,
-        sector: sectorFilter,
-        only_with_fundamentals: onlyWithFundamentals,
-        rules: apiRules,
-        sort_by: sortBy,
-        sort_dir: sortDir,
-        limit: 120,
-        offset: 0,
-      });
+      const res = await queryFinanceScreener(queryRequest);
       setItems(res.items || []);
       setTotal(res.total || 0);
       setUniverseTotal(res.universe_total || 0);
+      setMissingCount(res.missing_data_count || 0);
       setCoverage(res.coverage);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Erreur lors de l'exécution du screener.");
     } finally {
       setLoading(false);
     }
-  }, [
-    timeframe,
-    universeType,
-    universeValue,
-    indexFilter,
-    marketZoneFilter,
-    countryFilter,
-    exchangeFilter,
-    currencyFilter,
-    capCategoryFilter,
-    searchText,
-    sectorFilter,
-    onlyWithFundamentals,
-    apiRules,
-    sortBy,
-    sortDir,
-  ]);
+  }, [queryRequest]);
+
+  async function handleFillMissing() {
+    if (fillingMissing || isBgRunning || missingCount === 0) return;
+    setFillingMissing(true);
+    setError(null);
+    setBanner(null);
+    try {
+      const res = await boostFundamentalsQueue({
+        screener_filters: queryRequest,
+        batch_size: fillBatchSize,
+        run: true,
+      });
+      window.dispatchEvent(new Event("finance-sync-started"));
+      setBanner(
+        res.started
+          ? `${res.boosted} titre(s) placé(s) en tête de la file des fondamentaux : chargement en arrière-plan (dans la limite du budget du jour)…`
+          : `${res.boosted} titre(s) placé(s) en tête de file : ils seront chargés au prochain passage (une synchronisation est déjà en cours).`,
+      );
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Impossible de compléter les données manquantes.");
+    } finally {
+      setFillingMissing(false);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -1148,6 +1183,39 @@ export function FinanceScreenerPanel({
               <strong>{TIMEFRAME_SHORT[timeframe]}</strong>
             </span>
           </div>
+
+          {missingCount > 0 && (
+            <div className={styles.fillMissingGroup}>
+              <span className={styles.muted} title="Titres référencés depuis la liste de la bourse, sans cours ni fondamentaux chargés">
+                {missingCount} sans données
+              </span>
+              <select
+                className={styles.opSelect}
+                value={fillBatchSize}
+                onChange={e => setFillBatchSize(Number(e.target.value))}
+                aria-label="Nombre de titres à compléter"
+                disabled={fillingMissing || isBgRunning}
+              >
+                {[25, 50, 100].map(n => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                className={styles.secondaryBtn}
+                onClick={() => void handleFillMissing()}
+                disabled={fillingMissing || isBgRunning}
+                title={`Charge en arrière-plan les cours et fondamentaux EODHD d'un lot de titres sans données correspondant aux filtres actuels (≈ ${(Math.min(fillBatchSize, missingCount) * 11).toLocaleString("fr-FR")} calls EODHD : 1 historique + 10 fondamentaux par titre)`}
+              >
+                {fillingMissing || isBgRunning ? <LoaderCircle size={13} className="spin" /> : <Database size={13} />}
+                <span>
+                  Compléter {Math.min(fillBatchSize, missingCount)} (≈ {(Math.min(fillBatchSize, missingCount) * 11).toLocaleString("fr-FR")} calls)
+                </span>
+              </button>
+            </div>
+          )}
 
           <div className={styles.colGroupTabs} role="tablist" aria-label="Vue des colonnes">
             {(

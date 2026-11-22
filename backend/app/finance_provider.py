@@ -14,6 +14,7 @@ from typing import Any
 import httpx
 
 from .config import Settings
+from .finance_eodhd_usage import record_eodhd_call
 from .finance_statements import (
     STATEMENT_TYPE_BY_KEY,
     build_period_from_series,
@@ -394,6 +395,7 @@ async def fetch_eodhd_fundamentals_json(ticker: str, api_key: str) -> dict[str, 
             follow_redirects=True,
             timeout=20.0,
         ) as client:
+            record_eodhd_call(url)
             resp = await client.get(url)
             if resp.status_code == 200:
                 data = resp.json()
@@ -476,6 +478,13 @@ def persist_eodhd_fundamentals_to_warehouse(
         {"earnings_history": earnings_history, "highlights": highlights, "currency": currency},
         currency=currency,
     )
+    # Tout chargement EODHD met à jour l'échéancier intelligent (dernière période, prochain contrôle)
+    try:
+        from .finance_fundamentals_queue import record_fetch
+
+        record_fetch(db_path, eod_ticker or symbol, fundamentals, aliases=[symbol])
+    except Exception as exc:
+        _logger.debug("Échéancier des fondamentaux non mis à jour (%s): %s", symbol, exc)
     return annual_series, quarterly_series, earnings_history
 
 
@@ -488,7 +497,16 @@ async def get_unified_financial_statements(
     db_path = warehouse_db_path(settings)
     clean_sym = symbol.strip()
     canonical = resolve_canonical_symbol(db_path, clean_sym)
-    ttl_seconds = max(60, int(settings.finance_fundamentals_ttl_hours) * 3600)
+    ttl_seconds: float | None = max(60, int(settings.finance_fundamentals_ttl_hours) * 3600)
+    if not refresh:
+        # Fraîcheur intelligente : à jour jusqu'au prochain contrôle prévu (nouvelle publication attendue)
+        from .finance_fundamentals_queue import is_fresh_by_schedule
+
+        schedule_fresh = is_fresh_by_schedule(db_path, [canonical, *resolve_candidate_eod_tickers(db_path, canonical)])
+        if schedule_fresh is True:
+            ttl_seconds = None
+        elif schedule_fresh is False:
+            ttl_seconds = 0
 
     eod_key = (
         settings.eod_historical_data_key.get_secret_value()

@@ -19,6 +19,8 @@ from typing import Any
 
 import httpx
 
+from .finance_eodhd_usage import record_eodhd_call
+
 _logger = logging.getLogger("uvicorn.error")
 
 _TIMEOUT = httpx.Timeout(12.0, connect=5.0)
@@ -114,6 +116,7 @@ async def fetch_eodhd_sentiments(
     )
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=False) as client:
+            record_eodhd_call(url)
             resp = await client.get(url)
             if resp.status_code != 200:
                 return None
@@ -177,6 +180,7 @@ async def fetch_eodhd_historical_mcap(
     )
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=False) as client:
+            record_eodhd_call(url)
             resp = await client.get(url)
             if resp.status_code != 200:
                 return None
@@ -232,6 +236,7 @@ async def fetch_eodhd_earnings_calendar(
     )
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=False) as client:
+            record_eodhd_call(url)
             resp = await client.get(url)
             if resp.status_code != 200:
                 return None
@@ -281,6 +286,7 @@ async def fetch_eodhd_insider_transactions(
     )
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=False) as client:
+            record_eodhd_call(url)
             resp = await client.get(url)
             if resp.status_code != 200:
                 return None
@@ -340,6 +346,7 @@ async def fetch_eodhd_macro_context(
             f"?indicator={indicator}&api_token={urllib.parse.quote(api_key)}&fmt=json"
         )
         try:
+            record_eodhd_call(url)
             resp = await client.get(url)
             if resp.status_code != 200:
                 return None
@@ -365,6 +372,7 @@ async def fetch_eodhd_macro_context(
             f"?filter[year]={year}&api_token={urllib.parse.quote(api_key)}&fmt=json"
         )
         try:
+            record_eodhd_call(url)
             resp = await client.get(url)
             if resp.status_code != 200:
                 return None

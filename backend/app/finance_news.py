@@ -11,6 +11,7 @@ from typing import Any
 import httpx
 
 from .config import Settings
+from .finance_eodhd_usage import record_eodhd_call
 from .google_cloud import has_llm_access, post_chat_completion
 from .providers import _check_response, _json, _safe_web_url, search_web
 
@@ -41,6 +42,7 @@ async def fetch_eodhd_news(
     )
     try:
         async with httpx.AsyncClient(timeout=12.0, follow_redirects=False) as client:
+            record_eodhd_call(url)
             resp = await client.get(url)
             if resp.status_code != 200:
                 return None
@@ -108,6 +110,7 @@ async def fetch_yahoo_symbol_news(
     )
     articles: list[dict[str, str]] = []
     try:
+        record_eodhd_call(url)
         resp = await client.get(url, timeout=10.0)
         if resp.status_code != 200:
             return []

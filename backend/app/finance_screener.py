@@ -238,6 +238,9 @@ _COMPARABLE_COLUMNS: frozenset[str] = frozenset(
     f["key"] for f in SCREENER_FIELDS if f.get("comparable")
 )
 
+# Lignes « catalogue » sans cours ni fondamentaux (à compléter titre par titre)
+_MISSING_DATA_SQL = "(s.price IS NULL AND s.bars_count = 0 AND s.has_fundamentals = 0)"
+
 _ALLOWED_METRIC_OPS: dict[str, str] = {
     "gt": ">",
     "gte": ">=",
@@ -1126,6 +1129,7 @@ def query_screener(
     exchange: str = "",
     currency: str = "",
     only_with_fundamentals: bool = False,
+    only_missing_data: bool = False,
     rules: list[dict[str, Any]] | None = None,
     sort_by: str = "market_cap",
     sort_dir: str = "desc",
@@ -1236,6 +1240,10 @@ def query_screener(
         params.append(currency.strip().upper())
     if only_with_fundamentals:
         clauses.append("s.has_fundamentals = 1")
+    filters_where = " AND ".join(clauses) if clauses else "1=1"
+    filters_params = list(params)
+    if only_missing_data:
+        clauses.append(_MISSING_DATA_SQL)
 
     extra_tfs: set[str] = set()
     post_rules: list[dict[str, Any]] = []
@@ -1252,7 +1260,10 @@ def query_screener(
     safe_sort = sort_by if sort_by in _SORTABLE_COLUMNS else "market_cap"
     sort_expr = _col_expr(safe_sort, main_tf, main_tf, extra_tfs)
     safe_dir = "ASC" if str(sort_dir or "").strip().lower() == "asc" else "DESC"
-    order_sql = f"ORDER BY ({sort_expr} IS NULL) ASC, {sort_expr} {safe_dir}, s.symbol ASC"
+    order_sql = (
+        f"ORDER BY ({sort_expr} IS NULL) ASC, (COALESCE(t_main.price, s.price) IS NULL) ASC, "
+        f"{sort_expr} {safe_dir}, s.symbol ASC"
+    )
 
     join_sql_parts = [
         "FROM finance_screener_snapshots s",
@@ -1288,6 +1299,11 @@ def query_screener(
             universe_params,
         ).fetchone()
         universe_total = int((u_total_row["cnt"] if u_total_row else 0) or 0)
+        missing_row = conn.execute(
+            f"SELECT COUNT(*) AS cnt FROM finance_screener_snapshots s WHERE {filters_where} AND {_MISSING_DATA_SQL}",
+            filters_params,
+        ).fetchone()
+        missing_data_count = int((missing_row["cnt"] if missing_row else 0) or 0)
 
         if not post_rules:
             total_row = conn.execute(
@@ -1318,6 +1334,7 @@ def query_screener(
         "timeframe": main_tf,
         "total": total,
         "universe_total": universe_total,
+        "missing_data_count": missing_data_count,
         "offset": safe_offset,
         "limit": safe_limit,
         "items": items,
@@ -1421,7 +1438,7 @@ async def hydrate_screener_universe(
                 regular_fetch.append(canonical)
 
         to_fetch = [*priority_fetch, *regular_fetch]
-        cap = max(1, min(120, int(max_fundamentals or 40)))
+        cap = max(1, min(500, int(max_fundamentals or 40)))
         batch = to_fetch[:cap]
         total_batch = len(batch)
         done_batch = 0

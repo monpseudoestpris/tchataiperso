@@ -27,6 +27,7 @@ from typing import Any
 import httpx
 
 from .config import Settings
+from .finance_eodhd_usage import record_eodhd_call
 from .finance_eodhd_extras import (
     fetch_eodhd_earnings_calendar,
     fetch_eodhd_historical_mcap,
@@ -147,6 +148,7 @@ async def _fetch_eodhd_bars_range(ticker: str, api_key: str, from_date: str) -> 
         async with httpx.AsyncClient(
             headers={"User-Agent": _USER_AGENT}, follow_redirects=True, timeout=20.0
         ) as client:
+            record_eodhd_call(url)
             resp = await client.get(url)
             if resp.status_code == 200:
                 data = resp.json()
@@ -180,6 +182,7 @@ async def _fetch_eodhd_dividends(ticker: str, api_key: str) -> list[dict[str, An
         async with httpx.AsyncClient(
             headers={"User-Agent": _USER_AGENT}, follow_redirects=True, timeout=15.0
         ) as client:
+            record_eodhd_call(url)
             resp = await client.get(url)
             if resp.status_code == 200:
                 data = resp.json()
@@ -208,6 +211,7 @@ async def _fetch_yahoo_chart_10y(yahoo_symbol: str) -> tuple[list[dict[str, Any]
         async with httpx.AsyncClient(
             headers={"User-Agent": _USER_AGENT}, follow_redirects=True, timeout=20.0
         ) as client:
+            record_eodhd_call(url)
             resp = await client.get(url)
             if resp.status_code != 200:
                 return [], []
@@ -274,6 +278,7 @@ async def _fetch_yahoo_extended_summary(yahoo_symbol: str) -> dict[str, Any]:
             )
             if crumb:
                 url += f"&crumb={urllib.parse.quote(crumb)}"
+            record_eodhd_call(url)
             resp = await client.get(url)
             if resp.status_code == 200:
                 res = (resp.json().get("quoteSummary") or {}).get("result") or []
@@ -1408,6 +1413,17 @@ async def _sync_eodhd_extras(
     }
 
 
+def _fundamentals_schedule_safe(db_path: Any, canonical: str) -> dict[str, Any] | None:
+    """Fraîcheur des fondamentaux (période publiée, publication, prochain contrôle) pour l'affichage."""
+    try:
+        from .finance_fundamentals_queue import get_symbol_schedule
+
+        return get_symbol_schedule(db_path, [canonical, *resolve_candidate_eod_tickers(db_path, canonical)])
+    except Exception as exc:
+        _logger.debug("Échéancier des fondamentaux indisponible (%s): %s", canonical, exc)
+        return None
+
+
 async def get_financial_dossier(
     settings: Settings,
     symbol: str,
@@ -1812,6 +1828,7 @@ async def get_financial_dossier(
         "source_provider": statements.get("source_provider") or ("eodhd" if (eod_fund or is_eufund) else "yahoo_finance"),
         "source_label": statements.get("source_label") or ("EOD Historical Data" if (eod_fund or is_eufund) else "Yahoo Finance"),
         "warehouse_stats": get_warehouse_stats(db_path, canonical),
+        "fundamentals_schedule": _fundamentals_schedule_safe(db_path, canonical),
         "header": {
             "name": display_name,
             "logo_url": resolve_eodhd_logo_url(eod_fund, canonical),

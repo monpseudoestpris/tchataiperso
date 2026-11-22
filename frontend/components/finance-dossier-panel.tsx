@@ -460,6 +460,22 @@ export function FinanceDossierPanel({
               {dossier.warehouse_stats.annual_periods_count || 0} exercices
             </span>
           )}
+          {dossier.fundamentals_schedule?.last_period_end && (
+            <span
+              className="finance-stmt-meta-date"
+              title="Les fondamentaux ne sont rechargés qu'après une nouvelle publication de résultats (calendrier EODHD ou saison habituelle), au plus tard 120 / 200 jours après le dernier chargement. « Actualiser » force le rechargement."
+            >
+              Fondamentaux à jour au {new Date(dossier.fundamentals_schedule.last_period_end).toLocaleDateString("fr-FR")}
+              {dossier.fundamentals_schedule.last_report_date
+                ? ` (publiés le ${new Date(dossier.fundamentals_schedule.last_report_date).toLocaleDateString("fr-FR")})`
+                : ""}
+              {dossier.fundamentals_schedule.reported_pending
+                ? " · nouveaux résultats publiés, rechargement prévu"
+                : dossier.fundamentals_schedule.next_due_at
+                  ? ` · prochain contrôle vers le ${new Date(dossier.fundamentals_schedule.next_due_at).toLocaleDateString("fr-FR")}`
+                  : ""}
+            </span>
+          )}
         </div>
         <div className="finance-dossier-topbar-right">
           <div className="finance-timeframe-selector">

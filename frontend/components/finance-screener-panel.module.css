@@ -149,6 +149,13 @@
   font-weight: 600;
 }
 
+.fillMissingGroup {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
 .controlGroup {
   display: flex;
   align-items: center;

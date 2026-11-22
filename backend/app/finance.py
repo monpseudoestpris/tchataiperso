@@ -13,6 +13,7 @@ import httpx
 from fastapi import HTTPException
 
 from .config import Settings
+from .finance_eodhd_usage import record_eodhd_call
 from .finance_ranges import CHART_RANGES, DEFAULT_CHART_RANGE
 from .documents import MAX_EXTRACTED_CHARS
 from .models import Attachment
@@ -280,6 +281,7 @@ async def search_yahoo_ticker(client: httpx.AsyncClient, query: str) -> dict[str
 
     url = f"https://query2.finance.yahoo.com/v1/finance/search?q={urllib.parse.quote(clean_q)}&quotesCount=5&newsCount=0"
     try:
+        record_eodhd_call(url)
         resp = await client.get(url)
         if resp.status_code != 200:
             return None
@@ -316,6 +318,7 @@ async def fetch_yahoo_chart(
     """Fetches chart data (OHLCV, current price, metadata) for symbol."""
     url = f"https://query2.finance.yahoo.com/v8/finance/chart/{urllib.parse.quote(symbol)}?range={range_period}&interval={interval}"
     try:
+        record_eodhd_call(url)
         resp = await client.get(url)
         if resp.status_code == 200:
             data = resp.json()
@@ -339,6 +342,7 @@ async def fetch_yahoo_quote_summary(
         url += f"&crumb={urllib.parse.quote(crumb)}"
 
     try:
+        record_eodhd_call(url)
         resp = await client.get(url)
         if resp.status_code == 200:
             data = resp.json()
@@ -751,6 +755,7 @@ async def lookup_eodhd_search_metadata(
         f"?api_token={urllib.parse.quote(api_key)}&fmt=json"
     )
     try:
+        record_eodhd_call(url)
         resp = await client.get(url, timeout=10.0)
         if resp.status_code != 200:
             return None
@@ -819,6 +824,7 @@ async def search_eodhd_ticker(
     if asset_type:
         url += f"&type={urllib.parse.quote(asset_type)}"
     try:
+        record_eodhd_call(url)
         resp = await client.get(url, timeout=10.0)
         if resp.status_code != 200:
             return None
@@ -856,6 +862,7 @@ async def fetch_eodhd_realtime(
     """Fetches real-time / delayed quote from EOD Historical Data."""
     url = f"https://eodhd.com/api/real-time/{urllib.parse.quote(ticker)}?api_token={urllib.parse.quote(api_key)}&fmt=json"
     try:
+        record_eodhd_call(url)
         resp = await client.get(url, timeout=10.0)
         if resp.status_code == 200:
             data = resp.json()
@@ -909,6 +916,7 @@ async def fetch_eodhd_historical_eod(
     """Fetches historical daily bars (EOD) from EOD Historical Data."""
     url = f"https://eodhd.com/api/eod/{urllib.parse.quote(ticker)}?order=d&fmt=json&limit={limit}&api_token={urllib.parse.quote(api_key)}"
     try:
+        record_eodhd_call(url)
         resp = await client.get(url, timeout=15.0)
         if resp.status_code == 200:
             data = resp.json()
@@ -927,6 +935,7 @@ async def fetch_eodhd_fundamentals(
     """Fetches fundamentals from EOD Historical Data (if plan permits)."""
     url = f"https://eodhd.com/api/fundamentals/{urllib.parse.quote(ticker)}?api_token={urllib.parse.quote(api_key)}&fmt=json"
     try:
+        record_eodhd_call(url)
         resp = await client.get(url, timeout=15.0)
         if resp.status_code == 200:
             data = resp.json()

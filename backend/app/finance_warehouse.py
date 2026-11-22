@@ -327,6 +327,26 @@ CREATE TABLE IF NOT EXISTS finance_screener_snapshots (
 );
 
 CREATE INDEX IF NOT EXISTS idx_fin_scr_exch_sec ON finance_screener_snapshots (exchange, sector);
+
+CREATE TABLE IF NOT EXISTS finance_fundamentals_queue (
+    symbol TEXT PRIMARY KEY,
+    priority INTEGER NOT NULL DEFAULT 99,
+    reason TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'pending',
+    last_fetched_at TEXT,
+    last_period_end TEXT,
+    last_report_date TEXT,
+    typical_report_days TEXT NOT NULL DEFAULT '[]',
+    cadence TEXT NOT NULL DEFAULT '',
+    next_due_at TEXT,
+    reported_pending INTEGER NOT NULL DEFAULT 0,
+    stale_retries INTEGER NOT NULL DEFAULT 0,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    updated_at TEXT NOT NULL
+) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS idx_fin_fundq_due ON finance_fundamentals_queue (priority, next_due_at);
 CREATE INDEX IF NOT EXISTS idx_fin_scr_mcap ON finance_screener_snapshots (market_cap);
 CREATE INDEX IF NOT EXISTS idx_fin_scr_pe ON finance_screener_snapshots (pe_ttm);
 CREATE INDEX IF NOT EXISTS idx_fin_scr_roic ON finance_screener_snapshots (roic_pct);
@@ -2090,6 +2110,10 @@ DEFAULT_SYNC_PREFERENCES: dict[str, Any] = {
     "index_codes": [],
     "watchlists": False,
     "exchanges": [],
+    "full_data_exchanges": [],
+    "fundamentals_budget_pct": 10,
+    "fundamentals_quota_safety_pct": 15,
+    "fundamentals_priority_order": ["watchlists", "indices", "full_exchanges"],
 }
 
 
@@ -2124,6 +2148,17 @@ def _normalize_sync_preferences(raw: dict[str, Any] | None) -> dict[str, Any]:
     except (TypeError, ValueError):
         interval_days = int(DEFAULT_SYNC_PREFERENCES["screener_fundamentals_interval_days"])
 
+    def _bounded_int(key: str, lo: int, hi: int) -> int:
+        try:
+            return max(lo, min(hi, int(src.get(key, DEFAULT_SYNC_PREFERENCES[key]))))
+        except (TypeError, ValueError):
+            return int(DEFAULT_SYNC_PREFERENCES[key])
+
+    default_order = list(DEFAULT_SYNC_PREFERENCES["fundamentals_priority_order"])
+    raw_order = src.get("fundamentals_priority_order")
+    order = [k for k in raw_order if k in default_order] if isinstance(raw_order, list) else []
+    order = list(dict.fromkeys(order)) + [k for k in default_order if k not in order]
+
     return {
         "enabled": bool(src.get("enabled", DEFAULT_SYNC_PREFERENCES["enabled"])),
         "principal_indices": bool(
@@ -2141,6 +2176,10 @@ def _normalize_sync_preferences(raw: dict[str, Any] | None) -> dict[str, Any]:
         "index_codes": _clean_list(src.get("index_codes")),
         "watchlists": bool(src.get("watchlists", DEFAULT_SYNC_PREFERENCES["watchlists"])),
         "exchanges": _clean_list(src.get("exchanges")),
+        "full_data_exchanges": _clean_list(src.get("full_data_exchanges")),
+        "fundamentals_budget_pct": _bounded_int("fundamentals_budget_pct", 1, 50),
+        "fundamentals_quota_safety_pct": _bounded_int("fundamentals_quota_safety_pct", 5, 50),
+        "fundamentals_priority_order": order,
     }
 
 
