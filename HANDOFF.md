@@ -25,10 +25,14 @@ Application de chat IA multi-fournisseurs (`tchataiperso`) composée d'un backen
 **Statut** : Implémenté et vérifié.
 
 ## 3. Completed Work
-- **Synchro quotidienne automatique du contenu complet des 9 principaux indices (`finance_funds.py`, `finance_warehouse.py`, `main.py`, `FinanceSyncPanel`)** :
-  - `DEFAULT_SYNC_PREFERENCES` active désormais par défaut `major_indices_constituents: True` (récupère chaque jour les compositions + cours EOD + indicateurs techniques 4 unités + IsoPressure des 9 principaux indices : `CAC40`, `SP500`, `NASDAQ100`, `DJI`, `EUROSTOXX50`, `DAX40`, `FTSE100`, `SMI20`, `NIKKEI225`) ainsi que `screener_fundamentals: True` (`screener_fundamentals_daily_cap: 40` dossiers/jour, cache 15j).
-  - Verrou anti-concurrence `_DAILY_SYNC_LOCK` + état `is_running` dans `finance_funds.py` ; boucle `run_daily_exchange_catalog_sync_loop` lancée au démarrage même en repli Yahoo Finance sans clé EODHD (`main.py`).
-  - UI : contrôles dédiés dans `FinanceSyncPanel` (case « 9 principaux indices auto », enrichissement fondamental progressif avec quota `20`/`40`/`80`/`120` par jour, badge `Auto`) et accès direct via le bouton **« Synchro auto 24h »** depuis `FinanceScreenerPanel`.
+- **Priorité stricte EODHD sur toute la chaîne Finance & Migration en un clic de l'entrepôt (`finance_provider.py`, `finance_warehouse.py`, `finance_dossier.py`, `finance.py`, `finance_news.py`, `finance_watchlist.py`, `finance_indices.py`, `finance_screener.py`, `finance_funds.py`, `FinanceSyncPanel`)** :
+  - **États financiers & fondamentaux** (`finance_provider.py`, `finance_warehouse.py`, `finance_screener.py`) : un snapshot `yahoo_finance` en cache ne bloque plus EODHD (ni dans `get_unified_financial_statements`, ni dans `hydrate_screener_universe`) ; `load_fundamental_series` privilégie exclusivement `source = 'eodhd'` dès qu'il existe ; résolution systématique via `resolve_candidate_eod_tickers` (`finance_instruments.eod_ticker` + `.DE → .XETRA/.F`, `.L → .LSE`, `.T → .TSE`).
+  - **Cours EOD, Dividendes, News, Indices & Watchlist** (`finance_warehouse.py`, `finance.py`, `finance_dossier.py`, `finance_news.py`, `finance_watchlist.py`, `finance_indices.py`) : `get_instrument_eod_sync_info` expose désormais `latest_bar_source` et `is_eod_fresh_today(..., prefer_source="eodhd")` ne considère plus des barres Yahoo du jour comme fraîches pour EODHD ; suivi exact des sources (`bars_source` / `divs_source`) sans écraser Yahoo en `"eodhd"` ; priorité du dernier cours EODHD sur un vieux `quote_summary_ext` Yahoo ; priorité cache `provider="eodhd"` sur dividendes, news et cotations d'indices.
+  - **Mise à jour globale de l'entrepôt existant vers EODHD** (`finance_warehouse.py`, `finance_funds.py`, `routers/finance.py`, `FinanceSyncPanel`) : `get_warehouse_eod_source_breakdown` recense les titres EODHD vs Yahoo-only (barres & états financiers), exposé dans `GET /api/finance/sync-preferences` (`warehouse_sources`) ; nouvel endpoint `POST /api/finance/sync-preferences/upgrade-eodhd` (`upgrade_warehouse_to_eodhd`) avec suivi d'avancement live (barre de progression + pastille en-tête) et 2 boutons dédiés dans `FinanceSyncPanel` (**« Migrer les données Yahoo vers EODHD »** et **« Tout actualiser depuis EODHD »**) suivis de la réindexation complète du Screener.
+- **Synchro automatique des 9 principaux indices + Indicateur live + Fondamentaux hebdomadaires (`finance_funds.py`, `finance_warehouse.py`, `FinanceModal`, `FinanceSyncPanel`)** :
+  - `DEFAULT_SYNC_PREFERENCES` active par défaut `major_indices_constituents: True` (cours EOD + technique 4 unités + IsoPressure chaque jour) et `screener_fundamentals: True` avec cadence **hebdomadaire** (`screener_fundamentals_interval_days: 7`, `screener_fundamentals_daily_cap: 40`) mémorisée dans la colonne dédiée `finance_sync_preferences.last_fundamentals_run_at` (les fondamentaux sont automatiquement sautés les autres jours de la semaine sauf clic sur « Forcer »).
+  - Suivi d'avancement temps réel en mémoire (`_DAILY_SYNC_PROGRESS` + `GET /api/finance/sync-preferences/status`, 0 I/O) mis à jour étape par étape (indices `1/9`…`9/9`, fondamentaux `k/N`), verrou anti-concurrence `_DAILY_SYNC_LOCK`.
+  - UI : **pilule animée en direct dans l'en-tête de `FinanceModal`** (visible depuis tous les onglets, cliquable vers le panneau de synchro) + **barre de progression live** dans `FinanceSyncPanel` + sélecteur de fréquence des fondamentaux (`1×/semaine`, `1×/2 semaines`, `1×/mois`) et bouton « Synchro auto 24h » dans `FinanceScreenerPanel`.
 - **Screener Boursier intégré V1 + Multi-Unités (`Jour`, `Semaine`, `Mois`, `3 Mois`) & `IsoPressure`** :
   - BDD (`backend/app/finance_warehouse.py`) : ajout de `PRAGMA busy_timeout=15000`, création idempotente des tables indexées `finance_screener_snapshots` (1 ligne/titre) et `finance_screener_technicals` (`PRIMARY KEY (symbol, timeframe) WITHOUT ROWID` pour `day`, `week`, `month`, `quarter`) avec écritures par micro-lots (`upsert_screener_snapshots`, `upsert_screener_technicals`).
   - Moteur technique Python pur (`backend/app/finance_technicals.py`) : agrégation OHLCV `aggregate_bars` (`day`, `week`, `month`, `quarter`), portage complet d'**IsoPressure** (`raw`, `p5`, `p20`, `p50`, `p100`, `p200`, `isopressure_20_50_diff`, `isopressure_20_50_dir`, croisements `20/50` et `5/20`, 7 types de MA `RMA/KMA/EMA/WMA/DEMA/ALMA/HMA`, `CCI`, `MFI`), plus `SMA/EMA`, `RSI`, `MACD`, `Bollinger`, `ADX`, `Stochastique`, `ATR`, `ROC`, `Supertrend` calculés sur tout l'historique EOD stocké.
@@ -83,7 +87,7 @@ Application de chat IA multi-fournisseurs (`tchataiperso`) composée d'un backen
 
 ## 5. Modified Files
 - Créés (session courante) :
-  - `backend/app/finance_technicals.py`, `backend/app/finance_screener.py`, `backend/tests/test_finance_technicals.py`, `backend/tests/test_finance_screener.py`.
+  - `backend/app/finance_technicals.py`, `backend/app/finance_screener.py`, `backend/tests/test_finance_technicals.py`, `backend/tests/test_finance_screener.py`, `backend/tests/test_finance_provider_eod_priority.py`.
   - `frontend/components/finance-screener-panel.tsx`, `frontend/components/finance-screener-panel.module.css`.
   - `frontend/components/finance-fullscreen-ticker-switcher.tsx`, `frontend/components/finance-fullscreen-ticker-switcher.module.css`.
   - `frontend/components/visual-doc-gallery.tsx`, `frontend/components/visual-doc-gallery.module.css`.
@@ -93,7 +97,7 @@ Application de chat IA multi-fournisseurs (`tchataiperso`) composée d'un backen
   - `frontend/components/visual-doc-book-reader.tsx`, `frontend/components/visual-doc-book-reader.module.css`.
   - `backend/migrations/versions/0028_add_user_default_voice.py`.
 - Modifiés (session courante) :
-  - `backend/app/context.py`, `backend/app/visual_documents.py`, `backend/app/routers/visual_docs.py`, `backend/app/routers/messages.py`, `backend/app/routers/finance.py`, `backend/app/finance_warehouse.py`, `backend/app/finance_funds.py`, `backend/app/finance_dossier.py`, `backend/app/finance_indices.py`, `backend/tests/test_visual_documents.py`.
+  - `backend/app/context.py`, `backend/app/visual_documents.py`, `backend/app/routers/visual_docs.py`, `backend/app/routers/messages.py`, `backend/app/routers/finance.py`, `backend/app/finance.py`, `backend/app/finance_provider.py`, `backend/app/finance_warehouse.py`, `backend/app/finance_funds.py`, `backend/app/finance_dossier.py`, `backend/app/finance_indices.py`, `backend/app/finance_news.py`, `backend/app/finance_watchlist.py`, `backend/tests/test_visual_documents.py`.
   - `frontend/components/finance-modal.tsx`, `frontend/components/finance-sync-panel.tsx`, `frontend/components/visual-doc-modal.tsx`, `frontend/components/visual-doc-modal.module.css`, `frontend/lib/api.ts`.
   - `backend/app/models.py`, `backend/app/cli.py`, `backend/app/main.py`, `backend/app/voice.py`, `backend/app/schemas.py`, `backend/app/routers/settings.py`, `backend/app/routers/voice.py`, `backend/app/serializers.py`, `backend/tests/test_settings.py`.
   - `frontend/lib/api.ts`, `frontend/components/settings-modal.tsx`, `frontend/components/chat-app.tsx`, `frontend/app/globals.css`, `frontend/app/interface-themes.css`, `HANDOFF.md`.
@@ -101,14 +105,15 @@ Application de chat IA multi-fournisseurs (`tchataiperso`) composée d'un backen
   - `scripts/install.sh`, `scripts/install_lib/*`, `.env.example`, `README.md`, `backend/app/voice_sanitize.py`, `backend/app/routers/finance.py`, `backend/app/routers/system.py`, `frontend/components/voice-fullscreen-modal.tsx`, `frontend/components/finance-reports-panel.tsx`, etc.
 
 ## 6. Verification
-- `cd backend && .venv/bin/python -m pytest tests/test_finance_technicals.py tests/test_finance_screener.py -q` : **RÉUSSI** (`12 passed`, incluant synchro auto des 9 principaux indices + fondamentaux Screener, agrégation `week`/`month`/`quarter`, `IsoPressure`, filtre `isopressure_p20 > isopressure_p50` multi-unités).
-- `cd frontend && npx tsc --noEmit && npx eslint components/finance-sync-panel.tsx components/finance-screener-panel.tsx` : **RÉUSSI** (0 erreur, 0 avertissement).
-- `cd frontend && npx eslint components/finance-fullscreen-ticker-switcher.tsx` : **RÉUSSI** (0 erreur, 0 avertissement).
+- `cd backend && .venv/bin/python -m pytest tests/test_finance_provider_eod_priority.py tests/test_finance_technicals.py tests/test_finance_screener.py tests/test_finance_statements.py tests/test_finance.py -q` : **RÉUSSI** (`70 passed`, incluant priorité stricte EODHD sur toute la chaîne Finance, détection des barres/fondamentaux Yahoo-only, migration en lot `upgrade_warehouse_to_eodhd`, hydratation Screener EODHD-first, synchro auto des 9 principaux indices, cycle hebdomadaire 7j, agrégation `week`/`month`/`quarter` et `IsoPressure`).
+- `cd frontend && npx tsc --noEmit && npx eslint components/finance-sync-panel.tsx` : **RÉUSSI** (0 erreur, 0 avertissement).
+- `cd frontend && npx eslint components/finance-screener-panel.tsx components/finance-fullscreen-ticker-switcher.tsx` : **RÉUSSI** (vérifié précédemment, inchangés depuis).
 - Non exécutés : rebuild/redémarrage des conteneurs Docker `clair-api` / `clair-web` (`./scripts/compose.sh up -d --build clair-api clair-web`).
 
 ## 7. Known Issues and Risks
 - Sur un PC Windows, exécuter `./scripts/install.sh` depuis **WSL2** (Ubuntu/Debian) avec Docker Desktop actif côté Windows.
 - L'accès micro navigateur (`getUserMedia` / `AudioContext`) exige `localhost` / `127.0.0.1` ou HTTPS.
+- Note pré-existante (hors périmètre) : 2 tests dans `backend/tests/test_finance_funds.py` échouent sur une fixture SQLite antérieure à la migration `0028` (`no such column: users.default_voice`).
 
 ## 8. Next Action
-Sur un nouveau PC (ou pour valider sur ce poste), lancer `./scripts/install.sh --check` pour le diagnostic ou `./scripts/install.sh` (ou `--all` / `--local`) pour installer et démarrer toute l'application.
+Rebuilder et redémarrer les conteneurs locaux (`./scripts/compose.sh up -d --build clair-api clair-web`) pour charger les dernières évolutions Finance (priorité EODHD sur les états financiers, bouton « Synchro auto 24h », pilule de progression live et cadence hebdomadaire des fondamentaux).

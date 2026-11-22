@@ -1566,6 +1566,7 @@ async def get_financial_dashboard_data(
         extract_eodhd_financial_stats,
         merge_financial_stats,
         persist_eodhd_fundamentals_to_warehouse,
+        resolve_candidate_eod_tickers,
     )
     from .finance_warehouse import (
         get_instrument_eod_sync_info,
@@ -1634,9 +1635,15 @@ async def get_financial_dashboard_data(
                 else:
                     parsed = _parse_explicit_eod_ticker(clean_target)
                     if parsed:
-                        ticker_candidate = f"{parsed[0]}.{parsed[1]}"
+                        raw_explicit = f"{parsed[0]}.{parsed[1]}"
+                        mapped_cands = resolve_candidate_eod_tickers(db_path if use_warehouse else None, raw_explicit)
+                        ticker_candidate = mapped_cands[0] if mapped_cands else raw_explicit
                         if parsed[1] == "EUFUND":
                             eod_item = _catalog_item_from_warehouse(ticker_candidate)
+                    elif "." in clean_target:
+                        mapped_cands = resolve_candidate_eod_tickers(db_path if use_warehouse else None, clean_target)
+                        if mapped_cands:
+                            ticker_candidate = mapped_cands[0]
 
                 if not ticker_candidate and looks_like_isin(clean_target):
                     cat_hit = _catalog_item_from_warehouse(clean_target)
@@ -1702,7 +1709,11 @@ async def get_financial_dashboard_data(
                     if (use_warehouse and not refresh and not intraday)
                     else None
                 )
-                bars_fresh_today = is_eod_fresh_today(sync_info, min_bars_needed=eod_limit)
+                bars_fresh_today = is_eod_fresh_today(
+                    sync_info,
+                    min_bars_needed=eod_limit,
+                    prefer_source="eodhd" if eod_key else None,
+                )
                 stored_cached_bars = (
                     get_stored_eod_bars(db_path, canonical_candidate, limit=eod_limit)
                     if bars_fresh_today
@@ -1710,7 +1721,7 @@ async def get_financial_dashboard_data(
                 )
 
                 if stored_cached_bars:
-                    # Option A: cours déjà sauvegardés aujourd'hui -> lecture 100% locale sans appel réseau EOD/temps réel.
+                    # Option A: cours déjà sauvegardés aujourd'hui depuis EODHD -> lecture 100% locale.
                     bars = list(reversed(stored_cached_bars))
                     rt_data = None
                     eod_bars_from_cache = True
@@ -1731,6 +1742,19 @@ async def get_financial_dashboard_data(
                         fetch_eodhd_historical_eod(client, ticker_candidate, eod_key, limit=eod_limit),
                         fetch_eodhd_fundamentals(client, ticker_candidate, eod_key),
                     )
+                if not rt_data and not bars and not eod_fund:
+                    for alt_cand in resolve_candidate_eod_tickers(db_path if use_warehouse else None, ticker_candidate):
+                        if alt_cand == ticker_candidate:
+                            continue
+                        alt_rt, alt_bars, alt_fund = await asyncio.gather(
+                            fetch_eodhd_realtime(client, alt_cand, eod_key),
+                            fetch_eodhd_historical_eod(client, alt_cand, eod_key, limit=eod_limit),
+                            fetch_eodhd_fundamentals(client, alt_cand, eod_key),
+                        )
+                        if alt_rt or alt_bars or alt_fund:
+                            ticker_candidate = alt_cand
+                            rt_data, bars, eod_fund = alt_rt, alt_bars, alt_fund
+                            break
                 has_real_name = bool(
                     (eod_fund or {}).get("General", {}).get("Name")
                     or (eod_item and eod_item.get("Name") and str(eod_item["Name"]).upper() != ticker_candidate.upper())
@@ -1793,7 +1817,7 @@ async def get_financial_dashboard_data(
     if not eod_bars and use_warehouse and not refresh and not intraday:
         local_canonical = resolve_canonical_symbol(db_path, eod_resolved_sym or clean_target)
         local_sync = get_instrument_eod_sync_info(db_path, local_canonical)
-        if is_eod_fresh_today(local_sync, min_bars_needed=eod_limit):
+        if is_eod_fresh_today(local_sync, min_bars_needed=eod_limit, prefer_source="eodhd" if eod_key else None):
             local_stored = get_stored_eod_bars(db_path, local_canonical, limit=eod_limit)
             if local_stored:
                 eod_bars = list(reversed(local_stored))

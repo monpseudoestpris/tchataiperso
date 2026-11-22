@@ -1,14 +1,18 @@
 "use client";
 
-import { CalendarClock, Check, LoaderCircle, Play, RefreshCw, X } from "lucide-react";
+import { CalendarClock, Check, Database, LoaderCircle, Play, RefreshCw, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import {
   fetchFinanceSyncPreferences,
+  fetchFinanceSyncStatus,
   runFinanceSyncNow,
   updateFinanceSyncPreferences,
+  upgradeFinanceWarehouseToEodhd,
   type FinanceSyncAvailableIndex,
   type FinanceSyncPreferences,
+  type FinanceSyncProgress,
+  type FinanceWarehouseSourcesSummary,
   type SupportedExchangeInfo,
 } from "@/lib/api";
 
@@ -28,12 +32,15 @@ export function FinanceSyncPanel({
   const [indices, setIndices] = useState<FinanceSyncAvailableIndex[]>([]);
   const [exchanges, setExchanges] = useState<SupportedExchangeInfo[]>([]);
   const [showAllIndices, setShowAllIndices] = useState(false);
-  const [bgRunning, setBgRunning] = useState(false);
+  const [liveProgress, setLiveProgress] = useState<FinanceSyncProgress | null>(null);
+  const [warehouseSources, setWarehouseSources] = useState<FinanceWarehouseSourcesSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
   const [savedBanner, setSavedBanner] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const isSyncActive = running || Boolean(liveProgress?.is_running);
 
   useEffect(() => {
     let cancelled = false;
@@ -41,7 +48,8 @@ export function FinanceSyncPanel({
       .then(res => {
         if (cancelled) return;
         setPrefs(res.preferences);
-        setBgRunning(Boolean(res.is_running));
+        if (res.progress) setLiveProgress(res.progress);
+        if (res.warehouse_sources) setWarehouseSources(res.warehouse_sources);
         setIndices(res.available_indices || []);
         setExchanges(res.available_exchanges || []);
       })
@@ -58,6 +66,37 @@ export function FinanceSyncPanel({
     };
   }, []);
 
+  // Suit l'avancement en direct pendant toute synchro (automatique ou manuelle)
+  useEffect(() => {
+    let cancelled = false;
+    const intervalMs = isSyncActive ? 2000 : 12000;
+    const timer = window.setInterval(() => {
+      fetchFinanceSyncStatus()
+        .then(status => {
+          if (cancelled) return;
+          setLiveProgress(prev => {
+            if (prev?.is_running && !status.is_running) {
+              fetchFinanceSyncPreferences()
+                .then(res => {
+                  if (cancelled) return;
+                  setPrefs(res.preferences);
+                  if (res.warehouse_sources) setWarehouseSources(res.warehouse_sources);
+                  setExchanges(res.available_exchanges || []);
+                  if (onSynced) onSynced();
+                })
+                .catch(() => {});
+            }
+            return status;
+          });
+        })
+        .catch(() => {});
+    }, intervalMs);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [isSyncActive, onSynced]);
+
   async function persistPrefs(next: FinanceSyncPreferences) {
     setPrefs(next);
     setSaving(true);
@@ -70,13 +109,14 @@ export function FinanceSyncPanel({
         major_indices_constituents: next.major_indices_constituents,
         screener_fundamentals: next.screener_fundamentals,
         screener_fundamentals_daily_cap: next.screener_fundamentals_daily_cap,
+        screener_fundamentals_interval_days: next.screener_fundamentals_interval_days,
         indx_catalog: next.indx_catalog,
         index_codes: next.index_codes,
         watchlists: next.watchlists,
         exchanges: next.exchanges,
       });
       setPrefs(res.preferences);
-      setBgRunning(Boolean(res.is_running));
+      if (res.progress) setLiveProgress(res.progress);
       setExchanges(res.available_exchanges || []);
       setSavedBanner("Préférences enregistrées.");
     } catch (err) {
@@ -115,7 +155,8 @@ export function FinanceSyncPanel({
     try {
       const res = await runFinanceSyncNow(forceRefresh);
       setPrefs(res.preferences);
-      setBgRunning(Boolean(res.is_running));
+      if (res.progress) setLiveProgress(res.progress);
+      if (res.warehouse_sources) setWarehouseSources(res.warehouse_sources);
       setExchanges(res.available_exchanges || []);
       const s = res.summary;
       if (s?.skipped && s.reason === "already_running") {
@@ -123,14 +164,51 @@ export function FinanceSyncPanel({
       } else {
         const idxCount = Object.keys(s?.indices || {}).length;
         const exchCount = Object.keys(s?.exchanges || {}).length;
-        const fundEnriched = s?.screener_fundamentals?.enriched ?? 0;
+        const sf = s?.screener_fundamentals;
+        const fundMsg = sf?.skipped
+          ? "fondamentaux à jour (cycle hebdomadaire)"
+          : `${sf?.enriched ?? 0} fondamentaux enrichis`;
         setSavedBanner(
-          `Synchronisation terminée (${s?.principal_indices_count ?? 0} indices, ${idxCount} compositions complètes + technique multi-unités, ${fundEnriched} fondamentaux enrichis, ${s?.watchlist_items_count ?? 0} suivi(s), ${exchCount} marché(s)).`,
+          `Synchronisation terminée (${s?.principal_indices_count ?? 0} indices, ${idxCount} compositions + technique multi-unités, ${fundMsg}, ${s?.watchlist_items_count ?? 0} suivi(s), ${exchCount} marché(s)).`,
         );
       }
       if (onSynced) onSynced();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Échec de la synchronisation immédiate.");
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  async function handleUpgradeWarehouseToEodhd(forceAllFundamentals: boolean) {
+    if (running || saving) return;
+    setRunning(true);
+    setError(null);
+    setSavedBanner(null);
+    try {
+      const res = await upgradeFinanceWarehouseToEodhd({
+        include_bars: true,
+        include_fundamentals: true,
+        force_all_fundamentals: forceAllFundamentals,
+        max_fundamentals: 250,
+        max_bars: 600,
+      });
+      setPrefs(res.preferences);
+      if (res.progress) setLiveProgress(res.progress);
+      if (res.warehouse_sources) setWarehouseSources(res.warehouse_sources);
+      const s = res.summary;
+      if (s?.skipped && s.reason === "already_running") {
+        setSavedBanner("Une synchronisation est déjà en cours en arrière-plan.");
+      } else if (s?.skipped && s.reason === "eodhd_key_missing") {
+        setError("Clé API EODHD (EOD_HISTORICAL_DATA_KEY) non configurée.");
+      } else {
+        setSavedBanner(
+          `Mise à jour EODHD terminée : ${s?.bars_upgraded ?? 0}/${s?.bars_targeted ?? 0} cours EOD mis à jour, ${s?.fundamentals_upgraded ?? 0}/${s?.fundamentals_targeted ?? 0} états financiers mis à jour depuis EODHD.`,
+        );
+      }
+      if (onSynced) onSynced();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Échec de la mise à jour EODHD.");
     } finally {
       setRunning(false);
     }
@@ -200,6 +278,28 @@ export function FinanceSyncPanel({
       </div>
 
       {error && <div className="finance-modal-error">⚠️ {error}</div>}
+      {isSyncActive && (
+        <div className="finance-sync-progress-box" role="status" aria-live="polite">
+          <div className="finance-sync-progress-head">
+            <span className="finance-sync-progress-title">
+              <LoaderCircle size={14} className="spin" />
+              <strong>
+                {liveProgress?.trigger === "auto" ? "Synchronisation automatique en cours" : "Synchronisation en cours"}
+              </strong>
+              <span>· {liveProgress?.current_label || "Traitement des marchés…"}</span>
+            </span>
+            <span className="finance-sync-progress-pct">
+              {liveProgress?.total_steps ? `${liveProgress.percent}%` : ""}
+            </span>
+          </div>
+          <div className="finance-sync-progress-track">
+            <div
+              className="finance-sync-progress-fill"
+              style={{ width: `${Math.max(8, liveProgress?.percent || 12)}%` }}
+            />
+          </div>
+        </div>
+      )}
       {savedBanner && <div className="finance-index-import-banner">✓ {savedBanner}</div>}
 
       {loading && !prefs ? (
@@ -209,6 +309,50 @@ export function FinanceSyncPanel({
         </div>
       ) : prefs ? (
         <div className="finance-sync-sections">
+          {/* Bloc 0 : Sources EODHD vs Yahoo Finance dans l'entrepôt */}
+          {warehouseSources && (
+            <div className="finance-sync-card">
+              <div className="finance-sync-card-head">
+                <strong>
+                  <Database size={14} style={{ display: "inline", verticalAlign: "-2px", marginRight: 6 }} />
+                  Priorité EOD Historical Data (EODHD)
+                </strong>
+                <small>
+                  États financiers : {warehouseSources.eodhd_fundamentals_count} EODHD
+                  {warehouseSources.yahoo_only_fundamentals_count > 0
+                    ? ` · ${warehouseSources.yahoo_only_fundamentals_count} Yahoo à migrer`
+                    : " · 0 Yahoo restant"}
+                  {" · "}Cours : {warehouseSources.eodhd_bars_symbols_count}/{warehouseSources.total_bars_symbols} EODHD
+                </small>
+              </div>
+              <div className="finance-sync-check-row" style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                <button
+                  type="button"
+                  className="finance-tf-btn active"
+                  disabled={running || saving || !warehouseSources.eodhd_configured}
+                  onClick={() => void handleUpgradeWarehouseToEodhd(false)}
+                  title="Remplace uniquement les cours et états financiers encore issus de Yahoo Finance par des données EODHD"
+                >
+                  {running ? <LoaderCircle size={12} className="spin" /> : <RefreshCw size={12} />}
+                  <span>
+                    Migrer les données Yahoo vers EODHD (
+                    {warehouseSources.yahoo_only_fundamentals_count + warehouseSources.yahoo_only_bars_symbols_count})
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="finance-tf-btn"
+                  disabled={running || saving || !warehouseSources.eodhd_configured}
+                  onClick={() => void handleUpgradeWarehouseToEodhd(true)}
+                  title="Re-télécharge tous les états financiers de l'entrepôt depuis EODHD et réindexe le Screener"
+                >
+                  <Database size={12} />
+                  <span>Tout actualiser depuis EODHD</span>
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Bloc 1 : Indices de base */}
           <div className="finance-sync-card">
             <div className="finance-sync-card-head">
@@ -269,7 +413,24 @@ export function FinanceSyncPanel({
                   onChange={() => toggleBool("screener_fundamentals")}
                 />
                 <span>
-                  Enrichir progressivement les fondamentaux &amp; historiques 10 ans pour le Screener (
+                  Enrichir les fondamentaux &amp; historiques 10 ans pour le Screener :{" "}
+                  <select
+                    value={prefs.screener_fundamentals_interval_days}
+                    disabled={saving || running || !prefs.screener_fundamentals}
+                    onClick={e => e.stopPropagation()}
+                    onChange={e =>
+                      void persistPrefs({
+                        ...prefs,
+                        screener_fundamentals_interval_days: Number(e.target.value) || 7,
+                      })
+                    }
+                    aria-label="Fréquence de rafraîchissement des données fondamentales"
+                  >
+                    <option value={7}>1× / semaine (7 j)</option>
+                    <option value={14}>1× / 2 semaines (14 j)</option>
+                    <option value={30}>1× / mois (30 j)</option>
+                  </select>{" "}
+                  ·{" "}
                   <select
                     value={prefs.screener_fundamentals_daily_cap}
                     disabled={saving || running || !prefs.screener_fundamentals}
@@ -280,22 +441,19 @@ export function FinanceSyncPanel({
                         screener_fundamentals_daily_cap: Number(e.target.value) || 40,
                       })
                     }
-                    aria-label="Nombre maximal de dossiers fondamentaux enrichis par jour"
+                    aria-label="Nombre maximal de dossiers fondamentaux enrichis par passe"
                   >
-                    <option value={20}>20 / jour</option>
-                    <option value={40}>40 / jour</option>
-                    <option value={80}>80 / jour</option>
-                    <option value={120}>120 / jour</option>
+                    <option value={20}>20 valeurs / passe</option>
+                    <option value={40}>40 valeurs / passe</option>
+                    <option value={80}>80 valeurs / passe</option>
+                    <option value={120}>120 valeurs / passe</option>
                   </select>
-                  , cache 15 jours)
+                  {prefs.last_fundamentals_run_at
+                    ? ` (dernière passe : ${new Date(prefs.last_fundamentals_run_at).toLocaleDateString("fr-FR")})`
+                    : ""}
                 </span>
               </label>
             </div>
-            {bgRunning && (
-              <div className="finance-index-import-banner">
-                <LoaderCircle size={12} className="spin" /> Synchronisation automatique en cours en arrière-plan…
-              </div>
-            )}
             <div className="finance-sync-pills-grid">
               {displayedIndices.map(idx => {
                 const autoIncluded = prefs.major_indices_constituents && idx.tier === "major";

@@ -44,6 +44,7 @@ from .finance_provider import (
     fetch_eodhd_fundamentals_json,
     get_unified_financial_statements,
     persist_eodhd_fundamentals_to_warehouse,
+    resolve_candidate_eod_tickers,
 )
 from .finance_report_html import build_classy_report_html, extract_report_highlights
 from .finance_warehouse import (
@@ -1262,10 +1263,15 @@ async def _sync_dossier_news(
 ) -> dict[str, Any]:
     """Récupère les actualités boursières (EODHD prioritaire + Yahoo backup) avec cache BDD 6h."""
     news_ttl = min(max(300, ttl_seconds), 6 * 3600)
+    prefer_eod = bool(eod_key and not settings.demo_mode)
     cached = (
         None
         if refresh
-        else get_snapshot(db_path, canonical, "news", max_age_seconds=news_ttl, include_raw=False)
+        else (
+            get_snapshot(db_path, canonical, "news", provider="eodhd", max_age_seconds=news_ttl, include_raw=False)
+            if prefer_eod
+            else get_snapshot(db_path, canonical, "news", max_age_seconds=news_ttl, include_raw=False)
+        )
     )
     if cached and isinstance(cached.get("normalized"), dict):
         norm = cached["normalized"]
@@ -1282,7 +1288,7 @@ async def _sync_dossier_news(
 
     if not settings.demo_mode:
         if eod_key:
-            for cand in _candidate_eod_tickers(canonical)[:2]:
+            for cand in resolve_candidate_eod_tickers(db_path, canonical)[:3]:
                 eod_items = await fetch_eodhd_news(cand, eod_key, limit=15)
                 if eod_items:
                     items = eod_items
@@ -1332,7 +1338,7 @@ async def _sync_eodhd_extras(
             "macro_context": None,
         }
 
-    eod_t = (_candidate_eod_tickers(canonical) or [canonical])[0]
+    eod_t = (resolve_candidate_eod_tickers(db_path, canonical) or [canonical])[0]
     country_iso3 = resolve_country_iso3(eod_fund, canonical)
     macro_sym = f"__MACRO_{country_iso3}__"
 
@@ -1431,7 +1437,7 @@ async def get_financial_dossier(
     is_eufund = canonical.upper().endswith(".EUFUND")
 
     if eod_fund is None and eod_key:
-        for cand in _candidate_eod_tickers(canonical):
+        for cand in resolve_candidate_eod_tickers(db_path, canonical):
             fetched = await fetch_eodhd_fundamentals_json(cand, eod_key)
             if fetched:
                 eod_fund = fetched
@@ -1444,13 +1450,23 @@ async def get_financial_dossier(
         if yahoo_sum:
             save_snapshot(db_path, canonical, "yahoo_finance", "quote_summary_ext", yahoo_sum, None)
 
-    # 2. Synchroniser 10+ ans de barres EOD journalières & l'historique des dividendes
+    # 2. Synchroniser 10+ ans de barres EOD journalières & l'historique des dividendes (EODHD prioritaire)
     stored_bars = get_stored_eod_bars(db_path, canonical)
     latest_date = get_latest_bar_date(db_path, canonical)
     sync_info = get_instrument_eod_sync_info(db_path, canonical)
-    fresh_bars_today = not refresh and is_eod_fresh_today(sync_info, min_bars_needed=2000)
+    prefer_eod_bars = bool(eod_key and not settings.demo_mode)
+    fresh_bars_today = not refresh and is_eod_fresh_today(
+        sync_info,
+        min_bars_needed=2000,
+        prefer_source="eodhd" if prefer_eod_bars else None,
+    )
+    latest_bar_is_non_eod = bool(
+        prefer_eod_bars
+        and sync_info.get("latest_bar_source")
+        and str(sync_info.get("latest_bar_source")).lower() != "eodhd"
+    )
     today_date = datetime.date.today()
-    need_bars_sync = refresh or (
+    need_bars_sync = refresh or latest_bar_is_non_eod or (
         not fresh_bars_today
         and (
             len(stored_bars) < 200
@@ -1458,47 +1474,72 @@ async def get_financial_dossier(
         )
     )
 
-    div_snap = get_snapshot(db_path, canonical, "dividends", max_age_seconds=ttl_seconds, include_raw=True)
+    div_snap = (
+        get_snapshot(db_path, canonical, "dividends", provider="eodhd", max_age_seconds=ttl_seconds, include_raw=True)
+        if prefer_eod_bars
+        else get_snapshot(db_path, canonical, "dividends", max_age_seconds=ttl_seconds, include_raw=True)
+    )
+    div_fallback_snap = (
+        get_snapshot(db_path, canonical, "dividends", provider="yahoo_finance", max_age_seconds=ttl_seconds, include_raw=True)
+        if (prefer_eod_bars and div_snap is None and not refresh)
+        else None
+    )
     stored_divs: list[dict[str, Any]] = (div_snap.get("raw") if div_snap else None) or []
     need_divs_sync = refresh or div_snap is None
 
     if need_bars_sync or need_divs_sync:
         new_bars: list[dict[str, Any]] = []
         new_divs: list[dict[str, Any]] | None = None
-        eod_cand_list = _candidate_eod_tickers(canonical)
-        eod_t = eod_cand_list[0] if eod_cand_list else canonical
+        bars_source = "eodhd"
+        divs_source = "eodhd"
+        eod_cand_list = resolve_candidate_eod_tickers(db_path, canonical) or [canonical]
 
-        if eod_key:
-            tasks = []
-            if need_bars_sync:
-                from_dt = (
-                    (datetime.date.fromisoformat(latest_date) - datetime.timedelta(days=7)).isoformat()
-                    if (latest_date and len(stored_bars) >= 1500 and not refresh)
-                    else (today_date - datetime.timedelta(days=3800)).isoformat()
-                )
-                tasks.append(_fetch_eodhd_bars_range(eod_t, eod_key, from_dt))
-            else:
-                tasks.append(asyncio.sleep(0, result=[]))
-            if need_divs_sync:
-                tasks.append(_fetch_eodhd_dividends(eod_t, eod_key))
-            else:
-                tasks.append(asyncio.sleep(0, result=None))
-            new_bars, new_divs = await asyncio.gather(*tasks)
+        if prefer_eod_bars:
+            from_dt = (
+                (datetime.date.fromisoformat(latest_date) - datetime.timedelta(days=7)).isoformat()
+                if (latest_date and len(stored_bars) >= 1500 and not refresh and not latest_bar_is_non_eod)
+                else (today_date - datetime.timedelta(days=3800)).isoformat()
+            )
+            for eod_t in eod_cand_list[:3]:
+                tasks = []
+                if need_bars_sync and not new_bars:
+                    tasks.append(_fetch_eodhd_bars_range(eod_t, eod_key, from_dt))
+                else:
+                    tasks.append(asyncio.sleep(0, result=[]))
+                if need_divs_sync and new_divs is None:
+                    tasks.append(_fetch_eodhd_dividends(eod_t, eod_key))
+                else:
+                    tasks.append(asyncio.sleep(0, result=None))
+                cand_bars, cand_divs = await asyncio.gather(*tasks)
+                if cand_bars and not new_bars:
+                    new_bars = cand_bars
+                    bars_source = "eodhd"
+                if cand_divs is not None and new_divs is None:
+                    new_divs = cand_divs
+                    divs_source = "eodhd"
+                if (not need_bars_sync or new_bars) and (not need_divs_sync or new_divs is not None):
+                    break
 
         # Yahoo Finance uniquement en backup si EODHD n'a pas fourni les données (hors fonds EUFUND)
         if not is_eufund and ((need_bars_sync and not new_bars) or (need_divs_sync and new_divs is None)):
-            y_bars, y_divs = await _fetch_yahoo_chart_10y(yahoo_lookup)
-            if not new_bars:
-                new_bars = y_bars
-            if new_divs is None:
-                new_divs = y_divs
+            if need_divs_sync and new_divs is None and div_fallback_snap and isinstance(div_fallback_snap.get("raw"), list):
+                stored_divs = div_fallback_snap["raw"]
+                need_divs_sync = False
+            if (need_bars_sync and not new_bars) or (need_divs_sync and new_divs is None):
+                y_bars, y_divs = await _fetch_yahoo_chart_10y(yahoo_lookup)
+                if need_bars_sync and not new_bars and y_bars:
+                    new_bars = y_bars
+                    bars_source = "yahoo_finance"
+                if need_divs_sync and new_divs is None and y_divs is not None:
+                    new_divs = y_divs
+                    divs_source = "yahoo_finance"
 
         if new_bars:
             upsert_eod_bars(
                 db_path,
                 canonical,
                 new_bars,
-                "eodhd" if eod_key else "yahoo_finance",
+                bars_source,
                 requested_limit=2500,
             )
             stored_bars = get_stored_eod_bars(db_path, canonical)
@@ -1507,7 +1548,7 @@ async def get_financial_dossier(
             save_snapshot(
                 db_path,
                 canonical,
-                "eodhd" if eod_key else "yahoo_finance",
+                divs_source,
                 "dividends",
                 new_divs,
                 None,
@@ -1538,7 +1579,7 @@ async def get_financial_dossier(
     beta_val = _num(tech.get("Beta")) or _num(y_stat.get("beta")) or _num(y_det.get("beta"))
 
     last_bar_price = (_num(stored_bars[-1].get("close")) or _num(stored_bars[-1].get("adjusted_close"))) if stored_bars else None
-    price = _num(y_price.get("regularMarketPrice")) or last_bar_price
+    price = last_bar_price or _num(y_price.get("regularMarketPrice"))
     mma50 = _num(tech.get("50DayMA")) or _simple_ma(stored_bars, 50)
     mma200 = _num(tech.get("200DayMA")) or _simple_ma(stored_bars, 200)
     low_52w = _num(tech.get("52WeekLow")) or _num(y_det.get("fiftyTwoWeekLow"))

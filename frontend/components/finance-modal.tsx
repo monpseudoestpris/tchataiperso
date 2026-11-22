@@ -84,6 +84,7 @@ import {
   fetchCachedIndexPerformances,
   fetchCustomIndicators,
   fetchFinanceDetails,
+  fetchFinanceSyncStatus,
   fetchIndexComposition,
   fetchPrincipalIndices,
   fetchWatchlistState,
@@ -101,6 +102,7 @@ import {
   type EodBar,
   type EodhdEufundItem,
   type FinanceRange,
+  type FinanceSyncProgress,
   type FinanceWatchlistMeta,
   type FinancialDashboardData,
   type FinancialStats,
@@ -414,6 +416,7 @@ export function FinanceModal({
   const [indxCatalogOpen, setIndxCatalogOpen] = useState(false);
   const [eufundCatalogOpen, setEufundCatalogOpen] = useState(false);
   const [syncPanelOpen, setSyncPanelOpen] = useState(false);
+  const [syncProgress, setSyncProgress] = useState<FinanceSyncProgress | null>(null);
   const [watchlistSidebarOpen, setWatchlistSidebarOpen] = useState<boolean>(() => {
     if (typeof window === "undefined") return true;
     return window.localStorage.getItem(WATCHLIST_SIDEBAR_OPEN_KEY) !== "0";
@@ -530,6 +533,33 @@ export function FinanceModal({
       void loadDetails("Air Liquide");
     }
   }, [isOpen, initialQuery, initialData]);
+
+  // Suit l'état en direct de la synchro auto en arrière-plan tant que la modale Finances est ouverte
+  const isBgSyncRunning = Boolean(syncProgress?.is_running);
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+    const poll = () => {
+      fetchFinanceSyncStatus()
+        .then(st => {
+          if (cancelled) return;
+          setSyncProgress(prev => {
+            if (prev?.is_running && !st.is_running) {
+              void loadWorkspaceData(false);
+            }
+            return st;
+          });
+        })
+        .catch(() => {});
+    };
+    poll();
+    const timer = window.setInterval(poll, isBgSyncRunning ? 2500 : 18000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, isBgSyncRunning]);
 
   // Handle escape key
   useEffect(() => {
@@ -1535,6 +1565,23 @@ export function FinanceModal({
             </div>
 
             <div className="finance-modal-header-actions">
+              {syncProgress?.is_running && (
+                <button
+                  type="button"
+                  className="finance-sync-live-pill"
+                  onClick={() => {
+                    setMainTab("search_indices");
+                    setSyncPanelOpen(true);
+                  }}
+                  title="Synchronisation automatique des indices en cours — cliquer pour voir le détail"
+                >
+                  <LoaderCircle size={13} className="spin" />
+                  <span>
+                    {syncProgress.current_label || "Synchro auto en cours…"}
+                    {syncProgress.total_steps > 0 ? ` (${syncProgress.percent}%)` : ""}
+                  </span>
+                </button>
+              )}
               <button
                 type="button"
                 className={`finance-help-btn finance-wl-toggle-btn ${watchlistSidebarOpen ? "active" : ""}`}

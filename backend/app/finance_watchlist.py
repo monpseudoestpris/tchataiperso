@@ -244,7 +244,13 @@ async def resolve_watchlist_instrument(settings: Settings, query: str) -> dict[s
 
     yahoo_quote: dict[str, Any] | None = None
     yahoo_chart: dict[str, Any] | None = None
-    if not settings.demo_mode and not is_eufund:
+    eod_has_complete_meta = bool(
+        eod_item
+        and eod_item.get("ticker")
+        and eod_item.get("Name")
+        and str(eod_item["Name"]).strip().upper() != str(eod_item["ticker"]).strip().upper()
+    )
+    if not settings.demo_mode and not is_eufund and not eod_has_complete_meta:
         try:
             client, _ = await get_yahoo_crumb_and_client()
             try:
@@ -279,15 +285,30 @@ async def resolve_watchlist_instrument(settings: Settings, query: str) -> dict[s
         raise HTTPException(404, f"Action ou ticker introuvable pour « {query} ».")
 
     meta = (yahoo_chart or {}).get("meta") or {}
+    eod_ticker = (eod_item.get("ticker") if eod_item else None) or ""
+    derived_yahoo = ""
+    if eod_ticker:
+        et_u = str(eod_ticker).upper()
+        if et_u.endswith(".US"):
+            derived_yahoo = et_u[:-3]
+        elif et_u.endswith(".XETRA"):
+            derived_yahoo = f"{et_u[:-6]}.DE"
+        elif et_u.endswith(".LSE"):
+            derived_yahoo = f"{et_u[:-4]}.L"
+        elif et_u.endswith(".TSE"):
+            derived_yahoo = f"{et_u[:-4]}.T"
+        else:
+            derived_yahoo = et_u
     yahoo_sym = (
         (yahoo_quote.get("symbol") if yahoo_quote else None)
         or meta.get("symbol")
+        or derived_yahoo
         or ""
     )
-    eod_ticker = (eod_item.get("ticker") if eod_item else None) or ""
     symbol = eod_ticker or yahoo_sym or clean_q.upper()
     name = (
-        (yahoo_quote.get("shortname") if yahoo_quote else None)
+        (eod_item.get("Name") if (eod_item and str(eod_item.get("Name") or "").upper() != str(eod_ticker).upper()) else None)
+        or (yahoo_quote.get("shortname") if yahoo_quote else None)
         or (yahoo_quote.get("longname") if yahoo_quote else None)
         or meta.get("shortName")
         or (eod_item.get("Name") if eod_item else None)
@@ -371,7 +392,11 @@ async def _fetch_single_watchlist_quote(
     lookup_sym = item.eod_ticker or item.symbol or yahoo_sym
     canonical = resolve_canonical_symbol(db_path, lookup_sym)
     sync_info = get_instrument_eod_sync_info(db_path, canonical)
-    if not refresh and is_eod_fresh_today(sync_info, min_bars_needed=260):
+    if not refresh and is_eod_fresh_today(
+        sync_info,
+        min_bars_needed=260,
+        prefer_source="eodhd" if eod_key else None,
+    ):
         stored_bars = get_stored_eod_bars(db_path, canonical, limit=270)
         if stored_bars:
             metrics = compute_period_returns(stored_bars)
@@ -387,24 +412,29 @@ async def _fetch_single_watchlist_quote(
         currency = item.currency or "EUR"
 
         try:
+            from .finance_provider import resolve_candidate_eod_tickers
+
             is_eufund = str(item.eod_ticker or "").upper().endswith(".EUFUND") or str(item.exchange or "").upper() == "EUFUND"
-            if eod_key and item.eod_ticker:
-                if not is_eufund:
-                    rt_data = await fetch_eodhd_realtime(client, item.eod_ticker, eod_key)
-                    if rt_data:
-                        rt_p = _safe_float(rt_data.get("close"))
-                        rt_chg = _safe_float(rt_data.get("change_p"))
-                        if rt_p is not None and rt_p > 0:
-                            current_price = rt_p
-                        if rt_chg is not None:
-                            rt_change_pct = rt_chg
-                eod_bars = await fetch_eodhd_historical_eod(client, item.eod_ticker, eod_key, limit=270)
-                if eod_bars:
-                    bars = list(reversed(eod_bars))
-                    try:
-                        upsert_eod_bars(db_path, canonical, bars, "eodhd", requested_limit=270)
-                    except Exception:
-                        pass
+            if eod_key:
+                eod_cands = resolve_candidate_eod_tickers(db_path, item.eod_ticker or item.symbol or canonical)
+                for eod_cand in eod_cands[:3]:
+                    if not is_eufund and current_price is None:
+                        rt_data = await fetch_eodhd_realtime(client, eod_cand, eod_key)
+                        if rt_data:
+                            rt_p = _safe_float(rt_data.get("close"))
+                            rt_chg = _safe_float(rt_data.get("change_p"))
+                            if rt_p is not None and rt_p > 0:
+                                current_price = rt_p
+                            if rt_chg is not None:
+                                rt_change_pct = rt_chg
+                    eod_bars = await fetch_eodhd_historical_eod(client, eod_cand, eod_key, limit=270)
+                    if eod_bars:
+                        bars = list(reversed(eod_bars))
+                        try:
+                            upsert_eod_bars(db_path, canonical, bars, "eodhd", requested_limit=270)
+                        except Exception:
+                            pass
+                        break
 
             if not bars and not is_eufund:
                 chart = await fetch_yahoo_chart(client, yahoo_sym, range_period="1y", interval="1d")

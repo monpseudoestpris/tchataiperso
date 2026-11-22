@@ -1172,7 +1172,12 @@ async def _fetch_single_index_quote(
 ) -> dict[str, Any]:
     db_path = warehouse_db_path(settings)
     code = defn["code"]
-    snap = get_snapshot(db_path, defn["eod_ticker"], "index_quote", max_age_seconds=_INDEX_QUOTE_TTL_SEC)
+    prefer_eod = bool(eod_key and not settings.demo_mode)
+    snap = (
+        get_snapshot(db_path, defn["eod_ticker"], "index_quote", provider="EODHD", max_age_seconds=_INDEX_QUOTE_TTL_SEC)
+        if prefer_eod
+        else get_snapshot(db_path, defn["eod_ticker"], "index_quote", max_age_seconds=_INDEX_QUOTE_TTL_SEC)
+    )
     if snap and isinstance(snap.get("normalized"), dict):
         q = snap["normalized"]
         return {
@@ -1193,16 +1198,18 @@ async def _fetch_single_index_quote(
     async with sem:
         try:
             if eod_key:
-                bars = await fetch_eodhd_historical_eod(client, defn["eod_ticker"], eod_key, limit=5)
-                if bars:
-                    latest = bars[0]
-                    prev = bars[1] if len(bars) >= 2 else None
-                    last_price = _safe_float(latest.get("close"))
-                    prev_close = _safe_float(prev.get("close")) if prev else None
-                    as_of = str(latest.get("date") or "")
-                    if last_price is not None and prev_close and prev_close > 0:
-                        change_pct = round(((last_price - prev_close) / prev_close) * 100.0, 2)
-                    source = "EODHD"
+                for cand_idx in [defn["eod_ticker"], *defn.get("eod_alt_tickers", [])]:
+                    bars = await fetch_eodhd_historical_eod(client, cand_idx, eod_key, limit=5)
+                    if bars:
+                        latest = bars[0]
+                        prev = bars[1] if len(bars) >= 2 else None
+                        last_price = _safe_float(latest.get("close"))
+                        prev_close = _safe_float(prev.get("close")) if prev else None
+                        as_of = str(latest.get("date") or "")
+                        if last_price is not None and prev_close and prev_close > 0:
+                            change_pct = round(((last_price - prev_close) / prev_close) * 100.0, 2)
+                        source = "EODHD"
+                        break
 
             if last_price is None:
                 chart = await fetch_yahoo_chart(client, defn["yahoo_symbol"], range_period="5d", interval="1d")
@@ -1684,7 +1691,12 @@ async def get_index_performances(
         canonical = resolve_canonical_symbol(db_path, eod_t or sym)
         sync_info = get_instrument_eod_sync_info(db_path, canonical)
         stored = get_stored_eod_bars(db_path, canonical, limit=420)
-        fresh_today = is_eod_fresh_today(sync_info, min_bars_needed=380, today_iso=today_iso)
+        fresh_today = is_eod_fresh_today(
+            sync_info,
+            min_bars_needed=380,
+            today_iso=today_iso,
+            prefer_source="eodhd" if eod_key else None,
+        )
 
         use_local_only = cache_only or (fresh_today and not refresh)
         bars: list[dict[str, Any]] = stored if (use_local_only and stored) else []
@@ -1693,28 +1705,33 @@ async def get_index_performances(
         currency = default_currency
 
         if not bars and not cache_only and not settings.demo_mode:
+            from .finance_provider import resolve_candidate_eod_tickers
+
             async with sem:
                 try:
-                    if eod_key and eod_t:
-                        raw_eod = await fetch_eodhd_historical_eod(client, eod_t, eod_key, limit=420)
-                        if raw_eod:
-                            parsed: list[dict[str, Any]] = []
-                            for b in reversed(raw_eod):
-                                d_str = str(b.get("date") or "")[:10]
-                                adj_bar = _to_adjusted_ohlc_bar(
-                                    d_str,
-                                    b.get("open"),
-                                    b.get("high"),
-                                    b.get("low"),
-                                    b.get("close"),
-                                    b.get("adjusted_close"),
-                                    b.get("volume"),
-                                )
-                                if adj_bar:
-                                    parsed.append(adj_bar)
-                            if parsed:
-                                bars = parsed
-                                source_used = "eodhd"
+                    if eod_key:
+                        for cand_eod in resolve_candidate_eod_tickers(db_path, eod_t or sym)[:3]:
+                            raw_eod = await fetch_eodhd_historical_eod(client, cand_eod, eod_key, limit=420)
+                            if raw_eod:
+                                parsed: list[dict[str, Any]] = []
+                                for b in reversed(raw_eod):
+                                    d_str = str(b.get("date") or "")[:10]
+                                    adj_bar = _to_adjusted_ohlc_bar(
+                                        d_str,
+                                        b.get("open"),
+                                        b.get("high"),
+                                        b.get("low"),
+                                        b.get("close"),
+                                        b.get("adjusted_close"),
+                                        b.get("volume"),
+                                    )
+                                    if adj_bar:
+                                        parsed.append(adj_bar)
+                                if parsed:
+                                    bars = parsed
+                                    eod_t = cand_eod
+                                    source_used = "eodhd"
+                                    break
                     if not bars and yahoo_t:
                         chart = await fetch_yahoo_chart(client, yahoo_t, range_period="2y", interval="1d")
                         if chart:

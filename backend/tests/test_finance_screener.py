@@ -264,7 +264,7 @@ def test_daily_sync_auto_fetches_major_indices_constituents_and_fundamentals(tmp
     import asyncio
     from unittest.mock import AsyncMock, patch
 
-    from app.finance_funds import run_daily_sync_now
+    from app.finance_funds import get_daily_sync_status, run_daily_sync_now
     from app.finance_indices import INDEX_DEFINITIONS
     from app.finance_warehouse import DEFAULT_SYNC_PREFERENCES, get_sync_preferences, save_sync_preferences
 
@@ -275,12 +275,13 @@ def test_daily_sync_auto_fetches_major_indices_constituents_and_fundamentals(tmp
     )
     db_path = warehouse_db_path(settings)
 
-    # Par défaut : contenu complet des 9 principaux indices + fondamentaux Screener activés
+    # Par défaut : contenu complet des 9 principaux indices + fondamentaux Screener 1×/semaine (7 j)
     defaults = get_sync_preferences(db_path)
     assert DEFAULT_SYNC_PREFERENCES["major_indices_constituents"] is True
     assert defaults["major_indices_constituents"] is True
     assert defaults["screener_fundamentals"] is True
     assert defaults["screener_fundamentals_daily_cap"] == 40
+    assert defaults["screener_fundamentals_interval_days"] == 7
 
     major_codes = [d["code"] for d in INDEX_DEFINITIONS if d.get("tier") == "major"]
     assert len(major_codes) == 9
@@ -306,7 +307,7 @@ def test_daily_sync_auto_fetches_major_indices_constituents_and_fundamentals(tmp
         patch("app.finance_indices.get_index_performances", side_effect=_fake_index_perf),
         patch("app.finance_screener.hydrate_screener_universe", side_effect=_fake_hydrate),
     ):
-        res = asyncio.run(run_daily_sync_now(settings, refresh=False, respect_enabled=True))
+        res = asyncio.run(run_daily_sync_now(settings, refresh=False, respect_enabled=True, trigger="auto"))
 
     assert res["summary"]["skipped"] is False
     assert called_codes == major_codes
@@ -314,6 +315,26 @@ def test_daily_sync_auto_fetches_major_indices_constituents_and_fundamentals(tmp
     assert len(hydrate_calls) == 1
     assert hydrate_calls[0]["max_fundamentals"] == 40
     assert res["summary"]["screener_fundamentals"]["enriched"] == 3
+    assert res["preferences"]["last_fundamentals_run_at"] is not None
+    status_after = get_daily_sync_status()
+    assert status_after["is_running"] is False
+    assert status_after["percent"] == 100
+
+    # Deuxième exécution dans la même semaine : les cours des 9 indices tournent, mais les fondamentaux sont sautés (1×/semaine)
+    called_codes.clear()
+    hydrate_calls.clear()
+    with (
+        patch("app.finance_indices.list_principal_indices", new=AsyncMock(return_value={"indices": [{"code": c} for c in major_codes]})),
+        patch("app.finance_indices.list_eodhd_indx_catalog", new=AsyncMock(return_value={"total": 100})),
+        patch("app.finance_indices.get_index_performances", side_effect=_fake_index_perf),
+        patch("app.finance_screener.hydrate_screener_universe", side_effect=_fake_hydrate),
+    ):
+        res_week = asyncio.run(run_daily_sync_now(settings, refresh=False, respect_enabled=True, trigger="auto"))
+
+    assert called_codes == major_codes
+    assert hydrate_calls == []
+    assert res_week["summary"]["screener_fundamentals"]["skipped"] is True
+    assert res_week["summary"]["screener_fundamentals"]["reason"] == "weekly_cooldown"
 
     # Si l'utilisateur désactive `major_indices_constituents`, seul `index_codes` est synchronisé
     save_sync_preferences(

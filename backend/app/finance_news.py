@@ -272,19 +272,16 @@ async def collect_latest_stock_news(
 
     if not settings.demo_mode:
         async def _get_primary_news() -> tuple[list[dict[str, Any]], str | None]:
+            from .finance_provider import resolve_candidate_eod_tickers
+
             db_path = warehouse_db_path(settings)
             canonical = resolve_canonical_symbol(db_path, clean_sym)
             meta = get_instrument_meta(db_path, canonical)
-            eod_candidates: list[str] = []
-            for cand in [
-                meta.get("eod_ticker") if meta else None,
-                canonical,
-                clean_sym,
-                f"{clean_sym}.US" if "." not in clean_sym else None,
-            ]:
-                c = str(cand or "").strip().upper()
-                if c and c not in eod_candidates:
-                    eod_candidates.append(c)
+            eod_candidates = resolve_candidate_eod_tickers(db_path, canonical)
+            if clean_sym != canonical:
+                for extra in resolve_candidate_eod_tickers(db_path, clean_sym):
+                    if extra not in eod_candidates:
+                        eod_candidates.append(extra)
 
             if settings.enabled(settings.eod_historical_data_key):
                 eod_key = settings.eod_historical_data_key.get_secret_value()
@@ -415,9 +412,20 @@ async def get_cached_or_fetch_eodhd_news_feed(
     meta = get_instrument_meta(db_path, canonical)
     news_ttl = min(max(300, int(settings.finance_fundamentals_ttl_hours) * 3600), 6 * 3600)
 
+    eod_key = (
+        settings.eod_historical_data_key.get_secret_value()
+        if settings.enabled(settings.eod_historical_data_key)
+        else ""
+    )
+    prefer_eod = bool(eod_key and not settings.demo_mode)
+
     if not refresh:
         for snap_sym in (canonical, clean_sym):
-            cached = get_snapshot(db_path, snap_sym, "news", max_age_seconds=news_ttl, include_raw=False)
+            cached = (
+                get_snapshot(db_path, snap_sym, "news", provider="eodhd", max_age_seconds=news_ttl, include_raw=False)
+                if prefer_eod
+                else get_snapshot(db_path, snap_sym, "news", max_age_seconds=news_ttl, include_raw=False)
+            )
             if cached and isinstance(cached.get("normalized"), dict):
                 norm = cached["normalized"]
                 cached_items = norm.get("items") or []
@@ -434,21 +442,13 @@ async def get_cached_or_fetch_eodhd_news_feed(
     source_label = "Yahoo Finance"
 
     if not settings.demo_mode:
-        eod_key = (
-            settings.eod_historical_data_key.get_secret_value()
-            if settings.enabled(settings.eod_historical_data_key)
-            else ""
-        )
-        candidates: list[str] = []
-        for cand in [
-            meta.get("eod_ticker") if meta else None,
-            canonical,
-            clean_sym,
-            f"{clean_sym}.US" if "." not in clean_sym else None,
-        ]:
-            c = str(cand or "").strip().upper()
-            if c and c not in candidates:
-                candidates.append(c)
+        from .finance_provider import resolve_candidate_eod_tickers
+
+        candidates = resolve_candidate_eod_tickers(db_path, canonical)
+        if clean_sym != canonical:
+            for extra in resolve_candidate_eod_tickers(db_path, clean_sym):
+                if extra not in candidates:
+                    candidates.append(extra)
 
         if eod_key:
             for cand in candidates[:3]:

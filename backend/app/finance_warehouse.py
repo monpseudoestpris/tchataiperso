@@ -244,6 +244,7 @@ CREATE TABLE IF NOT EXISTS finance_sync_preferences (
     pref_key TEXT PRIMARY KEY,
     config_json TEXT NOT NULL,
     last_run_at TEXT,
+    last_fundamentals_run_at TEXT,
     last_status_json TEXT,
     updated_at TEXT NOT NULL
 );
@@ -442,6 +443,12 @@ def init_warehouse(db_path: Path) -> None:
         }
         if "fund_family" not in exch_cols:
             conn.execute("ALTER TABLE finance_exchange_symbols ADD COLUMN fund_family TEXT")
+        sync_cols = {
+            str(r[1])
+            for r in conn.execute("PRAGMA table_info(finance_sync_preferences)").fetchall()
+        }
+        if "last_fundamentals_run_at" not in sync_cols:
+            conn.execute("ALTER TABLE finance_sync_preferences ADD COLUMN last_fundamentals_run_at TEXT")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_fin_exch_sym_type ON finance_exchange_symbols (exchange_code, type)"
         )
@@ -521,7 +528,7 @@ def get_instrument_meta(db_path: Path, symbol: str) -> dict[str, Any] | None:
 
 
 def get_instrument_eod_sync_info(db_path: Path, symbol: str) -> dict[str, Any]:
-    """Retourne la date de dernière sauvegarde locale EOD et la profondeur stockée pour un symbole."""
+    """Retourne la date de dernière sauvegarde locale EOD, la profondeur et la source pour un symbole."""
     sym = _norm_sym(symbol)
     empty = {
         "eod_synced_date": None,
@@ -529,6 +536,7 @@ def get_instrument_eod_sync_info(db_path: Path, symbol: str) -> dict[str, Any]:
         "eod_synced_bars": 0,
         "bars_count": 0,
         "latest_bar_date": None,
+        "latest_bar_source": None,
     }
     if not sym or not db_path.exists():
         return empty
@@ -550,12 +558,23 @@ def get_instrument_eod_sync_info(db_path: Path, symbol: str) -> dict[str, Any]:
             """,
             (sym,),
         ).fetchone()
+        latest_row = conn.execute(
+            """
+            SELECT source
+            FROM finance_eod_bars
+            WHERE symbol = ?
+            ORDER BY bar_date DESC
+            LIMIT 1
+            """,
+            (sym,),
+        ).fetchone()
     return {
         "eod_synced_date": str(inst["eod_synced_date"]) if (inst and inst["eod_synced_date"]) else None,
         "eod_synced_at": str(inst["eod_synced_at"]) if (inst and inst["eod_synced_at"]) else None,
         "eod_synced_bars": int((inst["eod_synced_bars"] if inst else 0) or 0),
         "bars_count": int((agg["cnt"] if agg else 0) or 0),
         "latest_bar_date": str(agg["max_dt"]) if (agg and agg["max_dt"]) else None,
+        "latest_bar_source": str(latest_row["source"]) if (latest_row and latest_row["source"]) else None,
     }
 
 
@@ -564,18 +583,103 @@ def is_eod_fresh_today(
     *,
     min_bars_needed: int = 1,
     today_iso: str | None = None,
+    prefer_source: str | None = None,
 ) -> bool:
-    """Indique si les barres EOD locales ont déjà été sauvegardées aujourd'hui avec la profondeur requise."""
+    """Indique si les barres EOD locales ont déjà été sauvegardées aujourd'hui avec la profondeur et la source requises."""
     if not sync_info:
         return False
     bars_count = int(sync_info.get("bars_count") or 0)
     if bars_count <= 0:
         return False
+    if prefer_source:
+        latest_src = str(sync_info.get("latest_bar_source") or "").strip().lower()
+        if latest_src and latest_src != prefer_source.strip().lower():
+            return False
     today = today_iso or datetime.date.today().isoformat()
     if str(sync_info.get("eod_synced_date") or "") != today:
         return False
     synced_depth = max(bars_count, int(sync_info.get("eod_synced_bars") or 0))
     return synced_depth >= max(1, int(min_bars_needed or 1))
+
+
+def get_warehouse_eod_source_breakdown(db_path: Path) -> dict[str, Any]:
+    """Recense les titres EODHD vs Yahoo Finance dans l'entrepôt (barres EOD & états financiers)."""
+    empty: dict[str, Any] = {
+        "eodhd_fundamentals_count": 0,
+        "yahoo_only_fundamentals_count": 0,
+        "yahoo_only_fundamentals_symbols": [],
+        "all_fundamentals_symbols": [],
+        "eodhd_bars_symbols_count": 0,
+        "yahoo_only_bars_symbols_count": 0,
+        "yahoo_only_bars_symbols": [],
+        "total_bars_symbols": 0,
+    }
+    if not db_path.exists():
+        return empty
+    with _connect(db_path) as conn:
+        eod_fund_syms = {
+            _norm_sym(str(r["symbol"]))
+            for r in conn.execute(
+                """
+                SELECT DISTINCT symbol FROM finance_raw_snapshots
+                WHERE payload_type = 'fundamentals' AND provider = 'eodhd'
+                UNION
+                SELECT DISTINCT symbol FROM finance_fundamental_facts
+                WHERE source = 'eodhd'
+                """
+            ).fetchall()
+            if r["symbol"]
+        }
+        all_fund_syms = {
+            _norm_sym(str(r["symbol"]))
+            for r in conn.execute(
+                """
+                SELECT DISTINCT symbol FROM finance_raw_snapshots
+                WHERE payload_type = 'fundamentals'
+                UNION
+                SELECT DISTINCT symbol FROM finance_fundamental_facts
+                UNION
+                SELECT DISTINCT symbol FROM finance_screener_snapshots
+                WHERE has_fundamentals = 1
+                """
+            ).fetchall()
+            if r["symbol"]
+        }
+        yahoo_only_fund = sorted(all_fund_syms - eod_fund_syms)
+
+        bar_rows = conn.execute(
+            """
+            SELECT b.symbol, b.source
+            FROM finance_eod_bars b
+            INNER JOIN (
+                SELECT symbol, MAX(bar_date) AS max_dt
+                FROM finance_eod_bars
+                GROUP BY symbol
+            ) m ON m.symbol = b.symbol AND m.max_dt = b.bar_date
+            """
+        ).fetchall()
+        eod_bar_syms: set[str] = set()
+        non_eod_bar_syms: set[str] = set()
+        for r in bar_rows:
+            sym = _norm_sym(str(r["symbol"] or ""))
+            if not sym:
+                continue
+            src = str(r["source"] or "").strip().lower()
+            if src == "eodhd":
+                eod_bar_syms.add(sym)
+            else:
+                non_eod_bar_syms.add(sym)
+
+    return {
+        "eodhd_fundamentals_count": len(eod_fund_syms),
+        "yahoo_only_fundamentals_count": len(yahoo_only_fund),
+        "yahoo_only_fundamentals_symbols": yahoo_only_fund,
+        "all_fundamentals_symbols": sorted(all_fund_syms),
+        "eodhd_bars_symbols_count": len(eod_bar_syms),
+        "yahoo_only_bars_symbols_count": len(non_eod_bar_syms),
+        "yahoo_only_bars_symbols": sorted(non_eod_bar_syms),
+        "total_bars_symbols": len(eod_bar_syms) + len(non_eod_bar_syms),
+    }
 
 
 def upsert_instrument(db_path: Path, meta: dict[str, Any]) -> None:
@@ -822,8 +926,14 @@ def load_fundamental_series(
     db_path: Path,
     symbol: str,
     period_type: str,
+    *,
+    prefer_source: str | None = "eodhd",
 ) -> tuple[dict[str, dict[str, float | None]], str | None, str | None, str | None]:
     """Charge les séries fondamentales stockées pour un symbole et une périodicité.
+
+    Lorsque `prefer_source` (par défaut `"eodhd"`) est présent pour ce symbole et cette
+    périodicité, ses données priment exclusivement afin d'éviter le mélange de dates fiscales
+    entre EODHD et d'anciens snapshots Yahoo Finance.
 
     Retourne `(series, currency, source, updated_at)`.
     """
@@ -831,15 +941,27 @@ def load_fundamental_series(
     if not sym or not db_path.exists():
         return {}, None, None, None
     with _connect(db_path) as conn:
-        rows = conn.execute(
-            """
-            SELECT period_date, metric_key, value, currency, source, updated_at
-            FROM finance_fundamental_facts
-            WHERE symbol = ? AND period_type = ?
-            ORDER BY period_date ASC
-            """,
-            (sym, period_type),
-        ).fetchall()
+        rows: list[sqlite3.Row] = []
+        if prefer_source:
+            rows = conn.execute(
+                """
+                SELECT period_date, metric_key, value, currency, source, updated_at
+                FROM finance_fundamental_facts
+                WHERE symbol = ? AND period_type = ? AND source = ?
+                ORDER BY period_date ASC
+                """,
+                (sym, period_type, prefer_source),
+            ).fetchall()
+        if not rows:
+            rows = conn.execute(
+                """
+                SELECT period_date, metric_key, value, currency, source, updated_at
+                FROM finance_fundamental_facts
+                WHERE symbol = ? AND period_type = ?
+                ORDER BY period_date ASC
+                """,
+                (sym, period_type),
+            ).fetchall()
     if not rows:
         return {}, None, None, None
     series: dict[str, dict[str, float | None]] = {}
@@ -1950,6 +2072,7 @@ DEFAULT_SYNC_PREFERENCES: dict[str, Any] = {
     "major_indices_constituents": True,
     "screener_fundamentals": True,
     "screener_fundamentals_daily_cap": 40,
+    "screener_fundamentals_interval_days": 7,
     "indx_catalog": True,
     "index_codes": [],
     "watchlists": False,
@@ -1979,6 +2102,15 @@ def _normalize_sync_preferences(raw: dict[str, Any] | None) -> dict[str, Any]:
     except (TypeError, ValueError):
         daily_cap = int(DEFAULT_SYNC_PREFERENCES["screener_fundamentals_daily_cap"])
 
+    raw_interval = src.get(
+        "screener_fundamentals_interval_days",
+        DEFAULT_SYNC_PREFERENCES["screener_fundamentals_interval_days"],
+    )
+    try:
+        interval_days = max(1, min(90, int(raw_interval)))
+    except (TypeError, ValueError):
+        interval_days = int(DEFAULT_SYNC_PREFERENCES["screener_fundamentals_interval_days"])
+
     return {
         "enabled": bool(src.get("enabled", DEFAULT_SYNC_PREFERENCES["enabled"])),
         "principal_indices": bool(
@@ -1991,6 +2123,7 @@ def _normalize_sync_preferences(raw: dict[str, Any] | None) -> dict[str, Any]:
             src.get("screener_fundamentals", DEFAULT_SYNC_PREFERENCES["screener_fundamentals"])
         ),
         "screener_fundamentals_daily_cap": daily_cap,
+        "screener_fundamentals_interval_days": interval_days,
         "indx_catalog": bool(src.get("indx_catalog", DEFAULT_SYNC_PREFERENCES["indx_catalog"])),
         "index_codes": _clean_list(src.get("index_codes")),
         "watchlists": bool(src.get("watchlists", DEFAULT_SYNC_PREFERENCES["watchlists"])),
@@ -2004,13 +2137,14 @@ def get_sync_preferences(db_path: Path, pref_key: str = "default") -> dict[str, 
         return {
             **DEFAULT_SYNC_PREFERENCES,
             "last_run_at": None,
+            "last_fundamentals_run_at": None,
             "last_status": None,
             "updated_at": None,
         }
     with _connect(db_path) as conn:
         row = conn.execute(
             """
-            SELECT config_json, last_run_at, last_status_json, updated_at
+            SELECT config_json, last_run_at, last_fundamentals_run_at, last_status_json, updated_at
             FROM finance_sync_preferences
             WHERE pref_key = ?
             """,
@@ -2020,6 +2154,7 @@ def get_sync_preferences(db_path: Path, pref_key: str = "default") -> dict[str, 
         return {
             **DEFAULT_SYNC_PREFERENCES,
             "last_run_at": None,
+            "last_fundamentals_run_at": None,
             "last_status": None,
             "updated_at": None,
         }
@@ -2034,6 +2169,7 @@ def get_sync_preferences(db_path: Path, pref_key: str = "default") -> dict[str, 
     return {
         **cfg,
         "last_run_at": row["last_run_at"] or None,
+        "last_fundamentals_run_at": row["last_fundamentals_run_at"] or None,
         "last_status": last_status,
         "updated_at": row["updated_at"] or None,
     }
@@ -2065,18 +2201,24 @@ def record_sync_run_status(
     db_path: Path,
     status_payload: dict[str, Any],
     pref_key: str = "default",
+    *,
+    fundamentals_ran: bool = False,
 ) -> dict[str, Any]:
     """Mémorise l'horodatage et le compte-rendu de la dernière exécution de synchro quotidienne."""
     now_iso = _utc_iso()
     current = get_sync_preferences(db_path, pref_key=pref_key)
     cfg = _normalize_sync_preferences(current)
+    next_fund_iso = now_iso if fundamentals_ran else current.get("last_fundamentals_run_at")
     with _connect(db_path) as conn:
         conn.execute(
             """
-            INSERT INTO finance_sync_preferences (pref_key, config_json, last_run_at, last_status_json, updated_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO finance_sync_preferences (
+                pref_key, config_json, last_run_at, last_fundamentals_run_at, last_status_json, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(pref_key) DO UPDATE SET
                 last_run_at = excluded.last_run_at,
+                last_fundamentals_run_at = COALESCE(excluded.last_fundamentals_run_at, finance_sync_preferences.last_fundamentals_run_at),
                 last_status_json = excluded.last_status_json,
                 updated_at = excluded.updated_at
             """,
@@ -2084,6 +2226,7 @@ def record_sync_run_status(
                 pref_key,
                 json.dumps(cfg, ensure_ascii=False),
                 now_iso,
+                next_fund_iso,
                 json.dumps(status_payload, ensure_ascii=False),
                 now_iso,
             ),

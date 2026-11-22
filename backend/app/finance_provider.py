@@ -25,6 +25,7 @@ from .finance_statements import (
     parse_timeseries,
 )
 from .finance_warehouse import (
+    get_instrument_meta,
     get_snapshot,
     get_warehouse_stats,
     load_fundamental_series,
@@ -332,15 +333,51 @@ def extract_eodhd_highlights_summary(fundamentals: dict[str, Any] | None) -> dic
     }
 
 
-def _candidate_eod_tickers(symbol: str) -> list[str]:
+_YAHOO_TO_EOD_SUFFIXES: dict[str, tuple[str, ...]] = {
+    "DE": ("XETRA", "F", "DE"),
+    "L": ("LSE", "L"),
+    "T": ("TSE", "T"),
+    "F": ("F", "XETRA"),
+}
+
+
+def _candidate_eod_tickers(symbol: str, *, stored_eod_ticker: str | None = None) -> list[str]:
+    """Génère les tickers candidats EODHD par ordre de priorité (y compris traduction `.DE` -> `.XETRA`, `.L` -> `.LSE`)."""
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def _add(val: str | None) -> None:
+        c = (val or "").strip().upper()
+        if c and c not in seen:
+            seen.add(c)
+            out.append(c)
+
+    if stored_eod_ticker:
+        _add(stored_eod_ticker)
+
     clean = symbol.strip().upper()
     if not clean:
-        return []
-    if "." in clean:
-        return [clean]
+        return out
     if clean.startswith("^"):
-        return [f"{clean[1:]}.INDX"]
-    return [f"{clean}.US", clean]
+        _add(f"{clean[1:]}.INDX")
+        return out
+    if "." in clean:
+        base, suffix = clean.rsplit(".", 1)
+        if suffix in _YAHOO_TO_EOD_SUFFIXES:
+            for eod_exch in _YAHOO_TO_EOD_SUFFIXES[suffix]:
+                _add(f"{base}.{eod_exch}")
+        _add(clean)
+        return out
+    _add(f"{clean}.US")
+    _add(clean)
+    return out
+
+
+def resolve_candidate_eod_tickers(db_path: Any, symbol: str) -> list[str]:
+    """Résout les tickers candidats EODHD en exploitant aussi `finance_instruments.eod_ticker`."""
+    meta = get_instrument_meta(db_path, symbol) if db_path else None
+    stored_eod = str((meta or {}).get("eod_ticker") or "").strip().upper() or None
+    return _candidate_eod_tickers(symbol, stored_eod_ticker=stored_eod)
 
 
 async def fetch_eodhd_fundamentals_json(ticker: str, api_key: str) -> dict[str, Any] | None:
@@ -453,11 +490,33 @@ async def get_unified_financial_statements(
     canonical = resolve_canonical_symbol(db_path, clean_sym)
     ttl_seconds = max(60, int(settings.finance_fundamentals_ttl_hours) * 3600)
 
-    # 1. Lecture depuis l'entrepôt si cache frais et aucun refresh demandé
+    eod_key = (
+        settings.eod_historical_data_key.get_secret_value()
+        if settings.enabled(settings.eod_historical_data_key)
+        else ""
+    )
+    prefer_eod = bool(eod_key and not settings.demo_mode)
+
+    # 1. Lecture depuis l'entrepôt si cache frais et aucun refresh demandé.
+    #    Si une clé EODHD est configurée, un ancien cache Yahoo Finance ne court-circuite PAS EODHD :
+    #    on ne retourne immédiatement depuis le cache que si un snapshot EODHD frais est disponible.
+    cached_fallback_snap: dict[str, Any] | None = None
     if not refresh:
-        cached_snap = get_snapshot(db_path, canonical, "fundamentals", max_age_seconds=ttl_seconds)
-        ann_series, ann_curr, ann_src, ann_upd = load_fundamental_series(db_path, canonical, "annual")
-        qtr_series, qtr_curr, qtr_src, qtr_upd = load_fundamental_series(db_path, canonical, "quarterly")
+        cached_snap = (
+            get_snapshot(db_path, canonical, "fundamentals", provider="eodhd", max_age_seconds=ttl_seconds)
+            if prefer_eod
+            else get_snapshot(db_path, canonical, "fundamentals", max_age_seconds=ttl_seconds)
+        )
+        if prefer_eod and not cached_snap:
+            cached_fallback_snap = get_snapshot(
+                db_path, canonical, "fundamentals", provider="yahoo_finance", max_age_seconds=ttl_seconds
+            )
+        ann_series, ann_curr, ann_src, ann_upd = load_fundamental_series(
+            db_path, canonical, "annual", prefer_source="eodhd" if prefer_eod else None
+        )
+        qtr_series, qtr_curr, qtr_src, qtr_upd = load_fundamental_series(
+            db_path, canonical, "quarterly", prefer_source="eodhd" if prefer_eod else None
+        )
         # Compléter automatiquement les champs EODHD étendus depuis le snapshot brut si mis en cache avant cette extension
         if (
             cached_snap
@@ -504,28 +563,20 @@ async def get_unified_financial_statements(
                 "highlights": norm_meta.get("highlights") or {},
             }
 
-    eod_key = (
-        settings.eod_historical_data_key.get_secret_value()
-        if settings.enabled(settings.eod_historical_data_key)
-        else ""
-    )
-
     eod_fundamentals: dict[str, Any] | None = None
     used_eod_ticker: str | None = None
-    if eod_key:
-        for cand in _candidate_eod_tickers(canonical):
+    if prefer_eod:
+        candidates = resolve_candidate_eod_tickers(db_path, canonical)
+        if canonical != clean_sym.upper():
+            for extra in _candidate_eod_tickers(clean_sym):
+                if extra not in candidates:
+                    candidates.append(extra)
+        for cand in candidates:
             payload = await fetch_eodhd_fundamentals_json(cand, eod_key)
             if payload:
                 eod_fundamentals = payload
                 used_eod_ticker = cand
                 break
-        if eod_fundamentals is None and canonical != clean_sym.upper():
-            for cand in _candidate_eod_tickers(clean_sym):
-                payload = await fetch_eodhd_fundamentals_json(cand, eod_key)
-                if payload:
-                    eod_fundamentals = payload
-                    used_eod_ticker = cand
-                    break
 
     ann_eod: dict[str, dict[str, float | None]] = {}
     qtr_eod: dict[str, dict[str, float | None]] = {}
@@ -544,10 +595,29 @@ async def get_unified_financial_statements(
         highlights = extract_eodhd_highlights_summary(eod_fundamentals)
         currency = str((eod_fundamentals.get("General") or {}).get("CurrencyCode") or "").strip().upper()
 
-    # 2. Backup Yahoo Finance si EODHD indisponible ou sans séries d'états financiers (sauf fonds EUFUND)
+    # 2. Backup Yahoo Finance uniquement si EODHD est indisponible ou sans séries d'états financiers (sauf fonds EUFUND)
     ann_yah: dict[str, dict[str, float | None]] = {}
     qtr_yah: dict[str, dict[str, float | None]] = {}
     if not ann_eod and not qtr_eod and not canonical.upper().endswith(".EUFUND"):
+        if cached_fallback_snap and not refresh:
+            fb_ann, fb_curr_a, _, fb_upd_a = load_fundamental_series(db_path, canonical, "annual", prefer_source="yahoo_finance")
+            fb_qtr, fb_curr_q, _, fb_upd_q = load_fundamental_series(db_path, canonical, "quarterly", prefer_source="yahoo_finance")
+            if ("TotalRevenue" in fb_ann or "TotalAssets" in fb_ann) or ("TotalRevenue" in fb_qtr or "TotalAssets" in fb_qtr):
+                norm_meta = cached_fallback_snap.get("normalized") or {}
+                return {
+                    "symbol": clean_sym,
+                    "canonical_symbol": canonical,
+                    "currency": cached_fallback_snap.get("currency") or fb_curr_a or fb_curr_q or norm_meta.get("currency") or "",
+                    "source_provider": "yahoo_finance",
+                    "source_label": _provider_label("yahoo_finance"),
+                    "cached": True,
+                    "updated_at": cached_fallback_snap.get("updated_at") or fb_upd_a or fb_upd_q,
+                    "warehouse_stats": get_warehouse_stats(db_path, canonical),
+                    "annual": build_period_from_series(fb_ann, annual=True),
+                    "quarterly": build_period_from_series(fb_qtr, annual=False),
+                    "earnings_history": norm_meta.get("earnings_history") or [],
+                    "highlights": norm_meta.get("highlights") or {},
+                }
         yahoo_lookup = clean_sym[:-3] if clean_sym.upper().endswith(".US") else clean_sym
         y_annual_raw, y_quarterly_raw = await fetch_yahoo_timeseries_bundle(yahoo_lookup)
         ann_yah = parse_timeseries(y_annual_raw, "annual")
@@ -572,9 +642,14 @@ async def get_unified_financial_statements(
                 currency=currency,
             )
 
-    # 3. Relire l'historique cumulé en entrepôt pour conserver les anciens exercices déjà téléchargés
-    stored_ann, stored_curr_a, stored_src_a, upd_a = load_fundamental_series(db_path, canonical, "annual")
-    stored_qtr, stored_curr_q, stored_src_q, upd_q = load_fundamental_series(db_path, canonical, "quarterly")
+    # 3. Relire l'historique cumulé en entrepôt en priorisant exclusivement EODHD dès qu'il existe
+    preferred_read = "eodhd" if (ann_eod or qtr_eod or prefer_eod) else None
+    stored_ann, stored_curr_a, stored_src_a, upd_a = load_fundamental_series(
+        db_path, canonical, "annual", prefer_source=preferred_read
+    )
+    stored_qtr, stored_curr_q, stored_src_q, upd_q = load_fundamental_series(
+        db_path, canonical, "quarterly", prefer_source=preferred_read
+    )
 
     final_ann = merge_statement_series(ann_eod or ann_yah, stored_ann)
     final_qtr = merge_statement_series(qtr_eod or qtr_yah, stored_qtr)

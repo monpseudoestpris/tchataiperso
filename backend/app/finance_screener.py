@@ -1249,6 +1249,7 @@ async def hydrate_screener_universe(
     include_fundamentals: bool = True,
     max_fundamentals: int = 40,
     refresh_eod: bool = False,
+    on_progress: Callable[[int, int, str], None] | None = None,
 ) -> dict[str, Any]:
     """Enrichit les cours EOD (et optionnellement les fondamentaux manquants) d'un univers pour le Screener."""
     from .finance_dossier import get_financial_dossier
@@ -1281,20 +1282,44 @@ async def hydrate_screener_universe(
     fundamentals_errors = 0
 
     if include_fundamentals and target_symbols and not settings.demo_mode:
+        from .finance_warehouse import get_warehouse_eod_source_breakdown
+
         ttl_sec = max(3600, int(settings.finance_fundamentals_ttl_hours) * 3600)
-        to_fetch: list[str] = []
+        prefer_eod = bool(settings.enabled(settings.eod_historical_data_key))
+        yahoo_priority_set = (
+            set(get_warehouse_eod_source_breakdown(db_path).get("yahoo_only_fundamentals_symbols") or [])
+            if prefer_eod
+            else set()
+        )
+        priority_fetch: list[str] = []
+        regular_fetch: list[str] = []
+        seen_fetch: set[str] = set()
         for sym in target_symbols:
             canonical = resolve_canonical_symbol(db_path, sym)
-            snap = get_snapshot(db_path, canonical, "fundamentals", max_age_seconds=ttl_sec)
+            if canonical in seen_fetch:
+                continue
+            seen_fetch.add(canonical)
+            snap = (
+                get_snapshot(db_path, canonical, "fundamentals", provider="eodhd", max_age_seconds=ttl_sec)
+                if prefer_eod
+                else get_snapshot(db_path, canonical, "fundamentals", max_age_seconds=ttl_sec)
+            )
             if snap:
                 fundamentals_skipped_cached += 1
+            elif canonical in yahoo_priority_set:
+                priority_fetch.append(canonical)
             else:
-                to_fetch.append(canonical)
+                regular_fetch.append(canonical)
 
+        to_fetch = [*priority_fetch, *regular_fetch]
         cap = max(1, min(120, int(max_fundamentals or 40)))
+        batch = to_fetch[:cap]
+        total_batch = len(batch)
+        done_batch = 0
         sem = asyncio.Semaphore(4)
 
         async def _enrich_one(sym: str) -> bool:
+            nonlocal done_batch
             async with sem:
                 try:
                     await get_financial_dossier(settings, sym, refresh=False)
@@ -1302,8 +1327,15 @@ async def hydrate_screener_universe(
                 except Exception as exc:
                     _logger.debug("Hydratation fondamentale ignorée (%s): %s", sym, exc)
                     return False
+                finally:
+                    done_batch += 1
+                    if on_progress is not None:
+                        try:
+                            on_progress(done_batch, total_batch, sym)
+                        except Exception:
+                            pass
 
-        results = await asyncio.gather(*(_enrich_one(s) for s in to_fetch[:cap]))
+        results = await asyncio.gather(*(_enrich_one(s) for s in batch))
         fundamentals_enriched = sum(1 for ok in results if ok)
         fundamentals_errors = sum(1 for ok in results if not ok)
 

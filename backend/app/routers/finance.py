@@ -18,6 +18,7 @@ from ..finance_dossier import generate_dossier_ai_analysis, get_financial_dossie
 from ..finance_experts import generate_finance_expert_opinion, list_finance_experts_and_cached
 from ..finance_funds import (
     get_daily_sync_state,
+    get_daily_sync_status,
     list_eufund_catalog,
     list_exchange_catalog,
     run_daily_sync_now,
@@ -708,6 +709,14 @@ async def update_finance_sync_preferences_endpoint(
     return await update_daily_sync_preferences(settings, body)
 
 
+@router.get("/sync-preferences/status")
+def get_finance_sync_status_endpoint(
+    user: User = Depends(current_user),
+) -> dict[str, Any]:
+    """Retourne instantanément l'état et l'avancement en direct de la synchro automatique."""
+    return get_daily_sync_status()
+
+
 @router.post("/sync-preferences/run")
 async def run_finance_sync_now_endpoint(
     refresh: bool = Query(False, description="Forcer le re-téléchargement même si déjà sauvegardé aujourd'hui"),
@@ -716,6 +725,25 @@ async def run_finance_sync_now_endpoint(
 ) -> dict[str, Any]:
     """Déclenche immédiatement la synchronisation selon la sélection enregistrée."""
     return await run_daily_sync_now(settings, refresh=refresh, respect_enabled=False)
+
+
+@router.post("/sync-preferences/upgrade-eodhd")
+async def upgrade_finance_warehouse_eodhd_endpoint(
+    body: dict[str, Any] = Body(default_factory=dict),
+    settings: Settings = Depends(get_settings),
+    user: User = Depends(current_user),
+) -> dict[str, Any]:
+    """Met à jour en lot les cours EOD et états financiers de l'entrepôt local depuis EODHD."""
+    from ..finance_funds import upgrade_warehouse_to_eodhd
+
+    return await upgrade_warehouse_to_eodhd(
+        settings,
+        include_bars=bool(body.get("include_bars", True)),
+        include_fundamentals=bool(body.get("include_fundamentals", True)),
+        force_all_fundamentals=bool(body.get("force_all_fundamentals", False)),
+        max_fundamentals=int(body.get("max_fundamentals") or 250),
+        max_bars=int(body.get("max_bars") or 600),
+    )
 
 
 @router.get("/funds/eufund")

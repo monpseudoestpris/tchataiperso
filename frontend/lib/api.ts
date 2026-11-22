@@ -2168,17 +2168,35 @@ export type FinanceSyncRunSummary = {
   errors?: string[];
 };
 
+export type FinanceSyncProgress = {
+  is_running: boolean;
+  trigger: "auto" | "manual" | null;
+  phase: string;
+  current_label: string;
+  completed_steps: number;
+  total_steps: number;
+  percent: number;
+  indices_done: number;
+  indices_total: number;
+  fundamentals_done: number;
+  fundamentals_total: number;
+  started_at: string | null;
+  updated_at: string | null;
+};
+
 export type FinanceSyncPreferences = {
   enabled: boolean;
   principal_indices: boolean;
   major_indices_constituents: boolean;
   screener_fundamentals: boolean;
   screener_fundamentals_daily_cap: number;
+  screener_fundamentals_interval_days: number;
   indx_catalog: boolean;
   index_codes: string[];
   watchlists: boolean;
   exchanges: string[];
   last_run_at: string | null;
+  last_fundamentals_run_at: string | null;
   last_status: FinanceSyncRunSummary | null;
   updated_at: string | null;
 };
@@ -2192,13 +2210,34 @@ export type FinanceSyncAvailableIndex = {
   constituents_count: number;
 };
 
+export type FinanceWarehouseSourcesSummary = {
+  eodhd_fundamentals_count: number;
+  yahoo_only_fundamentals_count: number;
+  eodhd_bars_symbols_count: number;
+  yahoo_only_bars_symbols_count: number;
+  total_bars_symbols: number;
+  eodhd_configured: boolean;
+};
+
 export type FinanceSyncStateResponse = {
   preferences: FinanceSyncPreferences;
   is_running?: boolean;
+  progress?: FinanceSyncProgress;
+  warehouse_sources?: FinanceWarehouseSourcesSummary;
   available_indices: FinanceSyncAvailableIndex[];
   available_exchanges: SupportedExchangeInfo[];
   summary?: FinanceSyncRunSummary & {
+    bars_targeted?: number;
+    bars_upgraded?: number;
+    bars_errors?: number;
+    fundamentals_targeted?: number;
+    fundamentals_upgraded?: number;
+    fundamentals_errors?: number;
+    force_all_fundamentals?: boolean;
     screener_fundamentals?: {
+      skipped?: boolean;
+      reason?: string | null;
+      next_due_at?: string | null;
       enriched: number;
       cached: number;
       errors: number;
@@ -2210,6 +2249,10 @@ export async function fetchFinanceSyncPreferences(): Promise<FinanceSyncStateRes
   return api<FinanceSyncStateResponse>("/finance/sync-preferences");
 }
 
+export async function fetchFinanceSyncStatus(): Promise<FinanceSyncProgress> {
+  return api<FinanceSyncProgress>("/finance/sync-preferences/status");
+}
+
 export async function updateFinanceSyncPreferences(
   prefs: Pick<
     FinanceSyncPreferences,
@@ -2218,6 +2261,7 @@ export async function updateFinanceSyncPreferences(
     | "major_indices_constituents"
     | "screener_fundamentals"
     | "screener_fundamentals_daily_cap"
+    | "screener_fundamentals_interval_days"
     | "indx_catalog"
     | "index_codes"
     | "watchlists"
@@ -2234,6 +2278,19 @@ export async function runFinanceSyncNow(refresh = false): Promise<FinanceSyncSta
   const qs = refresh ? "?refresh=true" : "";
   return api<FinanceSyncStateResponse>(`/finance/sync-preferences/run${qs}`, {
     method: "POST",
+  });
+}
+
+export async function upgradeFinanceWarehouseToEodhd(options?: {
+  include_bars?: boolean;
+  include_fundamentals?: boolean;
+  force_all_fundamentals?: boolean;
+  max_fundamentals?: number;
+  max_bars?: number;
+}): Promise<FinanceSyncStateResponse> {
+  return api<FinanceSyncStateResponse>("/finance/sync-preferences/upgrade-eodhd", {
+    method: "POST",
+    body: JSON.stringify(options ?? {}),
   });
 }
 
