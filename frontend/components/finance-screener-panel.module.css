@@ -524,11 +524,69 @@
   width: 48px;
 }
 
+.titleTh {
+  position: relative;
+  padding-right: 14px !important;
+}
+
+.colResizeHandle {
+  position: absolute;
+  top: 4px;
+  right: 0;
+  bottom: 4px;
+  width: 7px;
+  cursor: col-resize;
+  border-right: 2px solid transparent;
+  transition: border-color 0.14s ease, background 0.14s ease;
+}
+
+.colResizeHandle:hover {
+  border-right-color: #10b981;
+  background: rgba(16, 185, 129, 0.12);
+}
+
 .stockCell {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
-  max-width: 240px;
+  max-width: 320px;
+}
+
+.stockHoverTooltip {
+  display: none;
+  position: absolute;
+  left: 0;
+  top: calc(100% + 4px);
+  z-index: 40;
+  min-width: 240px;
+  max-width: min(72vw, 520px);
+  padding: 8px 11px;
+  border-radius: 9px;
+  background: #0f172a;
+  color: #f8fafc;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.28);
+  white-space: normal;
+  pointer-events: none;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.stockHoverTooltip strong {
+  font-size: 12.5px;
+  font-weight: 700;
+  line-height: 1.35;
+  color: #ffffff;
+}
+
+.stockHoverTooltip span {
+  font-size: 11px;
+  color: #cbd5e1;
+  line-height: 1.3;
+}
+
+.stockCell:hover .stockHoverTooltip {
+  display: flex;
 }
 
 .symbolBadge {
@@ -553,6 +611,35 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.stockNameRow {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.etfBadge,
+.exchBadge {
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  flex-shrink: 0;
+}
+
+.etfBadge {
+  background: #e0f2fe;
+  color: #0369a1;
+}
+
+.exchBadge {
+  background: #f1f5f9;
+  color: #475569;
+  border: 1px solid #e2e8f0;
 }
 
 .stockSub {
@@ -807,4 +894,15 @@
   background: rgba(244, 63, 94, 0.14);
   border-color: rgba(244, 63, 94, 0.35);
   color: #fda4af;
+}
+
+:global(:root[data-theme="dark"]) .etfBadge {
+  background: rgba(14, 165, 233, 0.18);
+  color: #7dd3fc;
+}
+
+:global(:root[data-theme="dark"]) .exchBadge {
+  background: #1e293b;
+  border-color: #334155;
+  color: #cbd5e1;
 }

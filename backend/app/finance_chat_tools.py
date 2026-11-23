@@ -150,6 +150,7 @@ _VALID_DOSSIER_SECTIONS: frozenset[str] = frozenset(
 _SCREENER_COMPACT_KEYS: tuple[str, ...] = (
     "symbol",
     "eod_ticker",
+    "asset_type",
     "name",
     "country",
     "market_zone",
@@ -262,6 +263,11 @@ FINANCE_CHAT_TOOLS: list[dict[str, Any]] = [
                     "only_with_fundamentals": {
                         "type": "boolean",
                         "description": "Si vrai, exclut les actions sans fondamentaux calculés.",
+                    },
+                    "asset_type": {
+                        "type": "string",
+                        "enum": ["all", "stock", "etf"],
+                        "description": "Filtrer par type d'instrument : 'stock' (actions), 'etf' (ETFs) ou 'all'.",
                     },
                     "timeframe": {
                         "type": "string",
@@ -948,6 +954,7 @@ def _tool_screener_query(args: dict[str, Any], ctx: FinanceToolContext) -> dict[
         res = query_screener(
             ctx.settings,
             timeframe=tf,
+            asset_type=str(args.get("asset_type") or "").strip(),
             universe_type=universe_type,
             universe_value=universe_value,
             watchlist_symbols=wl_symbols,

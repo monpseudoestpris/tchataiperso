@@ -995,10 +995,10 @@ def test_hermes_mcp_adapter_gateway_draft_and_permissions(tmp_path, monkeypatch)
         assert res_direct["structuredContent"]["success"] is True
 
         with client.app.state.sessions() as db:
-            pages = db.scalars(select(WebPage).order_by(WebPage.id.desc())).all()
+            pages = db.scalars(select(WebPage).order_by(WebPage.created_at.desc())).all()
             assert len(pages) == 2
-            assert pages[0].title == "Fiche Figures A4"
-            assert "a4-sheet" in pages[0].versions[0].html_content
+            a4_page = next(p for p in pages if p.title == "Fiche Figures A4")
+            assert "a4-sheet" in a4_page.versions[0].html_content
 
         unregister_gateway_mission_lease("sess-html")
 

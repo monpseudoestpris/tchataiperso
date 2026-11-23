@@ -7,4 +7,8 @@ export default defineConfig([
   ...nextTypescript,
   globalIgnores([".next/**", "next-env.d.ts"]),
   { rules: { "@next/next/no-img-element": "off" } },
+  {
+    files: ["**/*.cjs"],
+    rules: { "@typescript-eslint/no-require-imports": "off" },
+  },
 ]);

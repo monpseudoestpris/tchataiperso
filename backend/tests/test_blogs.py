@@ -521,4 +521,28 @@ def test_enrich_sources_follows_article_links_from_landing_page():
     assert "4,38 %" in enriched[0]["content"]
 
 
+def test_enrich_sources_blocks_ssrf_redirect_to_private_host():
+    requested: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(str(request.url))
+        if str(request.url) == "https://news.example.com/2026/11/redirect-trap-9999":
+            return httpx.Response(
+                302,
+                headers={"location": "http://169.254.169.254/latest/meta-data/"},
+                request=request,
+            )
+        return httpx.Response(200, text="<html><body>PRIVATE METADATA</body></html>", headers={"content-type": "text/html"})
+
+    real_async_client = httpx.AsyncClient
+    initial_sources = [
+        {"title": "Piège redirection", "url": "https://news.example.com/2026/11/redirect-trap-9999", "snippet": "Test"}
+    ]
+    with patch("httpx.AsyncClient", lambda *args, **kwargs: real_async_client(transport=httpx.MockTransport(handler))):
+        enriched = asyncio.run(_enrich_sources_with_content(initial_sources))
+
+    assert requested == ["https://news.example.com/2026/11/redirect-trap-9999"]
+    assert all("PRIVATE METADATA" not in s.get("content", "") for s in enriched)
+
+
 

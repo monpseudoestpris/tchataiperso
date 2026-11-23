@@ -14,7 +14,7 @@ from ..page_bricks import (
     propose_app_diagram,
 )
 from ..page_generator import propose_page_topics, refine_page_html, slugify
-from ..page_runtime import sanitize_and_enhance_html
+from ..page_runtime import inject_sandbox_storage_shim, sanitize_and_enhance_html
 from ..page_service import create_draft_web_page
 from ..page_wizard import interview_page_wizard
 from ..providers import ProviderError
@@ -487,13 +487,22 @@ def serve_public_page(
         if not versions:
             raise HTTPException(404, "Contenu de page vide")
         latest = versions[0]
-        html_content = latest.html_content
+        html_content = inject_sandbox_storage_shim(latest.html_content)
 
     return Response(
         content=html_content,
         media_type="text/html; charset=utf-8",
         headers={
-            "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com data:; script-src 'unsafe-inline'; img-src data: blob:;",
+            "Content-Security-Policy": (
+                "sandbox allow-scripts allow-forms allow-popups allow-downloads; "
+                "default-src 'none'; "
+                "style-src 'unsafe-inline' https://fonts.googleapis.com; "
+                "font-src https://fonts.gstatic.com data:; "
+                "script-src 'unsafe-inline'; "
+                "img-src data: blob:; "
+                "form-action 'none'; "
+                "frame-ancestors 'none';"
+            ),
             "X-Content-Type-Options": "nosniff",
         },
     )

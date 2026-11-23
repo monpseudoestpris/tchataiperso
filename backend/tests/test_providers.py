@@ -904,6 +904,28 @@ def test_openrouter_image_generation_b64(settings, transport):
     assert len(requests) == 1
 
 
+def test_openrouter_image_url_blocks_ssrf_redirect_without_dns(settings, transport):
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        if str(request.url).endswith("/images"):
+            return httpx.Response(200, json={"data": [{"url": "https://cdn.example.com/img.png"}]})
+        if str(request.url) == "https://cdn.example.com/img.png":
+            return httpx.Response(302, headers={"location": "http://127.0.0.1:8001/secret.png"})
+        return httpx.Response(200, content=b"\x89PNG\r\n\x1a\n" + b"\x00" * 30, headers={"content-type": "image/png"})
+
+    transport(handler)
+    with pytest.raises(providers.ProviderError, match="invalide ou interdite"):
+        asyncio.run(providers.generate_image(
+            settings, "Un paysage", "1:1", model="openai/gpt-image-2"
+        ))
+    assert [str(r.url) for r in requests] == [
+        "https://llm.example/v1/images",
+        "https://cdn.example.com/img.png",
+    ]
+
+
 def test_decode_reference_image_valid_and_invalid():
     png = b"\x89PNG\r\n\x1a\n" + b"abcd"
     data_url = "data:image/png;base64," + base64.b64encode(png).decode("ascii")

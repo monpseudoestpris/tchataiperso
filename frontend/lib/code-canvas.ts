@@ -331,6 +331,50 @@ function matchCanvasFileByRef(files: CanvasFile[], rawRef: string): CanvasFile |
  * Builds a self-contained HTML preview document if the Canvas files contain HTML (or CSS/JS).
  * Also injects the cLAIr Bricks runtime (`window.clair.runBrick(...)` + optional brick dock).
  */
+const SANDBOX_STORAGE_SHIM_SCRIPT = `<script data-clair-storage-shim>
+(function(){
+  if (typeof window === 'undefined' || window.__clair_storage_shim__) return;
+  window.__clair_storage_shim__ = true;
+  function makeMemStorage(){
+    var data = Object.create(null);
+    return {
+      get length(){ return Object.keys(data).length; },
+      key: function(i){ var k = Object.keys(data); return i >= 0 && i < k.length ? k[i] : null; },
+      getItem: function(k){ k = String(k); return Object.prototype.hasOwnProperty.call(data, k) ? data[k] : null; },
+      setItem: function(k, v){ data[String(k)] = String(v); },
+      removeItem: function(k){ delete data[String(k)]; },
+      clear: function(){ data = Object.create(null); }
+    };
+  }
+  ['localStorage', 'sessionStorage'].forEach(function(name){
+    try {
+      var s = window[name];
+      s.setItem('__clair_probe__', '1');
+      s.removeItem('__clair_probe__');
+    } catch (e) {
+      try {
+        Object.defineProperty(window, name, { value: makeMemStorage(), configurable: true });
+      } catch (e2) {}
+    }
+  });
+})();
+</script>`;
+
+export function injectSandboxStorageShim(html: string): string {
+  if (!html || html.includes("__clair_storage_shim__")) return html;
+  const headMatch = /<head\b[^>]*>/i.exec(html);
+  if (headMatch && headMatch.index !== undefined) {
+    const idx = headMatch.index + headMatch[0].length;
+    return `${html.slice(0, idx)}\n${SANDBOX_STORAGE_SHIM_SCRIPT}\n${html.slice(idx)}`;
+  }
+  const htmlMatch = /<html\b[^>]*>/i.exec(html);
+  if (htmlMatch && htmlMatch.index !== undefined) {
+    const idx = htmlMatch.index + htmlMatch[0].length;
+    return `${html.slice(0, idx)}\n<head>${SANDBOX_STORAGE_SHIM_SCRIPT}</head>\n${html.slice(idx)}`;
+  }
+  return `${SANDBOX_STORAGE_SHIM_SCRIPT}\n${html}`;
+}
+
 export function buildCanvasPreviewHtml(files: CanvasFile[], bricks: PageBrick[] = []): string | null {
   if (!files.length) return null;
   const htmlFile =
@@ -448,7 +492,7 @@ export function buildCanvasPreviewHtml(files: CanvasFile[], bricks: PageBrick[] 
     }
   }
 
-  return doc;
+  return injectSandboxStorageShim(doc);
 }
 
 // --- Pure client-side PKZIP builder (UTF-8 paths, nested folders, zero external deps) ---

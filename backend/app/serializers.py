@@ -74,11 +74,27 @@ def user_json(user: User) -> dict:
 def attachment_json(item: Attachment) -> dict:
     url_source = item.extraction.get("url") if isinstance(item.extraction, dict) else None
     finance_meta = None
+    youtube_meta = None
     if isinstance(item.extraction, dict) and item.extraction.get("model") in ("yahoo-finance", "eod-historical-data"):
         finance_meta = {
             k: item.extraction.get(k)
             for k in ("symbol", "short_name", "long_name", "price", "currency", "change_percent", "exchange", "url",
                       "provider", "source_label", "eod_bars", "financial_stats")
+            if item.extraction.get(k) is not None
+        }
+    elif isinstance(item.extraction, dict) and item.extraction.get("model") == "youtube-transcript":
+        youtube_meta = {
+            k: item.extraction.get(k)
+            for k in (
+                "video_id",
+                "author",
+                "duration",
+                "lang_label",
+                "has_transcript",
+                "transcript_segments",
+                "transcript_chars",
+                "saved_video_id",
+            )
             if item.extraction.get(k) is not None
         }
     analysis_mode = "local"
@@ -105,6 +121,7 @@ def attachment_json(item: Attachment) -> dict:
         "page_count": len(item.extraction["pages"]) if item.extraction and "pages" in item.extraction else 0,
         "source_url": url_source,
         "finance_meta": finance_meta,
+        "youtube_meta": youtube_meta,
         "analysis_mode": analysis_mode,
     }
 

@@ -4,6 +4,7 @@ import html
 import json
 import logging
 import re
+import sqlite3
 import urllib.parse
 from pathlib import Path
 from typing import Any, Awaitable, Callable
@@ -15,11 +16,15 @@ from fastapi import HTTPException
 from .config import Settings
 from .finance_eodhd_usage import record_eodhd_call
 from .finance_ranges import CHART_RANGES, DEFAULT_CHART_RANGE
+from .google_cloud import ProviderError
 from .documents import MAX_EXTRACTED_CHARS
 from .models import Attachment
 from .schemas import DocumentAnnotation, DocumentExtraction, ExtractedPage
 
 _logger = logging.getLogger("uvicorn.error")
+_FINANCE_HTTP_ERRORS = (httpx.HTTPError, ValueError)
+_FINANCE_SOURCE_ERRORS = (httpx.HTTPError, HTTPException, ProviderError, ValueError, OSError, RuntimeError)
+_WAREHOUSE_PERSIST_ERRORS = (sqlite3.Error, OSError, ValueError)
 
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -100,7 +105,7 @@ def is_yahoo_finance_url(url: str) -> bool:
         parsed = urllib.parse.urlparse(url)
         host = parsed.hostname or ""
         return any(pattern.match(host) for pattern in YAHOO_HOST_PATTERNS)
-    except Exception:
+    except (ValueError, TypeError):
         return False
 
 
@@ -110,7 +115,7 @@ def is_eodhd_url(url: str) -> bool:
         parsed = urllib.parse.urlparse(url)
         host = parsed.hostname or ""
         return any(pattern.match(host) for pattern in EODHD_HOST_PATTERNS)
-    except Exception:
+    except (ValueError, TypeError):
         return False
 
 
@@ -253,7 +258,7 @@ async def get_yahoo_crumb_and_client() -> tuple[httpx.AsyncClient, str | None]:
     try:
         # Step 1: Query fc.yahoo.com to receive initial session cookies
         await client.get("https://fc.yahoo.com")
-    except Exception as exc:
+    except httpx.HTTPError as exc:
         _logger.debug("fc.yahoo.com cookie step notice: %s", exc)
 
     try:
@@ -264,7 +269,7 @@ async def get_yahoo_crumb_and_client() -> tuple[httpx.AsyncClient, str | None]:
             if text and not text.startswith("{") and len(text) < 30:
                 _cached_crumb = text
                 return client, _cached_crumb
-    except Exception as exc:
+    except httpx.HTTPError as exc:
         _logger.warning("Échec de récupération du crumb Yahoo Finance: %s", exc)
 
     return client, _cached_crumb
@@ -303,7 +308,7 @@ async def search_yahoo_ticker(client: httpx.AsyncClient, query: str) -> dict[str
             if quote.get("symbol"):
                 return quote
 
-    except Exception as exc:
+    except _FINANCE_HTTP_ERRORS as exc:
         _logger.warning("Erreur lors de la recherche du ticker Yahoo Finance (%s): %s", query, exc)
 
     return None
@@ -325,7 +330,7 @@ async def fetch_yahoo_chart(
             result = data.get("chart", {}).get("result")
             if result and len(result) > 0:
                 return result[0]
-    except Exception as exc:
+    except _FINANCE_HTTP_ERRORS as exc:
         _logger.warning("Erreur lors de l'appel v8/finance/chart pour %s: %s", symbol, exc)
     return None
 
@@ -352,7 +357,7 @@ async def fetch_yahoo_quote_summary(
         elif resp.status_code == 401 and crumb:
             # Crumb might have expired, try once more without crumb or log
             _logger.debug("quoteSummary 401 avec crumb pour %s", symbol)
-    except Exception as exc:
+    except _FINANCE_HTTP_ERRORS as exc:
         _logger.warning("Erreur lors de l'appel v10/finance/quoteSummary pour %s: %s", symbol, exc)
     return None
 
@@ -787,7 +792,7 @@ async def lookup_eodhd_search_metadata(
             "ISIN": top.get("ISIN") or top.get("Isin"),
             "previousClose": top.get("previousClose"),
         }
-    except Exception as exc:
+    except _FINANCE_HTTP_ERRORS as exc:
         _logger.debug("Erreur lookup_eodhd_search_metadata (%s): %s", clean_q, exc)
         return None
 
@@ -849,7 +854,7 @@ async def search_eodhd_ticker(
             "ISIN": top.get("ISIN") or top.get("Isin"),
             "previousClose": top.get("previousClose"),
         }
-    except Exception as exc:
+    except _FINANCE_HTTP_ERRORS as exc:
         _logger.warning("Erreur lors de la recherche du ticker EODHD (%s): %s", query, exc)
         return None
 
@@ -868,7 +873,7 @@ async def fetch_eodhd_realtime(
             data = resp.json()
             if isinstance(data, dict) and data.get("code"):
                 return data
-    except Exception as exc:
+    except _FINANCE_HTTP_ERRORS as exc:
         _logger.warning("Erreur lors de l'appel real-time EODHD (%s): %s", ticker, exc)
     return None
 
@@ -922,7 +927,7 @@ async def fetch_eodhd_historical_eod(
             data = resp.json()
             if isinstance(data, list):
                 return data[:limit]
-    except Exception as exc:
+    except _FINANCE_HTTP_ERRORS as exc:
         _logger.warning("Erreur lors de l'appel eod EODHD (%s): %s", ticker, exc)
     return []
 
@@ -943,7 +948,7 @@ async def fetch_eodhd_fundamentals(
                 k in data for k in ("General", "Highlights", "Valuation", "Financials", "Mutual_Fund", "ETF_Data")
             ):
                 return data
-    except Exception as exc:
+    except _FINANCE_HTTP_ERRORS as exc:
         _logger.debug("Fundamentals EODHD non disponibles pour %s: %s", ticker, exc)
     return None
 
@@ -1523,7 +1528,7 @@ async def fetch_dual_financial_attachments(
     async def _safe_eod():
         try:
             return await fetch_eodhd_quote_data(settings, clean_target)
-        except Exception as e_exc:
+        except _FINANCE_SOURCE_ERRORS as e_exc:
             _logger.warning("Échec EODHD pour « %s »: %s", clean_target, e_exc)
             return None
 
@@ -1533,7 +1538,7 @@ async def fetch_dual_financial_attachments(
             if lookup.endswith(".US"):
                 lookup = lookup[:-3]
             return await fetch_yahoo_financials_data(settings, lookup)
-        except Exception as y_exc:
+        except _FINANCE_SOURCE_ERRORS as y_exc:
             _logger.warning("Échec Yahoo Finance pour « %s »: %s", clean_target, y_exc)
             return None
 
@@ -1780,7 +1785,7 @@ async def get_financial_dashboard_data(
                         "ticker": ticker_candidate.upper(),
                     }
                 return eod_item, rt_data, bars, eod_fund
-        except Exception as e_exc:
+        except _FINANCE_SOURCE_ERRORS as e_exc:
             _logger.warning("Échec EODHD dashboard pour « %s »: %s", clean_target, e_exc)
             return None, None, [], None
 
@@ -1815,7 +1820,7 @@ async def get_financial_dashboard_data(
                 return top_q, summary, chart, t
             finally:
                 await client.aclose()
-        except Exception as y_exc:
+        except _FINANCE_SOURCE_ERRORS as y_exc:
             _logger.warning("Échec Yahoo dashboard pour « %s »: %s", clean_target, y_exc)
             return None, None, None, None
 
@@ -2088,7 +2093,7 @@ async def get_financial_dashboard_data(
                     currency=currency,
                 )
             warehouse_stats = get_warehouse_stats(db_path, display_symbol)
-        except Exception as wh_exc:
+        except _WAREHOUSE_PERSIST_ERRORS as wh_exc:
             _logger.warning("Persistance entrepôt financier ignorée (%s): %s", display_symbol, wh_exc)
 
     return {
@@ -2153,7 +2158,7 @@ async def fetch_and_parse_yahoo_finance(
             eod_tuple = await fetch_eodhd_quote_data(settings, clean_target)
             if eod_tuple:
                 return eod_tuple
-        except Exception as eod_exc:
+        except _FINANCE_SOURCE_ERRORS as eod_exc:
             _logger.warning("Échec EODHD pour « %s » (%s), repli sur Yahoo Finance...", clean_target, eod_exc)
 
     y_tuple = await fetch_yahoo_financials_data(settings, clean_target)
@@ -2202,7 +2207,7 @@ async def process_message_finance_inquiries(
         try:
             entities = [e.strip() for e in await entity_resolver(text, previous_targets) if e and e.strip()][:3]
             resolved_by_llm = True
-        except Exception as exc:
+        except _FINANCE_SOURCE_ERRORS as exc:
             _logger.warning("Extraction des entités financières par IA indisponible; repli heuristique: %s", exc)
     if not resolved_by_llm:
         entities = heuristic
@@ -2266,7 +2271,7 @@ async def process_message_finance_inquiries(
                 new_attachments.append(attachment)
                 _logger.info("Données financières attachées pour %s (%s) [%s]", entity, symbol, extraction.get("provider", "finance"))
 
-        except Exception as exc:
+        except _FINANCE_SOURCE_ERRORS as exc:
             _logger.warning("Impossible de récupérer les données financières pour « %s »: %s", entity, exc)
             if failures is not None:
                 failures.append(entity)

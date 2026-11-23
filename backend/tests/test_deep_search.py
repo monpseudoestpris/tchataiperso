@@ -273,8 +273,14 @@ def test_get_message_html_endpoint(tmp_path):
         login = client.post("/api/auth/login", json={"username": "user_msg", "password": "correct horse battery"})
         assert login.status_code == 200
 
-        # Standard message HTML view
-        resp = client.get(f"/api/messages/{msg_id}/html")
+        # Standard message ChatSite HTML view (isolated snapshot)
+        resp_site = client.get(f"/api/messages/{msg_id}/html")
+        assert resp_site.status_code == 200
+        assert "text/html" in resp_site.headers["content-type"]
+        assert "<!doctype html>" in resp_site.text.lower()
+
+        # Printable / PDF message HTML export view
+        resp = client.get(f"/api/messages/{msg_id}/html?pdf=1")
         assert resp.status_code == 200
         assert "text/html" in resp.headers["content-type"]
         assert "<!DOCTYPE html>" in resp.text
@@ -286,21 +292,25 @@ def test_get_message_html_endpoint(tmp_path):
         assert resp_dl.status_code == 200
         assert "attachment" in resp_dl.headers.get("content-disposition", "")
 
-        # Turn scope (Question & Réponse)
-        resp_turn = client.get(f"/api/messages/{msg_id}/html?scope=turn")
+        # Turn scope printable export (Question & Réponse)
+        resp_turn = client.get(f"/api/messages/{msg_id}/html?scope=turn&pdf=1")
         assert resp_turn.status_code == 200
         assert "Question de l'utilisateur" in resp_turn.text
         assert "Réponse de l'assistant cLAIr" in resp_turn.text
         assert "Comment fabriquer du verre teinté ?" in resp_turn.text
 
-        # Conversation scope (Synthèse des messages)
-        resp_conv = client.get(f"/api/messages/{msg_id}/html?scope=conversation")
+        # Conversation scope printable export (Synthèse des messages)
+        resp_conv = client.get(f"/api/messages/{msg_id}/html?scope=conversation&pdf=1")
         assert resp_conv.status_code == 200
         assert "Transcription & Synthèse de la discussion" in resp_conv.text
         assert "Test HTML/PDF Export" in resp_conv.text
 
-        # Direct conversation HTML endpoint
-        resp_c_endpoint = client.get(f"/api/conversations/{conv.id}/html")
+        # Direct conversation printable HTML endpoint & ChatSite default view
+        resp_c_site = client.get(f"/api/conversations/{conv.id}/html")
+        assert resp_c_site.status_code == 200
+        assert "<!doctype html>" in resp_c_site.text.lower()
+
+        resp_c_endpoint = client.get(f"/api/conversations/{conv.id}/html?pdf=1")
         assert resp_c_endpoint.status_code == 200
         assert "<!DOCTYPE html>" in resp_c_endpoint.text
         assert "Test HTML/PDF Export" in resp_c_endpoint.text

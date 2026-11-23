@@ -6,7 +6,6 @@ import {
   ChevronDown,
   CircleAlert,
   Coins,
-  Cpu,
   Eye,
   ImagePlus,
   Layers,
@@ -211,10 +210,10 @@ export function ImageModelModal({
             </div>
             <div>
               <div className="model-modal-title-row">
-                <h2>Sélection du modèle d'image & vision</h2>
+                <h2>Sélection du modèle d&apos;image & vision</h2>
                 <span className="model-count-pill">{models.length} modèles disponibles</span>
               </div>
-              <p>Modèles officiels d'OpenRouter Image API & Ideogram avec tarifs directs, résolutions et capacités.</p>
+              <p>Modèles officiels d&apos;OpenRouter Image API & Ideogram avec tarifs directs, résolutions et capacités.</p>
             </div>
           </div>
           <div className="model-modal-header-right">
@@ -358,8 +357,8 @@ export function ImageModelModal({
           {sortedModels.length === 0 ? (
             <div className="model-empty-state">
               <CircleAlert size={36} />
-              <h3>Aucun modèle d'image ne correspond à votre recherche</h3>
-              <p>Modifiez vos termes de recherche ou choisissez l'onglet « Tous ».</p>
+              <h3>Aucun modèle d&apos;image ne correspond à votre recherche</h3>
+              <p>Modifiez vos termes de recherche ou choisissez l&apos;onglet « Tous ».</p>
               <button
                 type="button"
                 className="model-reset-search-btn"

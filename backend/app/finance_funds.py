@@ -33,7 +33,8 @@ _logger = logging.getLogger("uvicorn.error")
 _DAILY_SYNC_LOCK = asyncio.Lock()
 _DAILY_SYNC_RUNNING = False
 _ACTIVE_SYNC_TASK: asyncio.Task[Any] | None = None
-_DAILY_SYNC_PROGRESS: dict[str, Any] = {
+_SYNC_STATE_DB_PATH: Path | None = None
+_DAILY_SYNC_PROGRESS_DEFAULT: dict[str, Any] = {
     "is_running": False,
     "trigger": None,
     "phase": "idle",
@@ -50,6 +51,13 @@ _DAILY_SYNC_PROGRESS: dict[str, Any] = {
     "last_message": None,
     "last_completed_at": None,
 }
+_DAILY_SYNC_PROGRESS: dict[str, Any] = dict(_DAILY_SYNC_PROGRESS_DEFAULT)
+
+
+def configure_sync_state_db(db_path: Path | None) -> None:
+    """Configure la base SQLite WAL (`finance_warehouse.db`) pour persister l'avancement de synchro."""
+    global _SYNC_STATE_DB_PATH
+    _SYNC_STATE_DB_PATH = db_path
 
 
 def _update_sync_progress(**patch: Any) -> None:
@@ -62,10 +70,33 @@ def _update_sync_progress(**patch: Any) -> None:
         _DAILY_SYNC_PROGRESS["percent"] = max(0, min(100, round((done / total) * 100)))
     elif not _DAILY_SYNC_PROGRESS.get("is_running"):
         _DAILY_SYNC_PROGRESS["percent"] = 0
+    if _SYNC_STATE_DB_PATH is not None:
+        try:
+            import sqlite3
+            from .finance_warehouse import save_sync_runtime_state
+
+            save_sync_runtime_state(_SYNC_STATE_DB_PATH, dict(_DAILY_SYNC_PROGRESS))
+        except (sqlite3.Error, OSError) as exc:
+            _logger.debug("Persistance état de synchro ignorée: %s", exc)
 
 
-def get_daily_sync_status() -> dict[str, Any]:
-    """Retourne instantanément l'état en direct de la synchronisation automatique (0 I/O)."""
+def get_daily_sync_status(*, db_path: Path | None = None) -> dict[str, Any]:
+    """Retourne l'état de la synchro (cache RAM actif, ou relecture SQLite WAL après redémarrage)."""
+    target_db = db_path or _SYNC_STATE_DB_PATH
+    if _DAILY_SYNC_PROGRESS.get("updated_at") is None and target_db is not None:
+        try:
+            import sqlite3
+            from .finance_warehouse import load_sync_runtime_state
+
+            persisted = load_sync_runtime_state(target_db)
+            if persisted:
+                merged = dict(_DAILY_SYNC_PROGRESS_DEFAULT)
+                merged.update(persisted)
+                if not _DAILY_SYNC_RUNNING:
+                    merged["is_running"] = False
+                return merged
+        except (sqlite3.Error, OSError) as exc:
+            _logger.debug("Lecture état de synchro SQLite ignorée: %s", exc)
     return dict(_DAILY_SYNC_PROGRESS)
 
 
@@ -269,6 +300,7 @@ async def sync_configured_exchange_catalogs(
     *,
     refresh: bool = False,
     codes: list[str] | None = None,
+    seed_stock_codes: list[str] | None = None,
 ) -> dict[str, Any]:
     """Synchronise séquentiellement les places boursières demandées (`EUFUND, PA, US, XETRA, LSE, CC`)."""
     raw_codes = codes if codes is not None else (parse_auto_sync_exchange_codes(settings) or list(_DEFAULT_EXCHANGE_CODES))
@@ -286,11 +318,14 @@ async def sync_configured_exchange_catalogs(
             "source": source,
             "synced_at": _iso_from_ts(meta["fetched_at"]),
         }
-    # Référence immédiatement dans le Screener toutes les actions des catalogues (sans aucun appel réseau)
+    # Référence immédiatement dans le Screener les actions des catalogues concernés (sans appel réseau)
     from .finance_warehouse import seed_screener_from_exchange_catalogs
 
     try:
-        seed_screener_from_exchange_catalogs(warehouse_db_path(settings))
+        if seed_stock_codes is None:
+            seed_screener_from_exchange_catalogs(warehouse_db_path(settings))
+        elif seed_stock_codes:
+            seed_screener_from_exchange_catalogs(warehouse_db_path(settings), seed_stock_codes)
     except Exception as exc:
         _logger.warning("Référencement des catalogues de bourses dans le Screener ignoré: %s", exc)
     return {
@@ -368,7 +403,7 @@ async def get_daily_sync_state(
 ) -> dict[str, Any]:
     """Retourne les préférences de synchro quotidienne + tous les indices et listes EODHD avec leur nombre de titres."""
     from .finance_indices import list_eodhd_indx_catalog, list_principal_indices
-    from .finance_warehouse import get_index_constituents
+    from .finance_warehouse import get_cached_symbols_set, get_index_constituents
 
     db_path = warehouse_db_path(settings)
     prefs = get_sync_preferences(db_path)
@@ -387,16 +422,27 @@ async def get_daily_sync_state(
             "tier": idx.get("tier") or "major",
             "region": idx.get("region") or "",
             "constituents_count": int(idx.get("constituents_count") or 0),
+            "loaded_count": int(idx.get("loaded_count") or 0),
         }
         for idx in (indices_payload.get("indices") or [])
     ]
     known_idx_codes = {str(i["code"]).upper() for i in available_indices}
+    cached_syms = get_cached_symbols_set(db_path)
     for custom_code in prefs.get("index_codes") or []:
         c_up = str(custom_code or "").strip().upper()
         if not c_up or c_up in known_idx_codes:
             continue
         known_idx_codes.add(c_up)
         stored, _ = get_index_constituents(db_path, c_up, max_age_seconds=None)
+        loaded_cnt = sum(
+            1
+            for r in stored
+            if (
+                str(r.get("eod_ticker") or "").strip().upper() in cached_syms
+                or str(r.get("symbol") or "").strip().upper() in cached_syms
+                or str(r.get("yahoo_symbol") or "").strip().upper() in cached_syms
+            )
+        )
         available_indices.append(
             {
                 "code": c_up,
@@ -406,15 +452,33 @@ async def get_daily_sync_state(
                 "tier": "minor",
                 "region": "EODHD .INDX",
                 "constituents_count": len(stored),
+                "loaded_count": loaded_cnt,
             }
         )
 
     src_breakdown = get_warehouse_eod_source_breakdown(db_path)
     from .finance_exchange_full_sync import get_full_exchange_coverage
+    from .finance_sync_sources import get_unified_exchange_sources
+    from .finance_warehouse import get_screener_coverage
+
+    extra_exch_codes = [
+        *(prefs.get("stock_price_exchanges") or []),
+        *(prefs.get("full_data_exchanges") or []),
+        *(prefs.get("etf_exchanges") or []),
+    ]
+    scr_cov = get_screener_coverage(db_path)
 
     return {
         "preferences": prefs,
         "full_exchange_coverage": get_full_exchange_coverage(db_path, list(prefs.get("full_data_exchanges") or [])),
+        "exchange_sources": get_unified_exchange_sources(db_path, extra_codes=extra_exch_codes),
+        "screener_summary": {
+            "total_snapshots": int(scr_cov.get("total_snapshots") or 0),
+            "stock_count": int(scr_cov.get("stock_count") or 0),
+            "etf_count": int(scr_cov.get("etf_count") or 0),
+            "with_technicals": int(scr_cov.get("with_technicals") or 0),
+            "with_fundamentals": int(scr_cov.get("with_fundamentals") or 0),
+        },
         "is_running": _DAILY_SYNC_RUNNING,
         "progress": get_daily_sync_status(),
         "eodhd_indx_catalog_total": int((indx_cat or {}).get("total") or 0),
@@ -496,7 +560,23 @@ async def run_daily_sync_now(
         for c in (prefs.get("full_data_exchanges") or [])
         if _EXCHANGE_CODE_RE.fullmatch(str(c or "").strip().upper()) and str(c).strip().upper() not in ("ALL", "EUFUND", "CC")
     ]
-    for code in [*(prefs.get("exchanges") or []), *full_data_codes, *parse_auto_sync_exchange_codes(settings)]:
+    stock_price_codes = [
+        str(c or "").strip().upper()
+        for c in (prefs.get("stock_price_exchanges") or [])
+        if _EXCHANGE_CODE_RE.fullmatch(str(c or "").strip().upper()) and str(c).strip().upper() not in ("ALL", "EUFUND", "CC", "INDX")
+    ]
+    etf_exch_codes = [
+        str(c or "").strip().upper()
+        for c in (prefs.get("etf_exchanges") or [])
+        if _EXCHANGE_CODE_RE.fullmatch(str(c or "").strip().upper()) and str(c).strip().upper() not in ("ALL", "EUFUND", "CC", "INDX")
+    ]
+    stock_seed_codes = [
+        *(prefs.get("exchanges") or []),
+        *stock_price_codes,
+        *full_data_codes,
+        *parse_auto_sync_exchange_codes(settings),
+    ]
+    for code in [*stock_seed_codes, *etf_exch_codes]:
         clean_c = str(code or "").strip().upper()
         if clean_c and clean_c != "ALL" and _EXCHANGE_CODE_RE.fullmatch(clean_c) and clean_c not in seen_exch:
             seen_exch.add(clean_c)
@@ -504,6 +584,7 @@ async def run_daily_sync_now(
 
     # Fondamentaux : file d'attente priorisée sous budget quotidien (remplace l'ancien cycle hebdomadaire)
     will_run_fundamentals = bool(prefs.get("screener_fundamentals", True) and not settings.demo_mode)
+    has_daily_bars_targets = bool((full_data_codes or stock_price_codes or etf_exch_codes) and not settings.demo_mode)
 
     total_steps = (
         (1 if prefs.get("principal_indices") else 0)
@@ -512,7 +593,7 @@ async def run_daily_sync_now(
         + (1 if will_run_fundamentals else 0)
         + (1 if prefs.get("watchlists") else 0)
         + (1 if exch_codes else 0)
-        + (1 if full_data_codes and not settings.demo_mode else 0)
+        + (1 if has_daily_bars_targets else 0)
     )
     total_steps = max(1, total_steps)
     completed_steps = 0
@@ -631,22 +712,42 @@ async def run_daily_sync_now(
                     current_label=f"Catalogues marchés ({', '.join(exch_codes)})…",
                     completed_steps=completed_steps,
                 )
-                exch_res = await sync_configured_exchange_catalogs(settings, refresh=refresh, codes=exch_codes)
+                exch_res = await sync_configured_exchange_catalogs(
+                    settings,
+                    refresh=refresh,
+                    codes=exch_codes,
+                    seed_stock_codes=stock_seed_codes,
+                )
                 summary["exchanges"] = exch_res.get("exchanges") or {}
+                if etf_exch_codes:
+                    from .finance_warehouse import seed_etfs_from_exchange_catalog
+
+                    summary["etf_exchanges"] = seed_etfs_from_exchange_catalog(db_path, etf_exch_codes)
                 completed_steps += 1
                 _update_sync_progress(completed_steps=completed_steps)
 
-            # Bourses complètes (ex. tout Paris) : cours du jour en bulk (les fondamentaux passent par la file)
-            if full_data_codes and not settings.demo_mode:
-                from .finance_exchange_full_sync import run_full_exchange_sync
+            # Cours quotidiens en bulk (Actions + ETFs mutualisés par bourse) & complétion d'historiques manquants
+            if has_daily_bars_targets:
+                from .finance_sync_sources import run_daily_bulk_and_missing_bars_sync
 
+                bulk_targets = list(dict.fromkeys([*full_data_codes, *stock_price_codes, *etf_exch_codes]))
                 _update_sync_progress(
                     phase="full_exchanges",
-                    current_label=f"Bourses complètes ({', '.join(full_data_codes)}) : cours du jour…",
+                    current_label=f"Cours quotidiens ({', '.join(bulk_targets)})…",
                     completed_steps=completed_steps,
                 )
                 try:
-                    summary["full_exchanges"] = await run_full_exchange_sync(settings, full_data_codes)
+                    daily_bars = await run_daily_bulk_and_missing_bars_sync(
+                        settings,
+                        full_data_codes=full_data_codes,
+                        stock_price_codes=stock_price_codes,
+                        etf_exch_codes=etf_exch_codes,
+                    )
+                    summary["full_exchanges"] = daily_bars.get("full_exchanges") or {}
+                    summary["daily_bars"] = {
+                        "bulk_codes": daily_bars.get("bulk_codes") or [],
+                        "hydrated_bars": daily_bars.get("hydrated_bars") or {},
+                    }
                 except Exception as exc:
                     summary["errors"].append(f"full_exchanges: {exc}")
                 completed_steps += 1
@@ -978,6 +1079,35 @@ def _spawn_detached_sync_task(coro: Any, *, phase: str, label: str, trigger: str
     return True
 
 
+def is_sync_task_running() -> bool:
+    """Indique si une synchronisation financière en arrière-plan est actuellement en cours."""
+    return bool(_ACTIVE_SYNC_TASK is not None and not _ACTIVE_SYNC_TASK.done())
+
+
+async def stop_active_sync_task(timeout_seconds: float = 12.0) -> bool:
+    """Annule proprement la tâche financière en arrière-plan et attend la fin de sa transaction en cours."""
+    global _ACTIVE_SYNC_TASK, _DAILY_SYNC_RUNNING
+    task = _ACTIVE_SYNC_TASK
+    if task is None or task.done():
+        _DAILY_SYNC_RUNNING = False
+        return False
+    task.cancel()
+    try:
+        await asyncio.wait_for(asyncio.shield(task), timeout=timeout_seconds)
+    except (asyncio.CancelledError, asyncio.TimeoutError, Exception):
+        pass
+    _ACTIVE_SYNC_TASK = None
+    _DAILY_SYNC_RUNNING = False
+    _update_sync_progress(
+        is_running=False,
+        phase="idle",
+        current_label="",
+        last_message="Synchronisation arrêtée proprement avant fermeture de l'application.",
+        last_completed_at=datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+    )
+    return True
+
+
 async def start_daily_sync_background(
     settings: Settings,
     *,
@@ -1158,6 +1288,67 @@ async def start_screener_hydrate_background(
     }
 
 
+async def _run_screener_bars_batch_tracked(settings: Settings, symbols: list[str]) -> dict[str, Any]:
+    global _DAILY_SYNC_RUNNING
+    from .finance_screener import hydrate_screener_bars_batch
+
+    async with _DAILY_SYNC_LOCK:
+        _DAILY_SYNC_RUNNING = True
+        started_iso = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+        total = min(300, len(symbols))
+        _update_sync_progress(
+            is_running=True,
+            trigger="manual",
+            phase="screener_bars_batch",
+            current_label=f"Chargement cours & technique (0/{total})…",
+            completed_steps=0,
+            total_steps=max(1, total),
+            fundamentals_done=0,
+            fundamentals_total=total,
+            started_at=started_iso,
+        )
+
+        def _on_progress(done_n: int, tot_n: int, sym: str) -> None:
+            _update_sync_progress(
+                phase="screener_bars_batch",
+                current_label=f"Cours & technique {sym} ({done_n}/{tot_n})…",
+                completed_steps=done_n,
+                total_steps=max(1, tot_n),
+                fundamentals_done=done_n,
+                fundamentals_total=tot_n,
+            )
+
+        try:
+            res = await hydrate_screener_bars_batch(settings, symbols, on_progress=_on_progress)
+            _update_sync_progress(
+                last_message=(
+                    f"Cours & technique (4 unités) chargés pour {res.get('loaded', 0)}/{res.get('targeted', 0)} titre(s) "
+                    f"({res.get('calls', 0)} call(s) EODHD)."
+                ),
+                last_completed_at=datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+            )
+            return res
+        finally:
+            _DAILY_SYNC_RUNNING = False
+            _update_sync_progress(is_running=False, phase="idle", current_label="", percent=100)
+
+
+async def start_screener_bars_batch_background(settings: Settings, symbols: list[str]) -> dict[str, Any]:
+    """Démarre le chargement EOD léger par lot en tâche de fond détachée et répond immédiatement."""
+    started = _spawn_detached_sync_task(
+        _run_screener_bars_batch_tracked(settings, symbols),
+        phase="screener_bars_batch",
+        label=f"Chargement cours & technique ({len(symbols)} titres)…",
+        trigger="manual",
+    )
+    return {
+        "started": started,
+        "already_running": not started,
+        "targeted": len(symbols),
+        "progress": get_daily_sync_status(),
+    }
+
+
 async def _run_fundamentals_queue_tracked(settings: Settings) -> dict[str, Any]:
     global _DAILY_SYNC_RUNNING
     from .finance_fundamentals_scheduler import run_fundamentals_budget
@@ -1210,6 +1401,112 @@ async def start_fundamentals_run_background(settings: Settings) -> bool:
     )
 
 
+async def _run_single_sync_source_locked(
+    settings: Settings,
+    *,
+    kind: str,
+    code: str | None = None,
+    batch_size: int = 150,
+) -> dict[str, Any]:
+    global _DAILY_SYNC_RUNNING
+    from .finance_sync_sources import execute_single_sync_source
+
+    async with _DAILY_SYNC_LOCK:
+        _DAILY_SYNC_RUNNING = True
+        started_iso = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+        label = f"Chargement {code or kind}…"
+        _update_sync_progress(
+            is_running=True,
+            trigger="manual",
+            phase=f"source:{kind}",
+            current_label=label,
+            completed_steps=0,
+            total_steps=1,
+            fundamentals_done=0,
+            fundamentals_total=0,
+            started_at=started_iso,
+        )
+
+        def _on_progress(done_n: int, tot_n: int, sym: str) -> None:
+            _update_sync_progress(
+                current_label=f"{code or kind} · {sym} ({done_n}/{tot_n})…",
+                completed_steps=done_n,
+                total_steps=max(1, tot_n),
+                fundamentals_done=done_n,
+                fundamentals_total=tot_n,
+            )
+
+        try:
+            res = await execute_single_sync_source(
+                settings,
+                kind=kind,
+                code=code,
+                batch_size=batch_size,
+                on_progress=_on_progress,
+            )
+            _update_sync_progress(
+                last_message=res.get("message") or "Chargement terminé.",
+                last_completed_at=datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+            )
+            return res
+        finally:
+            _DAILY_SYNC_RUNNING = False
+            _update_sync_progress(
+                is_running=False,
+                phase="idle",
+                current_label="",
+                completed_steps=1,
+                total_steps=1,
+                percent=100,
+            )
+
+
+async def run_single_sync_source_now(
+    settings: Settings,
+    *,
+    kind: str,
+    code: str | None = None,
+    batch_size: int = 150,
+) -> dict[str, Any]:
+    """Exécute immédiatement en premier plan le chargement d'une source unique (ou lève `ValueError`)."""
+    from .finance_sync_sources import validate_sync_source_target
+
+    clean_kind, clean_code = validate_sync_source_target(kind, code)
+    if _DAILY_SYNC_LOCK.locked():
+        state = await get_daily_sync_state(settings)
+        return {**state, "summary": {"skipped": True, "reason": "already_running"}}
+    res = await _run_single_sync_source_locked(settings, kind=clean_kind, code=clean_code, batch_size=batch_size)
+    state = await get_daily_sync_state(settings)
+    return {**state, "summary": {"skipped": False, **res}}
+
+
+async def start_single_sync_source_background(
+    settings: Settings,
+    *,
+    kind: str,
+    code: str | None = None,
+    batch_size: int = 150,
+) -> dict[str, Any]:
+    """Lance le chargement d'une source unique en tâche de fond détachée et répond immédiatement."""
+    from .finance_sync_sources import validate_sync_source_target
+
+    clean_kind, clean_code = validate_sync_source_target(kind, code)
+    label = f"Chargement {clean_code or clean_kind}…"
+    started = _spawn_detached_sync_task(
+        _run_single_sync_source_locked(settings, kind=clean_kind, code=clean_code, batch_size=batch_size),
+        phase=f"source:{clean_kind}",
+        label=label,
+        trigger="manual",
+    )
+    state = await get_daily_sync_state(settings)
+    return {
+        **state,
+        "started": started,
+        "already_running": not started,
+        "summary": {"skipped": not started, "background": started, "kind": clean_kind, "code": clean_code},
+    }
+
+
 async def run_daily_exchange_catalog_sync_loop(settings: Settings) -> None:
     """Tâche de fond quotidienne récupérant automatiquement les principaux indices, leur contenu et les sélections."""
     try:
@@ -1251,6 +1548,8 @@ def _build_supported_exchanges_status(
     *,
     eod_exchanges: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
+    from .finance_sync_sources import ESTIMATED_CATALOG_COUNTS
+
     exch_map = meta.get("exchanges") or {}
     eod_by_code = {str(e.get("code") or "").upper(): e for e in (eod_exchanges or []) if e.get("code")}
     out: list[dict[str, Any]] = []
@@ -1266,6 +1565,7 @@ def _build_supported_exchanges_status(
                 "country": eod_meta.get("country") or "",
                 "currency": eod_meta.get("currency") or "",
                 "total": int(info.get("total") or 0),
+                "estimated_total": ESTIMATED_CATALOG_COUNTS.get(c, 0),
                 "synced_at": _iso_from_ts(info.get("fetched_at")),
             }
         )
@@ -1283,6 +1583,7 @@ def _build_supported_exchanges_status(
                 "country": str(entry.get("country") or ""),
                 "currency": str(entry.get("currency") or ""),
                 "total": int(info.get("total") or 0),
+                "estimated_total": ESTIMATED_CATALOG_COUNTS.get(c, 0),
                 "synced_at": _iso_from_ts(info.get("fetched_at")),
             }
         )
@@ -1296,6 +1597,7 @@ def _build_supported_exchanges_status(
                     "country": "",
                     "currency": "",
                     "total": int(info.get("total") or 0),
+                    "estimated_total": ESTIMATED_CATALOG_COUNTS.get(c, 0),
                     "synced_at": _iso_from_ts(info.get("fetched_at")),
                 }
             )

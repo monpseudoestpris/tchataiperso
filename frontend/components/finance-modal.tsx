@@ -517,12 +517,53 @@ export function FinanceModal({
     });
   }
 
-  // Synchronize when opening modal
+  // Synchronize synchronous state when opening modal or changing initial props
+  const openSyncKey = isOpen
+    ? `${initialQuery ?? ""}::${initialData?.symbol ?? ""}::${initialMainTab ?? ""}`
+    : null;
+  const [prevOpenSyncKey, setPrevOpenSyncKey] = useState<string | null>(null);
+  if (openSyncKey !== prevOpenSyncKey) {
+    setPrevOpenSyncKey(openSyncKey);
+    if (isOpen) {
+      if (initialData) {
+        setData(initialData);
+        setDailyBars(initialData.eod_bars || []);
+        setLoadedDailyRange("1m");
+        setIntradayBarsByRange({});
+        setQuery(initialData.short_name || initialData.symbol);
+        setError(null);
+      } else {
+        const targetQuery = (initialQuery || "").trim();
+        if (targetQuery) {
+          setQuery(targetQuery);
+        } else if (!data && initialMainTab !== "screener") {
+          setQuery("Air Liquide");
+        }
+      }
+    }
+  }
+
+  const openFetchRef = useRef({
+    loadWorkspaceData,
+    loadDetails,
+    hasData: Boolean(data),
+    hasPropModels: Boolean(propModels && propModels.length > 0),
+  });
+  useEffect(() => {
+    openFetchRef.current = {
+      loadWorkspaceData,
+      loadDetails,
+      hasData: Boolean(data),
+      hasPropModels: Boolean(propModels && propModels.length > 0),
+    };
+  });
+
+  // Trigger async fetches when opening modal
   useEffect(() => {
     if (!isOpen) return;
 
-    void loadWorkspaceData();
-    if (!propModels || propModels.length === 0) {
+    void openFetchRef.current.loadWorkspaceData();
+    if (!openFetchRef.current.hasPropModels) {
       api<Config>("/config")
         .then(cfg => {
           setFallbackModels(cfg.models || []);
@@ -531,24 +572,14 @@ export function FinanceModal({
         .catch(() => {});
     }
 
-    if (initialData) {
-      setData(initialData);
-      setDailyBars(initialData.eod_bars || []);
-      setLoadedDailyRange("1m");
-      setIntradayBarsByRange({});
-      setQuery(initialData.short_name || initialData.symbol);
-      setError(null);
-      return;
-    }
+    if (initialData) return;
 
     const targetQuery = (initialQuery || "").trim();
     if (targetQuery) {
-      setQuery(targetQuery);
-      void loadDetails(targetQuery);
-    } else if (!data && initialMainTab !== "screener") {
+      void openFetchRef.current.loadDetails(targetQuery);
+    } else if (!openFetchRef.current.hasData && initialMainTab !== "screener") {
       // Default to Air Liquide if no initial query
-      setQuery("Air Liquide");
-      void loadDetails("Air Liquide");
+      void openFetchRef.current.loadDetails("Air Liquide");
     }
   }, [isOpen, initialQuery, initialData, initialMainTab]);
 
@@ -614,11 +645,12 @@ export function FinanceModal({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [isOpen, modelModalOpen, helpOpen, indicatorModalOpen, fullscreenTickerOpen, chartFullscreen, onClose]);
 
+  const visibleCatalogMatches = searchFocused && query.trim().length >= 2 ? catalogMatches : [];
+
   useEffect(() => {
     if (!isOpen) return;
     const trimmed = query.trim();
     if (!searchFocused || trimmed.length < 2) {
-      setCatalogMatches([]);
       return;
     }
     let cancelled = false;
@@ -1748,9 +1780,9 @@ export function FinanceModal({
                         {loading ? <LoaderCircle size={15} className="spin" /> : "Rechercher"}
                       </button>
                     </form>
-                    {searchFocused && catalogMatches.length > 0 && (
+                    {visibleCatalogMatches.length > 0 && (
                       <div className="finance-search-dropdown" role="listbox" aria-label="Suggestions catalogue et entrepôt">
-                        {catalogMatches.map(m => (
+                        {visibleCatalogMatches.map(m => (
                           <button
                             key={`${m.eod_ticker}-${m.index_code ?? ""}`}
                             type="button"

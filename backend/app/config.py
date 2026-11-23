@@ -10,6 +10,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 _REPO_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
+_ISOLATED_ENV_PATHS: frozenset[Path] = frozenset()
 
 
 IDEOGRAM_IMAGE_MODELS: list[dict[str, Any]] = [
@@ -345,9 +346,17 @@ class Settings(BaseSettings):
 
     def __init__(self, **values):
         has_env_arg = "_env_file" in values
-        env_arg = values.get("_env_file", (".env", str(_REPO_ENV_FILE)))
+        default_env_files = tuple(
+            str(p)
+            for p in (Path(".env"), _REPO_ENV_FILE)
+            if p.resolve() not in _ISOLATED_ENV_PATHS
+        )
+        env_arg = values.get("_env_file", default_env_files)
         explicit = {k for k in values if not k.startswith("_")}
-        super().__init__(**values)
+        init_values = dict(values)
+        if not has_env_arg:
+            init_values["_env_file"] = default_env_files or None
+        super().__init__(**init_values)
         self._explicit_fields = explicit
         self._watch_env = not (has_env_arg and env_arg is None)
         if self._watch_env:
@@ -848,7 +857,10 @@ class Settings(BaseSettings):
     def refresh_from_env_file(self, force: bool = False) -> None:
         if not self._watch_env:
             return
-        candidates = [Path(".env"), _REPO_ENV_FILE]
+        candidates = [
+            p for p in (Path(".env"), _REPO_ENV_FILE)
+            if p.resolve() not in _ISOLATED_ENV_PATHS
+        ]
         env_path = next((path for path in candidates if path.is_file()), None)
         if env_path is None:
             return

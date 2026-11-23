@@ -8,9 +8,11 @@ from typing import Any
 from urllib.parse import parse_qs, urljoin, urlsplit
 
 import httpx
+from fastapi import HTTPException
 
 from .config import Settings
 from .google_cloud import can_fallback_to_model, has_llm_access, post_chat_completion
+from .web import RedirectLimitError, ResponseTooLargeError, safe_stream_get
 from .youtube import extract_youtube_video_id
 from .providers import (
     ProviderError,
@@ -1006,20 +1008,33 @@ def _extract_article_links_from_html(raw_html: str, base_url: str, max_links: in
     return links
 
 
+_MAX_BLOG_HTML_BYTES = 2 * 1024 * 1024  # 2 MiB max per article page
+
+
 async def _fetch_html_page(client: httpx.AsyncClient, url: str) -> tuple[str, str]:
-    """Fetch HTML for a safe web URL; return (final_url, html_text) or ('', '')."""
-    safe_url = _safe_web_url(url)
-    if not safe_url:
+    """Fetch HTML for a safe web URL with hop-by-hop SSRF validation and byte cap."""
+    clean_url = (url or "").strip()
+    if not _safe_web_url(clean_url):
         return "", ""
     try:
-        response = await client.get(safe_url)
-        if response.status_code != 200:
+        final_url, status_code, resp_headers, content, resp_encoding = await safe_stream_get(
+            client,
+            clean_url,
+            max_bytes=_MAX_BLOG_HTML_BYTES,
+            max_redirects=5,
+            allow_private=False,
+        )
+        if status_code != 200:
             return "", ""
-        content_type = response.headers.get("content-type", "").lower()
+        content_type = resp_headers.get("content-type", "").lower()
         if "text/html" not in content_type and "application/xhtml" not in content_type:
             return "", ""
-        return str(response.url or safe_url), response.text
-    except Exception:
+        try:
+            text = content.decode(resp_encoding or "utf-8", errors="replace")
+        except LookupError:
+            text = content.decode("utf-8", errors="replace")
+        return final_url or clean_url, text
+    except (HTTPException, ResponseTooLargeError, RedirectLimitError, httpx.HTTPError, UnicodeDecodeError, ValueError):
         return "", ""
 
 
@@ -1040,7 +1055,7 @@ async def _enrich_sources_with_content(
 
     async with httpx.AsyncClient(
         timeout=8.0,
-        follow_redirects=True,
+        follow_redirects=False,
         headers={
             "User-Agent": (
                 "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "

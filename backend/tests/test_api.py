@@ -73,7 +73,7 @@ def test_config_and_disabled_credentials(client):
     assert config["demo_mode"] is True
     assert config["features"] == {
         "chat": True, "google_cloud": False, "web_search": False, "ocr": False, "image_generation": False,
-        "sound_effects": False, "music_generation": False,
+        "sound_effects": False, "music_generation": False, "tts": True, "stt": True,
     }
     assert "api_key" not in json.dumps(config).lower()
 

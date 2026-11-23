@@ -48,7 +48,7 @@ export type Model = {
     prompt?: string;
     completion?: string;
     input_cache_read?: string;
-    [key: string]: any;
+    [key: string]: unknown;
   };
   prompt_price_1m?: number;
   completion_price_1m?: number;
@@ -109,6 +109,16 @@ export type Attachment = {
   page_count?: number;
   source_url?: string | null;
   analysis_mode?: "ocr" | "vision" | "local" | "finance";
+  youtube_meta?: {
+    video_id?: string | null;
+    author?: string | null;
+    duration?: string | null;
+    lang_label?: string | null;
+    has_transcript?: boolean | null;
+    transcript_segments?: number | null;
+    transcript_chars?: number | null;
+    saved_video_id?: string | null;
+  } | null;
   finance_meta?: {
     symbol?: string;
     short_name?: string;
@@ -506,7 +516,7 @@ export type TopicEvent = {
   topic_space_id: string;
   event_type: string;
   title: string;
-  details: Record<string, any>;
+  details: Record<string, unknown>;
   created_at: string;
 };
 
@@ -618,36 +628,11 @@ export type StreamEvent =
     }
   | { type: "error"; data: { message: string } };
 
-export function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : "Une erreur inattendue est survenue.";
-}
+import { ApiError, api, errorMessage, responseError } from "./api-client";
+import type { FundamentalsSchedule } from "./finance-api";
 
-export class ApiError extends Error {
-  constructor(message: string, readonly status: number) {
-    super(message);
-    this.name = "ApiError";
-  }
-}
-
-async function responseError(response: Response): Promise<ApiError> {
-  let detail = `Le serveur a renvoyé une erreur (${response.status}).`;
-  try {
-    const body = await response.json();
-    if (typeof body.detail === "string") detail = body.detail;
-    else if (Array.isArray(body.detail)) detail = body.detail.map((item: { msg?: string }) => item.msg ?? "Valeur invalide").join(" · ");
-    else if (typeof body.message === "string") detail = body.message;
-  } catch { /* Keep the HTTP status for non-JSON gateway failures. */ }
-  return new ApiError(detail, response.status);
-}
-
-export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const headers = new Headers(init.headers);
-  if (init.body && !(init.body instanceof FormData)) headers.set("Content-Type", "application/json");
-  const response = await fetch(`/api${path}`, { ...init, headers, cache: "no-store" });
-  if (!response.ok) throw await responseError(response);
-  if (response.status === 204) return undefined as T;
-  return response.json() as Promise<T>;
-}
+export { ApiError, api, errorMessage };
+export * from "./finance-api";
 
 export function skillToSlug(name: string): string {
   return name
@@ -736,10 +721,150 @@ export async function streamMessage(
   }
 }
 
-export async function attachUrl(url: string): Promise<Attachment> {
+export async function attachUrl(url: string, saveToLibrary = true): Promise<Attachment> {
   return api<Attachment>("/attachments/url", {
     method: "POST",
-    body: JSON.stringify({ url }),
+    body: JSON.stringify({ url, save_to_library: saveToLibrary }),
+  });
+}
+
+export type SavedVideoAnalysis = {
+  id: string;
+  action: string;
+  label: string;
+  prompt?: string;
+  markdown: string;
+  model?: string;
+  created_at: string;
+};
+
+export type SavedVideoSummary = {
+  id: string;
+  video_id: string;
+  url: string;
+  title: string;
+  author: string;
+  duration: string;
+  lang_label: string;
+  thumbnail_url: string;
+  has_transcript: boolean;
+  transcript_segments: number;
+  transcript_chars: number;
+  has_summary: boolean;
+  summary_action: string;
+  summary_model: string;
+  summary_preview: string;
+  analyses_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type SavedVideoDetail = SavedVideoSummary & {
+  transcript_markdown: string;
+  summary_markdown: string;
+  analyses: SavedVideoAnalysis[];
+};
+
+export async function fetchSavedVideos(query = ""): Promise<SavedVideoSummary[]> {
+  const qs = query.trim() ? `?q=${encodeURIComponent(query.trim())}` : "";
+  return api<SavedVideoSummary[]>(`/videos${qs}`);
+}
+
+export async function fetchSavedVideo(savedVideoId: string): Promise<SavedVideoDetail> {
+  return api<SavedVideoDetail>(`/videos/${savedVideoId}`);
+}
+
+export async function importSavedVideo(body: {
+  url: string;
+  action?: "none" | "summarize" | "analyze" | "key_points" | "study" | "translate_fr" | "custom";
+  custom_prompt?: string;
+  model?: string | null;
+}): Promise<SavedVideoDetail> {
+  return api<SavedVideoDetail>("/videos", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function generateSavedVideoAnalysis(
+  savedVideoId: string,
+  body: {
+    action: "summarize" | "analyze" | "key_points" | "study" | "translate_fr" | "custom";
+    custom_prompt?: string;
+    model?: string | null;
+  },
+): Promise<SavedVideoDetail> {
+  return api<SavedVideoDetail>(`/videos/${savedVideoId}/generate`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function updateSavedVideo(
+  savedVideoId: string,
+  body: {
+    title?: string;
+    summary_markdown?: string;
+    summary_action?: string;
+    summary_model?: string;
+    summary_prompt?: string;
+  },
+): Promise<SavedVideoDetail> {
+  return api<SavedVideoDetail>(`/videos/${savedVideoId}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function attachSavedVideoToChat(savedVideoId: string): Promise<Attachment> {
+  return api<Attachment>(`/videos/${savedVideoId}/attach`, {
+    method: "POST",
+  });
+}
+
+export async function deleteSavedVideo(savedVideoId: string): Promise<void> {
+  await api<void>(`/videos/${savedVideoId}`, { method: "DELETE" });
+}
+
+export type ShutdownStatus = {
+  shutting_down: boolean;
+  active_chat_streams: number;
+  finance_sync_running: boolean;
+  running_in_docker: boolean;
+  main_db_dialect: string;
+};
+
+export type PrepareShutdownResult = {
+  status: string;
+  shutting_down: boolean;
+  running_in_docker: boolean;
+  finance_sync_stopped: boolean;
+  active_chat_streams_remaining: number;
+  warehouse_checkpoint: {
+    checkpointed: boolean;
+    exists: boolean;
+    busy: number;
+    log_frames: number;
+    checkpointed_frames: number;
+  };
+  main_db_flushed: boolean;
+  process_stopping: boolean;
+};
+
+export async function fetchShutdownStatus(): Promise<ShutdownStatus> {
+  return api<ShutdownStatus>("/system/shutdown-status");
+}
+
+export async function prepareAppShutdown(stopProcess = false): Promise<PrepareShutdownResult> {
+  return api<PrepareShutdownResult>("/system/prepare-shutdown", {
+    method: "POST",
+    body: JSON.stringify({ stop_process: stopProcess }),
+  });
+}
+
+export async function resumeAppAfterShutdown(): Promise<{ status: string; shutting_down: boolean }> {
+  return api<{ status: string; shutting_down: boolean }>("/system/resume", {
+    method: "POST",
   });
 }
 
@@ -2099,6 +2224,7 @@ export type SupportedExchangeInfo = {
   country?: string;
   currency?: string;
   total: number;
+  estimated_total?: number;
   synced_at: string | null;
 };
 
@@ -2201,8 +2327,16 @@ export type FinanceSyncPreferences = {
   index_codes: string[];
   watchlists: boolean;
   exchanges: string[];
+  /** Bourses dont les cours d'actions sont mis à jour chaque jour (sans forcer les fondamentaux). */
+  stock_price_exchanges?: string[];
   /** Bourses dont toutes les actions doivent avoir leurs données (complétion progressive quotidienne). */
   full_data_exchanges: string[];
+  /** Bourses dont les ETFs sont suivis indépendamment dans le Screener. */
+  etf_exchanges?: string[];
+  /** Inclure les listes de suivi dans la file des fondamentaux. */
+  fundamentals_watchlists?: boolean;
+  /** Inclure les actions des indices suivis dans la file des fondamentaux. */
+  fundamentals_indices?: boolean;
   /** Budget quotidien des fondamentaux en % de la limite journalière du compte EODHD. */
   fundamentals_budget_pct: number;
   fundamentals_quota_safety_pct: number;
@@ -2221,6 +2355,7 @@ export type FinanceSyncAvailableIndex = {
   tier: "major" | "minor";
   region: string;
   constituents_count: number;
+  loaded_count?: number;
 };
 
 export type FinanceWarehouseSourcesSummary = {
@@ -2232,10 +2367,37 @@ export type FinanceWarehouseSourcesSummary = {
   eodhd_configured: boolean;
 };
 
+export type FinanceExchangeSourceStatus = {
+  code: string;
+  label: string;
+  country: string;
+  flag: string;
+  currency: string;
+  catalog_synced: boolean;
+  counts_estimated?: boolean;
+  synced_at: string | null;
+  stocks_total: number;
+  stocks_in_screener: number;
+  stocks_with_bars: number;
+  stocks_with_fundamentals: number;
+  etf_total: number;
+  etf_in_screener: number;
+  etf_with_bars: number;
+};
+
 export type FinanceSyncStateResponse = {
   preferences: FinanceSyncPreferences;
   full_exchange_coverage?: Record<string, { total: number; with_data: number }>;
+  exchange_sources?: FinanceExchangeSourceStatus[];
+  screener_summary?: {
+    total_snapshots: number;
+    stock_count: number;
+    etf_count: number;
+    with_technicals: number;
+    with_fundamentals: number;
+  };
   started?: boolean;
+  already_running?: boolean;
   is_running?: boolean;
   progress?: FinanceSyncProgress;
   eodhd_indx_catalog_total?: number;
@@ -2283,7 +2445,11 @@ export async function updateFinanceSyncPreferences(
     | "index_codes"
     | "watchlists"
     | "exchanges"
+    | "stock_price_exchanges"
     | "full_data_exchanges"
+    | "etf_exchanges"
+    | "fundamentals_watchlists"
+    | "fundamentals_indices"
     | "fundamentals_budget_pct"
     | "fundamentals_quota_safety_pct"
     | "fundamentals_priority_order"
@@ -2299,6 +2465,33 @@ export async function runFinanceSyncNow(refresh = false): Promise<FinanceSyncSta
   const qs = refresh ? "?refresh=true" : "";
   return api<FinanceSyncStateResponse>(`/finance/sync-preferences/run${qs}`, {
     method: "POST",
+  });
+}
+
+export type FinanceSyncSourceKind =
+  | "watchlists"
+  | "major_indices"
+  | "index"
+  | "stocks_exchange"
+  | "etf_exchange"
+  | "catalog_exchange";
+
+export async function runFinanceSyncSourceNow(body: {
+  kind: FinanceSyncSourceKind;
+  code?: string | null;
+  batch_size?: number;
+  background?: boolean;
+}): Promise<FinanceSyncStateResponse> {
+  return api<FinanceSyncStateResponse>("/finance/sync-preferences/run-source", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function ensureFinanceSyncCatalogCounts(codes?: string[]): Promise<FinanceSyncStateResponse> {
+  return api<FinanceSyncStateResponse>("/finance/sync-preferences/ensure-counts", {
+    method: "POST",
+    body: JSON.stringify(codes ? { codes } : {}),
   });
 }
 
@@ -2756,7 +2949,7 @@ export async function deleteTopicMemory(topicId: string, memoryId: string): Prom
 export async function createTopicEvent(topicId: string, data: {
   event_type: string;
   title: string;
-  details?: Record<string, any>;
+  details?: Record<string, unknown>;
 }): Promise<TopicEvent> {
   return api<TopicEvent>(`/topics/${topicId}/events`, {
     method: "POST",
@@ -3286,406 +3479,3 @@ export async function detachVisualDocFromConversation(
   });
 }
 
-// ---------------------------------------------------------------------------
-// Screener boursier intégré (Fondamentaux & Indicateurs techniques)
-// ---------------------------------------------------------------------------
-
-export type ScreenerTimeframe = "day" | "week" | "month" | "quarter";
-
-export type ScreenerFieldOption = {
-  value: number;
-  label: string;
-};
-
-export type ScreenerFieldMeta = {
-  key: string;
-  label: string;
-  category: "performance" | "valuation" | "quality" | "scores" | "technical";
-  type: "number" | "signal";
-  unit?: string;
-  scale?: number;
-  comparable?: boolean;
-  compare_group?: "price" | "isopressure";
-  supports_timeframe?: boolean;
-  options?: ScreenerFieldOption[];
-  description?: string;
-};
-
-export type ScreenerRule =
-  | {
-      kind: "metric";
-      field: string;
-      op: "gt" | "gte" | "lt" | "lte" | "eq" | "neq" | "between" | "is_not_null";
-      value?: number;
-      value_max?: number;
-      timeframe?: ScreenerTimeframe;
-    }
-  | {
-      kind: "compare";
-      left: string;
-      op: "gt" | "gte" | "lt" | "lte";
-      right: string;
-      multiplier?: number;
-      timeframe?: ScreenerTimeframe;
-    }
-  | {
-      kind: "signal";
-      field: string;
-      op: "eq" | "in";
-      value: number | number[];
-      timeframe?: ScreenerTimeframe;
-    };
-
-export type ScreenerPreset = {
-  id: string;
-  name: string;
-  description: string;
-  sort_by: string;
-  sort_dir: "asc" | "desc";
-  rules: ScreenerRule[];
-};
-
-export type ScreenerFacetItem = {
-  code: string;
-  label: string;
-  count: number;
-};
-
-export type ScreenerCountryFacet = ScreenerFacetItem & {
-  flag: string;
-};
-
-export type ScreenerZoneFacet = ScreenerFacetItem & {
-  name: string;
-  flag: string;
-};
-
-export type ScreenerIndexFacet = {
-  code: string;
-  name: string;
-  flag: string;
-  region: string;
-  tier: string;
-  count: number;
-};
-
-export type ScreenerCoverage = {
-  total_snapshots: number;
-  with_technicals: number;
-  with_fundamentals: number;
-  warehouse_symbols_count: number;
-  sectors: string[];
-  exchanges: string[];
-  exchange_items?: ScreenerFacetItem[];
-  currencies: string[];
-  countries?: ScreenerCountryFacet[];
-  market_zones?: ScreenerZoneFacet[];
-  indices?: ScreenerIndexFacet[];
-  cap_categories?: ScreenerFacetItem[];
-  last_computed_at: string | null;
-};
-
-export type ScreenerMetaResponse = {
-  fields: ScreenerFieldMeta[];
-  timeframes?: Array<{ key: ScreenerTimeframe; label: string }>;
-  presets: ScreenerPreset[];
-  coverage: ScreenerCoverage;
-  formula_engine: {
-    ready: boolean;
-    registered_kinds: string[];
-  };
-};
-
-export type ScreenerRow = {
-  symbol: string;
-  eod_ticker: string | null;
-  yahoo_symbol: string | null;
-  name: string;
-  exchange: string;
-  country: string;
-  market_zone?: string;
-  currency: string;
-  sector: string;
-  industry: string;
-  cap_category: string;
-  indices: string[];
-  timeframe?: ScreenerTimeframe;
-  tf_bars_count?: number;
-  market_cap: number | null;
-  market_cap_m: number | null;
-  price: number | null;
-  volume: number | null;
-  rel_volume_20d: number | null;
-  change_1d_pct: number | null;
-  change_1w_pct: number | null;
-  change_1m_pct: number | null;
-  change_3m_pct: number | null;
-  change_ytd_pct: number | null;
-  change_1y_pct: number | null;
-  dist_52w_high_pct: number | null;
-  dist_52w_low_pct: number | null;
-  pe_ttm: number | null;
-  pe_forward: number | null;
-  peg_ratio: number | null;
-  ev_ebitda: number | null;
-  pb_ratio: number | null;
-  fcf_yield_pct: number | null;
-  dividend_yield_pct: number | null;
-  roic_pct: number | null;
-  roe_pct: number | null;
-  op_margin_pct: number | null;
-  net_margin_pct: number | null;
-  net_debt_ebitda: number | null;
-  debt_to_equity_pct: number | null;
-  current_ratio: number | null;
-  rev_cagr_3y_pct: number | null;
-  eps_cagr_3y_pct: number | null;
-  beta: number | null;
-  analyst_upside_pct: number | null;
-  ih_score: number | null;
-  piotroski_f: number | null;
-  altman_z: number | null;
-  mos_intrinsic_pct: number | null;
-  sma20: number | null;
-  sma50: number | null;
-  sma200: number | null;
-  ema20: number | null;
-  ema50: number | null;
-  dist_sma50_pct: number | null;
-  dist_sma200_pct: number | null;
-  rsi_14: number | null;
-  macd_line: number | null;
-  macd_signal: number | null;
-  macd_hist: number | null;
-  macd_cross: number | null;
-  sma_golden_cross: number | null;
-  boll_pct_b: number | null;
-  boll_width_pct: number | null;
-  adx_14: number | null;
-  stoch_k: number | null;
-  atr_pct: number | null;
-  roc_12: number | null;
-  supertrend_dir: number | null;
-  isopressure_raw: number | null;
-  isopressure_p5: number | null;
-  isopressure_p20: number | null;
-  isopressure_p50: number | null;
-  isopressure_p100: number | null;
-  isopressure_p200: number | null;
-  isopressure_20_50_diff: number | null;
-  isopressure_20_50_dir: number | null;
-  isopressure_20_50_cross: number | null;
-  isopressure_5_20_cross: number | null;
-  has_fundamentals: boolean;
-  bars_count: number;
-  bars_date: string | null;
-  fundamentals_updated_at: string | null;
-  computed_at: string;
-  sparkline: number[];
-};
-
-export type ScreenerQueryRequest = {
-  timeframe?: ScreenerTimeframe;
-  universe_type?: "all" | "index" | "watchlist" | "exchange" | "zone" | "country";
-  universe_value?: string | null;
-  index_code?: string;
-  market_zone?: string;
-  country?: string;
-  cap_category?: string;
-  search?: string;
-  sector?: string;
-  exchange?: string;
-  currency?: string;
-  only_with_fundamentals?: boolean;
-  rules?: ScreenerRule[];
-  sort_by?: string;
-  sort_dir?: "asc" | "desc";
-  limit?: number;
-  offset?: number;
-};
-
-export type ScreenerQueryResponse = {
-  timeframe?: ScreenerTimeframe;
-  total: number;
-  universe_total: number;
-  missing_data_count?: number;
-  offset: number;
-  limit: number;
-  items: ScreenerRow[];
-  coverage: ScreenerCoverage;
-};
-
-export type ScreenerHydrateResponse = {
-  started?: boolean;
-  already_running?: boolean;
-  progress?: FinanceSyncProgress;
-  universe_type: string;
-  universe_value: string | null;
-  symbols_count: number;
-  eod_loaded: number;
-  indexed_count: number;
-  fundamentals_enriched: number;
-  fundamentals_cached: number;
-  fundamentals_errors: number;
-  coverage: ScreenerCoverage;
-};
-
-export async function fetchFinanceScreenerMeta(): Promise<ScreenerMetaResponse> {
-  return api<ScreenerMetaResponse>("/finance/screener/meta");
-}
-
-export async function queryFinanceScreener(
-  body: ScreenerQueryRequest,
-): Promise<ScreenerQueryResponse> {
-  return api<ScreenerQueryResponse>("/finance/screener/query", {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
-}
-
-export async function rebuildFinanceScreener(): Promise<{
-  indexed_count: number;
-  coverage: ScreenerCoverage;
-}> {
-  return api<{ indexed_count: number; coverage: ScreenerCoverage }>("/finance/screener/rebuild", {
-    method: "POST",
-  });
-}
-
-export async function hydrateFinanceScreener(body: {
-  universe_type: "all" | "index" | "watchlist";
-  universe_value?: string | null;
-  include_fundamentals?: boolean;
-  max_fundamentals?: number;
-  refresh_eod?: boolean;
-  background?: boolean;
-}): Promise<ScreenerHydrateResponse> {
-  return api<ScreenerHydrateResponse>("/finance/screener/hydrate", {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
-}
-
-export async function exportScreenerToWatchlist(body: {
-  list_name?: string;
-  list_id?: string | null;
-  items: Array<{
-    symbol: string;
-    eod_ticker?: string | null;
-    yahoo_symbol?: string | null;
-    name?: string;
-    exchange?: string;
-    currency?: string;
-  }>;
-}): Promise<{ list: FinanceWatchlistMeta; added_count: number }> {
-  return api<{ list: FinanceWatchlistMeta; added_count: number }>(
-    "/finance/screener/export-watchlist",
-    {
-      method: "POST",
-      body: JSON.stringify(body),
-    },
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Consommation de l'API EODHD (quota, appels du jour, barème)
-// ---------------------------------------------------------------------------
-
-export type EodhdUsageEndpoint = {
-  endpoint: string;
-  label: string;
-  requests: number;
-  unit_cost: number;
-  calls: number;
-};
-
-export type EodhdUsageReport = {
-  account: {
-    subscription: string;
-    api_requests_today: number | null;
-    api_requests_date: string | null;
-    daily_limit: number | null;
-    extra_limit: number | null;
-    remaining_today: number | null;
-  } | null;
-  local: {
-    date: string;
-    total_requests: number;
-    total_calls: number;
-    by_endpoint: EodhdUsageEndpoint[];
-  };
-  cost_table: Array<{ endpoint: string; unit_cost: number; label: string }>;
-  sync_estimate: {
-    lines: Array<{ label: string; calls: number; periodic?: boolean }>;
-    max_daily_calls: number;
-    light_load_calls?: number;
-    full_dossier_calls_estimate?: number;
-    note: string;
-  };
-  source_url: string;
-};
-
-export async function fetchEodhdUsage(): Promise<EodhdUsageReport> {
-  return api<EodhdUsageReport>("/finance/eodhd-usage");
-}
-
-// ---------------------------------------------------------------------------
-// File priorisée des fondamentaux (budget quotidien, échéances intelligentes)
-// ---------------------------------------------------------------------------
-
-export type FundamentalsSchedule = {
-  symbol: string;
-  status: "pending" | "ok" | "error";
-  last_fetched_at: string | null;
-  last_period_end: string | null;
-  last_report_date: string | null;
-  cadence: "quarterly" | "semiannual" | "annual" | "";
-  next_due_at: string | null;
-  reported_pending: number;
-  priority: number;
-};
-
-export type FundamentalsQueueState = {
-  stats: {
-    tracked: number;
-    never_loaded: number;
-    reported: number;
-    due: number;
-    up_to_date: number;
-    errors: number;
-    boosted: number;
-    to_process: number;
-  };
-  budget: {
-    daily_limit: number;
-    daily_limit_known: boolean;
-    budget_calls: number;
-    spent_today: number;
-    remaining_budget: number;
-    titles_per_day: number;
-    safety_floor: number;
-    account_remaining: number | null;
-  };
-  estimated_days: number;
-  next_items: Array<{ symbol: string; priority: number; reason: string; why: string }>;
-};
-
-export async function fetchFundamentalsQueue(): Promise<FundamentalsQueueState> {
-  return api<FundamentalsQueueState>("/finance/fundamentals-queue");
-}
-
-export async function runFundamentalsQueueNow(): Promise<{ started: boolean; already_running: boolean }> {
-  return api<{ started: boolean; already_running: boolean }>("/finance/fundamentals-queue/run", { method: "POST" });
-}
-
-export async function boostFundamentalsQueue(body: {
-  symbols?: string[];
-  screener_filters?: ScreenerQueryRequest;
-  batch_size?: number;
-  run?: boolean;
-}): Promise<{ boosted: number; started: boolean; already_running: boolean }> {
-  return api<{ boosted: number; started: boolean; already_running: boolean }>("/finance/fundamentals-queue/boost", {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
-}

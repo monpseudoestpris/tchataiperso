@@ -13,11 +13,13 @@ from app.models import Base, User
 from app.youtube import (
     DEFAULT_INNERTUBE_API_KEY,
     extract_innertube_key_from_html,
+    extract_player_response_from_html,
     extract_youtube_video_id,
     fetch_and_parse_youtube_video,
     format_duration,
     format_transcript_paragraphs,
     get_innertube_api_key,
+    parse_youtube_captions,
     select_best_caption_track,
 )
 
@@ -87,6 +89,57 @@ class TestYouTubeHelpers(unittest.TestCase):
         html3 = '<html><script>var empty = 1;</script></html>'
         self.assertIsNone(extract_innertube_key_from_html(html3))
         self.assertIsNone(extract_innertube_key_from_html(""))
+
+    def test_parse_youtube_captions_classic_xml_with_nested_tags(self):
+        xml_payload = """<transcript>
+            <text start="1.2" dur="3.0">Bonjour <i>à tous</i> et <b>bienvenue</b>.</text>
+            <text start="5.0" dur="2.5">Suite &amp; fin du segment.</text>
+        </transcript>"""
+        segs = parse_youtube_captions(xml_payload)
+        self.assertEqual(len(segs), 2)
+        self.assertAlmostEqual(segs[0][0], 1.2)
+        self.assertEqual(segs[0][1], "Bonjour à tous et bienvenue.")
+        self.assertEqual(segs[1][1], "Suite & fin du segment.")
+
+    def test_parse_youtube_captions_srv3_xml_format(self):
+        srv3_payload = """<timedtext format="3">
+            <head><pen id="1"/></head>
+            <body>
+                <p t="1500" d="3000"><s>Première</s><s> partie</s><s> srv3.</s></p>
+                <p t="62500" d="4000"><s>Deuxième</s><s> partie complète.</s></p>
+            </body>
+        </timedtext>"""
+        segs = parse_youtube_captions(srv3_payload)
+        self.assertEqual(len(segs), 2)
+        self.assertAlmostEqual(segs[0][0], 1.5)
+        self.assertEqual(segs[0][1], "Première partie srv3.")
+        self.assertAlmostEqual(segs[1][0], 62.5)
+        self.assertEqual(segs[1][1], "Deuxième partie complète.")
+
+    def test_parse_youtube_captions_json3_format(self):
+        json3_payload = """{
+            "events": [
+                {"tStartMs": 0, "segs": [{"utf8": "\\n"}]},
+                {"tStartMs": 4200, "segs": [{"utf8": "Début "}, {"utf8": "JSON3."}]},
+                {"tStartMs": 125000, "segs": [{"utf8": "Fin intégrale."}]}
+            ]
+        }"""
+        segs = parse_youtube_captions(json3_payload)
+        self.assertEqual(len(segs), 2)
+        self.assertAlmostEqual(segs[0][0], 4.2)
+        self.assertEqual(segs[0][1], "Début JSON3.")
+        self.assertAlmostEqual(segs[1][0], 125.0)
+        self.assertEqual(segs[1][1], "Fin intégrale.")
+
+    def test_extract_player_response_from_html(self):
+        html_doc = (
+            '<html><script>var ytInitialPlayerResponse = {"videoDetails":{"title":"Titre Watch"},'
+            '"captions":{"playerCaptionsTracklistRenderer":{"captionTracks":[{"languageCode":"fr","baseUrl":"https://yt/sub"}]}}};'
+            'var other = 1;</script></html>'
+        )
+        parsed = extract_player_response_from_html(html_doc)
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed["videoDetails"]["title"], "Titre Watch")
 
 
 class TestYouTubeDynamicApiKey(unittest.IsolatedAsyncioTestCase):
@@ -339,6 +392,44 @@ class TestYouTubeEndpointIntegration(unittest.TestCase):
             self.assertNotIn("tronquée à 40 000", markdown)
             self.assertIn("DEBUT_TRANSCRIPT_INTEGRAL.", markdown)
             self.assertIn("FIN_TRANSCRIPT_INTEGRAL_VERIFIEE.", markdown)
+            self.assertIsInstance(data.get("youtube_meta"), dict)
+            self.assertTrue(data["youtube_meta"]["has_transcript"])
+            self.assertGreater(data["youtube_meta"]["transcript_segments"], 690)
+
+    def test_youtube_json3_fallback_and_watch_player_fallback(self):
+        mock_watch_html = (
+            '<!DOCTYPE html><html><head><script>"INNERTUBE_API_KEY": "AIzaSyFallbackKey"</script>'
+            '<script>var ytInitialPlayerResponse = {"videoDetails":{"title":"Vidéo Repli Watch","author":"Chaine Repli","lengthSeconds":"420"},'
+            '"captions":{"playerCaptionsTracklistRenderer":{"captionTracks":['
+            '{"baseUrl":"https://www.youtube.com/api/timedtext?v=fb_vid&lang=fr&fmt=srv3","languageCode":"fr","name":{"simpleText":"Français"}}'
+            ']}}};</script></head><body></body></html>'
+        )
+        mock_json3 = '{"events":[{"tStartMs":1000,"segs":[{"utf8":"Texte récupéré via repli JSON3."}]}]}'
+
+        async def fake_get(url, **kwargs):
+            url_str = str(url)
+            if "watch" in url_str:
+                return httpx.Response(200, text=mock_watch_html, request=httpx.Request("GET", url_str))
+            if "timedtext" in url_str and "fmt=json3" in url_str:
+                return httpx.Response(200, text=mock_json3, request=httpx.Request("GET", url_str))
+            if "timedtext" in url_str:
+                return httpx.Response(200, text="", request=httpx.Request("GET", url_str))
+            return httpx.Response(404, request=httpx.Request("GET", url_str))
+
+        async def fake_post(url, **kwargs):
+            # Simule un client ANDROID sans captionTracks
+            return httpx.Response(200, json={"videoDetails": {}}, request=httpx.Request("POST", str(url)))
+
+        with patch("httpx.AsyncClient.get", side_effect=fake_get), \
+             patch("httpx.AsyncClient.post", side_effect=fake_post):
+            res = self.client.post("/api/attachments/url", json={"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"})
+            self.assertEqual(res.status_code, 201)
+            data = res.json()
+            self.assertTrue(data["youtube_meta"]["has_transcript"])
+            extr_res = self.client.get(f"/api/attachments/{data['id']}/extraction")
+            markdown = extr_res.json()["extraction"]["pages"][0]["markdown"]
+            self.assertIn("Vidéo Repli Watch", markdown)
+            self.assertIn("Texte récupéré via repli JSON3.", markdown)
 
 
 if __name__ == "__main__":

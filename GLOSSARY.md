@@ -21,8 +21,14 @@ Ce glossaire fige les termes métier canoniques du projet **cLAIr** (`tchataiper
 - **Définition métier** : Fichier unitaire (PDF, image, DOCX, texte, CSV) ou ressource URL (transcription intégrale de vidéo YouTube, cotation boursière ponctuelle) attaché directement à un message de tchat.
 - **DB Principale (`models.py`)** : Table `attachments` (`Attachment`, colonne `extracted_text` + JSON structuré `extraction` par page, rattachée à `message_id`).
 - **Backend** : `/api/attachments` (`routers/attachments.py`, `documents.py`, `youtube.py`).
-- **Frontend** : Type `Attachment`, composant `AttachmentAnalysis` (`components/chat-app.tsx`), avec `analysis_mode: "ocr" | "vision" | "local" | "finance"` et détection YouTube (`isYoutube`).
-- **Règle d'alignement** : Ne jamais confondre une **Pièce jointe** (`Attachment`, portée par un `Message` unique) avec un **Document Illustré** (`VisualDocument`, bibliothèque persistante rattachée à une `Conversation` entière via `ConversationVisualDoc`). Un **Rapport Trimestriel Financier** (`FinanceQuarterlyReport`) peut être promu en `VisualDocument` via `compile_finance_report_to_visual_doc`.
+- **Frontend** : Type `Attachment`, composant `AttachmentAnalysis` (`components/chat-attachment-analysis.tsx`), modale d'import `ChatUrlAttachModal` (`components/chat-url-attach-modal.tsx`), registre `YOUTUBE_TRANSCRIPT_ACTIONS` (`lib/youtube-actions.ts`), avec `analysis_mode: "ocr" | "vision" | "local" | "finance"` et détection YouTube (`isYoutube`, `youtube_meta`).
+- **Règle d'alignement** : Ne jamais confondre une **Pièce jointe** (`Attachment`, portée par un `Message` unique) avec un **Document Illustré** (`VisualDocument`, bibliothèque persistante rattachée à une `Conversation` entière via `ConversationVisualDoc`) ni avec une **Vidéo Sauvegardée** (`SavedVideo`, bibliothèque persistante de vidéos YouTube de l'utilisateur). Un **Rapport Trimestriel Financier** (`FinanceQuarterlyReport`) peut être promu en `VisualDocument` via `compile_finance_report_to_visual_doc`.
+
+### 2 bis. Vidéo Sauvegardée (`SavedVideo` / « Mes Vidéos »)
+- **Définition métier** : Fiche persistante par utilisateur conservant une vidéo YouTube importée : titre (renommable), lien canonique, chaîne, durée, langue des sous-titres, **transcription 100 % intégrale** (`transcript_markdown`), **résumé principal** (`summary_markdown`) et historique des analyses IA générées (`analyses`).
+- **DB Principale (`models.py`)** : Table `saved_videos` (`SavedVideo`, contrainte `UNIQUE (user_id, video_id)`, migration Alembic `0031_add_saved_videos`).
+- **Backend** : `/api/videos/*` (`routers/videos.py`, `saved_videos.py`, `youtube.py`), alimenté automatiquement lors de `POST /api/attachments/url` (`save_to_library=True`) ou par import direct `POST /api/videos`, et rattachable instantanément au tchat via `POST /api/videos/{id}/attach`.
+- **Frontend** : Modale bibliothèque `VideoLibraryModal` (`components/video-library-modal.tsx`), types `SavedVideoSummary` / `SavedVideoDetail` (`lib/api.ts`), accessible depuis `ToolsModal` (« Mes Vidéos ») et `ChatUrlAttachModal`.
 
 ### 3. cLAIr Pages : Page, App & Briques IA *(vs Site HTML de conversation)*
 - **Définition métier** :
@@ -85,23 +91,23 @@ Ce glossaire fige les termes métier canoniques du projet **cLAIr** (`tchataiper
 - **Frontend** : Sous-onglets `FinanceMoatPanel`, `FinanceExpertsPanel`, `FinanceDossierPanel`, `FinanceReportsPanel`, `FinanceNewsPanel` (gardés montés en mémoire `hidden` dans `FinanceModal` pour ne jamais interrompre une génération asynchrone).
 
 ### 9. Screener Boursier, Unités de temps (`timeframe`), `IsoPressure` & Lignes Catalogue
-- **Définition métier** : Moteur de filtrage et de tri multi-critères sur l'univers d'actions de l'entrepôt, combinant géographie/marchés, ratios fondamentaux, 31 scores Uncle Stock et indicateurs techniques multi-unités.
+- **Définition métier** : Moteur de filtrage et de tri multi-critères sur l'univers d'actions et d'ETFs de l'entrepôt, combinant type d'actif (`stock` vs `etf`), géographie/marchés (`PA`, `US`, `XETRA`, `LSE`…), ratios fondamentaux, 31 scores Uncle Stock et indicateurs techniques multi-unités.
 - **Entrepôt Finance (`finance_warehouse.db`)** :
-  - `finance_screener_snapshots` : 1 ligne par `symbol` (fondamentaux, performances, `market_zone`, `country`, `scores_json`, indicateurs techniques jour).
+  - `finance_screener_snapshots` : 1 ligne par `symbol` (`asset_type = 'stock' | 'etf'`, fondamentaux, performances, `market_zone`, `country`, `scores_json`, indicateurs techniques jour).
   - `finance_screener_technicals` : Indicateurs techniques pré-calculés par unité de temps (`PRIMARY KEY (symbol, timeframe) WITHOUT ROWID` où `timeframe IN ('day', 'week', 'month', 'quarter')`), incluant l'indicateur propriétaire **IsoPressure** (`isopressure_raw`, `p5`, `p20`, `p50`, `p100`, `p200`, `isopressure_20_50_diff`, `isopressure_20_50_dir`, croisements).
-- **Backend** : `finance_screener.py` (Passe 1 SQL whitelistée avec `LEFT JOIN` multi-unités + Passe 2 Python extensible via `register_post_filter_evaluator`), `finance_technicals.py`, `finance_geography.py`, `finance_scores.py`. Outil tchat : `finance_screener_query`.
-- **Frontend** : `FinanceScreenerPanel` (onglet `4 · Screener` de `FinanceModal`, lien tchat `clair-finance://screener`).
+- **Backend** : `finance_screener.py` (Passe 1 SQL whitelistée avec `LEFT JOIN` multi-unités + Passe 2 Python extensible via `register_post_filter_evaluator` + hydratation EOD légère `hydrate_screener_bars_batch`), `finance_technicals.py`, `finance_geography.py`, `finance_scores.py`, `finance_warehouse.py` (`get_etf_exchange_catalog_counts`, `seed_etfs_from_exchange_catalog`). Outil tchat : `finance_screener_query`.
+- **Frontend** : `FinanceScreenerPanel` (onglet `4 · Screener` de `FinanceModal`, lien tchat `clair-finance://screener` ; le chargement des cours et catalogues ETF s'effectue dans l'onglet `5 · Données & Synchro`, avec bouton de redirection lorsque des ETFs manquent).
 - **Règle d'alignement** :
   - Le terme UI **« Unité »** (`Jour · Semaine · Mois · 3 Mois`) correspond à `timeframe` (`day` / `week` / `month` / `quarter`) en DB et dans l'API.
-  - Une **« ligne catalogue »** (ou **« titre sans données »**, filtrable via `only_missing_data` / comptée par `missing_data_count`) est une action ordinaire (`Common Stock`) insérée gratuitement depuis `finance_exchange_symbols` par `seed_screener_from_exchange_catalogs` avec `price IS NULL` et `bars_count = 0` en attendant son chargement.
+  - Une **« ligne catalogue »** (ou **« titre sans données »**, filtrable via `only_missing_data` / comptée par `missing_data_count`) est soit une action ordinaire (`Common Stock`) insérée depuis `finance_exchange_symbols` par `seed_screener_from_exchange_catalogs` (filtrable par `exchange_codes`), soit un ETF (`type = 'ETF'`) référencé bourse par bourse (`PA`, `US`, `XETRA`, etc.) via `seed_etfs_from_exchange_catalog` avec `price IS NULL` et `bars_count = 0` en attendant son chargement.
 
 ### 10. File Budgétée des Fondamentaux & Synchro Quotidienne EODHD
-- **Définition métier** : Planificateur local qui étale le téléchargement et la mise à jour des états financiers EODHD selon la saison de publication de chaque entreprise et un budget quotidien maximal de crédits API.
+- **Définition métier** : Séparation entre la mise à jour quotidienne des **Cours** (cotations, historiques EOD et indicateurs techniques 4 unités via interrupteur `Tous les jours` ou action 1-clic `Charger tout de suite` par source) et le chargement progressif des **Données Fondamentales** (étalement sous budget quotidien et rafraîchissement automatique après publication des résultats).
 - **Entrepôt Finance (`finance_warehouse.db`)** :
   - `finance_fundamentals_queue` : File persistante (`symbol`, `priority` de `0` = coup de pouce à `99` = simple consultation, `next_due_at`, `reported_pending`, `typical_report_days`, `stale_retries`).
-  - `finance_sync_preferences` : Configuration JSON de la synchro automatique (`major_indices_constituents`, `selected_indices`, `full_data_exchanges`, `fundamentals_budget_pct`, `fundamentals_quota_safety_pct`, `fundamentals_priority_order`).
-- **Backend** : `finance_fundamentals_queue.py`, `finance_fundamentals_scheduler.py`, `finance_exchange_full_sync.py` (`/api/eod-bulk-last-day/{EXCH}`), `finance_eodhd_usage.py` (compteur mémoire `record_eodhd_call` + quota `/api/user`), `finance_funds.py`.
-- **Frontend** : Onglet `5 · Données & Synchro` (`FinanceSyncPanel`), cartes `FinanceFundamentalsPlanCard` et `FinanceEodhdUsageCard`, bouton **« Compléter »** (`boost`) dans `FinanceScreenerPanel`.
+  - `finance_sync_preferences` : Configuration JSON séparant les cours quotidiens (`watchlists`, `major_indices_constituents`, `index_codes`, `exchanges`, `stock_price_exchanges`, `etf_exchanges`) et les fondamentaux progressifs (`screener_fundamentals`, `fundamentals_watchlists`, `fundamentals_indices`, `full_data_exchanges`, `fundamentals_budget_pct`, `fundamentals_quota_safety_pct`, `fundamentals_priority_order`).
+- **Backend** : `finance_sync_sources.py` (`get_unified_exchange_sources`, `execute_single_sync_source`, `run_daily_bulk_and_missing_bars_sync` + route `POST /api/finance/sync-preferences/run-source`), `finance_fundamentals_queue.py`, `finance_fundamentals_scheduler.py`, `finance_exchange_full_sync.py` (`/api/eod-bulk-last-day/{EXCH}` mutualisé), `finance_eodhd_usage.py` (compteur `record_eodhd_call` + quota `/api/user`), `finance_funds.py`.
+- **Frontend** : Onglet `5 · Données & Synchro` (`FinanceSyncPanel` en 3 blocs : liste des sources **Cours**, carte **Fondamentaux** `FinanceFundamentalsPlanCard`, pied de page **Calls / Base / Migration** `FinanceSyncFooter`), bouton **« Compléter »** (`boost`) pour les actions dans `FinanceScreenerPanel`.
 
 ---
 

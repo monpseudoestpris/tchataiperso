@@ -2,7 +2,7 @@ import asyncio
 import io
 import json
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
@@ -135,15 +135,17 @@ class TestWebEndpoints(unittest.TestCase):
 <html><head><title>Page Test Antigravity</title><meta name="description" content="Une page de test." /></head>
 <body><article><h1>Titre Test</h1><p>Contenu extrait avec succ\xc3\xa8s.</p></article></body></html>"""
 
-        mock_resp = httpx.Response(
-            200,
-            content=mock_html,
-            headers={"content-type": "text/html; charset=utf-8"},
-            request=httpx.Request("GET", "https://example.com/article"),
-        )
+        real_async_client = httpx.AsyncClient
 
-        with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
-            mock_get.return_value = mock_resp
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                content=mock_html,
+                headers={"content-type": "text/html; charset=utf-8"},
+                request=request,
+            )
+
+        with patch("httpx.AsyncClient", lambda *args, **kwargs: real_async_client(transport=httpx.MockTransport(handler))):
             res = self.client.post("/api/attachments/url", json={"url": "https://example.com/article"})
             self.assertEqual(res.status_code, 201)
             data = res.json()
@@ -172,15 +174,17 @@ class TestWebEndpoints(unittest.TestCase):
 <html><head><title>Analyse Automatique</title></head>
 <body><article><p>D\xc3\xa9couverte du contenu web automatique.</p></article></body></html>"""
 
-        mock_resp = httpx.Response(
-            200,
-            content=mock_html,
-            headers={"content-type": "text/html; charset=utf-8"},
-            request=httpx.Request("GET", "https://news.example.org/ia"),
-        )
+        real_async_client = httpx.AsyncClient
 
-        with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
-            mock_get.return_value = mock_resp
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                content=mock_html,
+                headers={"content-type": "text/html; charset=utf-8"},
+                request=request,
+            )
+
+        with patch("httpx.AsyncClient", lambda *args, **kwargs: real_async_client(transport=httpx.MockTransport(handler))):
             msg_res = self.client.post(
                 f"/api/conversations/{conv_id}/messages",
                 json={
@@ -193,6 +197,43 @@ class TestWebEndpoints(unittest.TestCase):
             self.assertIn("event: meta", msg_res.text)
             self.assertIn("Analyse Automatique", msg_res.text)
             self.assertIn("event: status", msg_res.text)
+
+    def test_ssrf_intermediate_redirect_hop_is_blocked_before_connecting(self):
+        real_async_client = httpx.AsyncClient
+        requested_urls: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requested_urls.append(str(request.url))
+            if str(request.url) == "https://public.example.com/start":
+                return httpx.Response(
+                    302,
+                    headers={"location": "http://127.0.0.1:8001/internal-secret"},
+                    request=request,
+                )
+            return httpx.Response(200, text="INTERNAL SECRET", request=request)
+
+        with patch("httpx.AsyncClient", lambda *args, **kwargs: real_async_client(transport=httpx.MockTransport(handler))):
+            res = self.client.post("/api/attachments/url", json={"url": "https://public.example.com/start"})
+            self.assertEqual(res.status_code, 422)
+            # Crucial : aucune requête ne doit jamais atteindre l'hôte privé intermédiaire
+            self.assertEqual(requested_urls, ["https://public.example.com/start"])
+
+    def test_response_exceeding_max_upload_mb_is_rejected_with_413(self):
+        real_async_client = httpx.AsyncClient
+        self.app.state.settings.max_upload_mb = 1
+        oversized = b"A" * (1024 * 1024 + 64)
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                content=oversized,
+                headers={"content-type": "text/html; charset=utf-8"},
+                request=request,
+            )
+
+        with patch("httpx.AsyncClient", lambda *args, **kwargs: real_async_client(transport=httpx.MockTransport(handler))):
+            res = self.client.post("/api/attachments/url", json={"url": "https://public.example.com/huge"})
+            self.assertEqual(res.status_code, 413)
 
 
 if __name__ == "__main__":

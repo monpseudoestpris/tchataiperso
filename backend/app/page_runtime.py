@@ -456,6 +456,52 @@ def inject_a4_sheet_enforcer(
     return code
 
 
+SANDBOX_STORAGE_SHIM_JS = r"""
+(function() {
+  if (typeof window === 'undefined' || window.__clair_storage_shim__) return;
+  window.__clair_storage_shim__ = true;
+  function makeMemStorage() {
+    var data = Object.create(null);
+    return {
+      get length() { return Object.keys(data).length; },
+      key: function(i) { var k = Object.keys(data); return i >= 0 && i < k.length ? k[i] : null; },
+      getItem: function(k) { k = String(k); return Object.prototype.hasOwnProperty.call(data, k) ? data[k] : null; },
+      setItem: function(k, v) { data[String(k)] = String(v); },
+      removeItem: function(k) { delete data[String(k)]; },
+      clear: function() { data = Object.create(null); }
+    };
+  }
+  ['localStorage', 'sessionStorage'].forEach(function(name) {
+    try {
+      var s = window[name];
+      s.setItem('__clair_probe__', '1');
+      s.removeItem('__clair_probe__');
+    } catch (err) {
+      try {
+        Object.defineProperty(window, name, { value: makeMemStorage(), configurable: true });
+      } catch (err2) {}
+    }
+  });
+})();
+"""
+
+
+def inject_sandbox_storage_shim(html_code: str) -> str:
+    """Injecte en tête de <head> un repli mémoire pour localStorage/sessionStorage sous origine opaque `null`."""
+    if not html_code or "__clair_storage_shim__" in html_code:
+        return html_code
+    shim_tag = f"<script data-clair-storage-shim>\n{SANDBOX_STORAGE_SHIM_JS.strip()}\n</script>"
+    head_match = re.search(r"<head\b[^>]*>", html_code, flags=re.I)
+    if head_match:
+        idx = head_match.end()
+        return f"{html_code[:idx]}\n{shim_tag}\n{html_code[idx:]}"
+    html_match = re.search(r"<html\b[^>]*>", html_code, flags=re.I)
+    if html_match:
+        idx = html_match.end()
+        return f"{html_code[:idx]}\n<head>{shim_tag}</head>\n{html_code[idx:]}"
+    return f"{shim_tag}\n{html_code}"
+
+
 def sanitize_and_enhance_html(
     html_code: str,
     *,
@@ -520,7 +566,10 @@ def sanitize_and_enhance_html(
         flags=re.I | re.DOTALL,
     )
 
-    # 5. Injecter le gabarit physique A4 si la page est au format A4 strict
+    # 5. Injecter le shim mémoire localStorage/sessionStorage avant tout script de la page
+    code = inject_sandbox_storage_shim(code)
+
+    # 6. Injecter le gabarit physique A4 si la page est au format A4 strict
     code = inject_a4_sheet_enforcer(code, layout_style=layout_style, orientation=orientation)
 
     # 6. Injecter le script runtime universel

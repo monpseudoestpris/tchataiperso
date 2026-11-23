@@ -214,6 +214,7 @@ class ClassifyConversationRequest(BaseModel):
 
 class FetchUrlRequest(BaseModel):
     url: str = Field(min_length=1, max_length=2048)
+    save_to_library: bool = True
 
 
 class AgentPersonaConfig(BaseModel):

@@ -45,7 +45,10 @@ from .finance_warehouse import (
     list_warehouse_screener_symbols,
     load_fundamental_series,
     resolve_canonical_symbol,
+    resolve_symbol_asset_type,
     seed_screener_from_exchange_catalogs,
+    upsert_eod_bars,
+    upsert_instrument,
     upsert_screener_snapshots,
     upsert_screener_technicals,
     warehouse_db_path,
@@ -255,6 +258,7 @@ UNCLE_STOCK_SCORE_IDS: frozenset[str] = frozenset(
 _SORTABLE_COLUMNS: frozenset[str] = frozenset(
     {
         "symbol",
+        "asset_type",
         "name",
         "exchange",
         "country",
@@ -546,11 +550,19 @@ def build_screener_snapshot_from_dossier(
         symbol=eod_tkr,
     )
     market_zone = resolve_market_zone(canon_country, exchange=exch_val, symbol=eod_tkr)
+    raw_type = str(
+        (dossier.get("fund_profile") or {}).get("type")
+        or hdr.get("type")
+        or (meta or {}).get("type")
+        or ""
+    ).strip().lower()
+    asset_type = "etf" if raw_type == "etf" else "stock"
 
     return {
         "symbol": canonical,
         "eod_ticker": eod_tkr,
         "yahoo_symbol": _norm_sym(str((meta or {}).get("yahoo_symbol") or canonical)) or canonical,
+        "asset_type": asset_type,
         "name": str(hdr.get("name") or (meta or {}).get("long_name") or (meta or {}).get("short_name") or canonical),
         "exchange": exch_val,
         "country": canon_country,
@@ -638,6 +650,12 @@ def sync_screener_snapshot_from_dossier(
     idx_map = get_symbol_indices_map(db_path)
     indices = idx_map.get(canonical) or idx_map.get(_norm_sym(str((meta or {}).get("eod_ticker") or ""))) or []
     row = build_screener_snapshot_from_dossier(dossier, bars, meta=meta, indices_list=indices)
+    row["asset_type"] = resolve_symbol_asset_type(
+        db_path,
+        canonical,
+        str(row.get("eod_ticker") or canonical),
+        str(row.get("asset_type") or ""),
+    )
     upsert_screener_snapshots(db_path, [row], preserve_fundamentals_if_missing=False)
     mtf_rows = _build_mtf_rows(canonical, bars)
     if mtf_rows:
@@ -834,22 +852,54 @@ def build_screener_snapshot_from_warehouse(
 
     exch_val = str(gen.get("Exchange") or meta.get("exchange") or "")
     eod_tkr = _norm_sym(str(meta.get("eod_ticker") or canonical)) or canonical
+    cat_row: dict[str, str] = {}
+    if not (gen.get("Name") or y_price.get("longName") or meta.get("long_name") or meta.get("short_name")) or not exch_val:
+        with _connect(db_path) as conn:
+            found_cat = conn.execute(
+                """
+                SELECT exchange_code, name, country, currency, type
+                FROM finance_exchange_symbols
+                WHERE UPPER(eod_ticker) IN (?, ?) OR UPPER(symbol) IN (?, ?)
+                LIMIT 1
+                """,
+                (canonical, eod_tkr, canonical, eod_tkr),
+            ).fetchone()
+            if found_cat:
+                cat_row = {
+                    "exchange_code": str(found_cat["exchange_code"] or ""),
+                    "name": str(found_cat["name"] or ""),
+                    "country": str(found_cat["country"] or ""),
+                    "currency": str(found_cat["currency"] or ""),
+                    "type": str(found_cat["type"] or ""),
+                }
+    if not exch_val and cat_row.get("exchange_code"):
+        exch_val = cat_row["exchange_code"]
+    if not currency and cat_row.get("currency"):
+        currency = cat_row["currency"].strip().upper()
     canon_country = canonicalize_country(
-        str(gen.get("CountryName") or y_prof.get("country") or meta.get("country") or ""),
+        str(gen.get("CountryName") or y_prof.get("country") or meta.get("country") or cat_row.get("country") or ""),
         exchange=exch_val,
         symbol=eod_tkr,
     )
     market_zone = resolve_market_zone(canon_country, exchange=exch_val, symbol=eod_tkr)
+    asset_type = resolve_symbol_asset_type(
+        db_path,
+        canonical,
+        eod_tkr,
+        str(gen.get("Type") or cat_row.get("type") or ""),
+    )
 
     snap_row = {
         "symbol": canonical,
         "eod_ticker": eod_tkr,
         "yahoo_symbol": _norm_sym(str(meta.get("yahoo_symbol") or canonical)) or canonical,
+        "asset_type": asset_type,
         "name": str(
             gen.get("Name")
             or y_price.get("longName")
             or meta.get("long_name")
             or meta.get("short_name")
+            or cat_row.get("name")
             or canonical
         ),
         "exchange": exch_val,
@@ -1104,6 +1154,7 @@ def _row_to_screener_dict(row: Any, *, main_tf: str) -> dict[str, Any]:
     except Exception:
         d["scores"] = {}
     d["has_fundamentals"] = bool(d.get("has_fundamentals"))
+    d["asset_type"] = "etf" if str(d.get("asset_type") or "").strip().lower() == "etf" else "stock"
     raw_idx = str(d.pop("indices_csv", "") or "")
     d["indices"] = [p for p in raw_idx.split(",") if p]
     d["timeframe"] = main_tf
@@ -1132,6 +1183,7 @@ def _select_projection_sql(main_tf: str) -> str:
         "s.symbol",
         "s.eod_ticker",
         "s.yahoo_symbol",
+        "s.asset_type",
         "s.name",
         "s.exchange",
         "s.country",
@@ -1212,6 +1264,7 @@ def query_screener(
     settings: Settings,
     *,
     timeframe: str = "day",
+    asset_type: str = "",
     universe_type: str = "all",
     universe_value: str | None = None,
     watchlist_symbols: list[str] | None = None,
@@ -1234,19 +1287,29 @@ def query_screener(
 ) -> dict[str, Any]:
     """Exécute une requête multi-critères & multi-unités (`day`/`week`/`month`/`quarter`) sur le Screener."""
     main_tf = _normalize_timeframe(timeframe, default="day")
+    clean_asset = str(asset_type or "").strip().lower()
+    if clean_asset not in ("stock", "etf"):
+        clean_asset = ""
     db_path = warehouse_db_path(settings)
-    cov = get_screener_coverage(db_path)
+    cov = get_screener_coverage(db_path, asset_type=clean_asset)
     if auto_backfill:
         if cov["total_snapshots"] == 0 and cov["warehouse_symbols_count"] > 0:
             rebuild_screener_snapshots_from_warehouse(db_path)
-            cov = get_screener_coverage(db_path)
+            cov = get_screener_coverage(db_path, asset_type=clean_asset)
         else:
             _ensure_mtf_backfilled_if_needed(db_path)
             if _ensure_geography_backfilled_if_needed(db_path):
-                cov = get_screener_coverage(db_path)
+                cov = get_screener_coverage(db_path, asset_type=clean_asset)
 
     clauses: list[str] = []
     params: list[Any] = []
+
+    if clean_asset == "etf":
+        clauses.append("s.asset_type = ?")
+        params.append("etf")
+    elif clean_asset == "stock":
+        clauses.append("COALESCE(s.asset_type, 'stock') != ?")
+        params.append("etf")
 
     u_type = (universe_type or "all").strip().lower()
     u_val = _norm_sym(universe_value or "")
@@ -1451,18 +1514,21 @@ def query_screener(
     }
 
 
-def get_screener_metadata(settings: Settings) -> dict[str, Any]:
+def get_screener_metadata(settings: Settings, *, asset_type: str = "") -> dict[str, Any]:
     """Retourne le schéma des filtres, les unités temporelles, les presets et la couverture locale du Screener."""
+    clean_asset = str(asset_type or "").strip().lower()
+    if clean_asset not in ("stock", "etf"):
+        clean_asset = ""
     db_path = warehouse_db_path(settings)
-    cov = get_screener_coverage(db_path)
+    cov = get_screener_coverage(db_path, asset_type=clean_asset)
     if cov["total_snapshots"] == 0 and cov["warehouse_symbols_count"] > 0:
         rebuild_screener_snapshots_from_warehouse(db_path)
-        cov = get_screener_coverage(db_path)
+        cov = get_screener_coverage(db_path, asset_type=clean_asset)
     else:
         _ensure_mtf_backfilled_if_needed(db_path)
         seeded = seed_screener_from_exchange_catalogs(db_path)
         if _ensure_geography_backfilled_if_needed(db_path) or seeded:
-            cov = get_screener_coverage(db_path)
+            cov = get_screener_coverage(db_path, asset_type=clean_asset)
     return {
         "fields": list(SCREENER_FIELDS),
         "timeframes": [{"key": k, "label": TIMEFRAME_LABELS[k]} for k in SUPPORTED_TIMEFRAMES],
@@ -1472,6 +1538,148 @@ def get_screener_metadata(settings: Settings) -> dict[str, Any]:
             "ready": True,
             "registered_kinds": list_registered_post_filter_kinds(),
         },
+    }
+
+
+async def hydrate_screener_bars_batch(
+    settings: Settings,
+    symbols: list[str],
+    *,
+    years: int = 15,
+    on_progress: Callable[[int, int, str], None] | None = None,
+) -> dict[str, Any]:
+    """Télécharge l'historique EOD (1 call EODHD / titre) et recalcule le Screener 4 unités (idéal ETFs)."""
+    import datetime as _dt
+    import sqlite3
+    import httpx
+    from .finance_dossier import _fetch_eodhd_bars_range, _fetch_yahoo_chart_10y
+    from .finance_eodhd_usage import endpoint_cost
+    from .finance_provider import resolve_candidate_eod_tickers
+
+    db_path = warehouse_db_path(settings)
+    clean_syms = list(dict.fromkeys(_norm_sym(s) for s in symbols if _norm_sym(s)))[:300]
+    if not clean_syms:
+        return {"targeted": 0, "loaded": 0, "errors": 0, "calls": 0, "coverage": get_screener_coverage(db_path)}
+    if settings.demo_mode:
+        return {
+            "targeted": len(clean_syms),
+            "loaded": 0,
+            "errors": 0,
+            "calls": 0,
+            "stopped_reason": "Mode démo actif",
+            "coverage": get_screener_coverage(db_path),
+        }
+
+    eod_key = (
+        settings.eod_historical_data_key.get_secret_value()
+        if settings.enabled(settings.eod_historical_data_key)
+        else ""
+    )
+    start_date = (_dt.date.today() - _dt.timedelta(days=365 * max(1, years))).isoformat()
+    sem = asyncio.Semaphore(6)
+    done = 0
+    total = len(clean_syms)
+    loaded_canonicals: list[str] = []
+    calls = 0
+    errors = 0
+
+    cat_meta_by_sym: dict[str, dict[str, str]] = {}
+    if db_path.exists():
+        marks = ", ".join("?" for _ in clean_syms)
+        with _connect(db_path) as conn:
+            for r in conn.execute(
+                f"""
+                SELECT exchange_code, symbol, eod_ticker, name, isin, country, currency
+                FROM finance_exchange_symbols
+                WHERE UPPER(eod_ticker) IN ({marks}) OR UPPER(symbol) IN ({marks})
+                """,
+                [*clean_syms, *clean_syms],
+            ).fetchall():
+                d = {
+                    "exchange": str(r["exchange_code"] or ""),
+                    "long_name": str(r["name"] or ""),
+                    "short_name": str(r["name"] or ""),
+                    "isin": str(r["isin"] or ""),
+                    "country": str(r["country"] or ""),
+                    "currency": str(r["currency"] or ""),
+                }
+                if r["eod_ticker"]:
+                    cat_meta_by_sym[_norm_sym(str(r["eod_ticker"]))] = d
+                if r["symbol"]:
+                    cat_meta_by_sym.setdefault(_norm_sym(str(r["symbol"])), d)
+
+    async def _one(raw_sym: str) -> tuple[str | None, int]:
+        nonlocal done
+        canonical = resolve_canonical_symbol(db_path, raw_sym)
+        sym_calls = 0
+        bars: list[dict[str, Any]] = []
+        used_cand = raw_sym
+        source = "eodhd"
+        async with sem:
+            try:
+                if eod_key:
+                    candidates = list(dict.fromkeys([raw_sym, *resolve_candidate_eod_tickers(db_path, canonical)]))[:2]
+                    for cand in candidates:
+                        sym_calls += endpoint_cost("eod")
+                        bars = await _fetch_eodhd_bars_range(cand, eod_key, start_date)
+                        if bars:
+                            used_cand = cand
+                            break
+                else:
+                    y_sym = (
+                        canonical[:-3]
+                        if canonical.endswith(".US")
+                        else (
+                            f"{canonical[:-6]}.DE"
+                            if canonical.endswith(".XETRA")
+                            else (f"{canonical[:-4]}.L" if canonical.endswith(".LSE") else canonical)
+                        )
+                    )
+                    bars, _ = await _fetch_yahoo_chart_10y(y_sym)
+                    source = "yahoo_finance"
+
+                if bars:
+                    c_meta = cat_meta_by_sym.get(raw_sym) or cat_meta_by_sym.get(canonical) or {}
+                    upsert_instrument(
+                        db_path,
+                        {
+                            "symbol": canonical,
+                            "eod_ticker": used_cand,
+                            "short_name": c_meta.get("short_name") or None,
+                            "long_name": c_meta.get("long_name") or None,
+                            "isin": c_meta.get("isin") or None,
+                            "exchange": c_meta.get("exchange") or None,
+                            "currency": c_meta.get("currency") or None,
+                            "country": c_meta.get("country") or None,
+                        },
+                    )
+                    upsert_eod_bars(db_path, canonical, bars, source, requested_limit=len(bars))
+                    return canonical, sym_calls
+            except (httpx.HTTPError, sqlite3.Error, OSError, ValueError) as exc:
+                _logger.debug("Hydratation EOD seule ignorée (%s): %s", raw_sym, exc)
+            finally:
+                done += 1
+                if on_progress is not None:
+                    on_progress(done, total, raw_sym)
+            return None, sym_calls
+
+    res_list = await asyncio.gather(*(_one(s) for s in clean_syms))
+    for canon_ok, c_used in res_list:
+        calls += c_used
+        if canon_ok:
+            loaded_canonicals.append(canon_ok)
+        else:
+            errors += 1
+
+    if loaded_canonicals:
+        rebuild_screener_snapshots_from_warehouse(db_path, loaded_canonicals)
+
+    return {
+        "targeted": total,
+        "loaded": len(loaded_canonicals),
+        "errors": errors,
+        "calls": calls,
+        "coverage": get_screener_coverage(db_path),
     }
 
 

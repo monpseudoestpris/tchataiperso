@@ -13,6 +13,7 @@ import logging
 import os
 import re
 import sqlite3
+import threading
 import time
 import uuid
 import zlib
@@ -26,6 +27,7 @@ _logger = logging.getLogger("uvicorn.error")
 
 _WAREHOUSE_FILENAME = "finance_warehouse.db"
 _INITIALIZED_PATHS: set[str] = set()
+_INIT_LOCK = threading.Lock()
 _FTS_TOKEN_RE = re.compile(r"[0-9A-Za-zÀ-ÖØ-öø-ÿ]+")
 
 
@@ -253,6 +255,7 @@ CREATE TABLE IF NOT EXISTS finance_screener_snapshots (
     symbol TEXT PRIMARY KEY,
     eod_ticker TEXT,
     yahoo_symbol TEXT,
+    asset_type TEXT NOT NULL DEFAULT 'stock',
     name TEXT NOT NULL DEFAULT '',
     exchange TEXT NOT NULL DEFAULT '',
     country TEXT NOT NULL DEFAULT '',
@@ -396,6 +399,20 @@ CREATE TABLE IF NOT EXISTS finance_screener_technicals (
 
 CREATE INDEX IF NOT EXISTS idx_fin_scr_tech_tf_rsi ON finance_screener_technicals (timeframe, rsi_14);
 CREATE INDEX IF NOT EXISTS idx_fin_scr_tech_tf_iso ON finance_screener_technicals (timeframe, isopressure_20_50_dir, isopressure_20_50_diff);
+
+CREATE TABLE IF NOT EXISTS finance_eodhd_daily_usage (
+    usage_day TEXT NOT NULL,
+    endpoint TEXT NOT NULL,
+    requests INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (usage_day, endpoint)
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS finance_sync_runtime_state (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    state_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 
@@ -430,76 +447,100 @@ def _utc_iso(ts: float | None = None) -> str:
 
 
 def init_warehouse(db_path: Path) -> None:
-    """Crée le répertoire cible et initialise le schéma SQLite en mode WAL."""
+    """Crée le répertoire cible et initialise le schéma SQLite en mode WAL (thread-safe)."""
     key = str(db_path)
     if key in _INITIALIZED_PATHS and db_path.exists():
         return
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(db_path, timeout=15.0) as conn:
-        conn.execute("PRAGMA journal_mode=WAL;")
-        conn.execute("PRAGMA synchronous=NORMAL;")
-        conn.execute("PRAGMA temp_store=MEMORY;")
-        conn.execute("PRAGMA cache_size=-32768;")
-        conn.execute("PRAGMA mmap_size=268435456;")
-        conn.executescript(_SCHEMA_SQL)
-        inst_cols = {
-            str(r[1])
-            for r in conn.execute("PRAGMA table_info(finance_instruments)").fetchall()
-        }
-        if "eod_synced_date" not in inst_cols:
-            conn.execute("ALTER TABLE finance_instruments ADD COLUMN eod_synced_date TEXT")
-        if "eod_synced_at" not in inst_cols:
-            conn.execute("ALTER TABLE finance_instruments ADD COLUMN eod_synced_at TEXT")
-        if "eod_synced_bars" not in inst_cols:
-            conn.execute("ALTER TABLE finance_instruments ADD COLUMN eod_synced_bars INTEGER DEFAULT 0")
-        wl_cols = {
-            str(r[1])
-            for r in conn.execute("PRAGMA table_info(finance_user_watchlist_items)").fetchall()
-        }
-        if "note" not in wl_cols:
-            conn.execute("ALTER TABLE finance_user_watchlist_items ADD COLUMN note TEXT NOT NULL DEFAULT ''")
-        exch_cols = {
-            str(r[1])
-            for r in conn.execute("PRAGMA table_info(finance_exchange_symbols)").fetchall()
-        }
-        if "fund_family" not in exch_cols:
-            conn.execute("ALTER TABLE finance_exchange_symbols ADD COLUMN fund_family TEXT")
-        sync_cols = {
-            str(r[1])
-            for r in conn.execute("PRAGMA table_info(finance_sync_preferences)").fetchall()
-        }
-        if "last_fundamentals_run_at" not in sync_cols:
-            conn.execute("ALTER TABLE finance_sync_preferences ADD COLUMN last_fundamentals_run_at TEXT")
-        scr_cols = {
-            str(r[1])
-            for r in conn.execute("PRAGMA table_info(finance_screener_snapshots)").fetchall()
-        }
-        if "market_zone" not in scr_cols:
-            conn.execute("ALTER TABLE finance_screener_snapshots ADD COLUMN market_zone TEXT NOT NULL DEFAULT ''")
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_fin_scr_geo ON finance_screener_snapshots (market_zone, country, exchange)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_fin_scr_eod ON finance_screener_snapshots (eod_ticker)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_fin_exch_sym_type ON finance_exchange_symbols (exchange_code, type)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_fin_exch_sym_family ON finance_exchange_symbols (exchange_code, fund_family)"
-        )
-        _ensure_exchange_fts(conn)
-        conn.commit()
-    _INITIALIZED_PATHS.add(key)
+    with _INIT_LOCK:
+        if key in _INITIALIZED_PATHS and db_path.exists():
+            return
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(db_path, timeout=30.0) as conn:
+            conn.execute("PRAGMA busy_timeout=30000;")
+            conn.execute("PRAGMA journal_mode=WAL;")
+            conn.execute("PRAGMA synchronous=NORMAL;")
+            conn.execute("PRAGMA temp_store=MEMORY;")
+            conn.execute("PRAGMA cache_size=-32768;")
+            conn.execute("PRAGMA mmap_size=268435456;")
+            conn.executescript(_SCHEMA_SQL)
+            inst_cols = {
+                str(r[1])
+                for r in conn.execute("PRAGMA table_info(finance_instruments)").fetchall()
+            }
+            if "eod_synced_date" not in inst_cols:
+                conn.execute("ALTER TABLE finance_instruments ADD COLUMN eod_synced_date TEXT")
+            if "eod_synced_at" not in inst_cols:
+                conn.execute("ALTER TABLE finance_instruments ADD COLUMN eod_synced_at TEXT")
+            if "eod_synced_bars" not in inst_cols:
+                conn.execute("ALTER TABLE finance_instruments ADD COLUMN eod_synced_bars INTEGER DEFAULT 0")
+            wl_cols = {
+                str(r[1])
+                for r in conn.execute("PRAGMA table_info(finance_user_watchlist_items)").fetchall()
+            }
+            if "note" not in wl_cols:
+                conn.execute("ALTER TABLE finance_user_watchlist_items ADD COLUMN note TEXT NOT NULL DEFAULT ''")
+            exch_cols = {
+                str(r[1])
+                for r in conn.execute("PRAGMA table_info(finance_exchange_symbols)").fetchall()
+            }
+            if "fund_family" not in exch_cols:
+                conn.execute("ALTER TABLE finance_exchange_symbols ADD COLUMN fund_family TEXT")
+            sync_cols = {
+                str(r[1])
+                for r in conn.execute("PRAGMA table_info(finance_sync_preferences)").fetchall()
+            }
+            if "last_fundamentals_run_at" not in sync_cols:
+                conn.execute("ALTER TABLE finance_sync_preferences ADD COLUMN last_fundamentals_run_at TEXT")
+            scr_cols = {
+                str(r[1])
+                for r in conn.execute("PRAGMA table_info(finance_screener_snapshots)").fetchall()
+            }
+            if "market_zone" not in scr_cols:
+                conn.execute("ALTER TABLE finance_screener_snapshots ADD COLUMN market_zone TEXT NOT NULL DEFAULT ''")
+            added_asset_type = "asset_type" not in scr_cols
+            if added_asset_type:
+                conn.execute("ALTER TABLE finance_screener_snapshots ADD COLUMN asset_type TEXT NOT NULL DEFAULT 'stock'")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_fin_scr_geo ON finance_screener_snapshots (market_zone, country, exchange)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_fin_scr_eod ON finance_screener_snapshots (eod_ticker)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_fin_scr_asset_exch ON finance_screener_snapshots (asset_type, exchange)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_fin_exch_sym_type ON finance_exchange_symbols (exchange_code, type)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_fin_exch_sym_family ON finance_exchange_symbols (exchange_code, fund_family)"
+            )
+            if added_asset_type:
+                conn.execute(
+                    """
+                    UPDATE finance_screener_snapshots
+                    SET asset_type = 'etf'
+                    WHERE COALESCE(asset_type, 'stock') != 'etf'
+                      AND EXISTS (
+                          SELECT 1 FROM finance_exchange_symbols e
+                          WHERE (e.eod_ticker = finance_screener_snapshots.symbol
+                                 OR e.eod_ticker = finance_screener_snapshots.eod_ticker)
+                            AND LOWER(COALESCE(e.type, '')) = 'etf'
+                      )
+                    """
+                )
+            _ensure_exchange_fts(conn)
+            conn.commit()
+        _INITIALIZED_PATHS.add(key)
 
 
 @contextmanager
 def _connect(db_path: Path) -> Iterator[sqlite3.Connection]:
     init_warehouse(db_path)
-    conn = sqlite3.connect(db_path, timeout=15.0)
+    conn = sqlite3.connect(db_path, timeout=30.0)
     conn.row_factory = sqlite3.Row
     try:
-        conn.execute("PRAGMA busy_timeout=15000;")
+        conn.execute("PRAGMA busy_timeout=30000;")
         conn.execute("PRAGMA synchronous=NORMAL;")
         conn.execute("PRAGMA cache_size=-32768;")
         conn.execute("PRAGMA mmap_size=268435456;")
@@ -512,8 +553,89 @@ def _connect(db_path: Path) -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
+def checkpoint_warehouse(db_path: Path) -> dict[str, Any]:
+    """Force un checkpoint WAL complet (TRUNCATE) sur finance_warehouse.db avant arrêt propre."""
+    if not db_path.exists():
+        return {"checkpointed": True, "exists": False, "busy": 0, "log_frames": 0, "checkpointed_frames": 0}
+    with sqlite3.connect(db_path, timeout=30.0) as conn:
+        conn.execute("PRAGMA busy_timeout=30000;")
+        row = conn.execute("PRAGMA wal_checkpoint(TRUNCATE);").fetchone()
+        conn.execute("PRAGMA optimize;")
+        conn.commit()
+    busy, log_frames, ckpt_frames = (int(row[0]), int(row[1]), int(row[2])) if row and len(row) >= 3 else (0, 0, 0)
+    return {
+        "checkpointed": busy == 0,
+        "exists": True,
+        "busy": busy,
+        "log_frames": log_frames,
+        "checkpointed_frames": ckpt_frames,
+    }
+
+
 def _norm_sym(symbol: str) -> str:
     return (symbol or "").strip().upper()
+
+
+def increment_eodhd_usage(db_path: Path, usage_day: str, endpoint: str, delta: int = 1) -> None:
+    """Incrémente atomiquement le compteur quotidien d'appels EODHD dans `finance_warehouse.db`."""
+    if not usage_day or not endpoint or delta <= 0:
+        return
+    now_iso = _utc_iso()
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO finance_eodhd_daily_usage (usage_day, endpoint, requests, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(usage_day, endpoint) DO UPDATE SET
+                requests = requests + excluded.requests,
+                updated_at = excluded.updated_at
+            """,
+            (usage_day, endpoint, int(delta), now_iso),
+        )
+
+
+def load_eodhd_usage(db_path: Path, usage_day: str) -> dict[str, int]:
+    """Charge les compteurs d'appels EODHD du jour UTC depuis `finance_warehouse.db`."""
+    if not usage_day:
+        return {}
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT endpoint, requests FROM finance_eodhd_daily_usage WHERE usage_day = ?",
+            (usage_day,),
+        ).fetchall()
+    return {str(row["endpoint"]): int(row["requests"]) for row in rows if int(row["requests"]) > 0}
+
+
+def save_sync_runtime_state(db_path: Path, state: dict[str, Any]) -> None:
+    """Persiste l'état courant d'avancement de la synchronisation Finance dans `finance_warehouse.db`."""
+    now_iso = _utc_iso()
+    payload = json.dumps(state, ensure_ascii=False)
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO finance_sync_runtime_state (id, state_json, updated_at)
+            VALUES (1, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                state_json = excluded.state_json,
+                updated_at = excluded.updated_at
+            """,
+            (payload, now_iso),
+        )
+
+
+def load_sync_runtime_state(db_path: Path) -> dict[str, Any] | None:
+    """Charge le dernier état persisté de la synchronisation Finance depuis `finance_warehouse.db`."""
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT state_json FROM finance_sync_runtime_state WHERE id = 1"
+        ).fetchone()
+    if not row or not row["state_json"]:
+        return None
+    try:
+        parsed = json.loads(row["state_json"])
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 def resolve_canonical_symbol(db_path: Path, symbol: str) -> str:
@@ -2110,7 +2232,11 @@ DEFAULT_SYNC_PREFERENCES: dict[str, Any] = {
     "index_codes": [],
     "watchlists": False,
     "exchanges": [],
+    "stock_price_exchanges": [],
     "full_data_exchanges": [],
+    "etf_exchanges": [],
+    "fundamentals_watchlists": True,
+    "fundamentals_indices": True,
     "fundamentals_budget_pct": 10,
     "fundamentals_quota_safety_pct": 15,
     "fundamentals_priority_order": ["watchlists", "indices", "full_exchanges"],
@@ -2176,7 +2302,15 @@ def _normalize_sync_preferences(raw: dict[str, Any] | None) -> dict[str, Any]:
         "index_codes": _clean_list(src.get("index_codes")),
         "watchlists": bool(src.get("watchlists", DEFAULT_SYNC_PREFERENCES["watchlists"])),
         "exchanges": _clean_list(src.get("exchanges")),
+        "stock_price_exchanges": _clean_list(src.get("stock_price_exchanges")),
         "full_data_exchanges": _clean_list(src.get("full_data_exchanges")),
+        "etf_exchanges": _clean_list(src.get("etf_exchanges")),
+        "fundamentals_watchlists": bool(
+            src.get("fundamentals_watchlists", DEFAULT_SYNC_PREFERENCES["fundamentals_watchlists"])
+        ),
+        "fundamentals_indices": bool(
+            src.get("fundamentals_indices", DEFAULT_SYNC_PREFERENCES["fundamentals_indices"])
+        ),
         "fundamentals_budget_pct": _bounded_int("fundamentals_budget_pct", 1, 50),
         "fundamentals_quota_safety_pct": _bounded_int("fundamentals_quota_safety_pct", 5, 50),
         "fundamentals_priority_order": order,
@@ -2318,6 +2452,7 @@ _SCREENER_SNAPSHOT_COLS: tuple[str, ...] = (
     "symbol",
     "eod_ticker",
     "yahoo_symbol",
+    "asset_type",
     "name",
     "exchange",
     "country",
@@ -2445,7 +2580,12 @@ def upsert_screener_snapshots(
     for col in _SCREENER_SNAPSHOT_COLS:
         if col == "symbol":
             continue
-        if col in ("name", "exchange", "country", "market_zone", "currency", "sector", "industry", "cap_category", "indices_csv"):
+        if col == "asset_type":
+            update_parts.append(
+                "asset_type = CASE WHEN excluded.asset_type = 'etf' "
+                "OR finance_screener_snapshots.asset_type = 'etf' THEN 'etf' ELSE 'stock' END"
+            )
+        elif col in ("name", "exchange", "country", "market_zone", "currency", "sector", "industry", "cap_category", "indices_csv"):
             update_parts.append(f"{col} = COALESCE(NULLIF(excluded.{col}, ''), finance_screener_snapshots.{col})")
         elif col == "has_fundamentals":
             update_parts.append("has_fundamentals = MAX(finance_screener_snapshots.has_fundamentals, excluded.has_fundamentals)")
@@ -2482,6 +2622,7 @@ def upsert_screener_snapshots(
         if not sym:
             continue
         payload = {**row, "symbol": sym, "computed_at": row.get("computed_at") or now_iso}
+        payload["asset_type"] = "etf" if str(payload.get("asset_type") or "").strip().lower() == "etf" else "stock"
         for txt_col in non_null_text_cols:
             if payload.get(txt_col) is None:
                 payload[txt_col] = ""
@@ -2669,7 +2810,235 @@ def list_warehouse_screener_symbols(db_path: Path) -> list[str]:
     return [_norm_sym(str(r["symbol"])) for r in rows if r["symbol"]]
 
 
-def seed_screener_from_exchange_catalogs(db_path: Path) -> int:
+DEFAULT_ETF_EXCHANGE_CODES: tuple[str, ...] = (
+    "PA",
+    "XETRA",
+    "US",
+    "LSE",
+    "SW",
+    "AS",
+    "MI",
+    "BR",
+    "MC",
+    "TO",
+)
+_EXCLUDED_ETF_EXCHANGES: frozenset[str] = frozenset({"ALL", "EUFUND", "CC", "INDX"})
+
+
+def resolve_symbol_asset_type(
+    db_path: Path,
+    symbol: str,
+    eod_ticker: str = "",
+    raw_type: str = "",
+) -> str:
+    """Résout le type d'actif Screener (`'etf'` ou `'stock'`) depuis le type brut ou l'entrepôt local."""
+    raw_l = str(raw_type or "").strip().lower()
+    if raw_l == "etf":
+        return "etf"
+    keys = [k for k in {_norm_sym(symbol), _norm_sym(eod_ticker)} if k]
+    if not keys or not db_path.exists():
+        return "stock"
+    marks = ", ".join("?" for _ in keys)
+    with _connect(db_path) as conn:
+        exch_hit = conn.execute(
+            f"""
+            SELECT 1 FROM finance_exchange_symbols
+            WHERE LOWER(COALESCE(type, '')) = 'etf'
+              AND (UPPER(eod_ticker) IN ({marks}) OR UPPER(symbol) IN ({marks}))
+            LIMIT 1
+            """,
+            [*keys, *keys],
+        ).fetchone()
+        if exch_hit:
+            return "etf"
+        scr_hit = conn.execute(
+            f"""
+            SELECT 1 FROM finance_screener_snapshots
+            WHERE asset_type = 'etf'
+              AND (UPPER(symbol) IN ({marks}) OR UPPER(COALESCE(eod_ticker, '')) IN ({marks}))
+            LIMIT 1
+            """,
+            [*keys, *keys],
+        ).fetchone()
+        if scr_hit:
+            return "etf"
+    return "stock"
+
+
+def get_etf_exchange_catalog_counts(db_path: Path) -> list[dict[str, Any]]:
+    """Retourne, par bourse d'origine, le nombre d'ETFs disponibles, référencés au Screener et chargés."""
+    from .finance_geography import canonicalize_country, country_flag, exchange_display_label
+
+    catalog_stats: dict[str, dict[str, Any]] = {}
+    screener_stats: dict[str, dict[str, int]] = {}
+    extra_codes: set[str] = set()
+
+    if db_path.exists():
+        with _connect(db_path) as conn:
+            cat_rows = conn.execute(
+                """
+                SELECT UPPER(exchange_code) AS exch,
+                       COUNT(*) AS total_symbols,
+                       SUM(CASE WHEN LOWER(COALESCE(type, '')) = 'etf' THEN 1 ELSE 0 END) AS etf_count,
+                       MAX(fetched_at) AS max_ts
+                FROM finance_exchange_symbols
+                WHERE exchange_code != ''
+                GROUP BY UPPER(exchange_code)
+                """
+            ).fetchall()
+            for r in cat_rows:
+                code = _norm_sym(str(r["exch"] or ""))
+                if not code or code in _EXCLUDED_ETF_EXCHANGES:
+                    continue
+                extra_codes.add(code)
+                catalog_stats[code] = {
+                    "total_symbols": int(r["total_symbols"] or 0),
+                    "etf_catalog_count": int(r["etf_count"] or 0),
+                    "fetched_at": float(r["max_ts"]) if r["max_ts"] is not None else None,
+                }
+
+            scr_rows = conn.execute(
+                """
+                SELECT UPPER(exchange) AS exch,
+                       COUNT(*) AS in_screener,
+                       SUM(CASE WHEN price IS NOT NULL OR bars_count > 0 THEN 1 ELSE 0 END) AS with_data
+                FROM finance_screener_snapshots
+                WHERE asset_type = 'etf' AND exchange != ''
+                GROUP BY UPPER(exchange)
+                """
+            ).fetchall()
+            for r in scr_rows:
+                code = _norm_sym(str(r["exch"] or ""))
+                if not code or code in _EXCLUDED_ETF_EXCHANGES:
+                    continue
+                extra_codes.add(code)
+                screener_stats[code] = {
+                    "etf_in_screener_count": int(r["in_screener"] or 0),
+                    "etf_with_data_count": int(r["with_data"] or 0),
+                }
+
+    default_order = {c: i for i, c in enumerate(DEFAULT_ETF_EXCHANGE_CODES)}
+    ordered_codes = sorted(
+        set(DEFAULT_ETF_EXCHANGE_CODES) | extra_codes,
+        key=lambda c: (
+            0 if c in default_order else 1,
+            default_order.get(c, 999),
+            -(catalog_stats.get(c, {}).get("etf_catalog_count", 0)),
+            c,
+        ),
+    )
+
+    out: list[dict[str, Any]] = []
+    for code in ordered_codes:
+        c_info = catalog_stats.get(code) or {}
+        s_info = screener_stats.get(code) or {}
+        country = canonicalize_country("", exchange=code)
+        total_syms = int(c_info.get("total_symbols") or 0)
+        etf_cat = int(c_info.get("etf_catalog_count") or 0)
+        in_scr = int(s_info.get("etf_in_screener_count") or 0)
+        with_data = int(s_info.get("etf_with_data_count") or 0)
+        # Inclure les bourses par défaut, celles qui contiennent des ETFs, ou celles déjà présentes au Screener
+        if code not in default_order and etf_cat == 0 and in_scr == 0:
+            continue
+        out.append(
+            {
+                "code": code,
+                "label": exchange_display_label(code),
+                "country": country,
+                "flag": country_flag(country) if country else "🌐",
+                "catalog_synced": total_syms > 0,
+                "total_symbols": total_syms,
+                "etf_catalog_count": etf_cat,
+                "etf_in_screener_count": in_scr,
+                "etf_with_data_count": with_data,
+                "synced_at": _utc_iso(c_info["fetched_at"]) if c_info.get("fetched_at") is not None else None,
+            }
+        )
+    return out
+
+
+def seed_etfs_from_exchange_catalog(db_path: Path, exchange_codes: list[str]) -> dict[str, int]:
+    """Référence indépendamment dans le Screener les ETFs des bourses demandées (0 appel réseau)."""
+    clean_codes = [
+        c
+        for c in dict.fromkeys(_norm_sym(x) for x in exchange_codes)
+        if c and c not in _EXCLUDED_ETF_EXCHANGES
+    ]
+    if not clean_codes or not db_path.exists():
+        return {}
+    from .finance_geography import canonicalize_country, resolve_market_zone
+
+    now_iso = _utc_iso()
+    added_by_exchange: dict[str, int] = {}
+    with _connect(db_path) as conn:
+        for code in clean_codes:
+            upd_cur = conn.execute(
+                """
+                UPDATE finance_screener_snapshots
+                SET asset_type = 'etf',
+                    exchange = COALESCE(NULLIF(exchange, ''), ?)
+                WHERE COALESCE(asset_type, 'stock') != 'etf'
+                  AND EXISTS (
+                      SELECT 1 FROM finance_exchange_symbols e
+                      WHERE e.exchange_code = ?
+                        AND LOWER(COALESCE(e.type, '')) = 'etf'
+                        AND (e.eod_ticker = finance_screener_snapshots.symbol
+                             OR e.eod_ticker = finance_screener_snapshots.eod_ticker)
+                  )
+                """,
+                (code, code),
+            )
+            rows = conn.execute(
+                """
+                SELECT e.exchange_code, e.eod_ticker, e.name, e.country, e.currency
+                FROM finance_exchange_symbols e
+                WHERE e.exchange_code = ?
+                  AND LOWER(COALESCE(e.type, '')) = 'etf'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM finance_screener_snapshots s
+                      WHERE s.symbol = e.eod_ticker OR s.eod_ticker = e.eod_ticker
+                  )
+                """,
+                (code,),
+            ).fetchall()
+            payload: list[tuple[Any, ...]] = []
+            for r in rows:
+                eod = _norm_sym(str(r["eod_ticker"] or ""))
+                if not eod:
+                    continue
+                exch = str(r["exchange_code"] or code).strip().upper()
+                country = canonicalize_country(str(r["country"] or ""), exchange=exch, symbol=eod)
+                zone = resolve_market_zone(country, exchange=exch, symbol=eod)
+                payload.append(
+                    (
+                        eod,
+                        eod,
+                        "etf",
+                        str(r["name"] or eod).strip() or eod,
+                        exch,
+                        country,
+                        zone,
+                        str(r["currency"] or "").strip().upper(),
+                        now_iso,
+                    )
+                )
+            if payload:
+                conn.executemany(
+                    """
+                    INSERT OR IGNORE INTO finance_screener_snapshots
+                        (symbol, eod_ticker, asset_type, name, exchange, country, market_zone, currency, computed_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    payload,
+                )
+            added_by_exchange[code] = len(payload) + int(upd_cur.rowcount or 0)
+    return added_by_exchange
+
+
+def seed_screener_from_exchange_catalogs(
+    db_path: Path,
+    exchange_codes: list[str] | None = None,
+) -> int:
     """Référence dans le Screener toutes les actions ordinaires des catalogues de bourses synchronisés.
 
     Insère des lignes « catalogue » légères (nom, place, pays, zone, devise) sans cours ni
@@ -2680,19 +3049,35 @@ def seed_screener_from_exchange_catalogs(db_path: Path) -> int:
         return 0
     from .finance_geography import canonicalize_country, resolve_market_zone
 
+    filter_sql = ""
+    params: list[Any] = []
+    if exchange_codes is not None:
+        clean_codes = [
+            c
+            for c in dict.fromkeys(_norm_sym(x) for x in exchange_codes)
+            if c and c not in _EXCLUDED_ETF_EXCHANGES
+        ]
+        if not clean_codes:
+            return 0
+        marks = ", ".join("?" for _ in clean_codes)
+        filter_sql = f"AND UPPER(e.exchange_code) IN ({marks})"
+        params.extend(clean_codes)
+
     now_iso = _utc_iso()
     with _connect(db_path) as conn:
         rows = conn.execute(
-            """
+            f"""
             SELECT e.exchange_code, e.eod_ticker, e.name, e.country, e.currency
             FROM finance_exchange_symbols e
             WHERE LOWER(COALESCE(e.type, '')) = 'common stock'
               AND e.exchange_code NOT IN ('EUFUND', 'CC')
+              {filter_sql}
               AND NOT EXISTS (
                   SELECT 1 FROM finance_screener_snapshots s
                   WHERE s.symbol = e.eod_ticker OR s.eod_ticker = e.eod_ticker
               )
-            """
+            """,
+            params,
         ).fetchall()
         payload: list[tuple[Any, ...]] = []
         for r in rows:
@@ -2755,7 +3140,7 @@ def backfill_screener_geography(db_path: Path) -> int:
     return len(updates)
 
 
-def get_screener_coverage(db_path: Path) -> dict[str, Any]:
+def get_screener_coverage(db_path: Path, *, asset_type: str = "") -> dict[str, Any]:
     """Retourne la couverture actuelle et les facettes (indices, zones, pays, bourses, secteurs, devises) du Screener."""
     from .finance_geography import (
         EUROZONE_COUNTRIES,
@@ -2766,14 +3151,27 @@ def get_screener_coverage(db_path: Path) -> dict[str, Any]:
     )
     from .finance_indices import INDEX_DEFINITIONS
 
+    clean_asset = str(asset_type or "").strip().lower()
+    if clean_asset not in ("stock", "etf"):
+        clean_asset = ""
+    asset_sql = (
+        "asset_type = 'etf'"
+        if clean_asset == "etf"
+        else ("COALESCE(asset_type, 'stock') != 'etf'" if clean_asset == "stock" else "1=1")
+    )
+    etf_exchanges = get_etf_exchange_catalog_counts(db_path)
+
     empty = {
         "total_snapshots": 0,
         "with_technicals": 0,
         "with_fundamentals": 0,
+        "stock_count": 0,
+        "etf_count": 0,
         "warehouse_symbols_count": 0,
         "sectors": [],
         "exchanges": [],
         "exchange_items": [],
+        "etf_exchanges": etf_exchanges,
         "currencies": [],
         "countries": [],
         "market_zones": [],
@@ -2790,6 +3188,8 @@ def get_screener_coverage(db_path: Path) -> dict[str, Any]:
                 COUNT(*) AS total,
                 SUM(CASE WHEN bars_count >= 20 THEN 1 ELSE 0 END) AS with_tech,
                 SUM(CASE WHEN has_fundamentals = 1 THEN 1 ELSE 0 END) AS with_fund,
+                SUM(CASE WHEN COALESCE(asset_type, 'stock') != 'etf' THEN 1 ELSE 0 END) AS stock_cnt,
+                SUM(CASE WHEN asset_type = 'etf' THEN 1 ELSE 0 END) AS etf_cnt,
                 MAX(computed_at) AS last_comp
             FROM finance_screener_snapshots
             """
@@ -2800,14 +3200,14 @@ def get_screener_coverage(db_path: Path) -> dict[str, Any]:
         sectors = [
             str(r["sector"])
             for r in conn.execute(
-                "SELECT DISTINCT sector FROM finance_screener_snapshots WHERE sector != '' ORDER BY sector ASC"
+                f"SELECT DISTINCT sector FROM finance_screener_snapshots WHERE sector != '' AND {asset_sql} ORDER BY sector ASC"
             ).fetchall()
         ]
         exch_rows = conn.execute(
-            """
+            f"""
             SELECT exchange, COUNT(*) AS cnt
             FROM finance_screener_snapshots
-            WHERE exchange != ''
+            WHERE exchange != '' AND {asset_sql}
             GROUP BY exchange
             ORDER BY cnt DESC, exchange ASC
             """
@@ -2824,14 +3224,14 @@ def get_screener_coverage(db_path: Path) -> dict[str, Any]:
         currencies = [
             str(r["currency"])
             for r in conn.execute(
-                "SELECT DISTINCT currency FROM finance_screener_snapshots WHERE currency != '' ORDER BY currency ASC"
+                f"SELECT DISTINCT currency FROM finance_screener_snapshots WHERE currency != '' AND {asset_sql} ORDER BY currency ASC"
             ).fetchall()
         ]
         country_rows = conn.execute(
-            """
+            f"""
             SELECT country, COUNT(*) AS cnt
             FROM finance_screener_snapshots
-            WHERE country != ''
+            WHERE country != '' AND {asset_sql}
             GROUP BY country
             ORDER BY cnt DESC, country ASC
             """
@@ -2846,10 +3246,10 @@ def get_screener_coverage(db_path: Path) -> dict[str, Any]:
             for r in country_rows
         ]
         zone_rows = conn.execute(
-            """
+            f"""
             SELECT market_zone, COUNT(*) AS cnt
             FROM finance_screener_snapshots
-            WHERE market_zone != ''
+            WHERE market_zone != '' AND {asset_sql}
             GROUP BY market_zone
             """
         ).fetchall()
@@ -2868,10 +3268,10 @@ def get_screener_coverage(db_path: Path) -> dict[str, Any]:
         ]
 
         cap_rows = conn.execute(
-            """
+            f"""
             SELECT cap_category, COUNT(*) AS cnt
             FROM finance_screener_snapshots
-            WHERE cap_category != ''
+            WHERE cap_category != '' AND {asset_sql}
             GROUP BY cap_category
             ORDER BY cnt DESC, cap_category ASC
             """
@@ -2883,7 +3283,7 @@ def get_screener_coverage(db_path: Path) -> dict[str, Any]:
 
         idx_counts: dict[str, int] = {}
         for r in conn.execute(
-            "SELECT indices_csv FROM finance_screener_snapshots WHERE indices_csv != ''"
+            f"SELECT indices_csv FROM finance_screener_snapshots WHERE indices_csv != '' AND {asset_sql}"
         ).fetchall():
             raw_csv = str(r["indices_csv"] or "")
             for part in raw_csv.split(","):
@@ -2911,10 +3311,13 @@ def get_screener_coverage(db_path: Path) -> dict[str, Any]:
         "total_snapshots": int((agg["total"] if agg else 0) or 0),
         "with_technicals": int((agg["with_tech"] if agg else 0) or 0),
         "with_fundamentals": int((agg["with_fund"] if agg else 0) or 0),
+        "stock_count": int((agg["stock_cnt"] if agg else 0) or 0),
+        "etf_count": int((agg["etf_cnt"] if agg else 0) or 0),
         "warehouse_symbols_count": int((wh_cnt["cnt"] if wh_cnt else 0) or 0),
         "sectors": sectors,
         "exchanges": exchanges,
         "exchange_items": exchange_items,
+        "etf_exchanges": etf_exchanges,
         "currencies": currencies,
         "countries": countries,
         "market_zones": market_zones,

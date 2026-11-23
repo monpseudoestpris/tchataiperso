@@ -301,18 +301,20 @@ async def extract_document(settings: Settings, content: bytes, filename: str, mo
             ext = await providers.extract_ocr(settings, content, mime, page_count=page_count)
             for page in ext.pages:
                 readable = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", page.markdown)
-                if not any(character.isalnum() for character in readable) and settings.vision_model:
-                    try:
-                        if mime == "application/pdf":
+                if not any(character.isalnum() for character in readable):
+                    if mime == "application/pdf":
+                        if not settings.vision_model:
+                            continue
+                        try:
                             image = await asyncio.to_thread(render_pdf_page, content, page.index)
-                            image_mime = "image/png"
-                        else:
-                            image = await asyncio.to_thread(normalize_vision_image, content)
-                            image_mime = "image/jpeg"
-                        page.vision_description = await providers.describe_image(settings, image, image_mime)
+                            page.vision_description = await providers.describe_image(settings, image, "image/png")
+                            page.method = "vision"
+                        except (providers.ProviderError, HTTPException):
+                            pass
+                    else:
+                        image = await asyncio.to_thread(normalize_vision_image, content)
+                        page.vision_description = await providers.describe_image(settings, image, "image/jpeg")
                         page.method = "vision"
-                    except Exception:
-                        pass
             return ext
 
         extraction = await asyncio.wait_for(_do_ocr(), timeout=600)

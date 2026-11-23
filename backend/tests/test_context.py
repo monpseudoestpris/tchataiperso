@@ -208,4 +208,80 @@ def test_canvas_files_injected_into_context_even_with_summary():
     assert "Résumé des échanges précédents" in joined
 
 
+def test_youtube_long_transcript_preserves_full_text_on_large_context_model():
+    settings = Settings(_env_file=None, max_context_chars=60000, context_window_tokens=12000)
+    body = "Paragraphe détaillé de la conférence sur les systèmes distribués. " * 2100
+    full_transcript = f"DEBUT_VIDEO_00_00\n{body}\nFIN_VIDEO_02_15_00"
+    assert len(full_transcript) > 130000
+    extraction = {
+        "model": "youtube-transcript",
+        "pages": [{"index": 0, "markdown": full_transcript, "method": "local"}],
+        "annotations": [],
+        "warnings": [],
+    }
+    context = build_context(
+        settings,
+        "",
+        [],
+        [
+            {
+                "role": "user",
+                "content": "Résume toute cette vidéo",
+                "attachments": [
+                    {
+                        "filename": "🎬 Conférence Longue (DeepTalks)",
+                        "mime_type": "text/html; video=youtube",
+                        "extracted_text": full_transcript,
+                        "extraction": extraction,
+                    }
+                ],
+            }
+        ],
+        [],
+        False,
+        max_context_tokens=12000,
+        model_context_tokens=200000,
+    )
+    user_content = context[-1]["content"]
+    assert "DEBUT_VIDEO_00_00" in user_content
+    assert "FIN_VIDEO_02_15_00" in user_content
+    assert "contenu integral disponible" not in user_content
+
+
+def test_youtube_transcript_respects_small_model_context_window():
+    settings = Settings(_env_file=None, max_context_chars=60000, context_window_tokens=12000)
+    full_transcript = "Segment vidéo répété. " * 4000
+    extraction = {
+        "model": "youtube-transcript",
+        "pages": [{"index": 0, "markdown": full_transcript, "method": "local"}],
+        "annotations": [],
+        "warnings": [],
+    }
+    context = build_context(
+        settings,
+        "",
+        [],
+        [
+            {
+                "role": "user",
+                "content": "Résume",
+                "attachments": [
+                    {
+                        "filename": "🎬 Longue Vidéo (Test)",
+                        "mime_type": "text/html; video=youtube",
+                        "extracted_text": full_transcript,
+                        "extraction": extraction,
+                    }
+                ],
+            }
+        ],
+        [],
+        False,
+        max_context_tokens=12000,
+        model_context_tokens=8192,
+    )
+    total_chars = sum(len(str(m["content"])) for m in context)
+    assert total_chars <= 8192 * 3 + 500
+
+
 

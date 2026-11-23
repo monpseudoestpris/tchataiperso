@@ -12,9 +12,11 @@ from __future__ import annotations
 
 import datetime
 import logging
+import sqlite3
 import threading
 import time
 import urllib.parse
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -45,10 +47,18 @@ _DEFAULT_COST = 1
 
 _LOCK = threading.Lock()
 _USAGE_DAY: str = ""
-_USAGE: dict[str, int] = {}  # endpoint -> nombre de requêtes
+_USAGE: dict[str, int] = {}  # endpoint -> nombre de requêtes (cache mémoire)
+_USAGE_DB_PATH: Path | None = None
 
 _USER_CACHE: dict[str, Any] = {"ts": 0.0, "data": None}
 _USER_CACHE_TTL_SEC = 60.0
+
+
+def configure_usage_db(db_path: Path | None) -> None:
+    """Configure le chemin SQLite WAL (`finance_warehouse.db`) pour persister les compteurs quotidiens."""
+    global _USAGE_DB_PATH
+    with _LOCK:
+        _USAGE_DB_PATH = db_path
 
 
 def _today_utc() -> str:
@@ -74,8 +84,8 @@ def endpoint_cost(endpoint: str) -> int:
     return EODHD_ENDPOINT_COSTS.get(endpoint, (_DEFAULT_COST, endpoint))[0]
 
 
-def record_eodhd_call(url: str) -> None:
-    """Comptabilise une requête sortante si elle vise l'API EODHD (sans effet pour les autres URLs)."""
+def record_eodhd_call(url: str, *, db_path: Path | None = None) -> None:
+    """Comptabilise une requête sortante si elle vise l'API EODHD (persistance SQLite WAL si configurée)."""
     global _USAGE_DAY
     endpoint = endpoint_from_url(url)
     if not endpoint or endpoint == "user":
@@ -86,13 +96,33 @@ def record_eodhd_call(url: str) -> None:
             _USAGE_DAY = today
             _USAGE.clear()
         _USAGE[endpoint] = _USAGE.get(endpoint, 0) + 1
+        target_db = db_path or _USAGE_DB_PATH
+    if target_db is not None:
+        try:
+            from .finance_warehouse import increment_eodhd_usage
+
+            increment_eodhd_usage(target_db, today, endpoint, 1)
+        except (sqlite3.Error, OSError) as exc:
+            _logger.debug("Persistance compteur EODHD ignorée: %s", exc)
 
 
-def get_local_usage() -> dict[str, Any]:
-    """Retourne la consommation locale du jour (UTC), ventilée par endpoint avec le coût estimé."""
+def get_local_usage(*, db_path: Path | None = None) -> dict[str, Any]:
+    """Retourne la consommation locale du jour (UTC), lue depuis SQLite WAL si configuré, sinon mémoire."""
     today = _today_utc()
     with _LOCK:
-        snapshot = dict(_USAGE) if _USAGE_DAY == today else {}
+        target_db = db_path or _USAGE_DB_PATH
+        mem_snapshot = dict(_USAGE) if _USAGE_DAY == today else {}
+
+    snapshot = mem_snapshot
+    if target_db is not None:
+        try:
+            from .finance_warehouse import load_eodhd_usage
+
+            db_snapshot = load_eodhd_usage(target_db, today)
+            if db_snapshot or not mem_snapshot:
+                snapshot = db_snapshot
+        except (sqlite3.Error, OSError) as exc:
+            _logger.debug("Lecture compteur EODHD SQLite ignorée: %s", exc)
     items = []
     for endpoint, count in snapshot.items():
         unit = endpoint_cost(endpoint)
@@ -144,7 +174,7 @@ async def fetch_eodhd_account_usage(settings: Settings, *, force: bool = False) 
             _logger.debug("EODHD /api/user HTTP %s", resp.status_code)
             return None
         raw = resp.json()
-    except Exception as exc:
+    except (httpx.HTTPError, ValueError) as exc:
         _logger.debug("EODHD /api/user indisponible: %s", exc)
         return None
     if not isinstance(raw, dict):
@@ -170,12 +200,20 @@ def estimate_daily_sync_cost(prefs: dict[str, Any], daily_limit: int | None) -> 
     limit = int(daily_limit or 100_000)
     lines: list[dict[str, Any]] = []
 
-    full_codes = list(prefs.get("full_data_exchanges") or [])
-    if full_codes:
+    bulk_codes: list[str] = []
+    for raw_c in [
+        *(prefs.get("full_data_exchanges") or []),
+        *(prefs.get("stock_price_exchanges") or []),
+        *(prefs.get("etf_exchanges") or []),
+    ]:
+        c = str(raw_c or "").strip().upper()
+        if c and c not in bulk_codes:
+            bulk_codes.append(c)
+    if bulk_codes:
         lines.append(
             {
-                "label": f"Cours du jour en bulk ({', '.join(full_codes)})",
-                "calls": bulk_cost * len(full_codes),
+                "label": f"Cours du jour en bulk ({', '.join(bulk_codes)})",
+                "calls": bulk_cost * len(bulk_codes),
             }
         )
 
@@ -208,11 +246,12 @@ async def get_eodhd_usage_report(settings: Settings) -> dict[str, Any]:
     """Assemble la consommation réelle, la consommation locale, le barème et l'estimation de la synchro."""
     from .finance_warehouse import get_sync_preferences, warehouse_db_path
 
-    prefs = get_sync_preferences(warehouse_db_path(settings))
+    db_path = warehouse_db_path(settings)
+    prefs = get_sync_preferences(db_path)
     account = await fetch_eodhd_account_usage(settings)
     return {
         "account": account,
-        "local": get_local_usage(),
+        "local": get_local_usage(db_path=db_path),
         "cost_table": get_cost_table(),
         "sync_estimate": estimate_daily_sync_cost(prefs, (account or {}).get("daily_limit")),
         "source_url": "https://eodhd.com/financial-apis/api-limits",

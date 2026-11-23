@@ -542,6 +542,31 @@ class ConversationVisualDoc(Base):
     visual_doc: Mapped[VisualDocument] = relationship(back_populates="conversation_links")
 
 
+class SavedVideo(Base):
+    """Vidéo YouTube sauvegardée dans l'espace « Mes Vidéos » avec son lien, transcript intégral et résumés."""
+    __tablename__ = "saved_videos"
+    __table_args__ = (UniqueConstraint("user_id", "video_id", name="uq_saved_videos_user_video"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    video_id: Mapped[str] = mapped_column(String(32), index=True)
+    url: Mapped[str] = mapped_column(String(500))
+    title: Mapped[str] = mapped_column(String(255))
+    author: Mapped[str] = mapped_column(String(200), default="")
+    duration: Mapped[str] = mapped_column(String(32), default="")
+    lang_label: Mapped[str] = mapped_column(String(120), default="")
+    thumbnail_url: Mapped[str] = mapped_column(String(500), default="")
+    has_transcript: Mapped[bool] = mapped_column(Boolean, default=False)
+    transcript_segments: Mapped[int] = mapped_column(Integer, default=0)
+    transcript_markdown: Mapped[str] = mapped_column(Text, default="")
+    summary_markdown: Mapped[str] = mapped_column(Text, default="")
+    summary_action: Mapped[str] = mapped_column(String(40), default="")
+    summary_model: Mapped[str] = mapped_column(String(120), default="")
+    analyses: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
 
 
 

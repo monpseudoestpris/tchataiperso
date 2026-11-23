@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
-  ArrowLeft,
   Check,
   ChevronDown,
   ChevronUp,
@@ -35,6 +34,7 @@ import {
   Wand2,
   X,
 } from "lucide-react";
+import { injectSandboxStorageShim } from "@/lib/code-canvas";
 import {
   createWebPage,
   deleteWebPage,
@@ -45,7 +45,6 @@ import {
   interviewWebPageWizard,
   proposeWebPageTopics,
   refineWebPage,
-  restoreWebPageVersion,
   updateWebPage,
   type Model,
   type PageBrick,
@@ -53,7 +52,6 @@ import {
   type PageWizardCriteria,
   type PageWizardQuestion,
   type WebPage,
-  type WebPageVersion,
 } from "@/lib/api";
 import { buildBrickWiringPrompt, injectBrickIntoCanvasHtml } from "@/lib/canvas-bricks";
 import type { CanvasFile } from "@/lib/code-canvas";
@@ -253,23 +251,18 @@ export function WebPageModal({
   const [selectedPage, setSelectedPage] = useState<WebPage | null>(null);
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
   const [bricksModalOpen, setBricksModalOpen] = useState(false);
-  const [selectedModel, setSelectedModel] = useState<string>(currentModel || "");
+  const [selectedModel, setSelectedModel] = useState<string>(currentModel || models?.[0]?.id || "");
   const { isFavorite } = useModelFavorites("llm");
 
-  useEffect(() => {
+  const [prevCurrentModel, setPrevCurrentModel] = useState(currentModel);
+  if (currentModel !== prevCurrentModel) {
+    setPrevCurrentModel(currentModel);
     if (currentModel) {
       setSelectedModel(currentModel);
-    } else if (models && models.length > 0 && !selectedModel) {
-      setSelectedModel(models[0].id);
     }
-  }, [currentModel, models]);
-
-  // Synchronize useConversation whenever conversationId changes or modal opens
-  useEffect(() => {
-    if (conversationId) {
-      setUseConversation(true);
-    }
-  }, [conversationId, isOpen]);
+  } else if (!selectedModel && models && models.length > 0) {
+    setSelectedModel(models[0].id);
+  }
 
   const [loading, setLoading] = useState(false);
   const [loadingPage, setLoadingPage] = useState(false);
@@ -280,6 +273,16 @@ export function WebPageModal({
   const [prompt, setPrompt] = useState(initialPrompt ?? "");
   const [title, setTitle] = useState("");
   const [useConversation, setUseConversation] = useState(Boolean(conversationId));
+
+  // Synchronize useConversation whenever conversationId changes or modal opens
+  const convSyncKey = `${isOpen}:${conversationId ?? ""}`;
+  const [prevConvSyncKey, setPrevConvSyncKey] = useState(convSyncKey);
+  if (convSyncKey !== prevConvSyncKey) {
+    setPrevConvSyncKey(convSyncKey);
+    if (conversationId) {
+      setUseConversation(true);
+    }
+  }
   const [pageType, setPageType] = useState<string>("auto");
   const [targetAudience, setTargetAudience] = useState<string>("general");
   const [editorialTone, setEditorialTone] = useState<string>("auto");
@@ -626,12 +629,26 @@ export function WebPageModal({
     }
   }, [showImageExportMenu]);
 
+  // Sync sidebar tab when opening modal
+  const openTabKey = isOpen ? (initialTab ?? "") : "";
+  const [prevOpenTabKey, setPrevOpenTabKey] = useState(openTabKey);
+  if (openTabKey !== prevOpenTabKey) {
+    setPrevOpenTabKey(openTabKey);
+    if (isOpen && initialTab) {
+      setSidebarTab(initialTab);
+    }
+  }
+
+  const loadPagesRef = useRef<(targetId?: string | null) => Promise<void>>(loadPages);
+  useEffect(() => {
+    loadPagesRef.current = loadPages;
+  });
+
   // Load pages list on open
   useEffect(() => {
     if (!isOpen) return;
-    if (initialTab) setSidebarTab(initialTab);
-    void loadPages(initialPageId);
-  }, [isOpen, initialTab, initialPageId]);
+    void loadPagesRef.current(initialPageId);
+  }, [isOpen, initialPageId]);
 
   // Listen for CLAIR_BRICK_CALL postMessage from the app iframe
   useEffect(() => {
@@ -673,12 +690,14 @@ export function WebPageModal({
   }, [isOpen, selectedPage, selectedModel]);
 
   // When initialPrompt changes
-  useEffect(() => {
+  const [prevInitialPrompt, setPrevInitialPrompt] = useState(initialPrompt);
+  if (initialPrompt !== prevInitialPrompt) {
+    setPrevInitialPrompt(initialPrompt);
     if (initialPrompt) {
       setPrompt(initialPrompt);
       setSelectedPageId(null);
     }
-  }, [initialPrompt]);
+  }
 
   const pageItems = useMemo(
     () => pages.filter((p) => (p.kind || "page") !== "app"),
@@ -958,7 +977,8 @@ export function WebPageModal({
       const initialFormats: Record<string, "auto" | "text" | "list" | "table" | "cards" | "timeline"> = {};
       (res.topics || []).forEach((t, idx) => {
         initialLevels[t.id] = t.detail_level || fallbackLvl;
-        let fmt = (t.output_format as any) || "auto";
+        let fmt: "auto" | "text" | "list" | "table" | "cards" | "timeline" =
+          (t.output_format as "auto" | "text" | "list" | "table" | "cards" | "timeline" | undefined) || "auto";
         if (preferTables && fmt === "auto" && idx % 2 === 0) {
           fmt = "table";
         }
@@ -1081,7 +1101,7 @@ export function WebPageModal({
   function handleApplyBulkDetailLevel(level: number) {
     const clamped = Math.max(1, Math.min(10, level));
     setBulkDetailLevel(clamped);
-    setTopicDetailLevels((prev) => {
+    setTopicDetailLevels(() => {
       const updated: Record<string, number> = {};
       proposedTopics.forEach((t) => {
         updated[t.id] = clamped;
@@ -1101,7 +1121,7 @@ export function WebPageModal({
   // Apply a bulk output format to all proposed topics
   function handleApplyBulkFormat(format: "auto" | "text" | "list" | "table" | "cards" | "timeline") {
     setBulkOutputFormat(format);
-    setTopicOutputFormats((prev) => {
+    setTopicOutputFormats(() => {
       const updated: Record<string, "auto" | "text" | "list" | "table" | "cards" | "timeline"> = {};
       proposedTopics.forEach((t) => {
         updated[t.id] = format;
@@ -2139,7 +2159,7 @@ export function WebPageModal({
                             <option value="didactic_sheet">📘 Guide didactique structuré</option>
                             <option value="article">📰 Article de fond & format magazine</option>
                             <option value="dashboard">📊 Tableau de bord visuel & métriques</option>
-                            <option value="report">📋 Rapport formel d'analyse</option>
+                            <option value="report">📋 Rapport formel d&apos;analyse</option>
                           </select>
                         </div>
                         <div>
@@ -2260,7 +2280,7 @@ export function WebPageModal({
                             className={styles.selectInput}
                             value={interactivity}
                             onChange={(e) => {
-                              setInteractivity(e.target.value as any);
+                              setInteractivity(e.target.value as "auto" | "high" | "none");
                               setActivePreset("custom");
                             }}
                           >
@@ -2275,7 +2295,16 @@ export function WebPageModal({
                               className={styles.selectInput}
                               value={layoutStyle}
                               onChange={(e) => {
-                                setLayoutStyle(e.target.value as any);
+                                setLayoutStyle(
+                                  e.target.value as
+                                    | "tabs"
+                                    | "single_page"
+                                    | "print_sheet"
+                                    | "a4_1p"
+                                    | "a4_2p"
+                                    | "cheat_sheet"
+                                    | "auto"
+                                );
                                 setActivePreset("custom");
                               }}
                             >
@@ -2414,7 +2443,7 @@ export function WebPageModal({
                               type="button"
                               className={`${styles.creativeCard} ${animationEngine === eng.id ? styles.active : ""}`}
                               onClick={() => {
-                                setAnimationEngine(eng.id as any);
+                                setAnimationEngine(eng.id as "auto" | "both" | "aos" | "gsap" | "none");
                                 setActivePreset("custom");
                               }}
                               style={{ padding: "0.45rem" }}
@@ -2727,8 +2756,8 @@ export function WebPageModal({
                         key={`${selectedPage.id}-${selectedVersionId}-${previewNonce}`}
                         className={styles.iframe}
                         title={selectedPage.title}
-                        sandbox="allow-scripts allow-forms allow-modals allow-same-origin allow-downloads"
-                        srcDoc={activeHtml}
+                        sandbox="allow-scripts allow-forms allow-modals allow-downloads"
+                        srcDoc={injectSandboxStorageShim(activeHtml)}
                       />
                     </div>
                   ) : (
@@ -2987,7 +3016,11 @@ export function WebPageModal({
                 <select
                   className={styles.bulkFormatSelect}
                   value={bulkOutputFormat}
-                  onChange={(e) => handleApplyBulkFormat(e.target.value as any)}
+                  onChange={(e) =>
+                    handleApplyBulkFormat(
+                      e.target.value as "auto" | "text" | "list" | "table" | "cards" | "timeline"
+                    )
+                  }
                 >
                   <option value="auto">✨ Auto IA</option>
                   <option value="text">📝 Texte rédigé</option>
@@ -3199,7 +3232,10 @@ export function WebPageModal({
                                     className={`${styles.topicFormatBtn} ${isActive ? styles.active : ""}`}
                                     onClick={(e) => {
                                       e.stopPropagation();
-                                      handleSetTopicFormat(top.id, fmt.id as any);
+                                      handleSetTopicFormat(
+                                        top.id,
+                                        fmt.id as "auto" | "text" | "list" | "table" | "cards" | "timeline"
+                                      );
                                     }}
                                     title={`Formater ce thème en ${fmt.label}`}
                                   >

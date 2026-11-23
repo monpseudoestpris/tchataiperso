@@ -80,7 +80,7 @@ export function SkillsPanel({ conversation, model, config, onClose, onConversati
     if (busy || !name.trim() || !prompt.trim()) return;
     setBusy("save"); setError("");
     try {
-      const payload: Record<string, any> = {
+      const payload: Record<string, unknown> = {
         name: name.trim(),
         prompt: prompt.trim(),
         creativity,

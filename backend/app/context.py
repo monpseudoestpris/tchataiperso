@@ -302,6 +302,19 @@ def _format_canvas_files(canvas_files: list[dict] | None, max_chars: int) -> str
     return "".join(parts) if len(parts) > 1 else ""
 
 
+def _is_youtube_attachment(attachment: dict) -> bool:
+    if not isinstance(attachment, dict):
+        return False
+    mime = str(attachment.get("mime_type") or "").lower()
+    filename = str(attachment.get("filename") or "")
+    extraction = attachment.get("extraction")
+    return (
+        "youtube" in mime
+        or filename.startswith("🎬")
+        or (isinstance(extraction, dict) and extraction.get("model") == "youtube-transcript")
+    )
+
+
 def build_context(settings: Settings, summary: str, memories: list[str], messages: list[dict], sources: list[dict],
                   vision: bool, skills: list[dict] | None = None, deep_search: bool = False,
                   code_mode: bool = False, findings: list[str] | None = None,
@@ -309,6 +322,7 @@ def build_context(settings: Settings, summary: str, memories: list[str], message
                   prompt_cache_enabled: bool = True,
                   topic_context: str | None = None,
                   max_context_tokens: int | None = None,
+                  model_context_tokens: int | None = None,
                   creativity_instruction: str | None = None,
                   creativity: float | None = None,
                   followup_questions: bool = False,
@@ -346,6 +360,17 @@ def build_context(settings: Settings, summary: str, memories: list[str], message
         if max_context_tokens is not None
         else settings.max_context_chars
     )
+    has_youtube_attachment = any(
+        _is_youtube_attachment(att)
+        for msg in messages
+        for att in (msg.get("attachments") or [])
+    )
+    if has_youtube_attachment and model_context_tokens is not None and model_context_tokens > 0:
+        model_char_cap = max(8000, int(model_context_tokens * 3))
+        if model_char_cap > effective_max_chars:
+            effective_max_chars = min(450000, model_char_cap)
+        else:
+            effective_max_chars = min(effective_max_chars, model_char_cap)
     skill_text = ""
     if skills:
         skill_text = "Consignes des compétences actives :\n" + "\n\n".join(

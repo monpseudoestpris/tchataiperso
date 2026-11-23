@@ -6,6 +6,7 @@ import {
   Brain,
   Code2,
   Compass,
+  Film,
   Globe,
   GraduationCap,
   ImagePlus,
@@ -38,9 +39,11 @@ export interface ToolsModalProps {
   onOpenWebPages?: () => void;
   onOpenHermes?: () => void;
   onOpenVisualDocs?: () => void;
+  onOpenVideos?: () => void;
   // Tool state badges
   canvasFilesCount: number;
   visualDocsCount?: number;
+  savedVideosCount?: number;
   isMultiAgentActive: boolean;
   // Memory toggle
   autoMemoryEnabled: boolean;
@@ -62,8 +65,10 @@ export function ToolsModal({
   onOpenWebPages,
   onOpenHermes,
   onOpenVisualDocs,
+  onOpenVideos,
   canvasFilesCount,
   visualDocsCount = 0,
+  savedVideosCount = 0,
   isMultiAgentActive,
   autoMemoryEnabled,
   onToggleAutoMemory,
@@ -159,6 +164,37 @@ export function ToolsModal({
           <div>
             <h3 className={styles.sectionTitle}>Studios & Espaces Dédiés</h3>
             <div className={styles.grid}>
+              {/* Mes Vidéos (YouTube · Transcripts & Résumés) */}
+              {onOpenVideos && (
+                <button
+                  type="button"
+                  className={styles.toolCard}
+                  onClick={() => handleSelect(onOpenVideos)}
+                  title="Ouvrir votre espace Mes Vidéos : liens YouTube, transcriptions intégrales et résumés IA"
+                >
+                  <div className={styles.toolCardHeader}>
+                    <div className={styles.toolIconWrap} style={{ background: "#fef2f2", color: "#dc2626" }}>
+                      <Film size={19} />
+                    </div>
+                    {savedVideosCount > 0 ? (
+                      <span className={`${styles.toolTag} ${styles.active}`}>
+                        {savedVideosCount} vidéo{savedVideosCount > 1 ? "s" : ""}
+                      </span>
+                    ) : (
+                      <span className={styles.toolTag}>YouTube · Transcript</span>
+                    )}
+                  </div>
+                  <h4 className={styles.toolTitle}>Mes Vidéos</h4>
+                  <p className={styles.toolDesc}>
+                    Retrouvez toutes vos vidéos YouTube importées : titres, liens, transcriptions intégrales et résumés structurés.
+                  </p>
+                  <div className={styles.toolActionRow}>
+                    <span>Ouvrir ma vidéothèque</span>
+                    <ArrowRight size={14} />
+                  </div>
+                </button>
+              )}
+
               {/* Documents Illustrés (Mistral OCR + Schémas WebP) */}
               {onOpenVisualDocs && (
                 <button

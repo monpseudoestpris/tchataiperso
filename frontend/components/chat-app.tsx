@@ -3,17 +3,30 @@
 import {
   ArrowDown, ArrowRightLeft, ArrowUp, AudioLines, Bookmark, BookmarkCheck, BookOpen, Bot, Brain, Check, ChevronDown, ChevronLeft, ChevronRight,
   CircleAlert, Code2, Compass, Copy, Download, ExternalLink, Eye, FileCode2, FileText, FolderArchive, FolderKanban,
-  Globe, Globe2, GraduationCap, ImagePlus, LayoutGrid, LineChart, Link2, LoaderCircle, LogOut, Maximize2, Menu, MessageCircle, Newspaper, PanelLeftClose, Paperclip,
-  Pause, Pencil, Play, Plus, Presentation, Search, RefreshCw, Settings, Share2, Shield, Sliders, SlidersHorizontal, Sparkles, Square, SquarePlay, Star, Target, Trash2, TrendingUp, Unlink, Users, UsersRound, Volume2, WandSparkles, X,
+  Globe, Globe2, GraduationCap, ImagePlus, LayoutGrid, LineChart, Link2, LoaderCircle, LogOut, Menu, MessageCircle, Newspaper, PanelLeftClose, Paperclip,
+  Pause, Pencil, Play, Plus, Power, Presentation, Search, Settings, Share2, Shield, Sliders, SlidersHorizontal, Sparkles, Square, SquarePlay, Star, Target, Trash2, TrendingUp, Unlink, Users, UsersRound, Volume2, WandSparkles, X,
 } from "lucide-react";
 import { isValidElement, memo, useEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
-import rehypeKatex from "rehype-katex";
-import remarkGfm from "remark-gfm";
-import remarkMath from "remark-math";
 import { AdminPanel } from "@/components/admin-panel";
 import { AuthPanel } from "@/components/auth-panel";
 import { BlogModal } from "@/components/blog-modal";
+import {
+  AttachmentAnalysis,
+  AttachmentView,
+  ChatUrlAttachModal,
+  markdownRehypePlugins,
+  markdownRemarkPlugins,
+  normalizeMathMarkdown,
+  type YoutubeTranscriptAction,
+} from "@/components/chat-attachment-analysis";
+import { VideoLibraryModal } from "@/components/video-library-modal";
+import { QuitAppModal } from "@/components/quit-app-modal";
+import {
+  buildYoutubeActionPrompt,
+  isYoutubeUrl,
+  type UrlImportSubmitPayload,
+} from "@/lib/youtube-actions";
 import { CodeCanvas } from "@/components/code-canvas";
 import { DeepSearchModal } from "@/components/deep-search-modal";
 import { ResearchActivityModal } from "@/components/research-activity-modal";
@@ -43,7 +56,7 @@ import { VoiceFullscreenModal } from "@/components/voice-fullscreen-modal";
 import { VoiceRecorderButton } from "@/components/voice-recorder-button";
 import { VoiceSettingsMenu } from "@/components/voice-settings-menu";
 import { synthesizeSpeech } from "@/lib/voice-api";
-import { ApiError, api, attachUrl, attachVisualDocToConversation, createLearnReportFromMessage, createReportFromMessage, detachVisualDocFromConversation, ensureVisualDocFromFinanceReport, errorMessage, fetchTopics, linkConversationToTopic, unlinkConversationFromTopic, skillToSlug, streamMessage, type Attachment, type AuthUser, type Config, type Conversation, type DocumentExtraction, type FamilyGroupInfo, type FinancialDashboardData, type GeneratedSound, type Memory, type Message, type Model, type MultiAgentConfig, type PageBrick, type QuarterlyReport, type SamplingParameters, type Skill, type Source, type StageModelsConfig, type TopicSpace, type VisualDocSummary, type WebPage } from "@/lib/api";
+import { ApiError, api, attachUrl, attachVisualDocToConversation, createLearnReportFromMessage, createReportFromMessage, detachVisualDocFromConversation, ensureVisualDocFromFinanceReport, errorMessage, fetchSavedVideos, fetchTopics, linkConversationToTopic, unlinkConversationFromTopic, updateSavedVideo, skillToSlug, streamMessage, type Attachment, type AuthUser, type Config, type Conversation, type FamilyGroupInfo, type FinancialDashboardData, type GeneratedSound, type Memory, type Message, type Model, type MultiAgentConfig, type PageBrick, type QuarterlyReport, type SamplingParameters, type Skill, type Source, type StageModelsConfig, type TopicSpace, type VisualDocSummary, type WebPage } from "@/lib/api";
 import { extractDocMetaFromImageSrc, isIncompleteLocalDocImage, isLocalVisualDocImage, linkifyPageCitations, parseAssetCitationHref, parsePageCitationHref, prepareStreamingVisualMarkdown } from "@/lib/visual-doc-markdown";
 import { collectConversationCanvasFiles, createZipBlob, extractCanvasFiles, hasExplicitCanvasFiles, triggerBlobDownload, type CanvasFile } from "@/lib/code-canvas";
 import { hasInteractiveLearnModules, stripInteractiveModulesForBody } from "@/lib/learn-parser";
@@ -124,355 +137,8 @@ function BrandMark({ small = false }: { small?: boolean }) {
   return <span className={`brand-mark ${small ? "small" : ""}`} aria-hidden="true"><Sparkles strokeWidth={1.5} /></span>;
 }
 
-const CODE_SEGMENT_RE = /((?:^|\n)(?:`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:\n(?:`{3,}|~{3,})(?=\n|$)|$)|`+[^`]*?`+)/g;
-const markdownRemarkPlugins = [remarkGfm, remarkMath];
-const markdownRehypePlugins: NonNullable<React.ComponentProps<typeof ReactMarkdown>["rehypePlugins"]> = [
-  [rehypeKatex, { throwOnError: false, strict: "ignore", errorColor: "#64748b" }],
-];
-
-function formatDisplayMathBlock(indent: string, math: string) {
-  const body = math
-    .trim()
-    .split("\n")
-    .map(line => (line.trim() ? `${indent}${line.trim()}` : ""))
-    .join("\n");
-  return `${indent}$$\n${body}\n${indent}$$`;
-}
-
-function normalizeMathSegment(segment: string) {
-  return segment
-    .replace(/(^|\n)([ \t]*)\\\[([\s\S]*?)\\\](?=[ \t]*(?:\n|$))/g, (_, prefix: string, indent: string, math: string) =>
-      `${prefix}${formatDisplayMathBlock(indent, math)}`
-    )
-    .replace(/\\\[([\s\S]*?)\\\]/g, (_, math: string) => `\n$$\n${math.trim()}\n$$\n`)
-    .replace(/(^|\n)([ \t]*)\$\$([^\n$]+?)\$\$(?=[ \t]*(?:\n|$))/g, (_, prefix: string, indent: string, math: string) =>
-      `${prefix}${formatDisplayMathBlock(indent, math)}`
-    )
-    .replace(/(^|\n)([ \t]*)\[[ \t]*\n([\s\S]*?\\[a-zA-Z]+[\s\S]*?)\n[ \t]*\](?=[ \t]*(?:\n|$))/g, (_, prefix: string, indent: string, math: string) =>
-      `${prefix}${formatDisplayMathBlock(indent, math)}`
-    )
-    .replace(/\\\(([\s\S]*?)\\\)/g, (_, math: string) => `$${math.trim().replace(/\s*\n\s*/g, " ")}$`);
-}
-
-function normalizeMathMarkdown(content: string) {
-  return content
-    .split(CODE_SEGMENT_RE)
-    .map((part, index) => (index % 2 === 1 ? part : normalizeMathSegment(part)))
-    .join("");
-}
-
 function IconButton({ label, children, className = "", ...props }: { label: string; children: ReactNode; className?: string } & React.ButtonHTMLAttributes<HTMLButtonElement>) {
   return <button type="button" className={`icon-button ${className}`} aria-label={label} title={label} {...props}>{children}</button>;
-}
-
-type YoutubeTranscriptAction = "summarize" | "analyze";
-
-function AttachmentAnalysis({
-  attachment,
-  isFinance,
-  onYoutubeAction,
-  actionDisabled,
-}: {
-  attachment: Attachment;
-  isFinance?: boolean;
-  onYoutubeAction?: (attachment: Attachment, action: YoutubeTranscriptAction) => void;
-  actionDisabled?: boolean;
-}) {
-  const [extraction, setExtraction] = useState<DocumentExtraction | null>();
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [pageIndex, setPageIndex] = useState(0);
-  const [rawText, setRawText] = useState(!isFinance);
-  const [modalOpen, setModalOpen] = useState(false);
-  const [copiedTranscript, setCopiedTranscript] = useState(false);
-
-  const isYoutube =
-    attachment.filename.startsWith("🎬")
-    || attachment.mime_type.includes("youtube")
-    || extraction?.model === "youtube-transcript";
-
-  useEffect(() => {
-    if (!modalOpen) return;
-    const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape") setModalOpen(false);
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [modalOpen]);
-
-  async function load() {
-    setLoading(true); setError("");
-    try {
-      const result = await api<{ extraction: DocumentExtraction | null }>(`/attachments/${attachment.id}/extraction`);
-      setExtraction(result.extraction);
-    } catch (err) { setError(errorMessage(err)); }
-    finally { setLoading(false); }
-  }
-
-  function triggerYoutubeAction(action: YoutubeTranscriptAction) {
-    if (!onYoutubeAction || actionDisabled) return;
-    setModalOpen(false);
-    onYoutubeAction(attachment, action);
-  }
-
-  async function copyTranscript(text: string) {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopiedTranscript(true);
-      window.setTimeout(() => setCopiedTranscript(false), 1800);
-    } catch {
-      /* ignore clipboard error */
-    }
-  }
-
-  const page = extraction?.pages[pageIndex];
-  const isVision = attachment.analysis_mode === "vision" || page?.method === "vision";
-  const charCount = page?.markdown ? page.markdown.length : (attachment.extracted_chars || 0);
-
-  return <>
-    <details className={`attachment-analysis ${isFinance ? "finance-analysis" : ""} ${isYoutube ? "youtube-analysis" : ""}`} onToggle={event => {
-      if (event.currentTarget.open && extraction === undefined && !loading && !error) void load();
-    }}>
-      <summary>
-        {isFinance ? <TrendingUp size={14} /> : isYoutube ? <SquarePlay size={14} /> : isVision ? <Eye size={14} /> : <BookOpen size={14} />}
-        {isFinance
-          ? "Données financières détaillées Yahoo Finance (valorisation, bilan, historique des cours)"
-          : isYoutube
-          ? <>Transcription de la vidéo{charCount ? <span>{charCount.toLocaleString("fr-FR")} car.</span> : null}</>
-          : isVision
-          ? "Analyse visuelle détaillée (Modèle Vision)"
-          : <>Contenu extrait{attachment.page_count ? <span>{attachment.page_count} p.</span> : null}</>}
-      </summary>
-      {loading && <p className="analysis-status" role="status"><LoaderCircle size={14} className="spin" />Chargement de l’analyse…</p>}
-      {error && <div className="analysis-status" role="alert"><p>{error}</p><IconButton label="Réessayer le chargement" onClick={() => void load()}><RefreshCw size={15} /></IconButton></div>}
-      {extraction === null && <p className="analysis-status">Analyse indisponible pour cette pièce jointe. Joignez à nouveau le fichier pour l’analyser.</p>}
-      {extraction && page && <>
-        <div className="analysis-toolbar">
-          {!isYoutube && <>
-            <IconButton label="Page précédente" disabled={pageIndex === 0} onClick={() => setPageIndex(index => index - 1)}><ChevronLeft size={16} /></IconButton>
-            <label>Page <select value={pageIndex} onChange={event => setPageIndex(Number(event.target.value))}>{extraction.pages.map((item, index) => <option key={item.index} value={index}>{item.index + 1}</option>)}</select> / {extraction.pages.length}</label>
-            <IconButton label="Page suivante" disabled={pageIndex === extraction.pages.length - 1} onClick={() => setPageIndex(index => index + 1)}><ChevronRight size={16} /></IconButton>
-          </>}
-          <span>{isYoutube ? `YouTube · ${charCount.toLocaleString("fr-FR")} caractères` : page.method === "vision" ? "Vision IA détaillée" : page.method === "local" ? (isFinance ? "Yahoo Finance API" : "Extraction locale") : "Mistral OCR"}</span>
-          {isYoutube && (
-            <button type="button" className="analysis-expand-btn" onClick={() => setModalOpen(true)} title="Ouvrir la transcription complète dans une modale">
-              <Maximize2 size={13} />
-              <span>Agrandir</span>
-            </button>
-          )}
-        </div>
-        {isYoutube && onYoutubeAction && (
-          <div className="analysis-quick-actions" role="group" aria-label="Actions sur la transcription">
-            <button
-              type="button"
-              className="analysis-action-btn is-summarize"
-              disabled={actionDisabled}
-              onClick={() => triggerYoutubeAction("summarize")}
-              title="Générer un résumé structuré de l'intégralité de la vidéo"
-            >
-              <Sparkles size={13} />
-              <span>Résumer</span>
-            </button>
-            <button
-              type="button"
-              className="analysis-action-btn is-analyze"
-              disabled={actionDisabled}
-              onClick={() => triggerYoutubeAction("analyze")}
-              title="Générer une analyse approfondie et critique de la vidéo"
-            >
-              <Brain size={13} />
-              <span>Analyser</span>
-            </button>
-          </div>
-        )}
-        <div className="analysis-format" role="group" aria-label="Format de lecture">
-          <button type="button" aria-pressed={rawText} onClick={() => setRawText(true)}><FileText size={13} />Texte brut</button>
-          <button type="button" aria-pressed={!rawText} onClick={() => setRawText(false)}><BookOpen size={13} />Mise en forme</button>
-        </div>
-        <div className="analysis-content" aria-live="polite">
-          {extraction.warnings.map((warning, index) => <p className="analysis-warning" key={index}>{warning}</p>)}
-          <section className="analysis-section"><h4>{isFinance ? "Tableaux et indicateurs financiers Yahoo Finance" : isYoutube ? "Transcription intégrale de la vidéo" : isVision ? `Description visuelle détaillée · page ${page.index + 1}` : `Transcription OCR · page ${page.index + 1}`}</h4>
-            {page.markdown.trim() ? rawText ? <pre className="analysis-transcript">{page.markdown}</pre> : <div className="markdown"><ReactMarkdown skipHtml remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins} components={{
-              img: ({ alt }) => <span className="analysis-image-label">[{alt || "Illustration"}]</span>,
-              a: ({ children, href }) => <a href={href} target="_blank" rel="noreferrer">{children}</a>,
-              table: ({ children }) => <div className="table-scroll"><table>{children}</table></div>,
-            }}>{normalizeMathMarkdown(page.markdown)}</ReactMarkdown></div> : (page.vision_description ? <p>{page.vision_description}</p> : <p>Aucun texte détecté.</p>)}
-          </section>
-          {page.images.map(image => image.annotation && <section className="analysis-section" key={image.id}>
-            <h4>{image.id} · {image.annotation.image_type}</h4><p>{image.annotation.description}</p>
-            {image.annotation.visible_text && <pre className="analysis-transcript analysis-visible-text">{image.annotation.visible_text}</pre>}
-          </section>)}
-          {page.vision_description && <section className="analysis-section"><h4>Description visuelle · page {page.index + 1}</h4><p>{page.vision_description}</p></section>}
-          {pageIndex === 0 && extraction.annotations.length > 0 && <details className="analysis-annotations"><summary>Analyse documentaire complémentaire</summary>
-            {extraction.annotations.map((annotation, index) => <section className="analysis-section" key={index}><h4>{annotation.title || "Relevé documentaire"}</h4><p>{annotation.summary}</p></section>)}
-          </details>}
-        </div>
-      </>}
-    </details>
-    {modalOpen && extraction && page && (
-      <div className="modal-backdrop transcript-modal-backdrop" onClick={event => { if (event.target === event.currentTarget) setModalOpen(false); }}>
-        <section className="modal transcript-modal" role="dialog" aria-modal="true" aria-label={`Transcription — ${attachment.filename}`}>
-          <div className="transcript-modal-header">
-            <div className="transcript-modal-title">
-              <span className="modal-icon" style={{ background: "#fef2f2", color: "#dc2626" }}><SquarePlay size={18} /></span>
-              <div>
-                <h2>{attachment.filename.replace(/^🎬\s*/, "")}</h2>
-                <small>{charCount.toLocaleString("fr-FR")} caractères · Transcription intégrale</small>
-              </div>
-            </div>
-            <div className="transcript-modal-header-actions">
-              {onYoutubeAction && (
-                <>
-                  <button
-                    type="button"
-                    className="analysis-action-btn is-summarize"
-                    disabled={actionDisabled}
-                    onClick={() => triggerYoutubeAction("summarize")}
-                  >
-                    <Sparkles size={14} />
-                    <span>Résumer</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="analysis-action-btn is-analyze"
-                    disabled={actionDisabled}
-                    onClick={() => triggerYoutubeAction("analyze")}
-                  >
-                    <Brain size={14} />
-                    <span>Analyser</span>
-                  </button>
-                </>
-              )}
-              <button
-                type="button"
-                className="secondary-button transcript-copy-btn"
-                onClick={() => void copyTranscript(page.markdown)}
-                title="Copier toute la transcription"
-              >
-                {copiedTranscript ? <Check size={14} /> : <Copy size={14} />}
-                <span>{copiedTranscript ? "Copié" : "Copier"}</span>
-              </button>
-              <IconButton label="Fermer la transcription" onClick={() => setModalOpen(false)}><X size={18} /></IconButton>
-            </div>
-          </div>
-          <div className="transcript-modal-toolbar">
-            <div className="analysis-format" role="group" aria-label="Format de lecture">
-              <button type="button" aria-pressed={rawText} onClick={() => setRawText(true)}><FileText size={13} />Texte brut</button>
-              <button type="button" aria-pressed={!rawText} onClick={() => setRawText(false)}><BookOpen size={13} />Mise en forme</button>
-            </div>
-            {attachment.source_url && (
-              <a className="document-link document-youtube-link" href={attachment.source_url} target="_blank" rel="noreferrer">
-                <SquarePlay size={14} />
-                <span>Ouvrir sur YouTube</span>
-                <ExternalLink size={12} />
-              </a>
-            )}
-          </div>
-          <div className="transcript-modal-body">
-            {page.markdown.trim() ? rawText ? <pre className="analysis-transcript">{page.markdown}</pre> : <div className="markdown"><ReactMarkdown skipHtml remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins} components={{
-              img: ({ alt }) => <span className="analysis-image-label">[{alt || "Illustration"}]</span>,
-              a: ({ children, href }) => <a href={href} target="_blank" rel="noreferrer">{children}</a>,
-              table: ({ children }) => <div className="table-scroll"><table>{children}</table></div>,
-            }}>{normalizeMathMarkdown(page.markdown)}</ReactMarkdown></div> : <p>Aucun texte détecté.</p>}
-          </div>
-        </section>
-      </div>
-    )}
-  </>;
-}
-
-function AttachmentView({
-  attachment,
-  onOpenFinanceModal,
-  onYoutubeAction,
-  actionDisabled,
-}: {
-  attachment: Attachment;
-  onOpenFinanceModal?: (queryOrSymbol?: string) => void;
-  onYoutubeAction?: (attachment: Attachment, action: YoutubeTranscriptAction) => void;
-  actionDisabled?: boolean;
-}) {
-  const isYoutube = attachment.filename.startsWith("🎬") || attachment.mime_type.includes("youtube");
-  const isFinance = attachment.filename.startsWith("📈") || attachment.mime_type.includes("finance");
-  const isWeb = attachment.mime_type.startsWith("text/html") || !!attachment.source_url || attachment.filename.startsWith("🌐");
-
-  if (isFinance) {
-    const meta = attachment.finance_meta;
-    const isEOD = meta?.provider === "eodhd" || attachment.mime_type.includes("source=eod") || attachment.filename.includes("EOD Historical Data");
-    const symbol = meta?.symbol || attachment.filename.match(/\(([A-Za-z0-9\.\^=_-]+)\)/)?.[1] || "";
-    const shortName = meta?.short_name || meta?.long_name || attachment.filename.replace(/^📈\s*/, "").replace(/\s*·.*$/, "");
-    const price = meta?.price;
-    const currency = meta?.currency || (symbol.endsWith(".US") ? "USD" : "EUR");
-    const changePct = meta?.change_percent;
-    const sourceLabel = meta?.source_label || (isEOD ? "EOD Historical Data API" : "Yahoo Finance API");
-    const externalLabel = isEOD ? "EODHD" : "Yahoo Finance";
-    const externalUrl = meta?.url || attachment.source_url || (isEOD ? `https://eodhd.com/financial-summary/${symbol}` : (symbol ? `https://finance.yahoo.com/quote/${symbol}` : "https://finance.yahoo.com"));
-
-    return (
-      <div className="finance-attachment-card" role="region" aria-label={`Données financières pour ${shortName}`}>
-        <div className="finance-card-header">
-          <div className="finance-card-identity">
-            <span className="finance-card-icon"><TrendingUp size={16} /></span>
-            <div>
-              <div className="finance-card-title-row">
-                <strong className="finance-card-name">{shortName}</strong>
-                {symbol && <span className="finance-symbol-badge">{symbol}</span>}
-                <span className="finance-source-tag"><TrendingUp size={11} /> {sourceLabel}</span>
-              </div>
-              <p className="finance-card-sub">{isEOD ? "Cotations en direct et historique des séances EOD" : "Données financières, valorisation et consensus d'analystes"}</p>
-            </div>
-          </div>
-          <div className="finance-card-side">
-            {price != null && (
-              <div className="finance-card-quote">
-                <span className="finance-quote-price">{price} <small>{currency}</small></span>
-                {changePct != null && (
-                  <span className={`finance-quote-change ${changePct >= 0 ? "is-up" : "is-down"}`}>
-                    {changePct >= 0 ? "+" : ""}{changePct.toFixed(2)}%
-                  </span>
-                )}
-              </div>
-            )}
-            <div className="finance-card-actions-group">
-              {onOpenFinanceModal && (
-                <button
-                  type="button"
-                  className="finance-card-modal-btn"
-                  onClick={() => onOpenFinanceModal(symbol || shortName)}
-                  title="Ouvrir la courbe de cours EOD et les tableaux financiers Yahoo Finance"
-                >
-                  <LineChart size={13} />
-                  <span>Courbe & Stats</span>
-                </button>
-              )}
-              <a
-                className="finance-card-external-btn"
-                href={externalUrl}
-                target="_blank"
-                rel="noreferrer"
-                title={`Ouvrir la cotation en direct sur ${externalLabel}`}
-              >
-                <span>{externalLabel}</span>
-                <ExternalLink size={12} />
-              </a>
-            </div>
-          </div>
-        </div>
-        <AttachmentAnalysis attachment={attachment} isFinance={true} />
-      </div>
-    );
-  }
-
-  return <div className="attachment-entry">
-    {attachment.mime_type.startsWith("image/")
-      ? <div className="message-image-wrap"><a className="message-image" href={attachment.url} target="_blank" rel="noreferrer"><img src={attachment.url} alt={attachment.filename} loading="lazy" /><span>{attachment.filename}<ExternalLink size={13} /></span></a>{attachment.analysis_mode === "vision" ? <span className="attachment-mode-tag mode-vision"><Eye size={10} /> Vision IA</span> : attachment.analysis_mode === "ocr" ? <span className="attachment-mode-tag mode-ocr"><FileText size={10} /> Mistral OCR</span> : null}</div>
-      : isYoutube
-      ? <a className="document-link document-youtube-link" href={attachment.source_url || attachment.url} target="_blank" rel="noreferrer" title="Ouvrir la vidéo sur YouTube"><SquarePlay size={18} /><span>{attachment.filename}</span><ExternalLink size={13} /></a>
-      : isWeb
-      ? <a className="document-link document-web-link" href={attachment.source_url || attachment.url} target="_blank" rel="noreferrer" title="Consulter la page d'origine"><Globe2 size={18} /><span>{attachment.filename}</span><ExternalLink size={13} /></a>
-      : <a className="document-link" href={attachment.url} target="_blank" rel="noreferrer"><FileText size={18} /><span>{attachment.filename}</span>{attachment.analysis_mode === "ocr" ? <span className="attachment-mode-tag mode-ocr"><FileText size={10} /> Mistral OCR</span> : null}<ExternalLink size={13} /></a>}
-    <AttachmentAnalysis attachment={attachment} onYoutubeAction={onYoutubeAction} actionDisabled={actionDisabled} />
-  </div>;
 }
 
 function extractFollowUpQuestions(markdown: string): { cleanMarkdown: string; questions: string[] } {
@@ -1718,6 +1384,15 @@ export function ChatApp() {
   const [urlInputValue, setUrlInputValue] = useState("");
   const [urlLoading, setUrlLoading] = useState(false);
   const [urlError, setUrlError] = useState("");
+  const [videoLibraryOpen, setVideoLibraryOpen] = useState(false);
+  const [quitAppModalOpen, setQuitAppModalOpen] = useState(false);
+  const [savedVideosCount, setSavedVideosCount] = useState(0);
+  const [autoOpenTranscriptId, setAutoOpenTranscriptId] = useState<string | null>(null);
+  const pendingVideoSummarySaveRef = useRef<{
+    savedVideoId: string;
+    action: string;
+    prompt: string;
+  } | null>(null);
   const streamControllersRef = useRef<Map<string, AbortController>>(new Map());
   const streamingDeltasRef = useRef<Map<string, { assistantId: string; userMessage: Message; text: string; thought?: string; status: string }>>(new Map());
   const conversationIdRef = useRef<string | null>(null);
@@ -2627,9 +2302,8 @@ export function ChatApp() {
     }
   }
 
-  async function handleAttachUrl(event?: FormEvent) {
-    event?.preventDefault();
-    const clean = urlInputValue.trim();
+  async function handleAttachUrl(payload: UrlImportSubmitPayload) {
+    const clean = payload.url.trim();
     if (!clean) return;
     if (!/^https?:\/\//i.test(clean)) {
       setUrlError("Veuillez saisir une adresse web valide commençant par http:// ou https://");
@@ -2642,10 +2316,58 @@ export function ChatApp() {
     setUrlLoading(true);
     setUrlError("");
     try {
-      const attached = await attachUrl(clean);
-      setAttachments(old => [...old, attached]);
+      const attached = await attachUrl(clean, payload.saveToLibrary);
+      const nextFiles = [...attachments, attached];
       setUrlInputValue("");
       setShowUrlModal(false);
+      if (attached.youtube_meta?.saved_video_id) {
+        void fetchSavedVideos()
+          .then((list) => setSavedVideosCount(list.length))
+          .catch(() => undefined);
+      }
+
+      if (payload.action === "attach_only") {
+        setAttachments(nextFiles);
+        if (payload.openTranscriptAfterImport) {
+          setAutoOpenTranscriptId(attached.id);
+        }
+        return;
+      }
+
+      const detectedYoutube =
+        isYoutubeUrl(clean) ||
+        attached.filename.startsWith("🎬") ||
+        attached.mime_type.includes("youtube");
+      const prompt = buildYoutubeActionPrompt(payload.action, attached.filename, {
+        customPrompt: payload.customPrompt,
+        isYoutube: detectedYoutube,
+      });
+
+      if (working || isCurrentStreaming) {
+        setAttachments(nextFiles);
+        setDraft(prompt);
+        return;
+      }
+
+      if (attached.youtube_meta?.saved_video_id) {
+        pendingVideoSummarySaveRef.current = {
+          savedVideoId: attached.youtube_meta.saved_video_id,
+          action: payload.action,
+          prompt,
+        };
+      }
+      void send(
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        prompt,
+        nextFiles,
+      );
     } catch (err) {
       setUrlError(errorMessage(err));
     } finally {
@@ -2654,11 +2376,14 @@ export function ChatApp() {
   }
 
   function handleYoutubeTranscriptAction(attachment: Attachment, action: YoutubeTranscriptAction) {
-    const cleanTitle = attachment.filename.replace(/^🎬\s*/, "").trim();
-    const prompt =
-      action === "summarize"
-        ? `Résume de façon claire, structurée et fidèle l'intégralité de la vidéo « ${cleanTitle} » : synthèse globale, points clés organisés par thème, exemples ou chiffres marquants et repères temporels [MM:SS].`
-        : `Fais une analyse approfondie et critique de l'intégralité de la vidéo « ${cleanTitle} » : thèse centrale et structure de l'argumentation, points forts et preuves avancées, nuances, limites ou angles morts, et enseignements concrets à retenir (avec repères temporels [MM:SS]).`;
+    const prompt = buildYoutubeActionPrompt(action, attachment.filename, { isYoutube: true });
+    if (attachment.youtube_meta?.saved_video_id) {
+      pendingVideoSummarySaveRef.current = {
+        savedVideoId: attachment.youtube_meta.saved_video_id,
+        action,
+        prompt,
+      };
+    }
     const isPending = attachments.some(item => item.id === attachment.id);
     void send(
       undefined,
@@ -2974,6 +2699,16 @@ export function ChatApp() {
           } else if (event.type === "done") {
             setResearchRuns(old => old[assistantId] ? { ...old, [assistantId]: { ...old[assistantId], state: "completed" } } : old);
             streamingDeltasRef.current.delete(activeId!);
+            const pendingVidSave = pendingVideoSummarySaveRef.current;
+            if (pendingVidSave && event.data.message?.content) {
+              pendingVideoSummarySaveRef.current = null;
+              void updateSavedVideo(pendingVidSave.savedVideoId, {
+                summary_markdown: event.data.message.content,
+                summary_action: pendingVidSave.action,
+                summary_model: customModel || model || "",
+                summary_prompt: pendingVidSave.prompt,
+              }).catch(() => undefined);
+            }
             if (conversationIdRef.current === activeId) {
               setConversation(old => (old && old.id === activeId ? {
                 ...event.data.conversation,
@@ -3583,6 +3318,7 @@ export function ChatApp() {
               <Users size={16} />
             </IconButton>
             {user.is_admin && <IconButton label="Gérer les utilisateurs" onClick={() => setAdminOpen(true)}><Shield size={16} /></IconButton>}
+            {user.is_admin && <IconButton label="Quitter proprement l’application (sauvegarder les BDDs)" onClick={() => setQuitAppModalOpen(true)} className="profile-logout-btn"><Power size={16} /></IconButton>}
             <IconButton label="Se déconnecter (retour au login)" onClick={() => void logout()} className="profile-logout-btn"><LogOut size={16} /></IconButton>
           </div>
         </div>
@@ -4364,7 +4100,7 @@ export function ChatApp() {
                 const isWeb = item.mime_type.startsWith("text/html") || !!item.source_url || item.filename.startsWith("🌐");
                 const isVision = item.analysis_mode === "vision";
                 const isOcr = item.analysis_mode === "ocr";
-                return <div className="pending-entry" key={item.id}><div className="pending-file">{isYoutube ? <SquarePlay size={15} color="#dc2626" /> : isFinance ? <TrendingUp size={15} color="#059669" /> : isWeb ? <Globe2 size={15} /> : isVision ? <Eye size={15} color="#7c3aed" /> : <FileText size={15} />}<span>{item.filename}</span>{isVision ? <span className="attachment-mode-tag mode-vision"><Eye size={10} /> Vision IA</span> : isOcr ? <span className="attachment-mode-tag mode-ocr"><FileText size={10} /> Mistral OCR</span> : null}<IconButton label={`Retirer ${item.filename}`} disabled={working} onClick={() => void removeAttachment(item.id)}><X size={13} /></IconButton></div><AttachmentAnalysis attachment={item} onYoutubeAction={handleYoutubeTranscriptAction} actionDisabled={working || isCurrentStreaming} /></div>;
+                return <div className="pending-entry" key={item.id}><div className="pending-file">{isYoutube ? <SquarePlay size={15} color="#dc2626" /> : isFinance ? <TrendingUp size={15} color="#059669" /> : isWeb ? <Globe2 size={15} /> : isVision ? <Eye size={15} color="#7c3aed" /> : <FileText size={15} />}<span>{item.filename}</span>{isVision ? <span className="attachment-mode-tag mode-vision"><Eye size={10} /> Vision IA</span> : isOcr ? <span className="attachment-mode-tag mode-ocr"><FileText size={10} /> Mistral OCR</span> : null}<IconButton label={`Retirer ${item.filename}`} disabled={working} onClick={() => void removeAttachment(item.id)}><X size={13} /></IconButton></div><AttachmentAnalysis attachment={item} onYoutubeAction={handleYoutubeTranscriptAction} actionDisabled={working || isCurrentStreaming} autoOpenModal={autoOpenTranscriptId === item.id} onAutoOpened={() => setAutoOpenTranscriptId(null)} /></div>;
               })}</div>}
               <label className="sr-only" htmlFor="composer">Votre message</label>
               <textarea
@@ -4658,14 +4394,41 @@ export function ChatApp() {
         setVisualDocModalTab("library");
         setVisualDocModalOpen(true);
       }}
+      onOpenVideos={() => setVideoLibraryOpen(true)}
       canvasFilesCount={canvasFiles.length}
       visualDocsCount={activeVisualDocs.length}
+      savedVideosCount={savedVideosCount}
       isMultiAgentActive={multiAgentActive}
       autoMemoryEnabled={autoMemoryActive}
       onToggleAutoMemory={() => void toggleAutoMemory()}
     />
     {dialog && <div className="modal-backdrop" onClick={event => { if (event.target === event.currentTarget && !working) setDialog(null); }}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="dialog-title" onKeyDown={event => { if (event.key === "Escape" && !working) setDialog(null); if (event.key === "Tab") { const elements = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled)')); if (!elements.length) return; const first = elements[0]; const last = elements[elements.length - 1]; if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); } else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); } } }}><form onSubmit={event => void submitDialog(event)}><div className="modal-header"><span className="modal-icon">{dialog.type === "delete" ? <Trash2 size={20} /> : <Pencil size={20} />}</span><IconButton label="Fermer" disabled={working} onClick={() => setDialog(null)}><X size={18} /></IconButton></div><h2 id="dialog-title">{dialog.type === "delete" ? "Supprimer cette conversation ?" : "Organiser la discussion"}</h2>{dialog.type === "delete" ? <p>« {dialog.conversation.title} » et ses messages seront supprimés. Cette action est définitive.</p> : <div className="modal-fields"><div className="modal-field-header"><label htmlFor="rename-input">Titre de la conversation</label><button type="button" className="modal-ai-generate-btn" disabled={working} onClick={() => void classifyConversation(dialog.conversation.id, true)} title="Générer titre, thème et mots-clés avec Mistral Small">{busy === "classify" ? <LoaderCircle size={12} className="spin" /> : <WandSparkles size={12} />}<span>Générer en auto (IA)</span></button></div><input id="rename-input" value={renameValue} onChange={event => setRenameValue(event.target.value)} maxLength={200} autoFocus disabled={working} /><label htmlFor="theme-select">Thème</label><select id="theme-select" className="modal-select" value={renameTheme} onChange={event => setRenameTheme(event.target.value)} disabled={working}>{availableThemes.map(t => <option key={t} value={t}>{t}</option>)}</select><label htmlFor="keywords-input">Mots-clés (2 ou 3, séparés par des virgules)</label><input id="keywords-input" value={renameKeywords} onChange={event => setRenameKeywords(event.target.value)} placeholder="ex. santé, sommeil, récupération" maxLength={160} disabled={working} /></div>}<div className="modal-actions"><button type="button" className="secondary-button" disabled={working} onClick={() => setDialog(null)}>Annuler</button><button type="submit" className={dialog.type === "delete" ? "danger-button" : "primary-button"} disabled={working || (dialog.type === "rename" && !renameValue.trim())}>{working ? <LoaderCircle className="spin" size={15} /> : null}{dialog.type === "delete" ? "Supprimer" : "Enregistrer"}</button></div></form></section></div>}
-    {showUrlModal && <div className="modal-backdrop" onClick={event => { if (event.target === event.currentTarget && !urlLoading) setShowUrlModal(false); }}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="url-dialog-title" onKeyDown={event => { if (event.key === "Escape" && !urlLoading) setShowUrlModal(false); }}><form onSubmit={event => void handleAttachUrl(event)}><div className="modal-header"><span className="modal-icon" style={{ background: "#fef2f2", color: "#dc2626" }}><SquarePlay size={20} /></span><IconButton label="Fermer" disabled={urlLoading} onClick={() => setShowUrlModal(false)}><X size={18} /></IconButton></div><h2 id="url-dialog-title">Analyser un lien web ou YouTube</h2><p>Entrez l’adresse d’un article, d’une page web ou d’une vidéo YouTube. Pour YouTube, les propos tenus dans la vidéo seront transcrits et analysés par l’assistant.</p><div className="modal-fields"><label htmlFor="url-input">Adresse URL</label><input id="url-input" type="url" value={urlInputValue} onChange={event => setUrlInputValue(event.target.value)} placeholder="https://exemple.fr/article ou https://youtu.be/..." autoFocus disabled={urlLoading} required /></div>{urlError && <div className="url-error-msg" role="alert"><CircleAlert size={14} /><span>{urlError}</span></div>}<div className="modal-actions"><button type="button" className="secondary-button" disabled={urlLoading} onClick={() => setShowUrlModal(false)}>Annuler</button><button type="submit" className="primary-button" disabled={urlLoading || !urlInputValue.trim()} style={{ background: "linear-gradient(135deg, #dc2626 0%, #b91c1c 100%)" }}>{urlLoading ? <LoaderCircle className="spin" size={15} /> : null}{urlLoading ? "Extraction en cours…" : "Extraire et joindre"}</button></div></form></section></div>}
+    <ChatUrlAttachModal
+      open={showUrlModal}
+      loading={urlLoading}
+      urlValue={urlInputValue}
+      error={urlError}
+      savedVideosCount={savedVideosCount}
+      onChangeUrl={setUrlInputValue}
+      onClose={() => setShowUrlModal(false)}
+      onSubmit={payload => void handleAttachUrl(payload)}
+      onOpenVideoLibrary={() => setVideoLibraryOpen(true)}
+    />
+
+    <VideoLibraryModal
+      open={videoLibraryOpen}
+      defaultModel={model}
+      onClose={() => setVideoLibraryOpen(false)}
+      onAttachToChat={(att) => {
+        setAttachments(old => (old.length >= 5 ? old : [...old, att]));
+      }}
+      onCountChange={setSavedVideosCount}
+    />
+
+    <QuitAppModal
+      open={quitAppModalOpen}
+      onClose={() => setQuitAppModalOpen(false)}
+    />
 
     <TopicModal
       open={topicModalOpen}

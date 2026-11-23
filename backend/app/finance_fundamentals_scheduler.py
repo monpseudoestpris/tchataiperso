@@ -107,11 +107,15 @@ async def compute_budget(settings: Settings) -> dict[str, Any]:
 
 def _source_symbols(db_path, prefs: dict[str, Any], source: str) -> list[str]:
     if source == "watchlists":
+        if not prefs.get("fundamentals_watchlists", True):
+            return []
         return [
             _norm_sym(str(it.get("eod_ticker") or it.get("symbol") or ""))
             for it in list_warehouse_watchlist_items_for_sync(db_path)
         ]
     if source == "indices":
+        if not prefs.get("fundamentals_indices", True):
+            return []
         from .finance_indices import INDEX_DEFINITIONS
 
         codes = [str(c).upper() for c in (prefs.get("index_codes") or [])]

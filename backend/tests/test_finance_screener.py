@@ -543,3 +543,183 @@ def test_screener_lists_all_exchange_catalog_stocks_without_loading_prices(tmp_p
     assert paris["missing_data_count"] == 2
     missing = query_screener(settings, exchange="PA", only_missing_data=True, limit=50)
     assert {r["symbol"] for r in missing["items"]} == {"ALO.PA", "VIRP.PA"}
+
+
+def test_screener_etf_counts_by_exchange_independent_seeding_and_bars_hydration(tmp_path: Path):
+    import sqlite3
+    from unittest.mock import AsyncMock, MagicMock, patch
+    import httpx
+    from tests.test_api import authenticated_client
+    from app.finance_warehouse import (
+        _INITIALIZED_PATHS,
+        get_etf_exchange_catalog_counts,
+        init_warehouse,
+        replace_exchange_symbols,
+        seed_etfs_from_exchange_catalog,
+        seed_screener_from_exchange_catalogs,
+    )
+
+    settings = Settings(
+        _env_file=None,
+        app_data_dir=tmp_path / "app_data",
+        finance_data_dir=tmp_path / "finance_data",
+        demo_mode=False,
+        eod_historical_data_key="test-key",
+    )
+    db_path = warehouse_db_path(settings)
+
+    # 1. Migration douce d'un ancien schéma sans colonne `asset_type`
+    legacy_db = tmp_path / "legacy_warehouse.db"
+    with sqlite3.connect(legacy_db) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE finance_instruments (
+                symbol TEXT PRIMARY KEY, eod_ticker TEXT, yahoo_symbol TEXT, short_name TEXT, long_name TEXT, updated_at TEXT
+            );
+            CREATE TABLE finance_exchange_symbols (
+                exchange_code TEXT NOT NULL, symbol TEXT NOT NULL, eod_ticker TEXT NOT NULL,
+                name TEXT NOT NULL, isin TEXT, fund_family TEXT, country TEXT, currency TEXT, type TEXT, fetched_at REAL NOT NULL,
+                PRIMARY KEY (exchange_code, symbol)
+            ) WITHOUT ROWID;
+            CREATE TABLE finance_user_watchlist_items (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, list_id TEXT NOT NULL, symbol TEXT NOT NULL, name TEXT NOT NULL, position INTEGER DEFAULT 0);
+            CREATE TABLE finance_sync_preferences (pref_key TEXT PRIMARY KEY, config_json TEXT NOT NULL, last_run_at TEXT, last_status_json TEXT, updated_at TEXT NOT NULL);
+            CREATE TABLE finance_screener_snapshots (
+                symbol TEXT PRIMARY KEY, eod_ticker TEXT, yahoo_symbol TEXT, name TEXT NOT NULL DEFAULT '',
+                exchange TEXT NOT NULL DEFAULT '', country TEXT NOT NULL DEFAULT '', market_zone TEXT NOT NULL DEFAULT '',
+                currency TEXT NOT NULL DEFAULT '', sector TEXT NOT NULL DEFAULT '', industry TEXT NOT NULL DEFAULT '',
+                cap_category TEXT NOT NULL DEFAULT '', indices_csv TEXT NOT NULL DEFAULT '',
+                market_cap REAL, pe_ttm REAL, roic_pct REAL, ih_score REAL, piotroski_f REAL, rsi_14 REAL,
+                computed_at TEXT NOT NULL
+            );
+            INSERT INTO finance_exchange_symbols VALUES ('PA', 'CW8', 'CW8.PA', 'Amundi MSCI World', NULL, NULL, 'France', 'EUR', 'ETF', 1700000000.0);
+            INSERT INTO finance_screener_snapshots (symbol, eod_ticker, name, exchange, computed_at)
+            VALUES ('CW8.PA', 'CW8.PA', 'Amundi MSCI World', 'PA', '2026-11-23T00:00:00Z');
+            """
+        )
+    _INITIALIZED_PATHS.discard(str(legacy_db))
+    init_warehouse(legacy_db)
+    with sqlite3.connect(legacy_db) as conn:
+        migrated_type = conn.execute("SELECT asset_type FROM finance_screener_snapshots WHERE symbol = 'CW8.PA'").fetchone()[0]
+    assert migrated_type == "etf"
+
+    # 2. Catalogues PA et XETRA déjà synchronisés, US pas encore synchronisé
+    replace_exchange_symbols(
+        db_path,
+        "PA",
+        [
+            {"symbol": "AI", "eod_ticker": "AI.PA", "name": "Air Liquide", "country": "France", "currency": "EUR", "type": "Common Stock"},
+            {"symbol": "CW8", "eod_ticker": "CW8.PA", "name": "Amundi MSCI World UCITS ETF", "country": "France", "currency": "EUR", "type": "ETF"},
+            {"symbol": "EWLD", "eod_ticker": "EWLD.PA", "name": "Lyxor MSCI World UCITS ETF", "country": "France", "currency": "EUR", "type": "ETF"},
+        ],
+    )
+    replace_exchange_symbols(
+        db_path,
+        "XETRA",
+        [
+            {"symbol": "EXS1", "eod_ticker": "EXS1.XETRA", "name": "iShares Core DAX UCITS ETF", "country": "Germany", "currency": "EUR", "type": "ETF"},
+        ],
+    )
+    seed_screener_from_exchange_catalogs(db_path)
+
+    counts_before = {c["code"]: c for c in get_etf_exchange_catalog_counts(db_path)}
+    assert counts_before["PA"]["catalog_synced"] is True
+    assert counts_before["PA"]["etf_catalog_count"] == 2
+    assert counts_before["PA"]["etf_in_screener_count"] == 0
+    assert counts_before["XETRA"]["etf_catalog_count"] == 1
+    assert counts_before["US"]["catalog_synced"] is False
+    assert counts_before["US"]["etf_catalog_count"] == 0
+
+    # 3. Chargement indépendant de PA uniquement (XETRA reste non chargé dans le Screener)
+    seeded_pa = seed_etfs_from_exchange_catalog(db_path, ["PA"])
+    assert seeded_pa == {"PA": 2}
+
+    etf_only = query_screener(settings, asset_type="etf")
+    assert etf_only["total"] == 2
+    assert {r["symbol"] for r in etf_only["items"]} == {"CW8.PA", "EWLD.PA"}
+    assert all(r["asset_type"] == "etf" and r["exchange"] == "PA" for r in etf_only["items"])
+    assert etf_only["coverage"]["stock_count"] == 1
+    assert etf_only["coverage"]["etf_count"] == 2
+
+    stock_only = query_screener(settings, asset_type="stock", exchange="PA")
+    assert [r["symbol"] for r in stock_only["items"]] == ["AI.PA"]
+
+    # 4. Endpoints API : compter une bourse avant chargement (seed_screener=False), puis charger (seed_screener=True)
+    us_catalog_payload = [
+        {"Code": "SPY", "Name": "SPDR S&P 500 ETF Trust", "Country": "USA", "Currency": "USD", "Type": "ETF"},
+        {"Code": "QQQ", "Name": "Invesco QQQ Trust", "Country": "USA", "Currency": "USD", "Type": "ETF"},
+        {"Code": "AAPL", "Name": "Apple Inc.", "Country": "USA", "Currency": "USD", "Type": "Common Stock"},
+    ]
+    req = httpx.Request("GET", "https://eodhd.com/api/exchange-symbol-list/US")
+    fake_client = MagicMock()
+    fake_client.__aenter__ = AsyncMock(return_value=fake_client)
+    fake_client.__aexit__ = AsyncMock(return_value=None)
+    fake_client.get = AsyncMock(return_value=httpx.Response(200, request=req, json=us_catalog_payload))
+
+    with authenticated_client(settings) as client:
+        res_list = client.get("/api/finance/screener/etf-exchanges")
+        assert res_list.status_code == 200
+        ex_map = {e["code"]: e for e in res_list.json()["exchanges"]}
+        assert ex_map["PA"]["etf_in_screener_count"] == 2
+        assert ex_map["XETRA"]["etf_in_screener_count"] == 0
+
+        # Étape A : compter les ETFs de US sans rien ajouter au Screener
+        with patch("app.finance_funds.httpx.AsyncClient", return_value=fake_client):
+            res_count = client.post(
+                "/api/finance/screener/etf-exchanges/load",
+                json={"exchange": "US", "seed_screener": False},
+            )
+        assert res_count.status_code == 200
+        count_body = res_count.json()
+        assert count_body["seeded_count"] == 0
+        assert count_body["exchange_info"]["catalog_synced"] is True
+        assert count_body["exchange_info"]["etf_catalog_count"] == 2
+        assert count_body["exchange_info"]["etf_in_screener_count"] == 0
+        assert query_screener(settings, asset_type="etf", exchange="US")["total"] == 0
+
+        # Étape B : charger les 2 ETFs US dans le Screener (0 appel réseau)
+        res_seed_us = client.post(
+            "/api/finance/screener/etf-exchanges/load",
+            json={"exchange": "US", "seed_screener": True},
+        )
+        assert res_seed_us.status_code == 200
+        seed_body = res_seed_us.json()
+        assert seed_body["seeded_count"] == 2
+        assert seed_body["exchange_info"]["etf_in_screener_count"] == 2
+
+        us_etfs = client.post(
+            "/api/finance/screener/query",
+            json={"asset_type": "etf", "exchange": "US"},
+        )
+        assert us_etfs.status_code == 200
+        us_body = us_etfs.json()
+        assert us_body["total"] == 2
+        assert {r["symbol"] for r in us_body["items"]} == {"QQQ.US", "SPY.US"}
+
+        # 5. Hydratation EOD légère (1 call / ETF) pour PA sans écraser les noms du catalogue
+        bars_240 = _make_bars(240, 450.0, 0.35)
+        with patch("app.finance_dossier._fetch_eodhd_bars_range", new=AsyncMock(return_value=bars_240)):
+            res_hyd = client.post(
+                "/api/finance/screener/hydrate-bars",
+                json={
+                    "screener_filters": {"asset_type": "etf", "exchange": "PA"},
+                    "batch_size": 50,
+                    "background": False,
+                },
+            )
+        assert res_hyd.status_code == 200
+        hyd_body = res_hyd.json()
+        assert hyd_body["targeted"] == 2
+        assert hyd_body["loaded"] == 2
+        assert hyd_body["calls"] == 2
+
+    pa_after = query_screener(settings, asset_type="etf", exchange="PA")
+    assert pa_after["total"] == 2
+    assert pa_after["missing_data_count"] == 0
+    cw8 = next(r for r in pa_after["items"] if r["symbol"] == "CW8.PA")
+    assert cw8["name"] == "Amundi MSCI World UCITS ETF"
+    assert cw8["price"] is not None
+    assert cw8["rsi_14"] is not None
+    assert cw8["asset_type"] == "etf"
+    counts_after = {c["code"]: c for c in get_etf_exchange_catalog_counts(db_path)}
+    assert counts_after["PA"]["etf_with_data_count"] == 2
+    assert counts_after["US"]["etf_with_data_count"] == 0

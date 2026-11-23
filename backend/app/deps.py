@@ -86,10 +86,25 @@ def check_model(settings: Settings, model: str) -> dict:
     return found
 
 
+_MAX_CONVERSATION_LOCKS = 512
+
+
+def _prune_idle_locks(locks: dict[str, asyncio.Lock], keep_key: str) -> None:
+    """Évite la croissance non bornée en RAM de `app.state.locks` en purgeant les verrous inactifs."""
+    if len(locks) < _MAX_CONVERSATION_LOCKS:
+        return
+    idle_keys = [key for key, item in locks.items() if key != keep_key and not item.locked()]
+    for key in idle_keys:
+        locks.pop(key, None)
+
+
 def claim(request: Request, user_id: str, conversation_id: str) -> asyncio.Lock:
     if not hasattr(request.app.state, "locks"):
         request.app.state.locks = {}
-    lock = request.app.state.locks.setdefault(f"{user_id}:{conversation_id}", asyncio.Lock())
+    locks: dict[str, asyncio.Lock] = request.app.state.locks
+    lock_key = f"{user_id}:{conversation_id}"
+    _prune_idle_locks(locks, lock_key)
+    lock = locks.setdefault(lock_key, asyncio.Lock())
     if lock.locked():
         raise HTTPException(409, "Une réponse est déjà en cours dans cette conversation")
     return lock

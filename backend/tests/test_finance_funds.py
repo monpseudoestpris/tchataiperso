@@ -34,6 +34,7 @@ from app.main import app
 
 def _make_settings(tmp_path: Path, *, eod_key: str = "test-eod-key") -> Settings:
     return Settings(
+        _env_file=None,
         app_data_dir=tmp_path,
         finance_data_dir=tmp_path / "finance",
         demo_mode=False,
@@ -434,6 +435,8 @@ def test_configurable_daily_sync_preferences_defaults_indices_and_selective_run(
                 "enabled": True,
                 "principal_indices": True,
                 "indx_catalog": False,
+                "major_indices_constituents": False,
+                "screener_fundamentals": False,
                 "index_codes": ["cac40"],
                 "watchlists": False,
                 "exchanges": ["pa"],
@@ -475,7 +478,7 @@ def test_configurable_daily_sync_preferences_defaults_indices_and_selective_run(
             patch("app.finance_indices.get_index_performances", new=AsyncMock(return_value={"summary": {"loaded_count": 40, "from_cache_count": 40, "fetched_count": 0}})),
             patch("app.finance_funds.httpx.AsyncClient", return_value=fake_client),
         ):
-            res_run = client.post("/api/finance/sync-preferences/run")
+            res_run = client.post("/api/finance/sync-preferences/run?background=false")
         assert res_run.status_code == 200
         run_body = res_run.json()
         summary = run_body["summary"]

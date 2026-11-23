@@ -56,51 +56,144 @@ BLOCK_TAGS = {
 }
 
 
-def is_private_or_local_host(hostname: str) -> bool:
+_REDIRECT_STATUS_CODES = frozenset({301, 302, 303, 307, 308})
+
+
+class ResponseTooLargeError(ValueError):
+    """Raised when an external HTTP response exceeds the allowed byte ceiling."""
+
+
+class RedirectLimitError(ValueError):
+    """Raised when an external HTTP fetch exceeds the maximum redirect hops."""
+
+
+def is_private_or_local_host(hostname: str, *, resolve_dns: bool = True) -> bool:
     """Check if a hostname or IP points to a private, loopback, or reserved network."""
-    host_lower = hostname.strip().lower()
-    if host_lower in {"localhost", "localhost.localdomain", "broadcasthost"} or host_lower.endswith((".local", ".internal", ".localhost")):
+    host_lower = hostname.strip().rstrip(".").lower()
+    if not host_lower:
+        return True
+    if host_lower in {"localhost", "localhost.localdomain", "broadcasthost"} or host_lower.endswith(
+        (".local", ".internal", ".localhost")
+    ):
         return True
     try:
         ip = ipaddress.ip_address(host_lower)
-        return ip.is_private or ip.is_loopback or ip.is_reserved or ip.is_link_local or ip.is_multicast
+        if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+            ip = ip.ipv4_mapped
+        return (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_reserved
+            or ip.is_link_local
+            or ip.is_multicast
+            or ip.is_unspecified
+        )
     except ValueError:
         pass
+
+    if not resolve_dns:
+        return False
 
     try:
         addrinfo = socket.getaddrinfo(host_lower, None)
         for _, _, _, _, sockaddr in addrinfo:
             ip = ipaddress.ip_address(sockaddr[0])
-            if ip.is_private or ip.is_loopback or ip.is_reserved or ip.is_link_local or ip.is_multicast:
+            if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+                ip = ip.ipv4_mapped
+            if (
+                ip.is_private
+                or ip.is_loopback
+                or ip.is_reserved
+                or ip.is_link_local
+                or ip.is_multicast
+                or ip.is_unspecified
+            ):
                 return True
     except socket.gaierror:
         # Host resolution failed or offline; will fail connection if invalid
         pass
-    except Exception:
+    except OSError:
         return True
     return False
 
 
-def validate_web_url(url: str, allow_private: bool = False) -> urllib.parse.ParseResult:
+def validate_web_url(
+    url: str,
+    allow_private: bool = False,
+    *,
+    resolve_dns: bool = True,
+    allowed_schemes: tuple[str, ...] = ("http", "https"),
+) -> urllib.parse.ParseResult:
     """Validate that the URL is a safe, publicly reachable HTTP/HTTPS address."""
-    clean_url = url.strip()
+    clean_url = (url or "").strip()
     if not clean_url:
         raise HTTPException(422, "L'adresse URL ne peut pas être vide.")
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in clean_url):
+        raise HTTPException(422, "Adresse URL invalide.")
     try:
         parsed = urllib.parse.urlparse(clean_url)
-    except Exception as exc:
+    except ValueError as exc:
         raise HTTPException(422, "Adresse URL invalide.") from exc
 
-    if parsed.scheme.lower() not in {"http", "https"}:
+    if parsed.scheme.lower() not in allowed_schemes:
         raise HTTPException(422, "Seuls les protocoles http:// et https:// sont autorisés.")
 
-    if not parsed.netloc or not parsed.hostname:
+    if not parsed.netloc or not parsed.hostname or parsed.username or parsed.password:
         raise HTTPException(422, "L'adresse URL doit comporter un nom de domaine valide.")
 
-    if not allow_private and is_private_or_local_host(parsed.hostname):
+    if not allow_private and is_private_or_local_host(parsed.hostname, resolve_dns=resolve_dns):
         raise HTTPException(422, "Les adresses du réseau local ou privé ne sont pas autorisées pour des raisons de sécurité.")
 
     return parsed
+
+
+async def safe_stream_get(
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    max_bytes: int,
+    max_redirects: int = 5,
+    allow_private: bool = False,
+    resolve_dns: bool = True,
+    allowed_schemes: tuple[str, ...] = ("http", "https"),
+) -> tuple[str, int, httpx.Headers, bytes, str | None]:
+    """Fetch an external URL with hop-by-hop SSRF validation before connecting and a strict byte cap."""
+    current_url = validate_web_url(
+        url,
+        allow_private=allow_private,
+        resolve_dns=resolve_dns,
+        allowed_schemes=allowed_schemes,
+    ).geturl()
+
+    for hop in range(max_redirects + 1):
+        async with client.stream("GET", current_url, follow_redirects=False) as response:
+            location = response.headers.get("location")
+            if response.status_code in _REDIRECT_STATUS_CODES and location:
+                if hop >= max_redirects:
+                    raise RedirectLimitError("Trop de redirections HTTP.")
+                next_url = urllib.parse.urljoin(current_url, location.strip())
+                current_url = validate_web_url(
+                    next_url,
+                    allow_private=allow_private,
+                    resolve_dns=resolve_dns,
+                    allowed_schemes=allowed_schemes,
+                ).geturl()
+                continue
+
+            size_header = response.headers.get("content-length", "").strip()
+            if size_header.isdigit() and int(size_header) > max_bytes:
+                raise ResponseTooLargeError(f"La réponse dépasse la limite autorisée de {max_bytes} octets.")
+
+            buf = bytearray()
+            async for chunk in response.aiter_bytes():
+                if len(buf) + len(chunk) > max_bytes:
+                    raise ResponseTooLargeError(f"La réponse dépasse la limite autorisée de {max_bytes} octets.")
+                buf.extend(chunk)
+
+            final_url = str(response.url or current_url)
+            return final_url, response.status_code, response.headers, bytes(buf), response.encoding
+
+    raise RedirectLimitError("Trop de redirections HTTP.")
 
 
 class WebPageContentExtractor(HTMLParser):
@@ -240,29 +333,36 @@ async def fetch_and_parse_web_url(
         "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
     }
 
+    max_upload_mb = max(1, min(int(getattr(settings, "max_upload_mb", 40) or 40), 100))
+    max_bytes = max_upload_mb * 1024 * 1024
+
     try:
         async with httpx.AsyncClient(
             timeout=15.0,
-            follow_redirects=True,
-            max_redirects=5,
+            follow_redirects=False,
             headers=headers,
         ) as client:
-            response = await client.get(clean_url)
-            final_parsed = urllib.parse.urlparse(str(response.url))
-            if not allow_private and is_private_or_local_host(final_parsed.hostname or ""):
-                raise HTTPException(422, "Redirection vers un hôte local ou privé interdite.")
-            response.raise_for_status()
-            content = response.content
-            content_type = response.headers.get("content-type", "").lower()
+            final_url, status_code, resp_headers, content, resp_encoding = await safe_stream_get(
+                client,
+                clean_url,
+                max_bytes=max_bytes,
+                max_redirects=5,
+                allow_private=allow_private,
+            )
+            if status_code >= 400:
+                raise HTTPException(
+                    422, f"Le site {domain} a renvoyé une erreur HTTP {status_code}."
+                )
+            content_type = resp_headers.get("content-type", "").lower()
     except HTTPException:
         raise
+    except ResponseTooLargeError as exc:
+        raise HTTPException(413, f"La ressource web dépasse la limite autorisée de {max_upload_mb} Mo.") from exc
+    except RedirectLimitError as exc:
+        raise HTTPException(422, "Le site effectue trop de redirections.") from exc
     except httpx.TimeoutException as exc:
         raise HTTPException(504, f"Le site {domain} a mis trop de temps à répondre (délai dépassé).") from exc
-    except httpx.HTTPStatusError as exc:
-        raise HTTPException(
-            422, f"Le site {domain} a renvoyé une erreur HTTP {exc.response.status_code}."
-        ) from exc
-    except Exception as exc:
+    except httpx.HTTPError as exc:
         raise HTTPException(
             422, f"Impossible d'accéder au lien web ({type(exc).__name__}). Vérifiez l'adresse ou la connexion."
         ) from exc
@@ -282,13 +382,13 @@ async def fetch_and_parse_web_url(
         return filename, content, mime, extracted, extraction or {}
 
     # Handle HTML or text content
-    charset = response.encoding or "utf-8"
+    charset = resp_encoding or "utf-8"
     try:
         html_text = content.decode(charset, errors="replace")
-    except Exception:
+    except LookupError:
         html_text = content.decode("utf-8", errors="replace")
 
-    extractor = WebPageContentExtractor(base_url=str(response.url))
+    extractor = WebPageContentExtractor(base_url=final_url)
     extractor.feed(html_text)
     extracted_data = extractor.extract()
 

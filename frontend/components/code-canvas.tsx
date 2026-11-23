@@ -723,7 +723,7 @@ export function CodeCanvas({
             key={previewNonce}
             className="code-canvas-iframe"
             title="Aperçu de l'application Canvas"
-            sandbox="allow-scripts allow-forms allow-modals allow-same-origin allow-downloads"
+            sandbox="allow-scripts allow-forms allow-modals allow-downloads"
             srcDoc={previewHtml ?? ""}
           />
         </div>

@@ -167,6 +167,7 @@ INDEX_DEFINITIONS: list[dict[str, Any]] = [
         "eod_ticker": "PX4.INDX",
         "eod_alt_tickers": ["SBF120.INDX"],
         "yahoo_symbol": "^SBF120",
+        "nominal_count": 120,
         "description": "120 plus grandes valeurs françaises (CAC 40 + Next 20 + Mid 60)",
     },
     {
@@ -178,6 +179,7 @@ INDEX_DEFINITIONS: list[dict[str, Any]] = [
         "currency": "EUR",
         "eod_ticker": "CN20.INDX",
         "yahoo_symbol": "^CN20",
+        "nominal_count": 20,
         "description": "20 valeurs françaises suivant le CAC 40 (antichambre du CAC 40)",
     },
     {
@@ -189,6 +191,7 @@ INDEX_DEFINITIONS: list[dict[str, Any]] = [
         "currency": "EUR",
         "eod_ticker": "CACMD.INDX",
         "yahoo_symbol": "^CACMD",
+        "nominal_count": 60,
         "description": "60 valeurs moyennes françaises d'Euronext Paris",
     },
     {
@@ -200,6 +203,7 @@ INDEX_DEFINITIONS: list[dict[str, Any]] = [
         "currency": "USD",
         "eod_ticker": "RUT.INDX",
         "yahoo_symbol": "^RUT",
+        "nominal_count": 2000,
         "description": "2 000 petites et moyennes capitalisations américaines",
     },
     {
@@ -211,6 +215,7 @@ INDEX_DEFINITIONS: list[dict[str, Any]] = [
         "currency": "USD",
         "eod_ticker": "MID.INDX",
         "yahoo_symbol": "^MID",
+        "nominal_count": 400,
         "description": "400 valeurs américaines de moyenne capitalisation",
     },
     {
@@ -222,6 +227,7 @@ INDEX_DEFINITIONS: list[dict[str, Any]] = [
         "currency": "USD",
         "eod_ticker": "SML.INDX",
         "yahoo_symbol": "^SML",
+        "nominal_count": 600,
         "description": "600 petites capitalisations américaines rentables",
     },
     {
@@ -233,6 +239,7 @@ INDEX_DEFINITIONS: list[dict[str, Any]] = [
         "currency": "USD",
         "eod_ticker": "IXIC.INDX",
         "yahoo_symbol": "^IXIC",
+        "nominal_count": 3000,
         "description": "Indice global du marché Nasdaq",
     },
     {
@@ -245,6 +252,7 @@ INDEX_DEFINITIONS: list[dict[str, Any]] = [
         "eod_ticker": "MDAXI.INDX",
         "eod_alt_tickers": ["MDAX.INDX"],
         "yahoo_symbol": "^MDAXI",
+        "nominal_count": 50,
         "description": "50 moyennes capitalisations industrielles et tech allemandes",
     },
     {
@@ -257,6 +265,7 @@ INDEX_DEFINITIONS: list[dict[str, Any]] = [
         "eod_ticker": "TDXP.INDX",
         "eod_alt_tickers": ["TECDAX.INDX"],
         "yahoo_symbol": "^TECDAX",
+        "nominal_count": 30,
         "description": "30 principales valeurs technologiques allemandes",
     },
     {
@@ -268,6 +277,7 @@ INDEX_DEFINITIONS: list[dict[str, Any]] = [
         "currency": "GBP",
         "eod_ticker": "FTMC.INDX",
         "yahoo_symbol": "^FTMC",
+        "nominal_count": 250,
         "description": "250 moyennes capitalisations britanniques (LSE)",
     },
     {
@@ -280,6 +290,7 @@ INDEX_DEFINITIONS: list[dict[str, Any]] = [
         "eod_ticker": "STOXX.INDX",
         "eod_alt_tickers": ["SXXP.INDX"],
         "yahoo_symbol": "^STOXX",
+        "nominal_count": 600,
         "description": "600 grandes, moyennes et petites capitalisations européennes",
     },
     {
@@ -291,6 +302,7 @@ INDEX_DEFINITIONS: list[dict[str, Any]] = [
         "currency": "EUR",
         "eod_ticker": "AEX.INDX",
         "yahoo_symbol": "^AEX",
+        "nominal_count": 25,
         "description": "25 principales capitalisations d'Euronext Amsterdam",
     },
     {
@@ -303,6 +315,7 @@ INDEX_DEFINITIONS: list[dict[str, Any]] = [
         "eod_ticker": "BFX.INDX",
         "eod_alt_tickers": ["BEL20.INDX"],
         "yahoo_symbol": "^BFX",
+        "nominal_count": 20,
         "description": "20 valeurs phares d'Euronext Bruxelles",
     },
     {
@@ -314,6 +327,7 @@ INDEX_DEFINITIONS: list[dict[str, Any]] = [
         "currency": "EUR",
         "eod_ticker": "IBEX.INDX",
         "yahoo_symbol": "^IBEX",
+        "nominal_count": 35,
         "description": "35 principales valeurs de la Bourse de Madrid",
     },
     {
@@ -325,6 +339,7 @@ INDEX_DEFINITIONS: list[dict[str, Any]] = [
         "currency": "EUR",
         "eod_ticker": "FTSEMIB.INDX",
         "yahoo_symbol": "FTSEMIB.MI",
+        "nominal_count": 40,
         "description": "40 principales capitalisations de la Bourse de Milan",
     },
     {
@@ -336,6 +351,7 @@ INDEX_DEFINITIONS: list[dict[str, Any]] = [
         "currency": "EUR",
         "eod_ticker": "PSI20.INDX",
         "yahoo_symbol": "^PSI20",
+        "nominal_count": 20,
         "description": "Principal indice de la Bourse de Lisbonne",
     },
     {
@@ -348,6 +364,7 @@ INDEX_DEFINITIONS: list[dict[str, Any]] = [
         "eod_ticker": "OMX.INDX",
         "eod_alt_tickers": ["OMXS30.INDX"],
         "yahoo_symbol": "^OMX",
+        "nominal_count": 30,
         "description": "30 valeurs les plus échangées du Nasdaq Stockholm",
     },
     {
@@ -359,6 +376,7 @@ INDEX_DEFINITIONS: list[dict[str, Any]] = [
         "currency": "CAD",
         "eod_ticker": "GSPTSE.INDX",
         "yahoo_symbol": "^GSPTSE",
+        "nominal_count": 220,
         "description": "Indice principal de la Bourse de Toronto",
     },
     {
@@ -370,6 +388,7 @@ INDEX_DEFINITIONS: list[dict[str, Any]] = [
         "currency": "AUD",
         "eod_ticker": "AXJO.INDX",
         "yahoo_symbol": "^AXJO",
+        "nominal_count": 200,
         "description": "200 plus grandes sociétés cotées en Australie",
     },
     {
@@ -381,6 +400,7 @@ INDEX_DEFINITIONS: list[dict[str, Any]] = [
         "currency": "HKD",
         "eod_ticker": "HSI.INDX",
         "yahoo_symbol": "^HSI",
+        "nominal_count": 82,
         "description": "Principales valeurs de la Bourse de Hong Kong",
     },
     {
@@ -392,6 +412,7 @@ INDEX_DEFINITIONS: list[dict[str, Any]] = [
         "currency": "KRW",
         "eod_ticker": "KS11.INDX",
         "yahoo_symbol": "^KS11",
+        "nominal_count": 800,
         "description": "Indice composite de la Bourse de Séoul",
     },
     {
@@ -403,6 +424,7 @@ INDEX_DEFINITIONS: list[dict[str, Any]] = [
         "currency": "INR",
         "eod_ticker": "NSEI.INDX",
         "yahoo_symbol": "^NSEI",
+        "nominal_count": 50,
         "description": "50 principales capitalisations du National Stock Exchange (Inde)",
     },
 ]
@@ -1372,12 +1394,23 @@ async def list_principal_indices(
             for defn, q in zip(targets, results):
                 quotes_by_code[defn["code"]] = q
 
+    cached_syms = get_cached_symbols_set(db_path)
     items: list[dict[str, Any]] = []
     for defn in INDEX_DEFINITIONS:
         code = defn["code"]
         stored, _ = get_index_constituents(db_path, code, max_age_seconds=None)
         fallback = _FALLBACK_CONSTITUENTS.get(code, [])
-        count = len(stored) if stored else len(fallback)
+        count = len(stored) if stored else (len(fallback) or int(defn.get("nominal_count") or 0))
+        constituents_ref = stored or fallback
+        loaded_count = sum(
+            1
+            for r in constituents_ref
+            if (
+                str(r.get("eod_ticker") or "").strip().upper() in cached_syms
+                or str(r.get("symbol") or "").strip().upper() in cached_syms
+                or str(r.get("yahoo_symbol") or "").strip().upper() in cached_syms
+            )
+        )
         q = quotes_by_code.get(code, {})
         if not q and not include_quotes:
             snap = get_snapshot(db_path, defn["eod_ticker"], "index_quote", max_age_seconds=_INDEX_QUOTE_TTL_SEC)
@@ -1387,6 +1420,7 @@ async def list_principal_indices(
             {
                 **defn,
                 "constituents_count": count,
+                "loaded_count": loaded_count,
                 "last_price": q.get("last_price"),
                 "change_pct": q.get("change_pct"),
                 "as_of": q.get("as_of"),

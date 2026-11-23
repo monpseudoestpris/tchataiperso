@@ -129,11 +129,17 @@ def test_web_page_crud_and_lifecycle(client):
     assert res.status_code == 200
     assert res.json()["is_published"] is True
 
-    # 6. Public endpoint when published -> 200 with raw HTML and CSP
+    # 6. Public endpoint when published -> 200 with raw HTML, sandboxed CSP and storage shim
     res = client.get(f"/p/{token}")
     assert res.status_code == 200
     assert "text/html" in res.headers["content-type"]
-    assert "default-src 'none'" in res.headers["content-security-policy"]
+    csp = res.headers["content-security-policy"]
+    assert "default-src 'none'" in csp
+    assert "sandbox allow-scripts" in csp
+    assert "allow-same-origin" not in csp
+    assert "form-action 'none'" in csp
+    assert "frame-ancestors 'none'" in csp
+    assert "__clair_storage_shim__" in res.text
     assert "<!DOCTYPE html>" in res.text
 
     # Also test /api/pages/public/{token}

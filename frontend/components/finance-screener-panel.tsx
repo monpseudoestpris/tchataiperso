@@ -25,6 +25,7 @@ import {
   type FinanceSyncProgress,
   type FinanceWatchlistMeta,
   type PrincipalIndexInfo,
+  type ScreenerAssetType,
   type ScreenerCoverage,
   type ScreenerFieldMeta,
   type ScreenerPreset,
@@ -261,6 +262,7 @@ export function FinanceScreenerPanel({
   const [coverage, setCoverage] = useState<ScreenerCoverage | null>(null);
 
   const [timeframe, setTimeframe] = useState<ScreenerTimeframe>("day");
+  const [assetType, setAssetType] = useState<ScreenerAssetType>("");
   const [universeType, setUniverseType] = useState<"all" | "watchlist">("all");
   const [universeValue, setUniverseValue] = useState<string>("");
   const [indexFilter, setIndexFilter] = useState<string>("");
@@ -289,6 +291,59 @@ export function FinanceScreenerPanel({
   const [exporting, setExporting] = useState<boolean>(false);
   const [banner, setBanner] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [nameColWidth, setNameColWidth] = useState<number>(() => {
+    if (typeof window === "undefined") return 320;
+    try {
+      const saved = window.localStorage.getItem("clair:screener:nameColWidth");
+      if (saved) {
+        const parsed = Number(saved);
+        if (Number.isFinite(parsed) && parsed >= 200 && parsed <= 680) {
+          return parsed;
+        }
+      }
+    } catch {
+      /* ignore storage errors */
+    }
+    return 320;
+  });
+
+  function handleStartResizeNameCol(event: React.MouseEvent<HTMLSpanElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    const startX = event.clientX;
+    const startWidth = nameColWidth;
+    let latestWidth = startWidth;
+
+    function onMouseMove(moveEvent: MouseEvent) {
+      const delta = moveEvent.clientX - startX;
+      latestWidth = Math.max(200, Math.min(680, Math.round(startWidth + delta)));
+      setNameColWidth(latestWidth);
+    }
+
+    function onMouseUp() {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+      try {
+        window.localStorage.setItem("clair:screener:nameColWidth", String(latestWidth));
+      } catch {
+        /* ignore storage errors */
+      }
+    }
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+  }
+
+  function handleResetNameColWidth(event: React.MouseEvent<HTMLSpanElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    setNameColWidth(320);
+    try {
+      window.localStorage.removeItem("clair:screener:nameColWidth");
+    } catch {
+      /* ignore storage errors */
+    }
+  }
 
   const isBgRunning = Boolean(bgProgress?.is_running);
 
@@ -337,7 +392,8 @@ export function FinanceScreenerPanel({
   }, [coverage?.indices, indices]);
 
   const hasAnyActiveFilter = Boolean(
-    rules.length > 0 ||
+    assetType ||
+      rules.length > 0 ||
       searchText ||
       indexFilter ||
       marketZoneFilter ||
@@ -352,6 +408,7 @@ export function FinanceScreenerPanel({
   const queryRequest = useMemo<ScreenerQueryRequest>(
     () => ({
       timeframe,
+      asset_type: assetType,
       universe_type: universeType,
       universe_value: universeType === "all" ? null : universeValue || null,
       index_code: indexFilter,
@@ -371,6 +428,7 @@ export function FinanceScreenerPanel({
     }),
     [
       timeframe,
+      assetType,
       universeType,
       universeValue,
       indexFilter,
@@ -406,7 +464,7 @@ export function FinanceScreenerPanel({
   }, [queryRequest]);
 
   async function handleFillMissing() {
-    if (fillingMissing || isBgRunning || missingCount === 0) return;
+    if (fillingMissing || isBgRunning || missingCount === 0 || assetType === "etf") return;
     setFillingMissing(true);
     setError(null);
     setBanner(null);
@@ -497,6 +555,7 @@ export function FinanceScreenerPanel({
 
   function handleResetFilters() {
     setActivePresetId(null);
+    setAssetType("");
     setRules([]);
     setIndexFilter("");
     setMarketZoneFilter("");
@@ -727,6 +786,25 @@ export function FinanceScreenerPanel({
               </select>
             )}
 
+            <div className={styles.tfSelectorGroup} role="group" aria-label="Type d'instrument">
+              {(
+                [
+                  ["", "Tous", coverage?.total_snapshots ?? 0],
+                  ["stock", "Actions", coverage?.stock_count ?? 0],
+                  ["etf", "ETFs", coverage?.etf_count ?? 0],
+                ] as const
+              ).map(([typeVal, typeLabel, cnt]) => (
+                <button
+                  key={typeVal || "all"}
+                  type="button"
+                  className={`${styles.tfBtn} ${assetType === typeVal ? styles.tfBtnActive : ""}`}
+                  onClick={() => setAssetType(typeVal)}
+                >
+                  {typeLabel} ({cnt.toLocaleString("fr-FR")})
+                </button>
+              ))}
+            </div>
+
             <div className={styles.searchWrap}>
               <Search size={13} className={styles.searchIcon} />
               <input
@@ -748,19 +826,19 @@ export function FinanceScreenerPanel({
             </label>
           </div>
 
-          {onOpenDataSync && (
-            <div className={styles.syncActions}>
+          <div className={styles.syncActions}>
+            {onOpenDataSync && (
               <button
                 type="button"
                 className={styles.secondaryBtn}
                 onClick={onOpenDataSync}
-                title="Ouvrir l'onglet 5 · Données & Synchro (EODHD, synchro auto 24h, enrichissement et indexation)"
+                title="Ouvrir l'onglet 5 · Données & Synchro (Cours quotidiens, ETFs, Fondamentaux)"
               >
                 <Database size={13} />
                 <span>Données &amp; Synchro</span>
               </button>
-            </div>
-          )}
+            )}
+          </div>
         </div>
 
         {/* Filtres combinables : Indice, Zone boursière, Pays, Bourse, Secteur, Devise, Cap. */}
@@ -1185,36 +1263,55 @@ export function FinanceScreenerPanel({
           </div>
 
           {missingCount > 0 && (
-            <div className={styles.fillMissingGroup}>
-              <span className={styles.muted} title="Titres référencés depuis la liste de la bourse, sans cours ni fondamentaux chargés">
-                {missingCount} sans données
-              </span>
-              <select
-                className={styles.opSelect}
-                value={fillBatchSize}
-                onChange={e => setFillBatchSize(Number(e.target.value))}
-                aria-label="Nombre de titres à compléter"
-                disabled={fillingMissing || isBgRunning}
-              >
-                {[25, 50, 100].map(n => (
-                  <option key={n} value={n}>
-                    {n}
-                  </option>
-                ))}
-              </select>
-              <button
-                type="button"
-                className={styles.secondaryBtn}
-                onClick={() => void handleFillMissing()}
-                disabled={fillingMissing || isBgRunning}
-                title={`Charge en arrière-plan les cours et fondamentaux EODHD d'un lot de titres sans données correspondant aux filtres actuels (≈ ${(Math.min(fillBatchSize, missingCount) * 11).toLocaleString("fr-FR")} calls EODHD : 1 historique + 10 fondamentaux par titre)`}
-              >
-                {fillingMissing || isBgRunning ? <LoaderCircle size={13} className="spin" /> : <Database size={13} />}
-                <span>
-                  Compléter {Math.min(fillBatchSize, missingCount)} (≈ {(Math.min(fillBatchSize, missingCount) * 11).toLocaleString("fr-FR")} calls)
+            assetType === "etf" ? (
+              <div className={styles.fillMissingGroup}>
+                <span className={styles.muted} title="ETFs référencés sans cours chargés">
+                  {missingCount} ETF(s) sans cours
                 </span>
-              </button>
-            </div>
+                {onOpenDataSync && (
+                  <button
+                    type="button"
+                    className={styles.secondaryBtn}
+                    onClick={onOpenDataSync}
+                    title="Ouvrir l'onglet 5 · Données & Synchro pour charger les cours des ETFs"
+                  >
+                    <Database size={13} />
+                    <span>Charger dans Données &amp; Synchro</span>
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className={styles.fillMissingGroup}>
+                <span className={styles.muted} title="Titres référencés depuis la liste de la bourse, sans cours chargés">
+                  {missingCount} sans données
+                </span>
+                <select
+                  className={styles.opSelect}
+                  value={fillBatchSize}
+                  onChange={e => setFillBatchSize(Number(e.target.value))}
+                  aria-label="Nombre de titres à compléter"
+                  disabled={fillingMissing || isBgRunning}
+                >
+                  {[25, 50, 100].map(n => (
+                    <option key={n} value={n}>
+                      {n}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className={styles.secondaryBtn}
+                  onClick={() => void handleFillMissing()}
+                  disabled={fillingMissing || isBgRunning}
+                  title={`Charge en arrière-plan les cours et fondamentaux EODHD d'un lot de titres sans données correspondant aux filtres actuels (≈ ${(Math.min(fillBatchSize, missingCount) * 11).toLocaleString("fr-FR")} calls EODHD : 1 historique + 10 fondamentaux par titre)`}
+                >
+                  {fillingMissing || isBgRunning ? <LoaderCircle size={13} className="spin" /> : <Database size={13} />}
+                  <span>
+                    Compléter {Math.min(fillBatchSize, missingCount)} (≈ {(Math.min(fillBatchSize, missingCount) * 11).toLocaleString("fr-FR")} calls)
+                  </span>
+                </button>
+              </div>
+            )
           )}
 
           <div className={styles.colGroupTabs} role="tablist" aria-label="Vue des colonnes">
@@ -1254,7 +1351,20 @@ export function FinanceScreenerPanel({
         <div className={styles.tableWrap}>
           {items.length === 0 ? (
             <div className={styles.emptyTable}>
-              {coverage && coverage.total_snapshots === 0 ? (
+              {assetType === "etf" && (coverage?.etf_count ?? 0) === 0 ? (
+                <>
+                  <p>Aucun ETF n&apos;est encore chargé dans le Screener.</p>
+                  <p className={styles.muted}>
+                    Rendez-vous dans <strong>Données &amp; Synchro</strong> pour choisir les bourses d&apos;ETFs (Paris, US, Xetra, Londres…) à charger et tenir à jour.
+                  </p>
+                  {onOpenDataSync && (
+                    <button type="button" className={styles.secondaryBtn} onClick={onOpenDataSync} style={{ marginTop: 8 }}>
+                      <Database size={13} />
+                      <span>Ouvrir Données &amp; Synchro</span>
+                    </button>
+                  )}
+                </>
+              ) : coverage && coverage.total_snapshots === 0 ? (
                 <>
                   <p>Aucune valeur n&apos;est encore indexée dans le Screener.</p>
                   <p className={styles.muted}>
@@ -1276,8 +1386,22 @@ export function FinanceScreenerPanel({
             <table className={styles.table}>
               <thead>
                 <tr>
-                  <th onClick={() => handleToggleSort("symbol")}>
+                  <th
+                    className={styles.titleTh}
+                    style={{ width: nameColWidth, minWidth: nameColWidth, maxWidth: nameColWidth }}
+                    onClick={() => handleToggleSort("symbol")}
+                  >
                     Titre {renderSortIcon("symbol")}
+                    <span
+                      className={styles.colResizeHandle}
+                      role="separator"
+                      aria-orientation="vertical"
+                      aria-label="Redimensionner la colonne Titre"
+                      title="Glisser pour agrandir la colonne Titre (double-clic pour réinitialiser)"
+                      onClick={e => e.stopPropagation()}
+                      onMouseDown={handleStartResizeNameCol}
+                      onDoubleClick={handleResetNameColWidth}
+                    />
                   </th>
                   <th className={styles.numCol} onClick={() => handleToggleSort("price")}>
                     Cours {renderSortIcon("price")}
@@ -1415,21 +1539,49 @@ export function FinanceScreenerPanel({
                       onClick={() => void onOpenStock(target, row.name || row.symbol, "fundamentals")}
                     >
                       <td>
-                        <div className={styles.stockCell}>
-                          <span className={styles.symbolBadge}>{row.symbol}</span>
-                          <div className={styles.stockMeta}>
-                            <strong className={styles.stockName}>{row.name || row.symbol}</strong>
-                            <small className={styles.stockSub}>
-                              {[
-                                row.country,
-                                row.sector || row.exchange,
-                                row.indices.length > 0 ? row.indices.slice(0, 2).join(", ") : "",
-                              ]
-                                .filter(Boolean)
-                                .join(" · ") || "—"}
-                            </small>
-                          </div>
-                        </div>
+                        {(() => {
+                          const fullName = row.name || row.symbol;
+                          const subLabel =
+                            [
+                              row.country,
+                              row.sector || (row.asset_type === "etf" ? "ETF" : ""),
+                              row.indices.length > 0 ? row.indices.slice(0, 2).join(", ") : "",
+                            ]
+                              .filter(Boolean)
+                              .join(" · ") || "—";
+                          const tooltipText = [
+                            `${fullName} (${row.symbol})`,
+                            row.exchange ? `Place : ${row.exchange}` : "",
+                            subLabel !== "—" ? subLabel : "",
+                          ]
+                            .filter(Boolean)
+                            .join(" — ");
+                          return (
+                            <div
+                              className={styles.stockCell}
+                              style={{ width: nameColWidth, maxWidth: nameColWidth }}
+                              title={tooltipText}
+                            >
+                              <span className={styles.symbolBadge}>{row.symbol}</span>
+                              <div className={styles.stockMeta}>
+                                <div className={styles.stockNameRow}>
+                                  <strong className={styles.stockName}>{fullName}</strong>
+                                  {row.asset_type === "etf" && <span className={styles.etfBadge}>ETF</span>}
+                                  {row.exchange && <span className={styles.exchBadge}>{row.exchange}</span>}
+                                </div>
+                                <small className={styles.stockSub}>{subLabel}</small>
+                              </div>
+                              <div className={styles.stockHoverTooltip} role="tooltip">
+                                <strong>{fullName}</strong>
+                                <span>
+                                  {row.symbol}
+                                  {row.exchange ? ` · ${row.exchange}` : ""}
+                                  {subLabel !== "—" ? ` · ${subLabel}` : ""}
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </td>
                       <td className={styles.numCol}>
                         {row.price != null ? (

@@ -58,12 +58,20 @@ test("parsePageCitationHref et extractDocMetaFromImageSrc analysent les chemins 
 
   assert.deepEqual(mod.extractDocMetaFromImageSrc("/api/docs/catan-1a2b/p6_fig2.webp"), {
     slug: "catan-1a2b",
+    assetPrefix: "",
     page: 6,
     isFullPage: false,
   });
   assert.deepEqual(mod.extractDocMetaFromImageSrc("/api/docs/catan-1a2b/page_6.webp"), {
     slug: "catan-1a2b",
+    assetPrefix: "",
     page: 6,
     isFullPage: true,
+  });
+  assert.deepEqual(mod.extractDocMetaFromImageSrc("/api/docs/catan-1a2b/supp_a1b2c3d4_p3_fig1.webp"), {
+    slug: "catan-1a2b",
+    assetPrefix: "supp_a1b2c3d4_",
+    page: 3,
+    isFullPage: false,
   });
 });

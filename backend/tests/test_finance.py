@@ -415,7 +415,7 @@ class TestFinanceApiMocked(unittest.IsolatedAsyncioTestCase):
     async def test_eodhd_fallback_to_yahoo_on_error(self):
         settings = Settings(_env_file=None, eod_historical_data_key="valid-secret-key", demo_mode=False)
 
-        with patch("app.finance.search_eodhd_ticker", side_effect=Exception("EODHD network timeout")), \
+        with patch("app.finance.search_eodhd_ticker", side_effect=httpx.ReadTimeout("EODHD network timeout")), \
              patch("app.finance.get_yahoo_crumb_and_client") as mock_y_client, \
              patch("app.finance.search_yahoo_ticker") as mock_y_search, \
              patch("app.finance.fetch_yahoo_chart") as mock_y_chart, \

@@ -5,23 +5,17 @@ import {
   AlertCircle,
   Bookmark,
   Bot,
-  Brain,
   Check,
   ChevronDown,
-  Coins,
   Cpu,
-  Eye,
-  Layers,
   LoaderCircle,
   MessageSquare,
   Plus,
-  RefreshCw,
   Sparkles,
   Star,
   Trash2,
   Users,
   X,
-  Zap,
 } from "lucide-react";
 import type {
   AgentPersonaConfig,
@@ -198,7 +192,6 @@ export function MultiAgentModal({
   // AI Persona Generation state
   const [aiGeneratingIndex, setAiGeneratingIndex] = useState<number | null>(null);
   const [aiPromptInput, setAiPromptInput] = useState("");
-  const [showAiCreator, setShowAiCreator] = useState(false);
   const [aiCreatingNew, setAiCreatingNew] = useState(false);
 
   // Map model id to model object
@@ -233,25 +226,27 @@ export function MultiAgentModal({
     };
   }, [isOpen]);
 
-  // Sync state if activeConfig changes
-  useEffect(() => {
+  // Sync state when activeConfig prop changes (render-time adjustment, avoids useEffect cascade)
+  const [prevActiveConfig, setPrevActiveConfig] = useState(activeConfig);
+  if (activeConfig !== prevActiveConfig) {
+    setPrevActiveConfig(activeConfig);
     if (activeConfig) {
       setMode(activeConfig.mode);
       setAgents(activeConfig.agents);
       setRounds(activeConfig.rounds || 1);
       setUseSelectedModel(activeConfig.use_selected_model ?? true);
     }
-  }, [activeConfig]);
+  }
 
   // Keep agent models synced to the selected chat model when useSelectedModel is enabled
-  useEffect(() => {
-    if (!useSelectedModel || !resolvedDefaultModel) return;
-    setAgents((prev) =>
-      prev.some((ag) => ag.model !== resolvedDefaultModel)
-        ? prev.map((ag) => ({ ...ag, model: resolvedDefaultModel }))
-        : prev
-    );
-  }, [useSelectedModel, resolvedDefaultModel]);
+  const modelSyncKey = useSelectedModel && resolvedDefaultModel ? resolvedDefaultModel : "";
+  const [prevModelSyncKey, setPrevModelSyncKey] = useState(modelSyncKey);
+  if (modelSyncKey !== prevModelSyncKey) {
+    setPrevModelSyncKey(modelSyncKey);
+    if (modelSyncKey && agents.some((ag) => ag.model !== modelSyncKey)) {
+      setAgents((prev) => prev.map((ag) => ({ ...ag, model: modelSyncKey })));
+    }
+  }
 
   if (!isOpen) return null;
 
@@ -321,8 +316,8 @@ export function MultiAgentModal({
         setSavedPersonaFeedback(`« ${saved.name} » sauvegardé dans votre panel !`);
         setTimeout(() => setSavedPersonaFeedback(""), 3000);
       }
-    } catch (err: any) {
-      setErrorMsg(err.message || "Erreur lors de la sauvegarde de la personnalité.");
+    } catch (err: unknown) {
+      setErrorMsg(err instanceof Error ? err.message : "Erreur lors de la sauvegarde de la personnalité.");
     } finally {
       setSavingPersonaIndex(null);
     }
@@ -447,11 +442,10 @@ export function MultiAgentModal({
             });
           }
           setAiPromptInput("");
-          setShowAiCreator(false);
         }
       }
-    } catch (err: any) {
-      setErrorMsg(err.message || "Erreur lors de la génération IA de la personnalité.");
+    } catch (err: unknown) {
+      setErrorMsg(err instanceof Error ? err.message : "Erreur lors de la génération IA de la personnalité.");
     } finally {
       setAiGeneratingIndex(null);
       setAiCreatingNew(false);
@@ -499,8 +493,8 @@ export function MultiAgentModal({
         setSaveSuccess(true);
         setTimeout(() => setSaveSuccess(false), 3000);
       }
-    } catch (err: any) {
-      setErrorMsg(err.message || "Erreur lors de la sauvegarde de l'équipe.");
+    } catch (err: unknown) {
+      setErrorMsg(err instanceof Error ? err.message : "Erreur lors de la sauvegarde de l'équipe.");
     } finally {
       setIsSavingTeam(false);
     }
@@ -583,7 +577,7 @@ export function MultiAgentModal({
           >
             <div className="multi-agent-mode-card-header">
               <span className="multi-agent-mode-icon">🎯</span>
-              <strong>Synthèse d'Experts (Consensus)</strong>
+              <strong>Synthèse d&apos;Experts (Consensus)</strong>
               {mode === "synthesis" && <Check size={16} className="mode-check-icon" />}
             </div>
             <p>
@@ -620,7 +614,7 @@ export function MultiAgentModal({
               {mode === "dialectic" && <Check size={16} className="mode-check-icon" />}
             </div>
             <p>
-              Un premier orateur expose la <strong>Thèse</strong> (favorable), un second attaque avec l'<strong>Antithèse</strong> (réfutation frontale),
+              Un premier orateur expose la <strong>Thèse</strong> (favorable), un second attaque avec l&apos;<strong>Antithèse</strong> (réfutation frontale),
               puis un troisième arbitre apporte la <strong>Contradiction & 3e Voie</strong>. Échanges <strong>courts, vifs et acérés</strong>.
             </p>
           </button>
@@ -636,7 +630,7 @@ export function MultiAgentModal({
                 className={`rounds-pill ${rounds === 1 ? "is-active" : ""}`}
                 onClick={() => setRounds(1)}
               >
-                1 tour (Chacun s'exprime une fois)
+                1 tour (Chacun s&apos;exprime une fois)
               </button>
               <button
                 type="button"
@@ -657,7 +651,7 @@ export function MultiAgentModal({
             onClick={() => setActiveTab("compose")}
           >
             <Bot size={15} />
-            <span>Composition de l'Équipe ({agents.length})</span>
+            <span>Composition de l&apos;Équipe ({agents.length})</span>
           </button>
           <button
             type="button"
@@ -708,10 +702,10 @@ export function MultiAgentModal({
               <div className="ai-persona-bar-header">
                 <div className="ai-persona-bar-title">
                   <Sparkles size={16} className="sparkle-icon" />
-                  <span>Créer une personnalité avec l'IA</span>
+                  <span>Créer une personnalité avec l&apos;IA</span>
                 </div>
                 <span className="ai-persona-bar-subtitle">
-                  Tapez le nom d'une personnalité historique, politique, scientifique ou fictive (ex : <em>Poutine</em>, <em>Churchill</em>, <em>Ada Lovelace</em>)
+                  Tapez le nom d&apos;une personnalité historique, politique, scientifique ou fictive (ex : <em>Poutine</em>, <em>Churchill</em>, <em>Ada Lovelace</em>)
                 </span>
               </div>
               <div className="ai-persona-input-row">
@@ -990,7 +984,7 @@ export function MultiAgentModal({
                             ) : (
                               <Sparkles size={12} />
                             )}
-                            <span>Inspirer par l'IA</span>
+                            <span>Inspirer par l&apos;IA</span>
                           </button>
 
                           {/* Quick Template Picker */}
@@ -1056,7 +1050,7 @@ export function MultiAgentModal({
                   disabled={isSavingTeam || !saveTeamName.trim()}
                 >
                   {isSavingTeam ? <LoaderCircle size={14} className="spin" /> : <Bookmark size={14} />}
-                  <span>Sauvegarder l'équipe</span>
+                  <span>Sauvegarder l&apos;équipe</span>
                 </button>
               </div>
             </div>
@@ -1252,7 +1246,7 @@ export function MultiAgentModal({
                       className="preset-load-btn"
                       onClick={() => handleLoadPresetTeam(preset)}
                     >
-                      <span>Charger l'équipe</span>
+                      <span>Charger l&apos;équipe</span>
                     </button>
                   </div>
                   <p className="preset-desc">{preset.description}</p>
@@ -1284,7 +1278,7 @@ export function MultiAgentModal({
                 <Bookmark size={32} />
                 <h3>Aucune équipe personnalisée enregistrée</h3>
                 <p>
-                  Composez vos agents dans l'onglet « Composition de l'Équipe » et cliquez sur « Sauvegarder l'équipe »
+                  Composez vos agents dans l&apos;onglet « Composition de l&apos;Équipe » et cliquez sur « Sauvegarder l&apos;équipe »
                   pour les retrouver ici en un clic.
                 </p>
               </div>

@@ -765,6 +765,54 @@ async def upgrade_finance_warehouse_eodhd_endpoint(
     return await upgrade_warehouse_to_eodhd(settings, **kwargs)
 
 
+@router.post("/sync-preferences/run-source")
+async def run_finance_sync_source_endpoint(
+    body: dict[str, Any] = Body(default_factory=dict),
+    settings: Settings = Depends(get_settings),
+    user: User = Depends(current_user),
+) -> dict[str, Any]:
+    """Charge immédiatement les cours (ou catalogue) d'une source unique en 1 clic."""
+    from ..finance_funds import run_single_sync_source_now, start_single_sync_source_background
+
+    kind = str(body.get("kind") or "").strip().lower()
+    code = str(body.get("code") or "").strip().upper() or None
+    try:
+        batch_size = max(1, min(300, int(body.get("batch_size") or 150)))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(400, "Taille de lot invalide.") from exc
+    background = bool(body.get("background", True))
+    try:
+        if background:
+            return await start_single_sync_source_background(
+                settings,
+                kind=kind,
+                code=code,
+                batch_size=batch_size,
+            )
+        return await run_single_sync_source_now(
+            settings,
+            kind=kind,
+            code=code,
+            batch_size=batch_size,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/sync-preferences/ensure-counts")
+async def ensure_finance_sync_counts_endpoint(
+    body: dict[str, Any] = Body(default_factory=dict),
+    settings: Settings = Depends(get_settings),
+    user: User = Depends(current_user),
+) -> dict[str, Any]:
+    """Télécharge sans injection Screener les listes de bourses manquantes pour connaître le nombre exact de titres."""
+    from ..finance_sync_sources import ensure_exchange_catalog_counts
+
+    raw_codes = body.get("codes") if isinstance(body.get("codes"), list) else None
+    clean_codes = [str(c).strip().upper() for c in raw_codes if str(c).strip()] if raw_codes else None
+    return await ensure_exchange_catalog_counts(settings, codes=clean_codes)
+
+
 @router.get("/funds/eufund")
 async def get_eufund_catalog_endpoint(
     q: str = Query("", max_length=100, description="Filtre par nom, ISIN ou code ticker"),
@@ -1860,13 +1908,102 @@ def delete_stock_moat(
 
 @router.get("/screener/meta")
 def get_finance_screener_meta(
+    asset_type: str = Query("", max_length=16, description="Filtrer les facettes par type (all | stock | etf)"),
     settings: Settings = Depends(get_settings),
     user: User = Depends(current_user),
 ) -> dict[str, Any]:
     """Retourne les champs filtrables, presets et couverture de l'entrepôt pour le Screener."""
     from ..finance_screener import get_screener_metadata
 
-    return get_screener_metadata(settings)
+    return get_screener_metadata(settings, asset_type=asset_type)
+
+
+@router.get("/screener/etf-exchanges")
+def get_screener_etf_exchanges(
+    settings: Settings = Depends(get_settings),
+    user: User = Depends(current_user),
+) -> dict[str, Any]:
+    """Retourne par bourse d'origine le nombre d'ETFs disponibles, référencés au Screener et chargés."""
+    from ..finance_warehouse import get_etf_exchange_catalog_counts
+
+    return {"exchanges": get_etf_exchange_catalog_counts(warehouse_db_path(settings))}
+
+
+@router.post("/screener/etf-exchanges/load")
+async def load_screener_etf_exchange(
+    body: dict[str, Any] = Body(default_factory=dict),
+    settings: Settings = Depends(get_settings),
+    user: User = Depends(current_user),
+) -> dict[str, Any]:
+    """Compte les ETFs d'une bourse (1 call si non synchronisée) et/ou les référence dans le Screener (0 call)."""
+    from ..finance_warehouse import (
+        get_etf_exchange_catalog_counts,
+        get_screener_coverage,
+        seed_etfs_from_exchange_catalog,
+    )
+
+    exch = str(body.get("exchange") or "").strip().upper()
+    if not exch or exch in ("ALL", "EUFUND", "CC", "INDX"):
+        raise HTTPException(400, "Code bourse requis (ex. PA, US, XETRA, LSE).")
+    refresh_catalog = bool(body.get("refresh_catalog", False))
+    seed_screener = bool(body.get("seed_screener", True))
+
+    try:
+        _, source = await sync_exchange_catalog_if_needed(settings, exch, refresh=refresh_catalog)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    db_path = warehouse_db_path(settings)
+    seeded_count = 0
+    if seed_screener:
+        seeded_map = seed_etfs_from_exchange_catalog(db_path, [exch])
+        seeded_count = int(seeded_map.get(exch) or 0)
+
+    etf_exchanges = get_etf_exchange_catalog_counts(db_path)
+    exch_info = next((item for item in etf_exchanges if item["code"] == exch), None)
+    return {
+        "exchange": exch,
+        "source": source,
+        "seeded_count": seeded_count,
+        "exchange_info": exch_info,
+        "etf_exchanges": etf_exchanges,
+        "coverage": get_screener_coverage(db_path, asset_type="etf"),
+    }
+
+
+@router.post("/screener/hydrate-bars")
+async def hydrate_finance_screener_bars(
+    body: dict[str, Any] = Body(default_factory=dict),
+    settings: Settings = Depends(get_settings),
+    user: User = Depends(current_user),
+    sessions: sessionmaker = Depends(get_sessions),
+) -> dict[str, Any]:
+    """Télécharge les cours EOD (1 call/titre) et calcule les indicateurs 4 unités pour un lot (ETFs / titres sans données)."""
+    from ..finance_screener import hydrate_screener_bars_batch
+
+    symbols = [str(s).strip().upper() for s in (body.get("symbols") or []) if str(s).strip()][:300]
+    if isinstance(body.get("screener_filters"), dict):
+        batch_size = max(1, min(300, int(body.get("batch_size") or 50)))
+        try:
+            res = _run_screener_query_from_body(
+                body["screener_filters"], settings, user, sessions, only_missing_data=True, limit_override=batch_size
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        for it in res.get("items") or []:
+            cand = str(it.get("eod_ticker") or it.get("symbol") or "").strip().upper()
+            if cand and cand not in symbols:
+                symbols.append(cand)
+        symbols = symbols[:300]
+
+    if not symbols:
+        raise HTTPException(400, "Aucun titre sans données à compléter.")
+
+    if bool(body.get("background", True)):
+        from ..finance_funds import start_screener_bars_batch_background
+
+        return await start_screener_bars_batch_background(settings, symbols)
+    return await hydrate_screener_bars_batch(settings, symbols)
 
 
 def _run_screener_query_from_body(
@@ -1905,6 +2042,7 @@ def _run_screener_query_from_body(
     return query_screener(
         settings,
         timeframe=str(body.get("timeframe") or "day"),
+        asset_type=str(body.get("asset_type") or ""),
         universe_type=universe_type,
         universe_value=universe_value,
         watchlist_symbols=wl_symbols,

@@ -11,6 +11,7 @@ from ..config import Settings
 from ..deps import current_user, get_sessions, get_settings, get_upload_dir
 from ..documents import extract_document
 from ..models import Attachment, User
+from ..saved_videos import upsert_saved_video_from_youtube
 from ..schemas import FetchUrlRequest
 from ..serializers import attachment_json
 from ..web import fetch_and_parse_web_url
@@ -83,6 +84,28 @@ async def upload_url(
     path.write_bytes(content)
     try:
         with sessions() as db:
+            if (
+                body.save_to_library
+                and isinstance(extraction, dict)
+                and extraction.get("model") == "youtube-transcript"
+                and extraction.get("video_id")
+            ):
+                annotations = extraction.get("annotations") if isinstance(extraction.get("annotations"), list) else []
+                first_ann = annotations[0] if annotations and isinstance(annotations[0], dict) else {}
+                saved = upsert_saved_video_from_youtube(
+                    db,
+                    user.id,
+                    video_id=str(extraction["video_id"]),
+                    url=str(extraction.get("url") or body.url.strip()),
+                    title=str(first_ann.get("title") or filename.lstrip("🎬 ").strip()),
+                    author=str(extraction.get("author") or ""),
+                    duration=str(extraction.get("duration") or ""),
+                    lang_label=str(extraction.get("lang_label") or ""),
+                    has_transcript=bool(extraction.get("has_transcript")),
+                    transcript_segments=int(extraction.get("transcript_segments") or 0),
+                    transcript_markdown=extracted,
+                )
+                extraction = {**extraction, "saved_video_id": saved.id}
             item = Attachment(
                 user_id=user.id,
                 filename=filename,

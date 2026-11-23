@@ -136,20 +136,25 @@ export function DeepSearchModal({
   const [showPlanReview, setShowPlanReview] = useState<boolean>(false);
 
   // Reset plan review if user changes engine
-  useEffect(() => {
+  const [prevIsGoogleModel, setPrevIsGoogleModel] = useState(isGoogleModel);
+  if (isGoogleModel !== prevIsGoogleModel) {
+    setPrevIsGoogleModel(isGoogleModel);
     if (!isGoogleModel) {
       setShowPlanReview(false);
       setCollaborativePlan("");
       setInteractionId(null);
     }
-  }, [isGoogleModel]);
+  }
+
+  const requestGooglePlanRef = useRef<(refineWithPrevious?: boolean) => Promise<void>>(handleRequestGooglePlan);
+  const confirmPlanRef = useRef<() => void>(handleConfirmPlan);
 
   // Auto-fetch collaborative plan when Google engine is selected
   useEffect(() => {
     if (!isOpen || activeTab !== "plan" || !isGoogleModel) return;
     const cleanQ = targetQuery.trim() || question.trim();
     if (cleanQ && !collaborativePlan && !loadingGooglePlan && !planError) {
-      void handleRequestGooglePlan();
+      void requestGooglePlanRef.current();
     }
   }, [isOpen, activeTab, isGoogleModel, selectedEngineModel, targetQuery, question, collaborativePlan, loadingGooglePlan, planError]);
 
@@ -163,23 +168,44 @@ export function DeepSearchModal({
   const [copiedReport, setCopiedReport] = useState(false);
   const [reportToDelete, setReportToDelete] = useState<DeepSearchReport | null>(null);
 
-  // Sync question when prop changes
-  useEffect(() => {
+  // Sync props into local state during render (avoids cascading renders in useEffect)
+  const [prevQuestion, setPrevQuestion] = useState(question);
+  if (question !== prevQuestion) {
+    setPrevQuestion(question);
     setTargetQuery(question.trim());
-  }, [question]);
+  }
 
-  useEffect(() => {
+  const [prevInitialReportId, setPrevInitialReportId] = useState(initialReportId);
+  if (initialReportId !== prevInitialReportId) {
+    setPrevInitialReportId(initialReportId);
     if (initialReportId) {
       setSelectedReportId(initialReportId);
       setActiveTab("reports");
     }
-  }, [initialReportId]);
+  }
 
-  useEffect(() => {
+  const [prevInitialTab, setPrevInitialTab] = useState(initialTab);
+  if (initialTab !== prevInitialTab) {
+    setPrevInitialTab(initialTab);
     if (initialTab) {
       setActiveTab(initialTab);
     }
-  }, [initialTab]);
+  }
+
+  const [prevSelectedReportId, setPrevSelectedReportId] = useState(selectedReportId);
+  if (selectedReportId !== prevSelectedReportId) {
+    setPrevSelectedReportId(selectedReportId);
+    if (!selectedReportId) {
+      setActiveReport(null);
+    }
+  }
+
+  const reportSelectionRef = useRef({ selectedReportId, hasActiveReport: Boolean(activeReport) });
+  useEffect(() => {
+    requestGooglePlanRef.current = handleRequestGooglePlan;
+    confirmPlanRef.current = handleConfirmPlan;
+    reportSelectionRef.current = { selectedReportId, hasActiveReport: Boolean(activeReport) };
+  });
 
   // Load reports list when switching to reports tab
   useEffect(() => {
@@ -192,8 +218,9 @@ export function DeepSearchModal({
         const list = await fetchDeepSearchReports();
         if (!cancelled) {
           setReports(list);
-          if (selectedReportId && !activeReport) {
-            void loadReportDetail(selectedReportId);
+          const { selectedReportId: currentSelectedId, hasActiveReport } = reportSelectionRef.current;
+          if (currentSelectedId && !hasActiveReport) {
+            void loadReportDetail(currentSelectedId);
           }
         }
       } catch (err) {
@@ -225,8 +252,6 @@ export function DeepSearchModal({
   useEffect(() => {
     if (selectedReportId) {
       void loadReportDetail(selectedReportId);
-    } else {
-      setActiveReport(null);
     }
   }, [selectedReportId]);
 
@@ -247,13 +272,13 @@ export function DeepSearchModal({
         }
       } else if (activeTab === "plan" && (e.metaKey || e.ctrlKey) && e.key === "Enter") {
         e.preventDefault();
-        handleConfirmPlan();
+        confirmPlanRef.current();
       }
     }
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen, activeTab, targetQuery, activeReport, reportToDelete]);
+  }, [isOpen, activeTab, targetQuery, activeReport, reportToDelete, onClose]);
 
   if (!isOpen) return null;
 
