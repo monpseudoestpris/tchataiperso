@@ -283,6 +283,63 @@ class TestYouTubeEndpointIntegration(unittest.TestCase):
             self.assertIn("Vidéo Résumé Test", msg_res.text)
             self.assertIn("Analyse de la vidéo YouTube", msg_res.text)
 
+    def test_long_transcript_is_not_truncated_at_40k(self):
+        mock_watch_html = """<!DOCTYPE html><html><head>
+        <script>"INNERTUBE_API_KEY": "AIzaSyFakeKeyLong"</script>
+        </head><body></body></html>"""
+
+        mock_innertube_json = {
+            "videoDetails": {
+                "title": "Conférence Longue Intégrale",
+                "author": "DeepTalks",
+                "lengthSeconds": "7200",
+                "shortDescription": "Conférence de 2 heures complète.",
+            },
+            "captions": {
+                "playerCaptionsTracklistRenderer": {
+                    "captionTracks": [
+                        {
+                            "baseUrl": "https://www.youtube.com/api/timedtext?v=long_vid&lang=fr",
+                            "languageCode": "fr",
+                            "name": {"runs": [{"text": "Français"}]},
+                        }
+                    ]
+                }
+            },
+        }
+
+        chunk = "Voici un paragraphe détaillé de la conférence sur l'architecture des systèmes distribués. "
+        xml_nodes = ['<text start="0.0" dur="3.0">DEBUT_TRANSCRIPT_INTEGRAL.</text>']
+        for i in range(1, 700):
+            xml_nodes.append(f'<text start="{i * 5:.1f}" dur="4.0">Segment {i}: {chunk}</text>')
+        xml_nodes.append('<text start="7190.0" dur="5.0">FIN_TRANSCRIPT_INTEGRAL_VERIFIEE.</text>')
+        mock_sub_xml = "<transcript>\n" + "\n".join(xml_nodes) + "\n</transcript>"
+
+        async def fake_get(url, **kwargs):
+            url_str = str(url)
+            if "watch" in url_str:
+                return httpx.Response(200, text=mock_watch_html, request=httpx.Request("GET", url_str))
+            if "timedtext" in url_str:
+                return httpx.Response(200, text=mock_sub_xml, request=httpx.Request("GET", url_str))
+            return httpx.Response(404, request=httpx.Request("GET", url_str))
+
+        async def fake_post(url, **kwargs):
+            return httpx.Response(200, json=mock_innertube_json, request=httpx.Request("POST", str(url)))
+
+        with patch("httpx.AsyncClient.get", side_effect=fake_get), \
+             patch("httpx.AsyncClient.post", side_effect=fake_post):
+            res = self.client.post("/api/attachments/url", json={"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"})
+            self.assertEqual(res.status_code, 201)
+            data = res.json()
+            self.assertGreater(data["extracted_chars"], 55000)
+
+            extr_res = self.client.get(f"/api/attachments/{data['id']}/extraction")
+            self.assertEqual(extr_res.status_code, 200)
+            markdown = extr_res.json()["extraction"]["pages"][0]["markdown"]
+            self.assertNotIn("tronquée à 40 000", markdown)
+            self.assertIn("DEBUT_TRANSCRIPT_INTEGRAL.", markdown)
+            self.assertIn("FIN_TRANSCRIPT_INTEGRAL_VERIFIEE.", markdown)
+
 
 if __name__ == "__main__":
     unittest.main()

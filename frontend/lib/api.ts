@@ -104,6 +104,7 @@ export type Attachment = {
   mime_type: string;
   url: string;
   size?: number;
+  extracted_chars?: number;
   has_extraction?: boolean;
   page_count?: number;
   source_url?: string | null;

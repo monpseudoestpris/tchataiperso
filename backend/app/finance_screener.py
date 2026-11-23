@@ -219,6 +219,39 @@ SCREENER_FIELDS: tuple[dict[str, Any], ...] = (
 )
 
 _FIELD_BY_KEY: dict[str, dict[str, Any]] = {f["key"]: f for f in SCREENER_FIELDS}
+UNCLE_STOCK_SCORE_IDS: frozenset[str] = frozenset(
+    {
+        "is_undervalued",
+        "trap_score",
+        "uncle_stock_score",
+        "quality_score",
+        "value_score",
+        "yield_score",
+        "balance_score",
+        "balance_value_score",
+        "financial_health_score",
+        "growth_rate",
+        "predictability_score",
+        "piotroski_f_score",
+        "mohanram_g_score",
+        "montier_c_score",
+        "levermann_score",
+        "company_score",
+        "oshaughnessy_vc3",
+        "greenblatt_score",
+        "pim_van_vliet_score",
+        "erp5_score",
+        "slater_score",
+        "altman_z_score",
+        "ohlson_o_score",
+        "beneish_m_score",
+        "dechow_f_score",
+        "esg_score",
+        "environment_score",
+        "social_score",
+        "governance_score",
+    }
+)
 _SORTABLE_COLUMNS: frozenset[str] = frozenset(
     {
         "symbol",
@@ -700,8 +733,11 @@ def build_screener_snapshot_from_warehouse(
     piotroski_f: float | None = None
     altman_z: float | None = None
     mos_pct: float | None = None
+    scores_compact: dict[str, float] = {}
 
     if ann_series:
+        from .finance_scores import compute_uncle_stock_scores
+
         annual_tables = _compute_annual_dossier_tables(ann_series, bars, beta_val)
         roic_pct = _find_table_latest(annual_tables.get("profitability"), "roic")
         if roe_pct is None:
@@ -727,9 +763,10 @@ def build_screener_snapshot_from_warehouse(
 
         shares_out = _num(shares_st.get("SharesOutstanding")) or _num(y_stat.get("sharesOutstanding"))
         eff_shares = shares_out or ((market_cap / price) if (market_cap and price and price > 0) else None)
+        intr_val: dict[str, Any] | None = None
         if price and price > 0 and deduped_dates:
             try:
-                intr = compute_intrinsic_valuations(
+                intr_val = compute_intrinsic_valuations(
                     ann_series=deduped_ann,
                     dates=deduped_dates,
                     current_price=price,
@@ -741,11 +778,41 @@ def build_screener_snapshot_from_warehouse(
                     piotroski_score=int(piotroski_f) if piotroski_f is not None else None,
                     bars=bars,
                 )
-                mos_pct = _num((intr.get("summary") or {}).get("margin_of_safety_corrected_pct"))
+                mos_pct = _num((intr_val.get("summary") or {}).get("margin_of_safety_corrected_pct"))
                 if mos_pct is None:
-                    mos_pct = _num((intr.get("summary") or {}).get("margin_of_safety_pct"))
+                    mos_pct = _num((intr_val.get("summary") or {}).get("margin_of_safety_pct"))
             except Exception as exc:
                 _logger.debug("Calcul intrinsèque screener ignoré pour %s: %s", canonical, exc)
+
+        if deduped_dates:
+            try:
+                us_scores = compute_uncle_stock_scores(
+                    ann_series=deduped_ann,
+                    dates=deduped_dates,
+                    current_price=price,
+                    shares_override=eff_shares,
+                    eod_fund=eod_fund,
+                    capital_valuation={
+                        "pe_ttm": pe_ttm,
+                        "pe_forward": pe_forward,
+                        "peg": peg_ratio,
+                        "pb": pb_ratio,
+                        "ev_ebitda": ev_ebitda,
+                        "op_margin_ttm": op_margin,
+                        "net_margin_ttm": net_margin,
+                        "roe_ttm": roe_pct,
+                        "market_cap": market_cap,
+                        "dividend_yield_pct": div_yield_pct,
+                        "price": price,
+                        "target_price": target_price,
+                    },
+                    intrinsic_valuation=intr_val,
+                    piotroski_score=int(piotroski_f) if piotroski_f is not None else None,
+                    bars=bars,
+                )
+                scores_compact = _extract_scores_compact(us_scores)
+            except Exception as exc:
+                _logger.debug("Calcul scores Uncle Stock screener ignoré pour %s: %s", canonical, exc)
 
     idx_lookup = indices_map if indices_map is not None else get_symbol_indices_map(db_path)
     indices = (
@@ -853,7 +920,7 @@ def build_screener_snapshot_from_warehouse(
         "bars_date": tech["bars_date"],
         "fundamentals_updated_at": fund_updated if has_fund else None,
         "computed_at": _utc_iso(),
-        "scores_json": {},
+        "scores_json": scores_compact,
         "sparkline_json": tech["sparkline"],
     }
     return snap_row, mtf_rows
@@ -914,6 +981,11 @@ def _col_expr(col: str, tf: str, main_tf: str, extra_tfs: set[str]) -> str:
             extra_tfs.add(tf)
             return f"COALESCE(t_{tf}.price, s.price)"
         return "COALESCE(t_main.price, s.price)"
+    if col.startswith("score:"):
+        score_id = col.split(":", 1)[1].strip()
+        if score_id not in UNCLE_STOCK_SCORE_IDS:
+            raise ValueError(f"Score Uncle Stock inconnu : {score_id!r}.")
+        return f"CAST(json_extract(s.scores_json, '$.{score_id}') AS REAL)"
     return f"s.{col}"
 
 
@@ -953,7 +1025,30 @@ def _compile_rule_sql(
             return f"({left_expr} IS NOT NULL AND {right_expr} IS NOT NULL AND {left_expr} {sql_op} ({right_expr} * ?))", [mult], False
         return f"({left_expr} IS NOT NULL AND {right_expr} IS NOT NULL AND {left_expr} {sql_op} {right_expr})", [], False
 
-    field = str(rule.get("field") or "").strip()
+    raw_field = str(rule.get("field") or "").strip()
+    if kind == "score" or raw_field.startswith("score:"):
+        score_id = raw_field.split(":", 1)[1].strip() if raw_field.startswith("score:") else raw_field
+        if score_id not in UNCLE_STOCK_SCORE_IDS:
+            raise ValueError(f"Score Uncle Stock inconnu : {score_id!r}.")
+        op = str(rule.get("op") or "").strip().lower()
+        col_sql = f"CAST(json_extract(s.scores_json, '$.{score_id}') AS REAL)"
+        if op == "is_not_null":
+            return f"{col_sql} IS NOT NULL", [], False
+        if op == "between":
+            lo = _num(rule.get("value"))
+            hi = _num(rule.get("value_max"))
+            if lo is None or hi is None:
+                raise ValueError(f"Bornes min et max requises pour « between » sur {score_id}.")
+            low_v, high_v = (lo, hi) if lo <= hi else (hi, lo)
+            return f"({col_sql} IS NOT NULL AND {col_sql} BETWEEN ? AND ?)", [low_v, high_v], False
+        if op in _ALLOWED_METRIC_OPS:
+            val = _num(rule.get("value"))
+            if val is None:
+                raise ValueError(f"Valeur numérique requise pour {score_id}.")
+            return f"({col_sql} IS NOT NULL AND {col_sql} {_ALLOWED_METRIC_OPS[op]} ?)", [val], False
+        raise ValueError(f"Opérateur invalide pour {score_id} : {op!r}.")
+
+    field = raw_field
     meta = _FIELD_BY_KEY.get(field)
     if not meta:
         raise ValueError(f"Champ de screening inconnu : {field!r}.")
@@ -1257,7 +1352,13 @@ def query_screener(
 
     where_sql = " AND ".join(clauses) if clauses else "1=1"
 
-    safe_sort = sort_by if sort_by in _SORTABLE_COLUMNS else "market_cap"
+    safe_sort = sort_by
+    if safe_sort.startswith("score:"):
+        score_sort_id = safe_sort.split(":", 1)[1].strip()
+        if score_sort_id not in UNCLE_STOCK_SCORE_IDS:
+            safe_sort = "market_cap"
+    elif safe_sort not in _SORTABLE_COLUMNS:
+        safe_sort = "market_cap"
     sort_expr = _col_expr(safe_sort, main_tf, main_tf, extra_tfs)
     safe_dir = "ASC" if str(sort_dir or "").strip().lower() == "asc" else "DESC"
     order_sql = (
@@ -1286,6 +1387,8 @@ def query_screener(
             "timeframe": main_tf,
             "total": 0,
             "universe_total": 0,
+            "with_fundamentals_count": 0,
+            "missing_data_count": 0,
             "offset": safe_offset,
             "limit": safe_limit,
             "items": [],
@@ -1299,6 +1402,11 @@ def query_screener(
             universe_params,
         ).fetchone()
         universe_total = int((u_total_row["cnt"] if u_total_row else 0) or 0)
+        with_fund_row = conn.execute(
+            f"SELECT COUNT(*) AS cnt FROM finance_screener_snapshots s WHERE {filters_where} AND s.has_fundamentals = 1",
+            filters_params,
+        ).fetchone()
+        with_fundamentals_count = int((with_fund_row["cnt"] if with_fund_row else 0) or 0)
         missing_row = conn.execute(
             f"SELECT COUNT(*) AS cnt FROM finance_screener_snapshots s WHERE {filters_where} AND {_MISSING_DATA_SQL}",
             filters_params,
@@ -1334,6 +1442,7 @@ def query_screener(
         "timeframe": main_tf,
         "total": total,
         "universe_total": universe_total,
+        "with_fundamentals_count": with_fundamentals_count,
         "missing_data_count": missing_data_count,
         "offset": safe_offset,
         "limit": safe_limit,

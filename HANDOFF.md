@@ -10,21 +10,37 @@ Application de chat IA multi-fournisseurs (`tchataiperso`) composée d'un backen
 - Le connecteur agentique **Hermes Agent** et la recherche approfondie **Google Deep Research** (Interactions API).
 
 ## 2. Current Objective
-1. **Screener Boursier intégré V1 (Fondamentaux & Indicateurs techniques, architecture extensible V2 pour formules personnalisées)** :
-   - Table matérialisée SQLite WAL `finance_screener_snapshots` dans `finance_warehouse.db`, moteur technique Python pur (`finance_technicals.py`), moteur de requête en 2 passes (`finance_screener.py`) avec registre Passe 2 prêt pour vos futures formules custom, endpoints `/api/finance/screener/*` et 4ᵉ onglet `4 · Screener` dans `FinanceModal`.
-2. **Changement de ticker en mode Plein Écran du graphique financier (`FinanceFullscreenTickerSwitcher` dans `FinanceModal`)** :
-   - Permet de rechercher et changer directement le ticker observé sans quitter le mode plein écran du cours (recherche catalogue + saisie libre, filtrage/changement de liste de suivi, boutons Précédent/Suivant, navigation clavier et bandeau d'erreur dédié).
-3. **Page d'accueil Galerie de Cartes + Couverture personnalisée sur les Documents Illustrés (`VisualDocGallery` + `/api/visual-docs/{doc_id}/cover`)** :
-   - Remplacement de la barre latérale étroite par une **page d'accueil Galerie pleine largeur** (`VisualDocGallery`) affichant des cartes éditoriales premium pour chaque document (couverture, badge de catégorie, statistiques pages/schémas/liens, forums dédiés, filtres par recherche/catégorie, carte `+ Nouveau document`).
-   - Ajout/remplacement/réinitialisation d'une **image de couverture personnalisée (`cover.webp`)** directement depuis chaque carte, depuis l'en-tête du document ou dès l'ingestion.
-   - Ouverture en pleine largeur du **détail du document et de la Liseuse 3D** au clic sur une carte, avec bouton **« ← Bibliothèque »**.
-2. **Adjonction à tout moment de Documents complémentaires (FAQ, Errata, Extensions, Aide de jeu, Annexes) ET de Liens Externes (Forums, Sites, Vidéos YouTube) sur un Document Illustré (`visual_doc_links.py` + `VisualDocLinksPanel`)** :
-   - Fichiers complémentaires locaux compilés intégralement en pages WebP + Markdown compilé lisibles dans la Liseuse 3D (via la barre de sélection de volume) + liens externes (YouTube, forums, web) résumés automatiquement.
-3. **Typologie métier des Documents Illustrés (9 catégories), Raisonnement Déductif & Forums Dédiés (`visual_doc_profiles.py`)** & **Liseuse Livre 3D interactive (`VisualDocBookReader`)**.
+1. **Initialisation de la mémoire stratégique du projet (`GLOSSARY.md`, `docs/adr/0001..0005`, mise à jour de `HANDOFF.md`)** :
+   - Création de `GLOSSARY.md` figeant les 14 termes métier canoniques et leurs correspondances exactes entre l'UI française, le frontend TypeScript, le backend FastAPI et les deux bases de données (`DATABASE_URL` ORM vs `finance_warehouse.db`).
+   - Création des 5 premiers ADR dans `docs/adr/` documentant les choix structurants déjà en place :
+     - `0001-dual-database-and-finance-warehouse.md`
+     - `0002-nextjs-proxy-cookie-auth-and-sse-streaming.md`
+     - `0003-hybrid-llm-routing-google-cloud-vertex-and-openrouter.md`
+     - `0004-visual-documents-webp-compilation-and-hybrid-context.md`
+     - `0005-eodhd-first-finance-pipeline-and-budgeted-fundamentals-queue.md`
+2. **Transcriptions vidéo YouTube intégrales (sans troncature 40k) + Modale & Actions rapides « Résumer » / « Analyser » (`youtube.py`, `visual_doc_links.py`, `chat-app.tsx`, `api.ts`, `globals.css`)** :
+   - Suppression de la limite à 40 000 caractères sur les transcriptions YouTube (`backend/app/youtube.py`) et de la coupe à 36 000 caractères sur les liens YouTube des Documents Illustrés (`backend/app/visual_doc_links.py`).
+   - Affichage dédié « Transcription de la vidéo » avec compteur de caractères, modale de lecture grand format (« Agrandir ») et deux boutons d'action rapide **« Résumer »** et **« Analyser »** (à la fois dans le panneau dépliable et dans la modale, utilisables avant ou après envoi du message).
+3. **Accès complet à l'espace Finance depuis le Tchat & Mode Vocal (`finance_chat_tools.py`, `finance_chat_agent.py`, `routers/messages.py`, `chat-app.tsx`)** :
+   - Boucle d'outils Finance natifs en lecture seule (`finance_screener_query`, `finance_get_warehouse_overview`, `finance_get_stock_dossier`, `finance_get_watchlists`, `finance_get_indices`, `finance_get_saved_analyses`, `finance_get_news`, `finance_search_catalog`) accessible directement dans les conversations (détection automatique d'intention + bouton `Finance` du compositeur + liens cliquables `clair-finance://ticker/...` et `clair-finance://screener`).
 
 **Statut** : Implémenté et vérifié.
 
 ## 3. Completed Work
+- **Mémoire stratégique du projet (`GLOSSARY.md` & `docs/adr/`)** :
+  - `GLOSSARY.md` : cartographie des 14 concepts clés du domaine (Documents Illustrés & Volumes, Pièces jointes, cLAIr Pages vs ChatSite, Code Canvas, Identifiants boursiers canoniques, Watchlists à double écriture, Dossier vs Dashboard Finance, Analyses IA Finance hybrides, Screener multi-unités & IsoPressure, File budgétée des fondamentaux EODHD, Espaces thématiques, 3 niveaux de Mémoire, Skills vs Multi-Agents vs Hermes, DeepSearch/Learn/Creativity).
+  - `docs/adr/0001` à `0005` : consignation des 5 décisions d'architecture structurantes (« one-way doors »).
+- **Transcriptions vidéo YouTube intégrales + Boutons « Résumer » / « Analyser » (`youtube.py`, `visual_doc_links.py`, `test_youtube.py`, `chat-app.tsx`, `api.ts`, `globals.css`)** :
+  - `backend/app/youtube.py` : suppression de la troncature à `MAX_EXTRACTED_CHARS` (40 000 car.) afin de conserver l'intégralité des sous-titres horodatés dans `extracted_text` et `extraction.pages[0].markdown`.
+  - `backend/app/visual_doc_links.py` : conservation intégrale de `extracted_text` pour les liens `link_type == "youtube"` (sans coupe à `MAX_STORED_LINK_TEXT_CHARS`).
+  - `backend/tests/test_youtube.py` : ajout du test de non-régression `test_long_transcript_is_not_truncated_at_40k` (> 55 000 car., début et fin intacts, aucune mention de troncature).
+  - `frontend/components/chat-app.tsx`, `frontend/lib/api.ts`, `frontend/app/globals.css` : détection des pièces jointes YouTube dans `AttachmentAnalysis`, affichage du nombre de caractères (`Attachment.extracted_chars`), ajout d'une modale grand format (« Agrandir », fermeture `Échap`, copie en un clic, bascule Texte brut / Mise en forme) et des deux boutons **« Résumer »** et **« Analyser »** lançant directement le prompt adapté dans le tchat (sur pièce jointe en attente ou déjà envoyée).
+- **Accès complet à l'espace Finance depuis le Tchat & Mode Vocal (`finance_chat_tools.py`, `finance_chat_agent.py`, `finance_screener.py`, `google_cloud.py`, `context.py`, `routers/messages.py`, `chat-app.tsx`, `finance-modal.tsx`, `globals.css`)** :
+  - **Screener enrichi (`finance_screener.py`)** : peuplement des 31 scores Uncle Stock dans `scores_json` lors de `build_screener_snapshot_from_warehouse`, nouvelle règle SQL paramétrée whitelistée `kind="score"` (et tri `sort_by="score:<id>"` via `UNCLE_STOCK_SCORE_IDS`), et exposition de `with_fundamentals_count` dans `query_screener`.
+  - **Propagation `thoughtSignature` (`google_cloud.py`)** : préservation de `thoughtSignature` dans `gemini_native_to_openai_dict`, `iter_gemini_sse_as_openai_data` et `openai_to_gemini_native_request` pour les appels multi-tours d'outils sur Gemini 2.5/3/4 en mode `vertex_api_key`.
+  - **8 outils Finance en lecture seule (`finance_chat_tools.py`)** : schémas JSON plats compatibles OpenRouter/OpenAI/Gemini ; lecture 100 % locale sans réseau sur `finance_warehouse.db` (Screener multi-unités/multi-critères + watchlist, vue d'ensemble entrepôt/couverture, dossier boursier assemblé localement avec plafond de 2 chargements live par tour si titre totalement absent, watchlists avec notes et variations, indices/compositions/performances, analyses IA archivées MOAT/Experts/Dossier/Rapports trimestriels, dépêches en cache et recherche FTS5 catalogue/EUFUND), avec isolation stricte `user_id` sur les données personnelles.
+  - **Orchestrateur & routeur (`finance_chat_agent.py`, `context.py`, `routers/messages.py`)** : `should_enable_finance_tools` (détection des métriques, fautes courantes type `puotrosky`, cashtags, continuité multi-tours), `should_suppress_auto_web_search` (évite SearXNG sur les requêtes entrepôt locales sauf demande web explicite), boucle ReAct streaming avec repli automatique via routeur JSON si le modèle sélectionné ne supporte pas `tools`, prompt dédié `FINANCE_TOOLS_SYSTEM_PROMPT` et provenance `provider: "finance_warehouse"`.
+  - **Interface Tchat (`chat-app.tsx`, `finance-modal.tsx`, `globals.css`)** : bouton `Finance` réactivé dans la barre d'outils du compositeur, bannière de provenance `Entrepôt Finance · Screener & Dossiers`, prop `initialMainTab` sur `FinanceModal`, et rendu des liens `[TICKER](clair-finance://ticker/TICKER)` et `[Ouvrir le Screener](clair-finance://screener)` en pilules cliquables ouvrant directement la fiche ou l'onglet `4 · Screener`.
 - **Filtres Marchés & Géographie combinables dans le Screener (`finance_geography.py`, `finance_warehouse.py`, `finance_screener.py`, `routers/finance.py`, `finance-screener-panel.tsx`, `finance-screener-panel.module.css`, `api.ts`)** :
   - Nouveau module dédié `backend/app/finance_geography.py` : canonisation des pays en français (`USA`/`United States` → `États-Unis`, etc.), déduction automatique du pays depuis la place boursière (`PA`, `XETRA`, `LSE`, `SW`, `TSE`…) ou le suffixe ticker lorsque les fondamentaux manquent, rattachement aux zones boursières (`eurozone`, `europe`, `north_america`, `asia_pacific`, `latin_america`, `mea`) et libellés lisibles des places boursières.
   - Entrepôt & Screener : colonne `market_zone` ajoutée de façon idempotente sur `finance_screener_snapshots` + index `idx_fin_scr_geo` + backfill léger automatique (`backfill_screener_geography`), facettes enrichies dans `get_screener_coverage` (`indices` avec tous les indices réellement indexés et leurs compteurs, `market_zones`, `countries`, `exchange_items`, `cap_categories`), filtres combinables `index_code`, `market_zone`, `country`, `exchange`, `currency`, `sector`, `cap_category` dans `query_screener` et `POST /api/finance/screener/query`.
@@ -99,29 +115,36 @@ Application de chat IA multi-fournisseurs (`tchataiperso`) composée d'un backen
 - **Travaux précédents conservés dans l'arbre de travail** (non commités) : Mode Vocal Plein Écran (`VoiceFullscreenModal`) et pont Rapports Financiers → Documents Illustrés interactifs (`compile_finance_report_to_visual_doc`).
 
 ## 4. Key Decisions
-- **Réutilisation de `VisualDocument` + `ConversationVisualDoc` pour les rapports financiers** : aucune migration de schéma SQL nécessaire, bénéficie immédiatement de `build_visual_docs_context` (sélection intelligente des pages pertinentes), des citations `[p. X]` cliquables et du rendu WebP sécurisé `/api/docs/{slug}/page_N.webp`.
+- **Architecture & Décisions structurantes consignées dans `docs/adr/`** :
+  - [0001-dual-database-and-finance-warehouse.md](docs/adr/0001-dual-database-and-finance-warehouse.md) : DB applicative (SQLAlchemy/Alembic) + Entrepôt Finance dédié (`finance_warehouse.db` SQLite WAL).
+  - [0002-nextjs-proxy-cookie-auth-and-sse-streaming.md](docs/adr/0002-nextjs-proxy-cookie-auth-and-sse-streaming.md) : Proxy Next.js même-origine, sessions cookies `HttpOnly` révocables et streaming SSE sur `POST`.
+  - [0003-hybrid-llm-routing-google-cloud-vertex-and-openrouter.md](docs/adr/0003-hybrid-llm-routing-google-cloud-vertex-and-openrouter.md) : Routage LLM hybride Google Cloud (Vertex AI / Gemini natif avec `thoughtSignature`) et OpenRouter sans repli silencieux par défaut.
+  - [0004-visual-documents-webp-compilation-and-hybrid-context.md](docs/adr/0004-visual-documents-webp-compilation-and-hybrid-context.md) : Compilation WebP des Documents Illustrés (réutilisée pour les Rapports Financiers et les Volumes complémentaires) et contexte hybride toutes-pages (360k–450k car.).
+  - [0005-eodhd-first-finance-pipeline-and-budgeted-fundamentals-queue.md](docs/adr/0005-eodhd-first-finance-pipeline-and-budgeted-fundamentals-queue.md) : Pipeline EODHD-first, référencement catalogue gratuit, file budgétée des fondamentaux (`finance_fundamentals_queue`), Screener 2 passes multi-unités (`IsoPressure` + 31 scores Uncle Stock) et 8 outils Finance locaux pour le tchat.
+- **Terminologie métier canonique consignée dans `GLOSSARY.md`** : alignement explicite des divergences de nommage entre UI, Frontend, Backend et DB.
 - **Composant `VoiceFullscreenSession` monté conditionnellement** : garantit le nettoyage immédiat des pistes micro (`MediaStream`), `AudioContext` et timers dès la fermeture, sans effet de bord React 19.
 
 ## 5. Modified Files
-- Créés (session courante) :
-  - `backend/app/finance_exchange_full_sync.py`, `backend/tests/test_finance_exchange_full_sync.py`, `backend/app/finance_geography.py`, `backend/app/finance_technicals.py`, `backend/app/finance_screener.py`, `backend/tests/test_finance_technicals.py`, `backend/tests/test_finance_screener.py`, `backend/tests/test_finance_provider_eod_priority.py`.
-  - `frontend/components/finance-screener-panel.tsx`, `frontend/components/finance-screener-panel.module.css`.
-  - `frontend/components/finance-fullscreen-ticker-switcher.tsx`, `frontend/components/finance-fullscreen-ticker-switcher.module.css`.
-  - `frontend/components/visual-doc-gallery.tsx`, `frontend/components/visual-doc-gallery.module.css`.
-  - `backend/app/visual_doc_links.py`, `backend/app/visual_doc_profiles.py`.
-  - `backend/migrations/versions/0029_add_visual_doc_category.py`, `backend/migrations/versions/0030_add_visual_doc_links.py`.
-  - `frontend/components/visual-doc-links-panel.tsx`, `frontend/components/visual-doc-links-panel.module.css`.
-  - `frontend/components/visual-doc-book-reader.tsx`, `frontend/components/visual-doc-book-reader.module.css`.
-  - `backend/migrations/versions/0028_add_user_default_voice.py`.
-- Modifiés (session courante) :
-  - `backend/app/context.py`, `backend/app/visual_documents.py`, `backend/app/routers/visual_docs.py`, `backend/app/routers/messages.py`, `backend/app/routers/finance.py`, `backend/app/finance.py`, `backend/app/finance_provider.py`, `backend/app/finance_warehouse.py`, `backend/app/finance_funds.py`, `backend/app/finance_dossier.py`, `backend/app/finance_indices.py`, `backend/app/finance_news.py`, `backend/app/finance_watchlist.py`, `backend/tests/test_visual_documents.py`.
-  - `frontend/components/finance-modal.tsx`, `frontend/components/finance-sync-panel.tsx`, `frontend/components/visual-doc-modal.tsx`, `frontend/components/visual-doc-modal.module.css`, `frontend/lib/api.ts`.
-  - `backend/app/models.py`, `backend/app/cli.py`, `backend/app/main.py`, `backend/app/voice.py`, `backend/app/schemas.py`, `backend/app/routers/settings.py`, `backend/app/routers/voice.py`, `backend/app/serializers.py`, `backend/tests/test_settings.py`.
-  - `frontend/lib/api.ts`, `frontend/components/settings-modal.tsx`, `frontend/components/chat-app.tsx`, `frontend/app/globals.css`, `frontend/app/interface-themes.css`, `HANDOFF.md`.
-- Autres fichiers déjà modifiés/créés dans l'arbre de travail (sessions précédentes — installeur, Mode Vocal Plein Écran & Rapports Financiers) :
-  - `scripts/install.sh`, `scripts/install_lib/*`, `.env.example`, `README.md`, `backend/app/voice_sanitize.py`, `backend/app/routers/finance.py`, `backend/app/routers/system.py`, `frontend/components/voice-fullscreen-modal.tsx`, `frontend/components/finance-reports-panel.tsx`, etc.
+- Créés (non commités dans l'arbre de travail actuel) :
+  - `GLOSSARY.md`
+  - `docs/adr/0001-dual-database-and-finance-warehouse.md`
+  - `docs/adr/0002-nextjs-proxy-cookie-auth-and-sse-streaming.md`
+  - `docs/adr/0003-hybrid-llm-routing-google-cloud-vertex-and-openrouter.md`
+  - `docs/adr/0004-visual-documents-webp-compilation-and-hybrid-context.md`
+  - `docs/adr/0005-eodhd-first-finance-pipeline-and-budgeted-fundamentals-queue.md`
+  - `backend/app/finance_chat_tools.py`, `backend/app/finance_chat_agent.py`, `backend/tests/test_finance_chat_tools.py`, `backend/tests/test_finance_chat_agent.py`.
+- Modifiés (non commités dans l'arbre de travail actuel) :
+  - `AGENTS.md`, `HANDOFF.md`
+  - `backend/app/context.py`, `backend/app/finance_screener.py`, `backend/app/google_cloud.py`, `backend/app/routers/messages.py`, `backend/app/visual_doc_links.py`, `backend/app/youtube.py`, `backend/tests/test_youtube.py`
+  - `frontend/app/globals.css`, `frontend/components/chat-app.tsx`, `frontend/components/finance-modal.tsx`, `frontend/lib/api.ts`
+- Note : `OLDPROJECT.md` est conservé à la racine conformément à la demande utilisateur.
 
 ## 6. Verification
+- `cd backend && .venv/bin/python -m pytest tests/test_youtube.py tests/test_visual_documents.py -q` : **RÉUSSI** (`26 passed`, incluant `test_long_transcript_is_not_truncated_at_40k`).
+- `cd frontend && npx tsc --noEmit` : **RÉUSSI** (0 erreur).
+- `cd backend && .venv/bin/python -m pytest tests/test_finance_chat_tools.py tests/test_finance_chat_agent.py tests/test_finance_screener.py tests/test_finance_technicals.py tests/test_finance_scores.py tests/test_finance.py tests/test_finance_experts.py tests/test_finance_indices.py tests/test_finance_statements.py tests/test_finance_intrinsic.py tests/test_google_cloud.py -q` : **RÉUSSI** (`112 passed`).
+- `cd frontend && npx tsc --noEmit` : **RÉUSSI** (0 erreur). `cd frontend && npx eslint components/chat-app.tsx components/finance-modal.tsx` : **0 erreur sur nos lignes modifiées** (erreurs/avertissements pré-existants hors périmètre dans ces deux fichiers historiques).
+- Non exécuté : test bout en bout contre les API LLM réelles (OpenRouter / Google Cloud Vertex AI) et rebuild des conteneurs Docker.
 - `cd backend && .venv/bin/python -m pytest tests/test_finance_fundamentals_queue.py tests/test_finance_fundamentals_scheduler.py tests/test_finance_eodhd_usage.py tests/test_finance_exchange_full_sync.py tests/test_finance_screener.py tests/test_finance_provider_eod_priority.py tests/test_finance_indices.py tests/test_finance.py tests/test_finance_statements.py -q` : **RÉUSSI** (`88 passed`). `cd frontend && npx tsc --noEmit && npx eslint components/finance-fundamentals-plan-card.tsx components/finance-sync-panel.tsx components/finance-screener-panel.tsx components/finance-eodhd-usage-card.tsx components/finance-dossier-panel.tsx` : **RÉUSSI**. Non testé contre l'API EODHD réelle (format du calendrier `earnings[].code/report_date/date/actual` supposé d'après la doc).
 - `cd backend && .venv/bin/python -m pytest tests/test_finance_eodhd_usage.py tests/test_finance_exchange_full_sync.py tests/test_finance_screener.py tests/test_finance_provider_eod_priority.py tests/test_finance_indices.py tests/test_finance.py -q` : **RÉUSSI** (`66 passed`). `cd frontend && npx tsc --noEmit && npx eslint components/finance-sync-panel.tsx components/finance-screener-panel.tsx components/finance-eodhd-usage-card.tsx` : **RÉUSSI**. `/api/user` non testé contre le compte réel.
 - `cd backend && .venv/bin/python -m pytest tests/test_finance_exchange_full_sync.py tests/test_finance_screener.py tests/test_finance_provider_eod_priority.py tests/test_finance_indices.py -q` : **RÉUSSI** (`23 passed`). `cd frontend && npx tsc --noEmit && npx eslint components/finance-sync-panel.tsx components/finance-screener-panel.tsx` : **RÉUSSI**. Non testé contre l'API EODHD réelle (format `eod-bulk-last-day` supposé : champs `code`, `date`, `open`, `high`, `low`, `close`, `adjusted_close`, `volume`).
@@ -144,4 +167,4 @@ Application de chat IA multi-fournisseurs (`tchataiperso`) composée d'un backen
 - Note pré-existante (hors périmètre) : 2 tests dans `backend/tests/test_finance_funds.py` échouent sur une fixture SQLite antérieure à la migration `0028` (`no such column: users.default_voice`).
 
 ## 8. Next Action
-Rebuilder et redémarrer les conteneurs locaux (`./scripts/compose.sh up -d --build clair-api clair-web`) pour charger les dernières évolutions Finance (priorité EODHD sur les états financiers, bouton « Synchro auto 24h », pilule de progression live et cadence hebdomadaire des fondamentaux).
+Rebuilder et redémarrer les conteneurs locaux (`./scripts/compose.sh up -d --build clair-api clair-web`) pour charger les outils Finance dans le tchat et les dernières évolutions Finance.

@@ -10,7 +10,6 @@ import httpx
 from fastapi import HTTPException
 
 from .config import Settings
-from .documents import MAX_EXTRACTED_CHARS
 from .schemas import DocumentAnnotation, DocumentExtraction, ExtractedPage
 
 _logger = logging.getLogger("uvicorn.error")
@@ -289,8 +288,6 @@ async def fetch_and_parse_youtube_video(
         )
 
     full_markdown = "\n\n".join(header_parts)
-    if len(full_markdown) > MAX_EXTRACTED_CHARS:
-        full_markdown = full_markdown[:MAX_EXTRACTED_CHARS] + "\n\n[... transcription tronquée à 40 000 caractères ...]"
 
     short_title = title[:65].strip()
     filename = f"🎬 {short_title} ({author})"[:255]

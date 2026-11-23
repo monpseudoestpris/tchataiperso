@@ -306,7 +306,8 @@ async def extract_and_summarize_visual_doc_link(
     first_ann = annotations[0] if annotations and isinstance(annotations[0], dict) else {}
     detected_title = str(first_ann.get("title") or "").strip()
     resolved_title = (custom_title.strip() or detected_title or domain or "Lien externe")[:200]
-    stored_text = (extracted_text or "").strip()[:MAX_STORED_LINK_TEXT_CHARS]
+    raw_extracted = (extracted_text or "").strip()
+    stored_text = raw_extracted if link_type == "youtube" else raw_extracted[:MAX_STORED_LINK_TEXT_CHARS]
 
     summary_md = await summarize_extracted_link(
         settings,

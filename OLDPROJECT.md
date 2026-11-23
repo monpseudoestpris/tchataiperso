@@ -1,0 +1,1 @@
+Initialise la mémoire du projet : scanne le dépôt en lecture seule, génère HANDOFF.md, puis propose-moi (sans les écrire tout de suite) les 10–15 termes métier clés — surtout là où le nommage diverge entre front/back/DB — et les 3–5 choix d'architecture structurants déjà en place pour qu'on crée GLOSSARY.md et les premiers ADR après ma validation. 

@@ -33,6 +33,12 @@ from ..multi_agent import execute_multi_agent_contradictory_debate, execute_mult
 from ..deps import check_model, claim, current_user, get_conversation, get_sessions, get_settings, get_upload_dir
 from ..documents import extraction_text
 from ..finance import process_message_finance_inquiries
+from ..finance_chat_agent import (
+    should_enable_finance_tools,
+    should_suppress_auto_web_search,
+    stream_finance_chat_turn,
+)
+from ..finance_chat_tools import FinanceToolContext
 from ..google_cloud import has_llm_access
 from ..memory_agent import process_memory_turn
 from ..visual_doc_profiles import (
@@ -260,24 +266,46 @@ async def send_message(
             is_finance_active = body.finance_mode or (has_finance_skill and not body.deep_search and not body.learn_mode)
             previous_finance_targets: list[str] = []
             recent_turns: list[dict[str, str]] = []
+            recent_turns_with_sources: list[dict[str, Any]] = []
             for past in conversation.messages:
                 if past.id == message.id:
                     continue
                 recent_turns.append({"role": past.role, "content": past.content})
+                has_fin_att = False
                 for past_att in past.attachments:
                     ext = past_att.extraction if isinstance(past_att.extraction, dict) else {}
                     if ext.get("model") in ("yahoo-finance", "eod-historical-data") and ext.get("symbol"):
+                        has_fin_att = True
                         sym = str(ext["symbol"])
                         if sym in previous_finance_targets:
                             previous_finance_targets.remove(sym)
                         previous_finance_targets.insert(0, sym)
+                recent_turns_with_sources.append({
+                    "role": past.role,
+                    "content": past.content,
+                    "sources": past.sources if isinstance(past.sources, list) else [],
+                    "has_finance_attachment": has_fin_att,
+                })
+            use_finance_tools = (
+                not settings.demo_mode
+                and not body.deep_search
+                and not body.learn_mode
+                and not body.multi_agent
+                and providers.stream_chat is _DEFAULT_STREAM_CHAT
+                and should_enable_finance_tools(
+                    body.content,
+                    recent_turns_with_sources,
+                    finance_mode=is_finance_active,
+                    has_finance_skill=has_finance_skill,
+                )
+            )
             entity_resolver = None
-            if not settings.demo_mode and has_llm_access(settings) and not body.deep_search and not body.learn_mode:
+            if not use_finance_tools and not settings.demo_mode and has_llm_access(settings) and not body.deep_search and not body.learn_mode:
                 async def entity_resolver(text: str, previous: list[str]) -> list[str]:
                     return await providers.extract_finance_targets(settings, text, previous, recent_turns[-4:])
             finance_failures: list[str] = []
             try:
-                if (not body.deep_search and not body.learn_mode) or body.finance_mode:
+                if not use_finance_tools and ((not body.deep_search and not body.learn_mode) or body.finance_mode):
                     finance_atts = await process_message_finance_inquiries(
                         settings,
                         body.content,
@@ -630,6 +658,16 @@ async def send_message(
                     and body.auto_web_search is not False
                     and (body.auto_web_search is True or body.web_search_mode == "auto" or getattr(settings, "auto_web_search", True))
                 )
+                if (
+                    auto_search_allowed
+                    and use_finance_tools
+                    and should_suppress_auto_web_search(
+                        body.content,
+                        finance_mode=is_finance_active,
+                        finance_tools_active=use_finance_tools,
+                    )
+                ):
+                    auto_search_allowed = False
                 auto_search_reason = ""
                 visual_doc_forum_mode = False
                 attached_vdocs_meta: list[dict[str, str]] = []
@@ -1076,6 +1114,7 @@ async def send_message(
                     followup_questions=body.followup_questions,
                     canvas_files=[item.model_dump() for item in body.canvas_files] if body.canvas_files else None,
                     visual_docs=visual_docs_payload or None,
+                    finance_tools_active=use_finance_tools,
                 )
                 use_two_step_section_writer = (
                     (body.deep_search or body.learn_mode)
@@ -1291,39 +1330,88 @@ async def send_message(
                         yield sse("status", {"message": f"{mode_prefix} · Contrôle documentaire terminé."})
 
                 else:
-                    if body.deep_search:
-                        status_label = f"DeepSearch · Synthèse globale et rapport approfondi ({len(sources)} source{'s' if len(sources) != 1 else ''})…"
-                    elif body.learn_mode:
-                        status_label = f"Mode Apprendre · Rédaction du cours complet et structuré ({len(sources)} support{'s' if len(sources) != 1 else ''})…"
-                    elif body.code_mode:
-                        status_label = "Canvas Code · Conception et génération des fichiers…"
-                    else:
-                        status_label = "Rédaction de la réponse…"
-                    yield sse("status", {"message": status_label})
-                    async for event_or_str, is_ping in _stream_chat_with_keepalive(
-                        context, model, enable_cache=user_prompt_cache, sampling_params=effective_sampling
-                    ):
-                        if is_ping:
-                            yield event_or_str
-                        else:
-                            if isinstance(event_or_str, dict):
-                                ev_type = event_or_str.get("type")
-                                ev_text = event_or_str.get("text") or ""
-                                if ev_type == "thought":
+                    if use_finance_tools:
+                        tool_ctx = FinanceToolContext(
+                            settings=settings,
+                            sessions=sessions,
+                            user_id=user.id,
+                        )
+                        fin_gen = stream_finance_chat_turn(
+                            settings=settings,
+                            model=model,
+                            messages=context,
+                            tool_ctx=tool_ctx,
+                            enable_cache=user_prompt_cache,
+                            sampling_params=effective_sampling,
+                        ).__aiter__()
+                        fin_pending: asyncio.Task | None = None
+                        while True:
+                            if fin_pending is None:
+                                fin_pending = asyncio.create_task(fin_gen.__anext__())
+                            done_tasks, _ = await asyncio.wait([fin_pending], timeout=2.0)
+                            if done_tasks:
+                                try:
+                                    fin_ev = fin_pending.result()
+                                    fin_pending = None
+                                except StopAsyncIteration:
+                                    fin_pending = None
+                                    break
+                                ev_type = fin_ev.get("type")
+                                if ev_type == "status":
+                                    yield sse("status", {"message": fin_ev.get("message") or ""})
+                                elif ev_type == "thought":
+                                    ev_text = fin_ev.get("text") or ""
                                     accumulated_thought += ev_text
                                     yield sse("thought", {"text": ev_text})
                                 elif ev_type == "delta":
+                                    ev_text = fin_ev.get("text") or ""
                                     accumulated += ev_text
                                     if len(accumulated) > 240000:
                                         raise providers.ProviderError("La réponse dépasse la limite autorisée")
+                                    yield sse("delta", {"text": ev_text})
+                                elif ev_type == "done":
+                                    fin_sources = fin_ev.get("sources") or []
+                                    if fin_sources:
+                                        existing_urls = {s.get("url") for s in sources if isinstance(s, dict)}
+                                        for fs in fin_sources:
+                                            if fs.get("url") not in existing_urls:
+                                                sources.append(fs)
+                            else:
+                                yield ": keepalive\n\n"
+                    else:
+                        if body.deep_search:
+                            status_label = f"DeepSearch · Synthèse globale et rapport approfondi ({len(sources)} source{'s' if len(sources) != 1 else ''})…"
+                        elif body.learn_mode:
+                            status_label = f"Mode Apprendre · Rédaction du cours complet et structuré ({len(sources)} support{'s' if len(sources) != 1 else ''})…"
+                        elif body.code_mode:
+                            status_label = "Canvas Code · Conception et génération des fichiers…"
+                        else:
+                            status_label = "Rédaction de la réponse…"
+                        yield sse("status", {"message": status_label})
+                        async for event_or_str, is_ping in _stream_chat_with_keepalive(
+                            context, model, enable_cache=user_prompt_cache, sampling_params=effective_sampling
+                        ):
+                            if is_ping:
+                                yield event_or_str
+                            else:
+                                if isinstance(event_or_str, dict):
+                                    ev_type = event_or_str.get("type")
+                                    ev_text = event_or_str.get("text") or ""
+                                    if ev_type == "thought":
+                                        accumulated_thought += ev_text
+                                        yield sse("thought", {"text": ev_text})
+                                    elif ev_type == "delta":
+                                        accumulated += ev_text
+                                        if len(accumulated) > 240000:
+                                            raise providers.ProviderError("La réponse dépasse la limite autorisée")
+                                        if not (body.deep_search or body.learn_mode):
+                                            yield sse("delta", {"text": ev_text})
+                                elif isinstance(event_or_str, str):
+                                    accumulated += event_or_str
+                                    if len(accumulated) > 240000:
+                                        raise providers.ProviderError("La réponse dépasse la limite autorisée")
                                     if not (body.deep_search or body.learn_mode):
-                                        yield sse("delta", {"text": ev_text})
-                            elif isinstance(event_or_str, str):
-                                accumulated += event_or_str
-                                if len(accumulated) > 240000:
-                                    raise providers.ProviderError("La réponse dépasse la limite autorisée")
-                                if not (body.deep_search or body.learn_mode):
-                                    yield sse("delta", {"text": event_or_str})
+                                        yield sse("delta", {"text": event_or_str})
                 if not accumulated.strip():
                     _logger.warning("Réponse vide du modèle %s ; nouvelle tentative", model)
                     yield sse("status", {"message": "Réponse vide du modèle · nouvelle tentative…"})

@@ -599,12 +599,18 @@ def openai_to_gemini_native_request(payload: dict[str, Any], *, bare_model: str 
                 else:
                     parsed_args = {}
                 if fn_name:
-                    parts.append({
+                    fc_part: dict[str, Any] = {
                         "functionCall": {
                             "name": fn_name,
                             "args": parsed_args if isinstance(parsed_args, dict) else {},
                         }
-                    })
+                    }
+                    sig = tc.get("thought_signature") or (
+                        (tc.get("extra_content") or {}).get("google") or {}
+                    ).get("thought_signature")
+                    if isinstance(sig, str) and sig:
+                        fc_part["thoughtSignature"] = sig
+                    parts.append(fc_part)
             if parts:
                 contents.append({"role": "model", "parts": parts})
             continue
@@ -774,14 +780,19 @@ def gemini_native_to_openai_dict(native: dict[str, Any], model: str) -> dict[str
         if isinstance(part.get("functionCall"), dict):
             fc = part["functionCall"]
             idx = len(tool_calls)
-            tool_calls.append({
+            tc_entry: dict[str, Any] = {
                 "id": f"call_{idx}",
                 "type": "function",
                 "function": {
                     "name": str(fc.get("name") or ""),
                     "arguments": json.dumps(fc.get("args") or {}, ensure_ascii=False),
                 },
-            })
+            }
+            thought_sig = part.get("thoughtSignature")
+            if isinstance(thought_sig, str) and thought_sig:
+                tc_entry["thought_signature"] = thought_sig
+                tc_entry["extra_content"] = {"google": {"thought_signature": thought_sig}}
+            tool_calls.append(tc_entry)
 
     message: dict[str, Any] = {
         "role": "assistant",
@@ -858,7 +869,7 @@ async def iter_gemini_sse_as_openai_data(
             if isinstance(part.get("functionCall"), dict):
                 fc = part["functionCall"]
                 saw_tool_calls = True
-                delta_tools.append({
+                delta_tc: dict[str, Any] = {
                     "index": tool_idx,
                     "id": f"call_{tool_idx}",
                     "type": "function",
@@ -866,7 +877,12 @@ async def iter_gemini_sse_as_openai_data(
                         "name": str(fc.get("name") or ""),
                         "arguments": json.dumps(fc.get("args") or {}, ensure_ascii=False),
                     },
-                })
+                }
+                thought_sig = part.get("thoughtSignature")
+                if isinstance(thought_sig, str) and thought_sig:
+                    delta_tc["thought_signature"] = thought_sig
+                    delta_tc["extra_content"] = {"google": {"thought_signature": thought_sig}}
+                delta_tools.append(delta_tc)
                 tool_idx += 1
 
         delta: dict[str, Any] = {}

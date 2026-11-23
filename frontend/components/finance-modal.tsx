@@ -117,11 +117,14 @@ import {
   type WatchlistItem,
 } from "@/lib/api";
 
+export type FinanceMainTab = "search_indices" | "fundamentals" | "chart_tech" | "screener" | "data_sync";
+
 type FinanceModalProps = {
   isOpen: boolean;
   onClose: () => void;
   initialQuery?: string | null;
   initialData?: FinancialDashboardData | null;
+  initialMainTab?: FinanceMainTab | null;
   models?: Model[];
   defaultModel?: string;
   onRefreshModels?: () => Promise<void>;
@@ -129,7 +132,7 @@ type FinanceModalProps = {
   onOpenReportAsDoc?: (report: QuarterlyReport, openVoiceFullscreen?: boolean) => Promise<void> | void;
 };
 
-type MainTab = "search_indices" | "fundamentals" | "chart_tech" | "screener" | "data_sync";
+type MainTab = FinanceMainTab;
 
 type ActiveTab =
   | "dossier"
@@ -349,6 +352,7 @@ export function FinanceModal({
   onClose,
   initialQuery,
   initialData,
+  initialMainTab,
   models: propModels,
   defaultModel: propDefaultModel,
   onRefreshModels,
@@ -489,11 +493,13 @@ export function FinanceModal({
     }
   }
 
-  const currentOpenSessionKey = isOpen ? `${initialQuery ?? ""}::${initialData?.symbol ?? ""}` : null;
+  const currentOpenSessionKey = isOpen ? `${initialQuery ?? ""}::${initialData?.symbol ?? ""}::${initialMainTab ?? ""}` : null;
   if (currentOpenSessionKey !== prevOpenSessionKey) {
     setPrevOpenSessionKey(currentOpenSessionKey);
     if (isOpen) {
-      if (initialData || (initialQuery || "").trim()) {
+      if (initialMainTab) {
+        setMainTab(initialMainTab);
+      } else if (initialData || (initialQuery || "").trim()) {
         setMainTab("fundamentals");
       } else if (!data) {
         setMainTab("search_indices");
@@ -539,12 +545,12 @@ export function FinanceModal({
     if (targetQuery) {
       setQuery(targetQuery);
       void loadDetails(targetQuery);
-    } else if (!data) {
+    } else if (!data && initialMainTab !== "screener") {
       // Default to Air Liquide if no initial query
       setQuery("Air Liquide");
       void loadDetails("Air Liquide");
     }
-  }, [isOpen, initialQuery, initialData]);
+  }, [isOpen, initialQuery, initialData, initialMainTab]);
 
   // Suit l'état en direct de la synchro auto en arrière-plan tant que la modale Finances est ouverte
   const isBgSyncRunning = Boolean(syncProgress?.is_running);
