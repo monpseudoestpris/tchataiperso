@@ -49,6 +49,7 @@ import { ThoughtAccordion } from "@/components/thought-accordion";
 import { TopicModal } from "@/components/topic-modal";
 import { ChatAttachedSites } from "@/components/chat-attached-sites";
 import { CreativityControl, formatCreativityBadge } from "@/components/creativity-control";
+import { QuickThemeToggle } from "@/components/quick-theme-toggle";
 import { SidebarCreativityPotentiometer } from "@/components/sidebar-creativity-potentiometer";
 import { WebPageModal } from "@/components/web-page-modal";
 import { VisualDocModal } from "@/components/visual-doc-modal";
@@ -134,7 +135,14 @@ function dateGroup(value: string) {
 }
 
 function BrandMark({ small = false }: { small?: boolean }) {
-  return <span className={`brand-mark ${small ? "small" : ""}`} aria-hidden="true"><Sparkles strokeWidth={1.5} /></span>;
+  return (
+    <span className={`brand-mark ${small ? "small" : ""}`} aria-hidden="true">
+      <svg viewBox="0 0 32 32" fill="none">
+        <path d="M16 5v22M5 16h22M8.2 8.2l15.6 15.6M8.2 23.8 23.8 8.2" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
+        <circle cx="16" cy="16" r="2.4" fill="var(--accent-primary)" />
+      </svg>
+    </span>
+  );
 }
 
 function IconButton({ label, children, className = "", ...props }: { label: string; children: ReactNode; className?: string } & React.ButtonHTMLAttributes<HTMLButtonElement>) {
@@ -2961,6 +2969,16 @@ export function ChatApp() {
   if (!authReady) return <div className="auth-loading" role="status"><LoaderCircle className="spin" size={20} />Vérification de la session…</div>;
   if (invitationToken || !user) return <AuthPanel invitationToken={invitationToken} serviceError={authError} onAuthenticated={authenticated} onRegistration={invitationAccepted} />;
 
+  const effectiveCreativity = conversation ? (conversation.creativity ?? null) : pendingCreativity;
+  const effectiveSampling = conversation ? (conversation.sampling_params ?? null) : pendingSamplingParams;
+  const chatBadge = formatCreativityBadge(effectiveCreativity, effectiveSampling);
+  const skillWithCreativity = (conversation?.skills ?? []).find(
+    s => s.creativity !== null && s.creativity !== undefined || (s.sampling_params && Object.values(s.sampling_params).some(v => v !== null && v !== undefined))
+  );
+  const inheritedSkillBadge = !chatBadge && skillWithCreativity
+    ? `${skillWithCreativity.name} (${formatCreativityBadge(skillWithCreativity.creativity, skillWithCreativity.sampling_params)})`
+    : null;
+
   return <div className="app-shell">
     <a className="skip-link" href="#composer">Aller au message</a>
     {sidebarOpen && <button className="sidebar-overlay" type="button" aria-label="Fermer le menu" onClick={() => setSidebarOpen(false)} />}
@@ -3312,14 +3330,16 @@ export function ChatApp() {
           </div>
           <div className="profile-actions">
             <IconButton label="Paramètres & Prompt général" onClick={() => setSettingsModalOpen(true)}>
-              <Settings size={16} />
+              <Settings size={15} />
             </IconButton>
-            <IconButton label={familyInfo?.id ? "Groupe familial" : "Créer un groupe familial"} onClick={() => setFamilyModalOpen(true)}>
-              <Users size={16} />
+            {user.is_admin && (
+              <IconButton label="Quitter proprement l’application (sauvegarder les BDDs)" onClick={() => setQuitAppModalOpen(true)} className="profile-logout-btn">
+                <Power size={15} />
+              </IconButton>
+            )}
+            <IconButton label="Se déconnecter (retour au login)" onClick={() => void logout()} className="profile-logout-btn">
+              <LogOut size={15} />
             </IconButton>
-            {user.is_admin && <IconButton label="Gérer les utilisateurs" onClick={() => setAdminOpen(true)}><Shield size={16} /></IconButton>}
-            {user.is_admin && <IconButton label="Quitter proprement l’application (sauvegarder les BDDs)" onClick={() => setQuitAppModalOpen(true)} className="profile-logout-btn"><Power size={16} /></IconButton>}
-            <IconButton label="Se déconnecter (retour au login)" onClick={() => void logout()} className="profile-logout-btn"><LogOut size={16} /></IconButton>
           </div>
         </div>
       </div>
@@ -3329,11 +3349,43 @@ export function ChatApp() {
       <header className="topbar">
         <div className="topbar-left">
           <IconButton label="Ouvrir le menu" className="mobile-only" onClick={() => setSidebarOpen(true)}><Menu size={21} /></IconButton>
-          <div className="model-select-wrap"><button type="button" className="model-selector-btn" onClick={() => setModelModalOpen(true)} disabled={!config || working} title="Changer de modèle IA (voir tous les modèles, prix, contexte, vision)" aria-label="Changer de modèle IA"><span className="model-indicator" />{isFavorite(model) && <span className="model-topbar-pill favorite" title="Modèle favori"><Star size={11} fill="#f59e0b" color="#f59e0b" /></span>}<span className="model-current-name">{currentModelInfo?.name || model || "Modèle IA"}</span>{currentModelInfo?.vision && <span className="model-topbar-pill vision" title="Modèle multimodal avec vision (images acceptées)"><Eye size={11} /><span>Vision</span></span>}{currentModelPriceTag && <span className={`model-topbar-pill price ${currentModelPriceTag === "Gratuit" ? "is-free" : ""}`}>{currentModelPriceTag}</span>}<ChevronDown size={14} className="model-chevron" /></button></div>
-          <span className="topbar-divider" />
-          <span className="personal-label">Votre espace IA</span>
+          <div className="model-select-wrap"><button type="button" className="model-selector-btn" onClick={() => setModelModalOpen(true)} disabled={!config || working} title="Changer de modèle IA (voir tous les modèles, prix, contexte, vision)" aria-label="Changer de modèle IA"><span className="model-indicator" />{isFavorite(model) && <span className="model-topbar-pill favorite" title="Modèle favori"><Star size={11} fill="currentColor" /></span>}<span className="model-current-name">{currentModelInfo?.name || model || "Modèle IA"}</span>{currentModelInfo?.vision && <span className="model-topbar-pill vision" title="Modèle multimodal avec vision (images acceptées)"><Eye size={11} /><span>Vision</span></span>}{currentModelPriceTag && <span className={`model-topbar-pill price ${currentModelPriceTag === "Gratuit" ? "is-free" : ""}`}>{currentModelPriceTag}</span>}<ChevronDown size={14} className="model-chevron" /></button></div>
         </div>
         <div className="topbar-right">
+          {/* Compétences & Créativité du tchat */}
+          <button
+            type="button"
+            className={`topbar-skills-btn ${skillsOpen ? "is-active" : ""}`}
+            onClick={() => {
+              setContextOpen(false);
+              setCreativityOpen(false);
+              setSkillsOpen(old => !old);
+            }}
+            aria-expanded={skillsOpen}
+            title={conversation?.skills?.length ? `Compétences actives : ${conversation.skills.map(s => s.name).join(" · ")}` : "Activer ou créer des compétences (@mentions)"}
+          >
+            <Sparkles size={15} />
+            <span>Compétences</span>
+            {(conversation?.skills?.length ?? 0) > 0 && (
+              <span className="topbar-skills-count">{conversation?.skills?.length}</span>
+            )}
+          </button>
+
+          <button
+            type="button"
+            className={`topbar-creativity-btn ${(chatBadge || creativityOpen) ? "is-active" : ""}`}
+            onClick={() => {
+              setContextOpen(false);
+              setSkillsOpen(false);
+              setCreativityOpen(old => !old);
+            }}
+            aria-expanded={creativityOpen}
+            title="Régler la créativité et les paramètres du modèle (temperature, top_p, top_k, pénalités, seed) pour ce tchat"
+          >
+            <Sliders size={15} />
+            <span>{chatBadge || (inheritedSkillBadge ? `Créativité · ${inheritedSkillBadge}` : "Créativité")}</span>
+          </button>
+
           {/* Boîte à outils & Studios IA */}
           <button
             type="button"
@@ -3342,7 +3394,7 @@ export function ChatApp() {
             aria-label="Ouvrir la boîte à outils IA"
             title="Boîte à outils IA : DeepSearch, Cours, Blogs, Studio Image, Sons & Musique, Canvas Code, Conseil IA, Réviser, Marchés..."
           >
-            <LayoutGrid size={16} />
+            <LayoutGrid size={15} />
             <span>Outils</span>
             {(multiAgentActive || canvasFiles.length > 0) && (
               <span className="topbar-active-dot" title="Outils actifs en cours" />
@@ -3362,7 +3414,7 @@ export function ChatApp() {
                 : "Mémorisation en pause : l’IA ne retient rien de vos échanges. Cliquez pour réactiver à la demande."
             }
           >
-            <Brain size={16} />
+            <Brain size={15} />
             <span className="topbar-memory-label">Mémorisation</span>
             <span className={`topbar-memory-pill ${autoMemoryActive ? "is-on" : "is-off"}`}>
               <span className="topbar-memory-dot" />
@@ -3386,7 +3438,7 @@ export function ChatApp() {
             aria-label="Consulter mes souvenirs"
             title="Consulter vos souvenirs enregistrés et le fil du contexte"
           >
-            <Bookmark size={16} />
+            <Bookmark size={15} />
             <span>Souvenirs</span>
             <span className="memory-count">{memories.length}</span>
           </button>
@@ -3468,17 +3520,8 @@ export function ChatApp() {
             </div>
           )}
 
-          {/* Paramètres & Prompt Général */}
-          <button
-            type="button"
-            className={`topbar-settings-btn ${settingsModalOpen ? "is-active" : ""}`}
-            onClick={() => setSettingsModalOpen(true)}
-            aria-label="Ouvrir les paramètres et le prompt général"
-            title="Paramètres de l'assistant, prompt général permanent et cache de prompt"
-          >
-            <Settings size={16} />
-            <span>Paramètres</span>
-          </button>
+          {/* Bascule rapide Clair / Sombre */}
+          <QuickThemeToggle />
 
           {/* Profil utilisateur & Bascule rapide de compte */}
           <div className="topbar-profile-wrap" ref={profileMenuRef}>
@@ -3604,6 +3647,20 @@ export function ChatApp() {
 
                 <div className="profile-dropdown-divider" />
 
+                {user.is_admin && (
+                  <button
+                    type="button"
+                    className="profile-menu-item"
+                    onClick={() => {
+                      setProfileMenuOpen(false);
+                      setQuitAppModalOpen(true);
+                    }}
+                  >
+                    <Power size={15} />
+                    <span>Quitter proprement</span>
+                  </button>
+                )}
+
                 <button
                   type="button"
                   className="profile-menu-item is-logout"
@@ -3624,93 +3681,30 @@ export function ChatApp() {
 
       <div className="workspace">
         <section className="chat-panel" aria-label="Conversation">
-          {(() => {
-            const effectiveCreativity = conversation ? (conversation.creativity ?? null) : pendingCreativity;
-            const effectiveSampling = conversation ? (conversation.sampling_params ?? null) : pendingSamplingParams;
-            const chatBadge = formatCreativityBadge(effectiveCreativity, effectiveSampling);
-            const skillWithCreativity = (conversation?.skills ?? []).find(
-              s => s.creativity !== null && s.creativity !== undefined || (s.sampling_params && Object.values(s.sampling_params).some(v => v !== null && v !== undefined))
-            );
-            const inheritedSkillBadge = !chatBadge && skillWithCreativity
-              ? `${skillWithCreativity.name} (${formatCreativityBadge(skillWithCreativity.creativity, skillWithCreativity.sampling_params)})`
-              : null;
-            return (
-              <>
-                <div className="chat-skills-toolbar">
-                  <span>{conversation?.skills?.length ? conversation.skills.map(skill => skill.name).join(" · ") : "Aucune compétence active"}</span>
-                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setContextOpen(false);
-                        setSkillsOpen(false);
-                        setCreativityOpen(old => !old);
-                      }}
-                      title="Régler la créativité et les paramètres du modèle (temperature, top_p, top_k, pénalités, seed) pour ce tchat"
-                      style={{
-                        borderColor: (chatBadge || creativityOpen) ? "#6366f1" : undefined,
-                        color: (chatBadge || creativityOpen) ? "#4f46e5" : undefined,
-                      }}
-                    >
-                      <Sliders size={14} />
-                      <span>{chatBadge || (inheritedSkillBadge ? `Créativité · ${inheritedSkillBadge}` : "Créativité")}</span>
-                    </button>
-                    <button type="button" onClick={() => { setContextOpen(false); setCreativityOpen(false); setSkillsOpen(true); }}>
-                      <Sparkles size={15} />Compétences<small>{conversation?.skills?.length ?? 0}</small>
-                    </button>
-                  </div>
-                </div>
-                {creativityOpen && (
-                  <div
-                    style={{
-                      padding: "4px 18px 10px",
-                      borderBottom: "1px solid var(--border, #e2e8f0)",
-                      background: "var(--surface, #fff)",
-                      maxHeight: "62vh",
-                      overflowY: "auto",
-                      scrollbarWidth: "thin",
-                      boxShadow: "0 8px 24px rgba(15, 23, 42, 0.06)",
-                    }}
-                  >
-                    <div
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "space-between",
-                        marginTop: "4px",
-                        position: "sticky",
-                        top: 0,
-                        background: "var(--surface, #fff)",
-                        zIndex: 2,
-                        paddingBottom: "4px",
-                      }}
-                    >
-                      <span style={{ fontSize: "11px", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--text-secondary, #64748b)" }}>
-                        Réglage de créativité de ce tchat
-                      </span>
-                      <button
-                        type="button"
-                        className="icon-button"
-                        aria-label="Fermer le panneau de créativité"
-                        onClick={() => setCreativityOpen(false)}
-                      >
-                        <X size={15} />
-                      </button>
-                    </div>
-                    <CreativityControl
-                      creativity={effectiveCreativity}
-                      samplingParams={effectiveSampling}
-                      onChange={(nextCreat, nextParams) => void updateConversationCreativity(nextCreat, nextParams)}
-                      model={model}
-                      models={config?.models ?? []}
-                      disabled={working}
-                      inheritedLabel={inheritedSkillBadge ? `Hérité : ${inheritedSkillBadge}` : "Auto (Modèle)"}
-                    />
-                  </div>
-                )}
-              </>
-            );
-          })()}
+          {creativityOpen && (
+            <div className="creativity-drawer">
+              <div className="creativity-drawer-header">
+                <span>Réglage de créativité de ce tchat</span>
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-label="Fermer le panneau de créativité"
+                  onClick={() => setCreativityOpen(false)}
+                >
+                  <X size={15} />
+                </button>
+              </div>
+              <CreativityControl
+                creativity={effectiveCreativity}
+                samplingParams={effectiveSampling}
+                onChange={(nextCreat, nextParams) => void updateConversationCreativity(nextCreat, nextParams)}
+                model={model}
+                models={config?.models ?? []}
+                disabled={working}
+                inheritedLabel={inheritedSkillBadge ? `Hérité : ${inheritedSkillBadge}` : "Auto (Modèle)"}
+              />
+            </div>
+          )}
           {skillsOpen && <SkillsPanel conversation={conversation} model={model} config={config} onClose={() => setSkillsOpen(false)} onConversationChange={setConversation} onRefreshConversations={refreshConversations} onSkillsChange={setSkills} />}
           <div className="chat-scroll" ref={messagesRef} onScroll={() => { const el = messagesRef.current; if (el) { const isBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120; atBottomRef.current = isBottom; setAtBottom(isBottom); } }}>
             {!messages.length && busy !== "switch" ? (
@@ -3718,40 +3712,40 @@ export function ChatApp() {
                 const at = topics.find(t => t.id === activeTopicSpaceId)!;
                 return (
                   <div className="welcome">
-                    <div className="welcome-eyebrow" style={{ color: "#2563eb" }}>
-                      <span style={{ background: "#2563eb" }} /> ESPACE THÉMATIQUE · {at.topic_type.toUpperCase()}
+                    <div className="welcome-eyebrow topic-welcome-eyebrow">
+                      <span /> ESPACE THÉMATIQUE · {at.topic_type.toUpperCase()}
                     </div>
-                    <div className="brand-mark small" style={{ fontSize: "24px", width: "46px", height: "46px", background: "linear-gradient(135deg, #2563eb 0%, #4f46e5 100%)" }}>
+                    <div className="brand-mark small topic-welcome-mark">
                       {at.icon || "📌"}
                     </div>
                     <h1>{at.title}</h1>
                     {at.objective && (
-                      <p style={{ maxWidth: 520, margin: "6px auto 0", color: "var(--text-secondary, #64748b)", fontSize: "13px" }}>
-                        🎯 {at.objective}
+                      <p className="topic-welcome-objective">
+                        {at.objective}
                       </p>
                     )}
 
                     {at.current_resume_context && (
-                      <div style={{ maxWidth: 640, margin: "16px auto 0", padding: "14px 18px", borderRadius: "12px", background: "linear-gradient(135deg, rgba(37,99,235,0.08) 0%, rgba(99,102,241,0.04) 100%)", border: "1px solid rgba(37,99,235,0.18)", textAlign: "left" }}>
-                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "6px" }}>
-                          <strong style={{ fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.05em", color: "#1d4ed8", display: "flex", alignItems: "center", gap: "5px" }}>
+                      <div className="topic-welcome-card">
+                        <div className="topic-welcome-card-header">
+                          <strong>
                             <Compass size={13} />
                             Ton point de reprise
                           </strong>
                           <button
                             type="button"
-                            style={{ fontSize: "11px", color: "#2563eb", background: "none", border: "none", cursor: "pointer", fontWeight: 600 }}
+                            className="topic-welcome-open-btn"
                             onClick={() => { setTopicModalId(at.id); setTopicModalOpen(true); }}
                           >
-                            Ouvrir l&apos;espace ➔
+                            Ouvrir l&apos;espace
                           </button>
                         </div>
-                        <p style={{ margin: 0, fontSize: "13px", lineHeight: 1.5, color: "var(--text-primary, #0f172a)" }}>
+                        <p>
                           {at.current_resume_context}
                         </p>
                         {at.suggested_next_step && (
-                          <div style={{ marginTop: "10px", padding: "8px 12px", background: "rgba(255,255,255,0.85)", borderRadius: "8px", border: "1px solid rgba(37,99,235,0.15)", fontSize: "12px", display: "flex", alignItems: "center", gap: "8px" }}>
-                            <Target size={14} style={{ color: "#2563eb", flexShrink: 0 }} />
+                          <div className="topic-next-step">
+                            <Target size={14} />
                             <span><strong>Prochaine étape :</strong> {at.suggested_next_step}</span>
                           </div>
                         )}
@@ -3820,9 +3814,9 @@ export function ChatApp() {
 
           <div className="composer-area">
             {topicNotice && (
-              <div className="memory-toast" style={{ borderColor: "#93c5fd", background: "#eff6ff" }} role="status">
-                <Compass size={14} className="memory-toast-icon" style={{ color: "#2563eb" }} />
-                <span className="memory-toast-text" style={{ color: "#1e3a8a" }}>{topicNotice}</span>
+              <div className="memory-toast is-topic" role="status">
+                <Compass size={14} className="memory-toast-icon" />
+                <span className="memory-toast-text">{topicNotice}</span>
                 {activeTopicSpaceId && (
                   <button
                     type="button"

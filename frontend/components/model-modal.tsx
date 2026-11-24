@@ -9,14 +9,11 @@ import {
   Coins,
   Cpu,
   Eye,
-  Layers,
-  LoaderCircle,
   RefreshCw,
   Search,
   Sparkles,
   Star,
   X,
-  Zap,
 } from "lucide-react";
 import type { Model } from "@/lib/api";
 import { useModelFavorites } from "@/lib/model-favorites";
@@ -33,10 +30,10 @@ type SortOption = "recommended" | "price_asc" | "price_desc" | "context_desc" | 
 
 const POPULAR_PROVIDERS = [
   { id: "all", label: "Tous" },
-  { id: "favorites", label: "⭐ Favoris" },
-  { id: "vision", label: "👁️ Vision" },
-  { id: "free", label: "🎁 Gratuits" },
-  { id: "reasoning", label: "🧠 Raisonnement" },
+  { id: "favorites", label: "Favoris" },
+  { id: "vision", label: "Vision" },
+  { id: "free", label: "Gratuits" },
+  { id: "reasoning", label: "Raisonnement" },
   { id: "openai", label: "OpenAI" },
   { id: "anthropic", label: "Anthropic" },
   { id: "google", label: "Google" },
@@ -347,8 +344,13 @@ export function ModelModal({
             const isSelected = activeTab === provider.id;
             const tabLabel =
               provider.id === "favorites"
-                ? `⭐ Favoris (${favoritesSet.size})`
+                ? `Favoris (${favoritesSet.size})`
                 : provider.label;
+            const tabIcon =
+              provider.id === "favorites" ? <Star size={13} /> :
+              provider.id === "vision" ? <Eye size={13} /> :
+              provider.id === "free" ? <Sparkles size={13} /> :
+              provider.id === "reasoning" ? <Brain size={13} /> : null;
             return (
               <button
                 key={provider.id}
@@ -359,7 +361,8 @@ export function ModelModal({
                   setVisibleCount(60);
                 }}
               >
-                {tabLabel}
+                {tabIcon}
+                <span>{tabLabel}</span>
               </button>
             );
           })}

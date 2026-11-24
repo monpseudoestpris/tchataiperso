@@ -1,16 +1,16 @@
 export const INTERFACE_THEMES = [
-  { id: "light", label: "Clair", mode: "light", preview: "#f8fafc", accent: "#6366f1" },
-  { id: "dark", label: "Sombre", mode: "dark", preview: "#0f172a", accent: "#a5b4fc" },
-  { id: "ocean", label: "Océan", mode: "light", preview: "#eff8fb", accent: "#0369a1" },
-  { id: "forest", label: "Forêt", mode: "light", preview: "#f1f8f2", accent: "#166534" },
-  { id: "lavender", label: "Lavande", mode: "light", preview: "#f7f3fc", accent: "#7e22ce" },
-  { id: "sand", label: "Sable", mode: "light", preview: "#faf6ed", accent: "#a16207" },
-  { id: "rose", label: "Rose", mode: "light", preview: "#fcf3f5", accent: "#be185d" },
-  { id: "midnight", label: "Nuit bleue", mode: "dark", preview: "#0b172b", accent: "#60a5fa" },
-  { id: "graphite", label: "Graphite", mode: "dark", preview: "#17191d", accent: "#a1a1aa" },
-  { id: "aubergine", label: "Aubergine", mode: "dark", preview: "#21142a", accent: "#c084fc" },
-  { id: "emerald", label: "Émeraude", mode: "dark", preview: "#10231d", accent: "#6ee7b7" },
-  { id: "cocoa", label: "Cacao", mode: "dark", preview: "#251a17", accent: "#fdba74" },
+  { id: "light", label: "Clair", mode: "light", preview: "#faf9f6", accent: "#b4532a" },
+  { id: "dark", label: "Sombre", mode: "dark", preview: "#141311", accent: "#de8a62" },
+  { id: "ocean", label: "Océan", mode: "light", preview: "#f5f9fb", accent: "#0e5a7c" },
+  { id: "forest", label: "Forêt", mode: "light", preview: "#f6f9f6", accent: "#1f5c3a" },
+  { id: "lavender", label: "Lavande", mode: "light", preview: "#f9f7fc", accent: "#673ab7" },
+  { id: "sand", label: "Sable", mode: "light", preview: "#fbf8f1", accent: "#8f5314" },
+  { id: "rose", label: "Rose", mode: "light", preview: "#fcf7f8", accent: "#9f2d52" },
+  { id: "midnight", label: "Nuit bleue", mode: "dark", preview: "#0d1624", accent: "#7cb3f5" },
+  { id: "graphite", label: "Graphite", mode: "dark", preview: "#151619", accent: "#b8bec9" },
+  { id: "aubergine", label: "Aubergine", mode: "dark", preview: "#1a1222", accent: "#cfa8f5" },
+  { id: "emerald", label: "Émeraude", mode: "dark", preview: "#0f1d17", accent: "#74d9a6" },
+  { id: "cocoa", label: "Cacao", mode: "dark", preview: "#1c1411", accent: "#e6a979" },
 ] as const;
 
 export type InterfaceTheme = (typeof INTERFACE_THEMES)[number];
@@ -19,6 +19,10 @@ const INTERFACE_THEME_EVENT = "clair-interface-theme-change";
 
 export function getInterfaceTheme(id: string | null): InterfaceTheme {
   return INTERFACE_THEMES.find((theme) => theme.id === id) ?? INTERFACE_THEMES[0];
+}
+
+export function getOppositeModeTheme(current: InterfaceTheme): InterfaceTheme {
+  return getInterfaceTheme(current.mode === "dark" ? "light" : "dark");
 }
 
 export function applyInterfaceTheme(theme: InterfaceTheme): void {

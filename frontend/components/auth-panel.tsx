@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
-import { KeyRound, LoaderCircle, ShieldCheck, Sparkles } from "lucide-react";
+import { KeyRound, LoaderCircle, ShieldCheck } from "lucide-react";
 import { api, errorMessage, type AuthUser } from "@/lib/api";
 
 export function AuthPanel({ invitationToken, serviceError, onAuthenticated, onRegistration }: {
@@ -34,7 +34,15 @@ export function AuthPanel({ invitationToken, serviceError, onAuthenticated, onRe
 
   return <main className="auth-shell">
     <section className="auth-panel" aria-labelledby="auth-title">
-      <div className="auth-brand"><span className="brand-mark small"><Sparkles strokeWidth={1.5} /></span><span>cLAIr<span className="brand-dot">.</span></span></div>
+      <div className="auth-brand">
+        <span className="brand-mark small" aria-hidden="true">
+          <svg viewBox="0 0 32 32" fill="none">
+            <path d="M16 5v22M5 16h22M8.2 8.2l15.6 15.6M8.2 23.8 23.8 8.2" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
+            <circle cx="16" cy="16" r="2.4" fill="var(--accent-primary)" />
+          </svg>
+        </span>
+        <span>cLAIr<span className="brand-dot">.</span></span>
+      </div>
       <span className="auth-eyebrow"><ShieldCheck size={14} /> ESPACE PERSONNEL</span>
       <h1 id="auth-title">{registering ? "Créer votre espace" : "Retrouver votre espace"}</h1>
       <p className="auth-intro">{registering ? "Choisissez un identifiant et un mot de passe pour activer votre invitation." : "Connectez-vous avec les identifiants de votre compte."}</p>

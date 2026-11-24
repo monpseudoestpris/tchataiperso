@@ -96,3 +96,10 @@ test("server snapshot reads safely without browser globals", () => {
   delete global.document;
   assert.equal(themes.readInterfaceTheme().id, "light");
 });
+
+test("getOppositeModeTheme toggles cleanly between light and dark modes", () => {
+  assert.equal(themes.getOppositeModeTheme(themes.getInterfaceTheme("light")).id, "dark");
+  assert.equal(themes.getOppositeModeTheme(themes.getInterfaceTheme("dark")).id, "light");
+  assert.equal(themes.getOppositeModeTheme(themes.getInterfaceTheme("sand")).id, "dark");
+  assert.equal(themes.getOppositeModeTheme(themes.getInterfaceTheme("midnight")).id, "light");
+});

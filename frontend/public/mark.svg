@@ -1,11 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="80" height="80" viewBox="0 0 80 80">
-  <defs>
-    <linearGradient id="mark-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#6366f1"/>
-      <stop offset="50%" stop-color="#8b5cf6"/>
-      <stop offset="100%" stop-color="#ec4899"/>
-    </linearGradient>
-  </defs>
-  <rect width="80" height="80" rx="22" fill="url(#mark-grad)"/>
-  <path d="M40 18v44M18 40h44M24.5 24.5l31 31m-31 0 31-31" stroke="#ffffff" stroke-width="5" stroke-linecap="round"/>
+  <rect width="80" height="80" rx="20" fill="#1c1917"/>
+  <path d="M40 19v42M19 40h42M25.2 25.2l29.6 29.6m-29.6 0 29.6-29.6" stroke="#faf9f6" stroke-width="4.2" stroke-linecap="round"/>
+  <circle cx="40" cy="40" r="4.5" fill="#b4532a"/>
 </svg>

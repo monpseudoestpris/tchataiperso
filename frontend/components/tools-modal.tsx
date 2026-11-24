@@ -173,7 +173,7 @@ export function ToolsModal({
                   title="Ouvrir votre espace Mes Vidéos : liens YouTube, transcriptions intégrales et résumés IA"
                 >
                   <div className={styles.toolCardHeader}>
-                    <div className={styles.toolIconWrap} style={{ background: "#fef2f2", color: "#dc2626" }}>
+                    <div className={`${styles.toolIconWrap} ${styles.toneCrimson}`}>
                       <Film size={19} />
                     </div>
                     {savedVideosCount > 0 ? (
@@ -204,7 +204,7 @@ export function ToolsModal({
                   title="Ingérer un PDF ou une série d'images (règles de jeu, manuels) avec Mistral OCR et schémas WebP"
                 >
                   <div className={styles.toolCardHeader}>
-                    <div className={styles.toolIconWrap} style={{ background: "#e0e7ff", color: "#4f46e5" }}>
+                    <div className={`${styles.toolIconWrap} ${styles.toneAccent}`}>
                       <BookOpen size={19} />
                     </div>
                     {visualDocsCount > 0 ? (
@@ -235,7 +235,7 @@ export function ToolsModal({
                   title="Ouvrir Hermes Agent (Nous Research)"
                 >
                   <div className={styles.toolCardHeader}>
-                    <div className={styles.toolIconWrap} style={{ background: "#eef2ff", color: "#4338ca" }}>
+                    <div className={`${styles.toolIconWrap} ${styles.toneAccent}`}>
                       <Bot size={19} />
                     </div>
                     <span className={styles.toolTag}>Nous Research · Agent</span>
@@ -260,7 +260,7 @@ export function ToolsModal({
                   title="Ouvrir cLAIr Pages"
                 >
                   <div className={styles.toolCardHeader}>
-                    <div className={styles.toolIconWrap} style={{ background: "#e0f2fe", color: "#0284c7" }}>
+                    <div className={`${styles.toolIconWrap} ${styles.toneInfo}`}>
                       <Globe size={19} />
                     </div>
                     <span className={styles.toolTag}>HTML5 · Autonome</span>
@@ -284,7 +284,7 @@ export function ToolsModal({
                 title="Ouvrir DeepSearch"
               >
                 <div className={styles.toolCardHeader}>
-                  <div className={styles.toolIconWrap} style={{ background: "#e0f2fe", color: "#0284c7" }}>
+                  <div className={`${styles.toolIconWrap} ${styles.toneInfo}`}>
                     <Compass size={19} />
                   </div>
                   <span className={styles.toolTag}>SearXNG</span>
@@ -307,7 +307,7 @@ export function ToolsModal({
                 title="Ouvrir mes cours et formations"
               >
                 <div className={styles.toolCardHeader}>
-                  <div className={styles.toolIconWrap} style={{ background: "#d1fae5", color: "#059669" }}>
+                  <div className={`${styles.toolIconWrap} ${styles.toneEmerald}`}>
                     <GraduationCap size={19} />
                   </div>
                   <span className={styles.toolTag}>Apprentissage</span>
@@ -330,7 +330,7 @@ export function ToolsModal({
                 title="Ouvrir le Mode Réviser"
               >
                 <div className={styles.toolCardHeader}>
-                  <div className={styles.toolIconWrap} style={{ background: "#ccfbf1", color: "#0d9488" }}>
+                  <div className={`${styles.toolIconWrap} ${styles.toneEmerald}`}>
                     <Sparkles size={19} />
                   </div>
                   <span className={styles.toolTag}>3D & Quiz</span>
@@ -353,7 +353,7 @@ export function ToolsModal({
                 title="Ouvrir le Canvas Code"
               >
                 <div className={styles.toolCardHeader}>
-                  <div className={styles.toolIconWrap} style={{ background: "#ede9fe", color: "#7c3aed" }}>
+                  <div className={`${styles.toolIconWrap} ${styles.toneAccent}`}>
                     <Code2 size={19} />
                   </div>
                   {canvasFilesCount > 0 ? (
@@ -382,7 +382,7 @@ export function ToolsModal({
                 title="Ouvrir le Studio Image"
               >
                 <div className={styles.toolCardHeader}>
-                  <div className={styles.toolIconWrap} style={{ background: "#fce7f3", color: "#db2777" }}>
+                  <div className={`${styles.toolIconWrap} ${styles.toneCrimson}`}>
                     <ImagePlus size={19} />
                   </div>
                   <span className={styles.toolTag}>Studio IA</span>
@@ -405,7 +405,7 @@ export function ToolsModal({
                 title="Ouvrir le Studio Son & Musique"
               >
                 <div className={styles.toolCardHeader}>
-                  <div className={styles.toolIconWrap} style={{ background: "#ffedd5", color: "#ea580c" }}>
+                  <div className={`${styles.toolIconWrap} ${styles.toneAmber}`}>
                     <Volume2 size={19} />
                   </div>
                   <span className={styles.toolTag}>ElevenLabs</span>
@@ -428,7 +428,7 @@ export function ToolsModal({
                 title="Ouvrir le Conseil Multi-Agents"
               >
                 <div className={styles.toolCardHeader}>
-                  <div className={styles.toolIconWrap} style={{ background: "#e0e7ff", color: "#4f46e5" }}>
+                  <div className={`${styles.toolIconWrap} ${styles.toneAccent}`}>
                     <Users size={19} />
                   </div>
                   {isMultiAgentActive ? (
@@ -455,7 +455,7 @@ export function ToolsModal({
                 title="Ouvrir mes blogs"
               >
                 <div className={styles.toolCardHeader}>
-                  <div className={styles.toolIconWrap} style={{ background: "#fef3c7", color: "#d97706" }}>
+                  <div className={`${styles.toolIconWrap} ${styles.toneAmber}`}>
                     <Newspaper size={19} />
                   </div>
                   <span className={styles.toolTag}>Veille web</span>
@@ -478,7 +478,7 @@ export function ToolsModal({
                 title="Ouvrir le tableau de bord financier"
               >
                 <div className={styles.toolCardHeader}>
-                  <div className={styles.toolIconWrap} style={{ background: "#dcfce7", color: "#16a34a" }}>
+                  <div className={`${styles.toolIconWrap} ${styles.toneEmerald}`}>
                     <TrendingUp size={19} />
                   </div>
                   <span className={styles.toolTag}>Cotations</span>

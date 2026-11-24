@@ -192,7 +192,7 @@ export function SkillsPanel({ conversation, model, config, onClose, onConversati
               <input type="checkbox" checked={activeIds.includes(skill.id)} disabled={!!busy} onChange={() => void toggleSkill(skill)} />
               <span>{skill.name}</span>
               <span className="skill-mention-badge" title={`Mentionnez cette compétence avec @${skillToSlug(skill.name)}`}>@{skillToSlug(skill.name)}</span>
-              {creatBadge && <span className="skill-mention-badge" style={{ background: "rgba(99, 102, 241, 0.12)", color: "#4f46e5" }} title="Créativité spécifique associée à cette compétence">{creatBadge}</span>}
+              {creatBadge && <span className="skill-creativity-badge" title="Créativité spécifique associée à cette compétence">{creatBadge}</span>}
             </label>
             <div><button type="button" className="icon-button" aria-label={`Modifier ${skill.name}`} title="Modifier" disabled={!!busy} onClick={() => editSkill(skill)}><Pencil size={14} /></button><button type="button" className="icon-button" aria-label={`Supprimer ${skill.name}`} title="Supprimer" disabled={!!busy} onClick={() => void deleteSkill(skill)}><Trash2 size={14} /></button></div>
           </div>

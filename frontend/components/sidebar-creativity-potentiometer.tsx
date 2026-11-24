@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type WheelEvent } from "react";
-import { RotateCcw, Sliders, Minus, Plus } from "lucide-react";
+import { useRef, useState, type KeyboardEvent, type PointerEvent, type WheelEvent } from "react";
+import { ChevronDown, ChevronUp, Minus, Plus, RotateCcw, Sliders } from "lucide-react";
 
 type SidebarCreativityPotentiometerProps = {
   creativity: number | null;
@@ -16,13 +16,11 @@ type SidebarCreativityPotentiometerProps = {
 function getCreativityPalette(c: number) {
   const clamped = Math.max(0, Math.min(1, c));
   const hue = Math.round(138 * (1 - clamped));
-  const lightness = Math.round(52 - clamped * 4);
+  const lightness = Math.round(48 - clamped * 4);
   return {
-    accent: `hsl(${hue}, 84%, ${lightness}%)`,
-    text: `hsl(${hue}, 80%, ${Math.round(28 + clamped * 12)}%)`,
-    bg: `hsla(${hue}, 85%, 52%, 0.12)`,
-    border: `hsla(${hue}, 80%, 46%, 0.45)`,
-    glow: `hsla(${hue}, 90%, 50%, 0.35)`,
+    accent: `hsl(${hue}, 74%, ${lightness}%)`,
+    bg: `hsla(${hue}, 70%, 50%, 0.1)`,
+    border: `hsla(${hue}, 65%, 46%, 0.35)`,
   };
 }
 
@@ -59,25 +57,25 @@ export function SidebarCreativityPotentiometer({
   onOpenDetails,
 }: SidebarCreativityPotentiometerProps) {
   const effectiveSourceValue = creativity ?? inheritedCreativity ?? 0.2;
-  const [draftValue, setDraftValue] = useState<number>(effectiveSourceValue);
-  const [isDragging, setIsDragging] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [dragValue, setDragValue] = useState<number | null>(null);
   const knobRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ latestVal: number } | null>(null);
 
-  useEffect(() => {
-    if (!isDragging) {
-      setDraftValue(creativity ?? inheritedCreativity ?? 0.2);
-    }
-  }, [creativity, inheritedCreativity, isDragging]);
-
-  const displayVal = isDragging ? draftValue : effectiveSourceValue;
+  const isDragging = dragValue !== null;
+  const displayVal = dragValue ?? effectiveSourceValue;
   const pct = Math.round(displayVal * 100);
   const palette = getCreativityPalette(displayVal);
-  // Rotary sweep: -135 deg (0%) to +135 deg (100%)
   const currentAngle = -135 + displayVal * 270;
 
   const isCustom = creativity !== null;
   const isInherited = creativity === null && inheritedCreativity !== null;
+
+  const summaryText = isCustom
+    ? `${pct} %${hasSamplingOverrides ? "+" : ""}`
+    : isInherited
+      ? `${inheritedSkillName ? `${inheritedSkillName} · ` : ""}${pct} %`
+      : `Auto · ${pct} %`;
 
   function clampStep(val: number): number {
     const clamped = Math.max(0, Math.min(1, val));
@@ -92,21 +90,12 @@ export function SidebarCreativityPotentiometer({
     const dx = clientX - cx;
     const dy = clientY - cy;
 
-    // Angle in degrees where 0 deg is North (top), 90 East, 180 South, -90 West
     const rad = Math.atan2(dx, -dy);
-    let deg = (rad * 180) / Math.PI; // -180 to 180
+    let deg = (rad * 180) / Math.PI;
+    if (deg < -135) deg = -135;
+    else if (deg > 135) deg = 135;
 
-    // Arc active from -135 deg to +135 deg. Dead zone is [-180, -135) and (135, 180] (bottom 90 degrees)
-    if (deg < -135) {
-      // In bottom-left dead zone: snap to 0% if closer to -135
-      deg = -135;
-    } else if (deg > 135) {
-      // In bottom-right dead zone: snap to 100% if closer to 135
-      deg = 135;
-    }
-
-    const ratio = (deg + 135) / 270;
-    return clampStep(ratio);
+    return clampStep((deg + 135) / 270);
   }
 
   function handlePointerDown(e: PointerEvent<HTMLDivElement>) {
@@ -115,15 +104,14 @@ export function SidebarCreativityPotentiometer({
     e.currentTarget.setPointerCapture(e.pointerId);
     const nextVal = calculateValueFromPointer(e.clientX, e.clientY);
     dragRef.current = { latestVal: nextVal };
-    setIsDragging(true);
-    setDraftValue(nextVal);
+    setDragValue(nextVal);
   }
 
   function handlePointerMove(e: PointerEvent<HTMLDivElement>) {
     if (!isDragging || !dragRef.current || disabled) return;
     const nextVal = calculateValueFromPointer(e.clientX, e.clientY);
     dragRef.current.latestVal = nextVal;
-    setDraftValue(nextVal);
+    setDragValue(nextVal);
   }
 
   function finishDrag(e: PointerEvent<HTMLDivElement>) {
@@ -133,7 +121,7 @@ export function SidebarCreativityPotentiometer({
     }
     const finalVal = dragRef.current.latestVal;
     dragRef.current = null;
-    setIsDragging(false);
+    setDragValue(null);
     onCommitCreativity(finalVal);
   }
 
@@ -141,9 +129,7 @@ export function SidebarCreativityPotentiometer({
     if (disabled) return;
     e.preventDefault();
     const step = e.deltaY < 0 ? 0.05 : -0.05;
-    const next = clampStep(displayVal + step);
-    setDraftValue(next);
-    onCommitCreativity(next);
+    onCommitCreativity(clampStep(displayVal + step));
   }
 
   function handleKeyDown(e: KeyboardEvent<HTMLDivElement>) {
@@ -155,229 +141,212 @@ export function SidebarCreativityPotentiometer({
     else if (e.key === "End") next = 1;
     if (next !== null) {
       e.preventDefault();
-      setDraftValue(next);
       onCommitCreativity(next);
     }
   }
 
   function nudge(delta: number) {
     if (disabled) return;
-    const next = clampStep(displayVal + delta);
-    setDraftValue(next);
-    onCommitCreativity(next);
+    onCommitCreativity(clampStep(displayVal + delta));
   }
 
-  // 74x74 viewBox, center (37, 37), radius 30
   const bgArc = describeArc(37, 37, 30, -135, 135);
   const activeArc = displayVal > 0.01 ? describeArc(37, 37, 30, -135, currentAngle) : "";
   const ticks = [0, 0.25, 0.5, 0.75, 1];
 
   return (
-    <div
-      className="sidebar-creativity-potentiometer"
-      style={{
-        background: palette.bg,
-        borderColor: palette.border,
-      }}
-      title="Potentiomètre de créativité : tournez directement la molette au doigt/souris, ou utilisez la molette et les boutons +/-"
-    >
-      <div className="sidebar-pot-knob-wrapper">
+    <div className="sidebar-pot-compact-wrap">
+      <button
+        type="button"
+        className={`sidebar-pot-compact ${expanded ? "is-open" : ""}`}
+        aria-expanded={expanded}
+        onClick={() => setExpanded((prev) => !prev)}
+        title="Afficher ou masquer le potentiomètre de créativité"
+      >
+        <span className="sidebar-pot-compact-dot" style={{ backgroundColor: palette.accent }} aria-hidden="true" />
+        <Sliders size={13} />
+        <span className="sidebar-pot-compact-label">Créativité</span>
+        <span className="sidebar-pot-compact-val">{summaryText}</span>
+        {expanded ? <ChevronDown size={13} /> : <ChevronUp size={13} />}
+      </button>
+
+      {expanded && (
         <div
-          ref={knobRef}
-          role="slider"
-          tabIndex={disabled ? -1 : 0}
-          aria-label="Potentiomètre rotatif de créativité"
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={pct}
-          aria-valuetext={`${pct} % (${getCreativityLevelLabel(displayVal)})`}
-          className={`sidebar-rotary-knob ${isDragging ? "is-turning" : ""} ${disabled ? "is-disabled" : ""}`}
-          onPointerDown={handlePointerDown}
-          onPointerMove={handlePointerMove}
-          onPointerUp={finishDrag}
-          onPointerCancel={finishDrag}
-          onWheel={handleWheel}
-          onKeyDown={handleKeyDown}
+          className="sidebar-creativity-potentiometer"
+          title="Potentiomètre de créativité : tournez la molette au doigt/souris, ou utilisez les boutons +/-"
         >
-          <svg width="74" height="74" viewBox="0 0 74 74" aria-hidden="true">
-            {/* Scale ticks */}
-            {ticks.map(t => {
-              const ang = -135 + t * 270;
-              const p1 = polarToCartesian(37, 37, 33.5, ang);
-              const p2 = polarToCartesian(37, 37, 36.5, ang);
-              return (
-                <line
-                  key={t}
-                  x1={p1.x}
-                  y1={p1.y}
-                  x2={p2.x}
-                  y2={p2.y}
-                  stroke={t <= displayVal ? palette.accent : "#cbd5e1"}
-                  strokeWidth="2"
+          <div className="sidebar-pot-knob-wrapper">
+            <div
+              ref={knobRef}
+              role="slider"
+              tabIndex={disabled ? -1 : 0}
+              aria-label="Potentiomètre rotatif de créativité"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={pct}
+              aria-valuetext={`${pct} % (${getCreativityLevelLabel(displayVal)})`}
+              className={`sidebar-rotary-knob ${isDragging ? "is-turning" : ""} ${disabled ? "is-disabled" : ""}`}
+              onPointerDown={handlePointerDown}
+              onPointerMove={handlePointerMove}
+              onPointerUp={finishDrag}
+              onPointerCancel={finishDrag}
+              onWheel={handleWheel}
+              onKeyDown={handleKeyDown}
+            >
+              <svg width="74" height="74" viewBox="0 0 74 74" aria-hidden="true">
+                {ticks.map((t) => {
+                  const ang = -135 + t * 270;
+                  const p1 = polarToCartesian(37, 37, 33.5, ang);
+                  const p2 = polarToCartesian(37, 37, 36.5, ang);
+                  return (
+                    <line
+                      key={t}
+                      x1={p1.x}
+                      y1={p1.y}
+                      x2={p2.x}
+                      y2={p2.y}
+                      stroke={t <= displayVal ? palette.accent : "var(--border-strong)"}
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                    />
+                  );
+                })}
+
+                <path
+                  d={bgArc}
+                  fill="none"
+                  stroke="var(--border-subtle)"
+                  strokeWidth="5"
                   strokeLinecap="round"
                 />
-              );
-            })}
 
-            {/* Inactive background track */}
-            <path
-              d={bgArc}
-              fill="none"
-              stroke="rgba(148, 163, 184, 0.3)"
-              strokeWidth="5"
-              strokeLinecap="round"
-            />
+                {activeArc && (
+                  <path
+                    d={activeArc}
+                    fill="none"
+                    stroke={palette.accent}
+                    strokeWidth="5.5"
+                    strokeLinecap="round"
+                  />
+                )}
 
-            {/* Active colored arc */}
-            {activeArc && (
-              <path
-                d={activeArc}
-                fill="none"
-                stroke={palette.accent}
-                strokeWidth="5.5"
-                strokeLinecap="round"
-              />
-            )}
+                <circle
+                  cx="37"
+                  cy="37"
+                  r="22"
+                  fill="var(--bg-surface)"
+                  stroke={palette.border}
+                  strokeWidth="2"
+                />
+                <circle
+                  cx="37"
+                  cy="37"
+                  r="18"
+                  fill={palette.bg}
+                  stroke="var(--border-subtle)"
+                  strokeWidth="1"
+                />
 
-            {/* Outer knob body */}
-            <circle
-              cx="37"
-              cy="37"
-              r="22"
-              fill="#ffffff"
-              stroke={palette.border}
-              strokeWidth="2.2"
-              style={{ filter: `drop-shadow(0 3px 8px ${palette.glow})` }}
-            />
-            {/* Metallic grooved inner circle */}
-            <circle
-              cx="37"
-              cy="37"
-              r="18"
-              fill={palette.bg}
-              stroke="rgba(255,255,255,0.9)"
-              strokeWidth="1.2"
-            />
+                <g transform={`rotate(${currentAngle} 37 37)`}>
+                  <line
+                    x1="37"
+                    y1="37"
+                    x2="37"
+                    y2="20"
+                    stroke={palette.accent}
+                    strokeWidth="3.2"
+                    strokeLinecap="round"
+                  />
+                  <circle cx="37" cy="22.5" r="2.8" fill={palette.accent} />
+                  <circle cx="37" cy="37" r="4" fill={palette.accent} />
+                </g>
+              </svg>
+            </div>
 
-            {/* Rotating needle pointer line + grip dot */}
-            <g transform={`rotate(${currentAngle} 37 37)`}>
-              <line
-                x1="37"
-                y1="37"
-                x2="37"
-                y2="20"
-                stroke={palette.accent}
-                strokeWidth="3.6"
-                strokeLinecap="round"
-              />
-              <circle cx="37" cy="22.5" r="3" fill={palette.accent} />
-              <circle cx="37" cy="37" r="4.2" fill={palette.accent} />
-            </g>
-          </svg>
-        </div>
-
-        {/* Quick step buttons underneath knob */}
-        <div className="sidebar-pot-quick-nudge">
-          <button
-            type="button"
-            className="sidebar-pot-nudge-btn"
-            disabled={disabled || displayVal <= 0}
-            onClick={() => nudge(-0.05)}
-            title="Diminuer la créativité (-5%)"
-            aria-label="Diminuer la créativité"
-          >
-            <Minus size={11} />
-          </button>
-          <span className="sidebar-pot-nudge-pct">{pct}%</span>
-          <button
-            type="button"
-            className="sidebar-pot-nudge-btn"
-            disabled={disabled || displayVal >= 1}
-            onClick={() => nudge(0.05)}
-            title="Augmenter la créativité (+5%)"
-            aria-label="Augmenter la créativité"
-          >
-            <Plus size={11} />
-          </button>
-        </div>
-      </div>
-
-      <div className="sidebar-pot-info">
-        <div className="sidebar-pot-top-row">
-          <strong className="sidebar-pot-name">Créativité</strong>
-          <div className="sidebar-pot-actions">
-            {isCustom && (
+            <div className="sidebar-pot-quick-nudge">
               <button
                 type="button"
-                className="sidebar-pot-icon-btn"
-                disabled={disabled}
-                onClick={() => onCommitCreativity(null)}
-                title="Revenir au réglage Auto"
-                aria-label="Réinitialiser la créativité en mode Auto"
+                className="sidebar-pot-nudge-btn"
+                disabled={disabled || displayVal <= 0}
+                onClick={() => nudge(-0.05)}
+                title="Diminuer la créativité (-5%)"
+                aria-label="Diminuer la créativité"
               >
-                <RotateCcw size={12} />
+                <Minus size={11} />
               </button>
-            )}
-            <button
-              type="button"
-              className="sidebar-pot-icon-btn"
-              onClick={onOpenDetails}
-              title="Réglages détaillés des 13 paramètres"
-              aria-label="Réglages détaillés de créativité"
-            >
-              <Sliders size={12} />
-            </button>
+              <span className="sidebar-pot-nudge-pct">{pct}%</span>
+              <button
+                type="button"
+                className="sidebar-pot-nudge-btn"
+                disabled={disabled || displayVal >= 1}
+                onClick={() => nudge(0.05)}
+                title="Augmenter la créativité (+5%)"
+                aria-label="Augmenter la créativité"
+              >
+                <Plus size={11} />
+              </button>
+            </div>
+          </div>
+
+          <div className="sidebar-pot-info">
+            <div className="sidebar-pot-top-row">
+              <strong className="sidebar-pot-name">Créativité</strong>
+              <div className="sidebar-pot-actions">
+                {isCustom && (
+                  <button
+                    type="button"
+                    className="sidebar-pot-icon-btn"
+                    disabled={disabled}
+                    onClick={() => onCommitCreativity(null)}
+                    title="Revenir au réglage Auto"
+                    aria-label="Réinitialiser la créativité en mode Auto"
+                  >
+                    <RotateCcw size={12} />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="sidebar-pot-icon-btn"
+                  onClick={onOpenDetails}
+                  title="Réglages détaillés des 13 paramètres"
+                  aria-label="Réglages détaillés de créativité"
+                >
+                  <Sliders size={12} />
+                </button>
+              </div>
+            </div>
+
+            <div className="sidebar-pot-status-row">
+              <span className="sidebar-pot-value">{summaryText}</span>
+            </div>
+
+            <span className="sidebar-pot-hint">{getCreativityLevelLabel(displayVal)}</span>
+
+            <div className="sidebar-pot-preset-chips">
+              {[
+                { label: "10%", val: 0.1, name: "Précis" },
+                { label: "40%", val: 0.4, name: "Équilibré" },
+                { label: "70%", val: 0.7, name: "Créatif" },
+                { label: "95%", val: 0.95, name: "Audacieux" },
+              ].map((p) => {
+                const isSelected = isCustom && Math.abs(displayVal - p.val) < 0.04;
+                return (
+                  <button
+                    key={p.label}
+                    type="button"
+                    className={`sidebar-pot-chip ${isSelected ? "is-selected" : ""}`}
+                    disabled={disabled}
+                    onClick={() => onCommitCreativity(p.val)}
+                    title={`${p.name} (${p.label})`}
+                  >
+                    {p.label}
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </div>
-
-        <div className="sidebar-pot-status-row">
-          <span
-            className="sidebar-pot-value"
-            style={{
-              color: palette.text,
-              background: "#ffffff",
-              borderColor: palette.border,
-            }}
-          >
-            {isCustom
-              ? `${pct} %${hasSamplingOverrides ? "+" : ""}`
-              : isInherited
-                ? `${inheritedSkillName ? `${inheritedSkillName} · ` : ""}${pct} %`
-                : `Auto · ${pct} %`}
-          </span>
-        </div>
-
-        <span className="sidebar-pot-hint" style={{ color: palette.text }}>
-          {getCreativityLevelLabel(displayVal)}
-        </span>
-
-        {/* 4 Clickable quick presets */}
-        <div className="sidebar-pot-preset-chips">
-          {[
-            { label: "10%", val: 0.1, name: "Précis" },
-            { label: "40%", val: 0.4, name: "Équilibré" },
-            { label: "70%", val: 0.7, name: "Créatif" },
-            { label: "95%", val: 0.95, name: "Audacieux" },
-          ].map(p => {
-            const isSelected = isCustom && Math.abs(displayVal - p.val) < 0.04;
-            return (
-              <button
-                key={p.label}
-                type="button"
-                className={`sidebar-pot-chip ${isSelected ? "is-selected" : ""}`}
-                disabled={disabled}
-                onClick={() => {
-                  setDraftValue(p.val);
-                  onCommitCreativity(p.val);
-                }}
-                title={`${p.name} (${p.label})`}
-              >
-                {p.label}
-              </button>
-            );
-          })}
-        </div>
-      </div>
+      )}
     </div>
   );
 }
