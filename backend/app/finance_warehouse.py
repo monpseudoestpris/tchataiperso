@@ -413,6 +413,65 @@ CREATE TABLE IF NOT EXISTS finance_sync_runtime_state (
     state_json TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS finance_game_profiles (
+    user_id TEXT PRIMARY KEY,
+    starting_capital REAL NOT NULL DEFAULT 10000.0,
+    equity REAL NOT NULL DEFAULT 10000.0,
+    rounds_played INTEGER NOT NULL DEFAULT 0,
+    trades_taken INTEGER NOT NULL DEFAULT 0,
+    wins INTEGER NOT NULL DEFAULT 0,
+    losses INTEGER NOT NULL DEFAULT 0,
+    draws INTEGER NOT NULL DEFAULT 0,
+    current_streak INTEGER NOT NULL DEFAULT 0,
+    best_streak INTEGER NOT NULL DEFAULT 0,
+    total_pnl REAL NOT NULL DEFAULT 0.0,
+    gross_profit REAL NOT NULL DEFAULT 0.0,
+    gross_loss REAL NOT NULL DEFAULT 0.0,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS finance_game_rounds (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    blind_mode INTEGER NOT NULL DEFAULT 1,
+    universe_type TEXT NOT NULL,
+    universe_value TEXT NOT NULL DEFAULT '',
+    timeframe TEXT NOT NULL,
+    horizon_code TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    company_name TEXT NOT NULL DEFAULT '',
+    exchange TEXT NOT NULL DEFAULT '',
+    sector TEXT NOT NULL DEFAULT '',
+    currency TEXT NOT NULL DEFAULT '',
+    cutoff_index INTEGER NOT NULL,
+    horizon_bars INTEGER NOT NULL,
+    current_step INTEGER NOT NULL DEFAULT 0,
+    cutoff_date TEXT NOT NULL,
+    end_date TEXT NOT NULL,
+    position_side TEXT,
+    position_status TEXT NOT NULL DEFAULT 'none',
+    position_size_pct REAL NOT NULL DEFAULT 100.0,
+    stake_amount REAL NOT NULL DEFAULT 0.0,
+    entry_step INTEGER,
+    entry_date TEXT,
+    entry_price REAL,
+    stop_loss REAL,
+    take_profit REAL,
+    exit_step INTEGER,
+    exit_date TEXT,
+    exit_price REAL,
+    exit_reason TEXT,
+    return_pct REAL,
+    pnl_amount REAL,
+    buy_hold_return_pct REAL,
+    bars_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    finished_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_fin_game_rounds_user_date ON finance_game_rounds (user_id, created_at DESC);
 """
 
 

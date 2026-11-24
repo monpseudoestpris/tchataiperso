@@ -22,6 +22,7 @@ from .routers import (
     conversations,
     family,
     finance as finance_router,
+    finance_game as finance_game_router,
     hermes,
     hermes_mcp,
     images,
@@ -167,6 +168,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(visual_docs.router)
     app.include_router(voice.router)
     app.include_router(finance_router.router, prefix="/api/finance", tags=["finance"])
+    app.include_router(finance_game_router.router, prefix="/api/finance/game", tags=["finance-game"])
 
     return app
 

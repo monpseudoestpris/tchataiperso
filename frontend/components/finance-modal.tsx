@@ -7,6 +7,7 @@ import { FinanceDossierPanel } from "@/components/finance-dossier-panel";
 import { FinanceEufundBrowser } from "@/components/finance-eufund-browser";
 import { FinanceExpertsPanel } from "@/components/finance-experts-panel";
 import { FinanceFullscreenTickerSwitcher } from "@/components/finance-fullscreen-ticker-switcher";
+import { FinanceGamePanel } from "@/components/finance-game-panel";
 import { FinanceHelpGuideId, FinanceHelpModal } from "@/components/finance-help-modal";
 import { FinanceThemeSwitcher, useInterfaceTheme } from "@/components/finance-theme-switcher";
 import { ModelModal } from "@/components/model-modal";
@@ -71,6 +72,7 @@ import {
   Target,
   TrendingDown,
   TrendingUp,
+  Trophy,
   Wallet,
   X,
 } from "lucide-react";
@@ -117,7 +119,13 @@ import {
   type WatchlistItem,
 } from "@/lib/api";
 
-export type FinanceMainTab = "search_indices" | "fundamentals" | "chart_tech" | "screener" | "data_sync";
+export type FinanceMainTab =
+  | "search_indices"
+  | "fundamentals"
+  | "chart_tech"
+  | "screener"
+  | "data_sync"
+  | "trading_game";
 
 type FinanceModalProps = {
   isOpen: boolean;
@@ -1742,6 +1750,18 @@ export function FinanceModal({
                 {syncProgress?.is_running ? `En cours ${syncProgress.percent}%` : "EODHD · Auto 24h"}
               </span>
             </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mainTab === "trading_game"}
+              className={`finance-main-tab-btn ${mainTab === "trading_game" ? "active" : ""}`}
+              onClick={() => switchMainTab("trading_game")}
+            >
+              <span className="finance-main-tab-num">6</span>
+              <Trophy size={15} />
+              <span className="finance-main-tab-label">Défi Replay</span>
+              <span className="finance-main-tab-meta">Jeu · Aveugle</span>
+            </button>
           </nav>
         </div>
 
@@ -1935,7 +1955,7 @@ export function FinanceModal({
               </div>
             )}
 
-            {mainTab !== "search_indices" && mainTab !== "data_sync" && loading && !data && (
+            {mainTab !== "search_indices" && mainTab !== "data_sync" && mainTab !== "trading_game" && loading && !data && (
               <div className="finance-modal-loading">
                 <LoaderCircle size={36} className="spin text-emerald" />
                 <p>Téléchargement des cours live et des états financiers (EOD Historical Data)…</p>
@@ -1975,6 +1995,29 @@ export function FinanceModal({
                   onSynced={() => {
                     void loadWorkspaceData(false);
                   }}
+                />
+              </div>
+            )}
+
+            {/* ONGLET 6 : Jeu Trading Replay */}
+            {(mainTab === "trading_game" || mountedMainTabs.trading_game) && (
+              <div hidden={mainTab !== "trading_game"}>
+                <FinanceGamePanel
+                  isActive={isOpen && mainTab === "trading_game"}
+                  dark={theme.mode === "dark"}
+                  indices={indices}
+                  watchlists={watchlists}
+                  activeListId={activeListId}
+                  customIndicators={customIndicators}
+                  onOpenStock={async (target, displayName, openTab) => {
+                    setQuery(displayName || target);
+                    setMainTab(openTab);
+                    await loadDetails(target);
+                    window.requestAnimationFrame(() => {
+                      modalBodyRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+                    });
+                  }}
+                  onOpenDataSync={() => switchMainTab("data_sync")}
                 />
               </div>
             )}

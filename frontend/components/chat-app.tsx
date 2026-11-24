@@ -4,7 +4,7 @@ import {
   ArrowDown, ArrowRightLeft, ArrowUp, AudioLines, Bookmark, BookmarkCheck, BookOpen, Bot, Brain, Check, ChevronDown, ChevronLeft, ChevronRight,
   CircleAlert, Code2, Compass, Copy, Download, ExternalLink, Eye, FileCode2, FileText, FolderArchive, FolderKanban,
   Globe, Globe2, GraduationCap, ImagePlus, LayoutGrid, LineChart, Link2, LoaderCircle, LogOut, Menu, MessageCircle, Newspaper, PanelLeftClose, Paperclip,
-  Pause, Pencil, Play, Plus, Power, Presentation, Search, Settings, Share2, Shield, Sliders, SlidersHorizontal, Sparkles, Square, SquarePlay, Star, Target, Trash2, TrendingUp, Unlink, Users, UsersRound, Volume2, WandSparkles, X,
+  Pause, Pencil, Play, Plus, Power, Presentation, Search, Settings, Share2, Shield, Sliders, SlidersHorizontal, Sparkles, Square, SquarePlay, Star, Target, Trash2, TrendingUp, Trophy, Unlink, Users, UsersRound, Volume2, WandSparkles, X,
 } from "lucide-react";
 import { isValidElement, memo, useEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
@@ -4009,6 +4009,10 @@ export function ChatApp() {
                   <button type="button" className="finance-mode-modal-link" style={{ marginLeft: "4px" }} onClick={() => openFinanceModal()} title="Ouvrir le tableau de bord avec courbe de cours et tableaux financiers">
                     <LineChart size={12} />
                     <span>Tableau de bord</span>
+                  </button>
+                  <button type="button" className="finance-mode-modal-link" style={{ marginLeft: "4px" }} onClick={() => openFinanceModal(undefined, null, "trading_game")} title="Jouer à Trading Replay (prévoir Achat / Vente sur historique réel)">
+                    <Trophy size={12} />
+                    <span>Défi Replay</span>
                   </button>
                   <button type="button" onClick={() => setFinanceMode(false)}>
                     <X size={12} />

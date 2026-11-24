@@ -4,11 +4,13 @@ import {
   CandlestickSeries,
   ColorType,
   createChart,
+  createSeriesMarkers,
   HistogramSeries,
   LineSeries,
   type IChartApi,
   type ISeriesApi,
   type Logical,
+  type SeriesMarker,
   type SeriesType,
   type Time,
   type UTCTimestamp,
@@ -18,6 +20,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { FinanceHoverTip } from "@/components/finance-info-tip";
 import type { CustomIndicator, EodBar } from "@/lib/api";
+import {
+  formatRelativeSessionLabel,
+  type ChartMarkerOverlay,
+  type ChartPriceLineOverlay,
+} from "@/lib/finance-game-helpers";
+import type { GameTimeframe } from "@/lib/finance-game-api";
 import {
   dateToLogicalIndex,
   DRAWING_COLORS,
@@ -91,6 +99,16 @@ function toTime(date: string): Time {
   return (Date.parse(date.replace(" ", "T") + ":00Z") / 1000) as UTCTimestamp;
 }
 
+function timeToIsoKey(time: Time): string {
+  if (typeof time === "string") return time.slice(0, 10);
+  if (typeof time === "number") {
+    return new Date(time * 1000).toISOString().slice(0, 10);
+  }
+  const mm = String(time.month).padStart(2, "0");
+  const dd = String(time.day).padStart(2, "0");
+  return `${time.year}-${mm}-${dd}`;
+}
+
 function pick(times: Time[], values: Num[]) {
   return values.flatMap((v, i) => (v == null || !Number.isFinite(v) ? [] : [{ time: times[i], value: v }]));
 }
@@ -112,6 +130,11 @@ type FinanceTvChartProps = {
   onChangeCustomFills?: (fills: Record<string, IndicatorFillConfig>) => void;
   onOpenIndicatorEditor?: (indicator?: CustomIndicator | null) => void;
   onDeleteCustomIndicator?: (id: string) => void;
+  priceLines?: ChartPriceLineOverlay[];
+  markers?: ChartMarkerOverlay[];
+  blindCutoffIndex?: number | null;
+  blindTimeframe?: GameTimeframe;
+  disableDrawingsPersistence?: boolean;
 };
 
 type ProjectedDrawing = {
@@ -157,6 +180,11 @@ export function FinanceTvChart({
   onChangeCustomFills,
   onOpenIndicatorEditor,
   onDeleteCustomIndicator,
+  priceLines,
+  markers,
+  blindCutoffIndex = null,
+  blindTimeframe = "day",
+  disableDrawingsPersistence = false,
 }: FinanceTvChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -217,7 +245,9 @@ export function FinanceTvChart({
   // Drawing state
   const [tool, setTool] = useState<DrawingTool>("none");
   const [drawColor, setDrawColor] = useState<string>(DRAWING_COLORS[0]);
-  const [drawings, setDrawings] = useState<ChartDrawing[]>(() => loadChartDrawings(symbol));
+  const [drawings, setDrawings] = useState<ChartDrawing[]>(() =>
+    disableDrawingsPersistence ? [] : loadChartDrawings(symbol),
+  );
   const [draft, setDraft] = useState<ChartDrawing | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const dragStartPxRef = useRef<{ x: number; y: number } | null>(null);
@@ -225,17 +255,29 @@ export function FinanceTvChart({
   const [projectedDrawings, setProjectedDrawings] = useState<ProjectedDrawing[]>([]);
   const [projectedDraft, setProjectedDraft] = useState<ProjectedDrawing | null>(null);
 
-  // Sync drawings when symbol changes
+  // Sync drawings when symbol or game round changes
+  if (tabId !== prevTabId) {
+    setPrevTabId(tabId);
+    setEditingParamKey(null);
+    setEditingCustomId(null);
+    if (disableDrawingsPersistence) {
+      setDrawings([]);
+      setDraft(null);
+      setSelectedId(null);
+    }
+  }
+
   if (symbol !== prevSymbol) {
     setPrevSymbol(symbol);
-    setDrawings(loadChartDrawings(symbol));
+    setDrawings(disableDrawingsPersistence ? [] : loadChartDrawings(symbol));
     setDraft(null);
     setSelectedId(null);
   }
 
   useEffect(() => {
+    if (disableDrawingsPersistence) return;
     saveChartDrawings(symbol, drawings);
-  }, [symbol, drawings]);
+  }, [symbol, drawings, disableDrawingsPersistence]);
 
   // En mode non contrôlé, active automatiquement tout nouvel indicateur personnalisé ayant enabled_by_default
   if (activeCustomIds === undefined) {
@@ -292,6 +334,13 @@ export function FinanceTvChart({
     const lows = rows.map(b => b.low as number);
     const volumes = rows.map(b => b.volume ?? 0);
 
+    const dateIndexMap = new Map<string, number>();
+    if (blindCutoffIndex != null) {
+      rows.forEach((b, idx) => {
+        dateIndexMap.set(b.date.slice(0, 10), idx);
+      });
+    }
+
     const chart = createChart(el, {
       autoSize: true,
       layout: {
@@ -303,7 +352,27 @@ export function FinanceTvChart({
         vertLines: { color: dark ? "#1e293b" : "#f1f5f9" },
         horzLines: { color: dark ? "#1e293b" : "#f1f5f9" },
       },
-      timeScale: { timeVisible: rows.length > 0 && rows[0].date.length > 10 },
+      timeScale: {
+        timeVisible: rows.length > 0 && rows[0].date.length > 10,
+        ...(blindCutoffIndex != null
+          ? {
+              tickMarkFormatter: (time: Time) => {
+                const idx = dateIndexMap.get(timeToIsoKey(time));
+                return idx == null ? "" : formatRelativeSessionLabel(idx, blindCutoffIndex, blindTimeframe);
+              },
+            }
+          : {}),
+      },
+      ...(blindCutoffIndex != null
+        ? {
+            localization: {
+              timeFormatter: (time: Time) => {
+                const idx = dateIndexMap.get(timeToIsoKey(time));
+                return idx == null ? "" : formatRelativeSessionLabel(idx, blindCutoffIndex, blindTimeframe);
+              },
+            },
+          }
+        : {}),
     });
     chartRef.current = chart;
     rowsRef.current = rows;
@@ -325,6 +394,37 @@ export function FinanceTvChart({
         close: b.close as number,
       })),
     );
+
+    if (priceLines && priceLines.length > 0) {
+      for (const pl of priceLines) {
+        if (!Number.isFinite(pl.price)) continue;
+        candles.createPriceLine({
+          price: pl.price,
+          color: pl.color,
+          lineWidth: 1,
+          lineStyle: pl.lineStyle ?? 2,
+          axisLabelVisible: true,
+          title: pl.title,
+        });
+      }
+    }
+
+    if (markers && markers.length > 0) {
+      const validDates = new Set(rows.map(b => b.date.slice(0, 10)));
+      const seriesMarkers: SeriesMarker<Time>[] = markers
+        .filter(m => validDates.has(m.time.slice(0, 10)))
+        .sort((a, b) => a.time.localeCompare(b.time))
+        .map(m => ({
+          time: toTime(m.time),
+          position: m.position,
+          shape: m.shape,
+          color: m.color,
+          text: m.text,
+        }));
+      if (seriesMarkers.length > 0) {
+        createSeriesMarkers(candles, seriesMarkers);
+      }
+    }
 
     const addLine = (values: Num[], color: string, pane = 0, title?: string) => {
       const s = chart.addSeries(
@@ -689,7 +789,7 @@ export function FinanceTvChart({
       candlesRef.current = null;
       paneBindingsRef.current = [];
     };
-  }, [bars, active, activeCustom, customIndicators, customResults, dark, params, customFills]);
+  }, [bars, active, activeCustom, customIndicators, customResults, dark, params, customFills, priceLines, markers, blindCutoffIndex, blindTimeframe]);
 
   const measurePanes = useCallback((): MeasuredPane[] => {
     const chart = chartRef.current;
