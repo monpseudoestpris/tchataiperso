@@ -2675,6 +2675,19 @@ export async function updateWatchlistItemNote(itemId: string, note: string): Pro
   });
 }
 
+export async function reorderWatchlistItems(
+  listId: string,
+  itemIds: string[],
+): Promise<{ list_id: string; item_ids: string[] }> {
+  return api<{ list_id: string; item_ids: string[] }>(
+    `/finance/watchlists/${encodeURIComponent(listId)}/reorder`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ item_ids: itemIds }),
+    },
+  );
+}
+
 export type CustomIndicatorGuideLine = {
   value: number;
   color: string;

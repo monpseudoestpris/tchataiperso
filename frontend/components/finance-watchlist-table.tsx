@@ -1,10 +1,11 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ArrowDown, ArrowLeftRight, ArrowUp, Check, FolderPlus, LineChart, LoaderCircle, PanelRightClose, Pencil, Plus, RefreshCw, Sparkles, StickyNote, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowLeftRight, ArrowUp, Check, ChevronDown, ChevronUp, FolderPlus, GripVertical, LineChart, LoaderCircle, PanelRightClose, Pencil, Plus, RefreshCw, Sparkles, StickyNote, Trash2, X } from "lucide-react";
 
 import { FinanceHoverTip } from "@/components/finance-info-tip";
 import type { FinanceWatchlistMeta, WatchlistItem } from "@/lib/api";
+import styles from "./finance-watchlist-table.module.css";
 
 type SortKey = "name" | "price" | "change_1d_pct" | "change_1w_pct" | "change_1m_pct" | "change_3m_pct" | "change_1y_pct";
 
@@ -26,6 +27,7 @@ type FinanceWatchlistTableProps = {
   onAddStock: (query: string) => Promise<void>;
   onUpdateItemNote?: (itemId: string, note: string) => Promise<void>;
   onRemoveStock: (id: string) => Promise<void>;
+  onReorderItems?: (orderedIds: string[]) => Promise<void>;
   onRefresh: () => void;
   onSeedDefaults: () => Promise<void>;
 };
@@ -61,6 +63,7 @@ export function FinanceWatchlistTable({
   onAddStock,
   onUpdateItemNote,
   onRemoveStock,
+  onReorderItems,
   onRefresh,
   onSeedDefaults,
 }: FinanceWatchlistTableProps) {
@@ -68,6 +71,9 @@ export function FinanceWatchlistTable({
   const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
   const [removingId, setRemovingId] = useState<string | null>(null);
+  const [reordering, setReordering] = useState(false);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<{ id: string; position: "before" | "after" } | null>(null);
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [creatingList, setCreatingList] = useState(false);
@@ -132,11 +138,91 @@ export function FinanceWatchlistTable({
   async function handleRemove(e: React.MouseEvent, id: string) {
     e.stopPropagation();
     setRemovingId(id);
+    setAddError(null);
     try {
       await onRemoveStock(id);
+    } catch (err: unknown) {
+      setAddError(err instanceof Error ? err.message : "Impossible de retirer cette action.");
     } finally {
       setRemovingId(null);
     }
+  }
+
+  const canReorder = Boolean(onReorderItems && sortKey === null && items.length > 1);
+
+  async function commitReorder(nextIds: string[]) {
+    if (!onReorderItems || reordering) return;
+    const currentIds = items.map(it => it.id);
+    if (
+      nextIds.length === currentIds.length &&
+      nextIds.every((id, idx) => id === currentIds[idx])
+    ) {
+      return;
+    }
+    setReordering(true);
+    setAddError(null);
+    try {
+      await onReorderItems(nextIds);
+    } catch (err: unknown) {
+      setAddError(err instanceof Error ? err.message : "Impossible d'enregistrer le nouvel ordre.");
+    } finally {
+      setReordering(false);
+    }
+  }
+
+  function handleMoveStep(e: React.MouseEvent, index: number, delta: -1 | 1) {
+    e.stopPropagation();
+    if (!canReorder || reordering) return;
+    const targetIdx = index + delta;
+    if (targetIdx < 0 || targetIdx >= items.length) return;
+    const nextIds = items.map(it => it.id);
+    const [moved] = nextIds.splice(index, 1);
+    nextIds.splice(targetIdx, 0, moved);
+    void commitReorder(nextIds);
+  }
+
+  function handleRowDragStart(e: React.DragEvent<HTMLTableRowElement>, itemId: string) {
+    if (!canReorder || reordering) {
+      e.preventDefault();
+      return;
+    }
+    setDraggingId(itemId);
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", itemId);
+  }
+
+  function handleRowDragOver(e: React.DragEvent<HTMLTableRowElement>, targetId: string) {
+    if (!canReorder || !draggingId || draggingId === targetId) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    const rect = e.currentTarget.getBoundingClientRect();
+    const position: "before" | "after" = e.clientY < rect.top + rect.height / 2 ? "before" : "after";
+    setDropTarget(prev =>
+      prev && prev.id === targetId && prev.position === position ? prev : { id: targetId, position },
+    );
+  }
+
+  function handleRowDrop(e: React.DragEvent<HTMLTableRowElement>, targetId: string) {
+    e.preventDefault();
+    const sourceId = draggingId || e.dataTransfer.getData("text/plain");
+    const pos = dropTarget?.id === targetId ? dropTarget.position : "before";
+    setDraggingId(null);
+    setDropTarget(null);
+    if (!canReorder || !sourceId || sourceId === targetId) return;
+    const nextIds = items.map(it => it.id);
+    const fromIdx = nextIds.indexOf(sourceId);
+    const toIdx = nextIds.indexOf(targetId);
+    if (fromIdx < 0 || toIdx < 0) return;
+    nextIds.splice(fromIdx, 1);
+    const adjustedTarget = fromIdx < toIdx ? toIdx - 1 : toIdx;
+    const insertIdx = pos === "after" ? adjustedTarget + 1 : adjustedTarget;
+    nextIds.splice(insertIdx, 0, sourceId);
+    void commitReorder(nextIds);
+  }
+
+  function handleRowDragEnd() {
+    setDraggingId(null);
+    setDropTarget(null);
   }
 
   function startEditNote(e: React.MouseEvent, item: WatchlistItem) {
@@ -393,6 +479,19 @@ export function FinanceWatchlistTable({
 
       {addError && <div className="finance-watchlist-error">⚠️ {addError}</div>}
 
+      {onReorderItems && sortKey !== null && items.length > 1 && (
+        <div className={styles.sortNotice}>
+          <span>Tri par colonne actif : revenez à l&apos;ordre manuel pour déplacer les actions.</span>
+          <button
+            type="button"
+            className={styles.sortResetBtn}
+            onClick={() => setSortKey(null)}
+          >
+            Ordre manuel
+          </button>
+        </div>
+      )}
+
       <div className="finance-table-wrapper finance-watchlist-table-wrap">
         <table className="finance-data-table finance-watchlist-table">
           <thead>
@@ -442,19 +541,18 @@ export function FinanceWatchlistTable({
                   </button>
                 </FinanceHoverTip>
               </th>
-              <th className="is-actions"></th>
             </tr>
           </thead>
           <tbody>
             {loading && items.length === 0 ? (
               <tr>
-                <td colSpan={8} className="finance-watchlist-empty-cell">
+                <td colSpan={7} className="finance-watchlist-empty-cell">
                   <LoaderCircle size={16} className="spin" /> Chargement de votre liste de suivi…
                 </td>
               </tr>
             ) : sortedItems.length === 0 ? (
               <tr>
-                <td colSpan={8} className="finance-watchlist-empty-cell">
+                <td colSpan={7} className="finance-watchlist-empty-cell">
                   <span>Aucune action dans votre suivi. Ajoutez un ticker ci-dessus ou </span>
                   <button type="button" className="finance-inline-link-btn" onClick={() => void onSeedDefaults()}>
                     <Sparkles size={12} /> charger la sélection type (CAC 40 & Tech)
@@ -462,7 +560,7 @@ export function FinanceWatchlistTable({
                 </td>
               </tr>
             ) : (
-              sortedItems.map(item => {
+              sortedItems.map((item, rowIndex) => {
                 const isSelected =
                   !!selectedSymbol &&
                   (selectedSymbol.toUpperCase() === item.symbol.toUpperCase() ||
@@ -471,95 +569,159 @@ export function FinanceWatchlistTable({
                 const isEufund =
                   item.exchange.toUpperCase() === "EUFUND" ||
                   item.eod_ticker.toUpperCase().endsWith(".EUFUND");
+                const isDragging = draggingId === item.id;
+                const dropClass =
+                  dropTarget?.id === item.id
+                    ? dropTarget.position === "before"
+                      ? styles.rowDropBefore
+                      : styles.rowDropAfter
+                    : "";
                 return (
                   <tr
                     key={item.id}
-                    className={`finance-watchlist-row ${isSelected ? "is-selected" : ""}`}
+                    draggable={canReorder && !reordering && editingNoteId !== item.id}
+                    onDragStart={e => handleRowDragStart(e, item.id)}
+                    onDragOver={e => handleRowDragOver(e, item.id)}
+                    onDrop={e => handleRowDrop(e, item.id)}
+                    onDragEnd={handleRowDragEnd}
+                    className={`finance-watchlist-row ${isSelected ? "is-selected" : ""} ${isDragging ? styles.rowDragging : ""} ${dropClass}`}
                     onClick={() => onSelectStock(item)}
                     title={`Cliquer pour ouvrir la courbe et les indicateurs de ${item.name}`}
                   >
                     <td>
-                      <div className="finance-wl-identity">
-                        <strong title={item.name}>{item.name}</strong>
-                        <div className="finance-wl-meta">
-                          <span className="finance-symbol-tag">{item.symbol}</span>
-                          {isEufund ? (
-                            <span className="finance-wl-exch is-eufund">Fonds · EUFUND</span>
-                          ) : (
-                            item.exchange && <span className="finance-wl-exch">{item.exchange}</span>
-                          )}
-                        </div>
-                        {editingNoteId === item.id ? (
-                          <form
-                            className="finance-wl-note-form"
-                            onSubmit={e => void handleSaveNote(e, item.id)}
+                      <div className={styles.identityCell}>
+                        {canReorder && (
+                          <span
+                            className={styles.dragHandle}
+                            title="Glisser pour déplacer dans la liste"
+                            aria-hidden="true"
                             onClick={e => e.stopPropagation()}
                           >
-                            <input
-                              type="text"
-                              value={noteDraft}
-                              onChange={e => setNoteDraft(e.target.value)}
-                              onKeyDown={e => {
-                                if (e.key === "Escape") {
-                                  e.stopPropagation();
-                                  setEditingNoteId(null);
-                                }
-                              }}
-                              placeholder="Note (nom du fonds, stratégie…)"
-                              maxLength={240}
-                              autoFocus
-                              disabled={savingNoteId === item.id}
-                            />
-                            <button
-                              type="submit"
-                              className="finance-wl-inline-ok"
-                              disabled={savingNoteId === item.id}
-                              title="Enregistrer la note"
-                              aria-label="Enregistrer la note"
-                            >
-                              {savingNoteId === item.id ? <LoaderCircle size={11} className="spin" /> : <Check size={11} />}
-                            </button>
-                            <button
-                              type="button"
-                              className="finance-wl-inline-cancel"
-                              onClick={e => {
-                                e.stopPropagation();
-                                setEditingNoteId(null);
-                              }}
-                              title="Annuler"
-                              aria-label="Annuler l'édition de note"
-                            >
-                              <X size={11} />
-                            </button>
-                          </form>
-                        ) : (
-                          <div className="finance-wl-note-row">
-                            {item.note ? (
+                            <GripVertical size={13} />
+                          </span>
+                        )}
+                        <div className={`finance-wl-identity ${styles.identityMain}`}>
+                          <div className={styles.identityTopRow}>
+                            <strong className={styles.identityTitle} title={item.name}>
+                              {item.name}
+                            </strong>
+                            <div className={styles.rowActions} onClick={e => e.stopPropagation()}>
+                              {canReorder && (
+                                <>
+                                  <button
+                                    type="button"
+                                    className={styles.iconBtn}
+                                    onClick={e => handleMoveStep(e, rowIndex, -1)}
+                                    disabled={reordering || rowIndex === 0}
+                                    title={`Monter ${item.name}`}
+                                    aria-label={`Monter ${item.name}`}
+                                  >
+                                    <ChevronUp size={12} />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className={styles.iconBtn}
+                                    onClick={e => handleMoveStep(e, rowIndex, 1)}
+                                    disabled={reordering || rowIndex === sortedItems.length - 1}
+                                    title={`Descendre ${item.name}`}
+                                    aria-label={`Descendre ${item.name}`}
+                                  >
+                                    <ChevronDown size={12} />
+                                  </button>
+                                </>
+                              )}
                               <button
                                 type="button"
-                                className="finance-wl-note-pill"
-                                onClick={e => startEditNote(e, item)}
-                                title={`${item.note} (cliquer pour modifier)`}
+                                className={`${styles.iconBtn} ${styles.removeBtn}`}
+                                onClick={e => void handleRemove(e, item.id)}
+                                disabled={removingId === item.id}
+                                title={`Retirer ${item.name} de la liste`}
+                                aria-label={`Retirer ${item.name}`}
                               >
-                                <StickyNote size={10} />
-                                <span>{item.note}</span>
+                                {removingId === item.id ? <LoaderCircle size={12} className="spin" /> : <Trash2 size={12} />}
                               </button>
+                            </div>
+                          </div>
+                          <div className="finance-wl-meta">
+                            <span className="finance-symbol-tag">{item.symbol}</span>
+                            {isEufund ? (
+                              <span className="finance-wl-exch is-eufund">Fonds · EUFUND</span>
                             ) : (
-                              onUpdateItemNote && (
-                                <button
-                                  type="button"
-                                  className="finance-wl-note-add-btn"
-                                  onClick={e => startEditNote(e, item)}
-                                  title="Ajouter une note personnelle"
-                                  aria-label={`Ajouter une note à ${item.name}`}
-                                >
-                                  <StickyNote size={10} />
-                                  <span>+ Note</span>
-                                </button>
-                              )
+                              item.exchange && <span className="finance-wl-exch">{item.exchange}</span>
                             )}
                           </div>
-                        )}
+                          {editingNoteId === item.id ? (
+                            <form
+                              className="finance-wl-note-form"
+                              onSubmit={e => void handleSaveNote(e, item.id)}
+                              onClick={e => e.stopPropagation()}
+                            >
+                              <input
+                                type="text"
+                                value={noteDraft}
+                                onChange={e => setNoteDraft(e.target.value)}
+                                onKeyDown={e => {
+                                  if (e.key === "Escape") {
+                                    e.stopPropagation();
+                                    setEditingNoteId(null);
+                                  }
+                                }}
+                                placeholder="Note (nom du fonds, stratégie…)"
+                                maxLength={240}
+                                autoFocus
+                                disabled={savingNoteId === item.id}
+                              />
+                              <button
+                                type="submit"
+                                className="finance-wl-inline-ok"
+                                disabled={savingNoteId === item.id}
+                                title="Enregistrer la note"
+                                aria-label="Enregistrer la note"
+                              >
+                                {savingNoteId === item.id ? <LoaderCircle size={11} className="spin" /> : <Check size={11} />}
+                              </button>
+                              <button
+                                type="button"
+                                className="finance-wl-inline-cancel"
+                                onClick={e => {
+                                  e.stopPropagation();
+                                  setEditingNoteId(null);
+                                }}
+                                title="Annuler"
+                                aria-label="Annuler l'édition de note"
+                              >
+                                <X size={11} />
+                              </button>
+                            </form>
+                          ) : (
+                            <div className="finance-wl-note-row">
+                              {item.note ? (
+                                <button
+                                  type="button"
+                                  className="finance-wl-note-pill"
+                                  onClick={e => startEditNote(e, item)}
+                                  title={`${item.note} (cliquer pour modifier)`}
+                                >
+                                  <StickyNote size={10} />
+                                  <span>{item.note}</span>
+                                </button>
+                              ) : (
+                                onUpdateItemNote && (
+                                  <button
+                                    type="button"
+                                    className="finance-wl-note-add-btn"
+                                    onClick={e => startEditNote(e, item)}
+                                    title="Ajouter une note personnelle"
+                                    aria-label={`Ajouter une note à ${item.name}`}
+                                  >
+                                    <StickyNote size={10} />
+                                    <span>+ Note</span>
+                                  </button>
+                                )
+                              )}
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </td>
                     <td className="is-num">
@@ -585,18 +747,6 @@ export function FinanceWatchlistTable({
                     </td>
                     <td className="is-num">
                       <ReturnCell value={item.change_1y_pct} />
-                    </td>
-                    <td className="is-actions">
-                      <button
-                        type="button"
-                        className="finance-wl-remove-btn"
-                        onClick={e => void handleRemove(e, item.id)}
-                        disabled={removingId === item.id}
-                        title={`Retirer ${item.name} du suivi`}
-                        aria-label={`Retirer ${item.name}`}
-                      >
-                        {removingId === item.id ? <LoaderCircle size={13} className="spin" /> : <Trash2 size={13} />}
-                      </button>
                     </td>
                   </tr>
                 );

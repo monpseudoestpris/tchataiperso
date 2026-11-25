@@ -22,6 +22,12 @@ import {
   BAR_INTERVAL_LABELS,
   type BarInterval,
 } from "@/lib/bar-aggregation";
+import {
+  buildDividendChartMarkers,
+  formatDividendHoverSummary,
+  projectDividendsToBars,
+  type ProjectedBarDividend,
+} from "@/lib/chart-dividends";
 import type { IndicatorFillConfig } from "@/lib/chart-zone-fills";
 import {
   DEFAULT_INDICATOR_PARAMS,
@@ -48,6 +54,7 @@ import {
   Check,
   ChevronRight,
   ClipboardList,
+  Coins,
   Copy,
   Database,
   ExternalLink,
@@ -87,6 +94,7 @@ import {
   fetchCachedIndexPerformances,
   fetchCustomIndicators,
   fetchFinanceDetails,
+  fetchFinanceDividends,
   fetchFinanceSyncStatus,
   fetchIndexComposition,
   fetchPrincipalIndices,
@@ -94,6 +102,7 @@ import {
   importIndexToWatchlist,
   loadIndexPerformances,
   renameWatchlist,
+  reorderWatchlistItems,
   searchFinanceCatalog,
   seedDefaultWatchlist,
   updateCustomIndicator,
@@ -115,6 +124,7 @@ import {
   type Model,
   type PrincipalIndexInfo,
   type QuarterlyReport,
+  type StockDividendItem,
   type WarehouseOverview,
   type WatchlistItem,
 } from "@/lib/api";
@@ -171,6 +181,7 @@ type ChartTabConfig = {
   barInterval: BarInterval;
   timeframe: FinanceRange;
   chartView: "advanced" | "line";
+  showDividends?: boolean;
   activeNative: IndicatorKey[];
   activeCustomIds: string[];
   indicatorParams: IndicatorParamsMap;
@@ -303,6 +314,7 @@ function loadSavedChartTabs(): ChartTabConfig[] {
         barInterval,
         timeframe,
         chartView,
+        showDividends: Boolean(obj.showDividends),
         activeNative,
         activeCustomIds,
         indicatorParams: normalizeIndicatorParams(obj.indicatorParams),
@@ -405,6 +417,12 @@ export function FinanceModal({
   const [chartFullscreen, setChartFullscreen] = useState(false);
   const [fullscreenTickerOpen, setFullscreenTickerOpen] = useState(false);
   const [hoveredBarIndex, setHoveredBarIndex] = useState<number | null>(null);
+  const [dividendsBySymbol, setDividendsBySymbol] = useState<
+    Record<string, { items: StockDividendItem[]; currency: string }>
+  >({});
+  const [dividendsLoadingSymbol, setDividendsLoadingSymbol] = useState<string | null>(null);
+  const [dividendsError, setDividendsError] = useState<string | null>(null);
+  const [dividendsRetryNonce, setDividendsRetryNonce] = useState(0);
   const activeChartTab = useMemo(
     () => chartTabs.find(t => t.id === activeChartTabId) ?? chartTabs[0],
     [chartTabs, activeChartTabId],
@@ -1098,6 +1116,33 @@ export function FinanceModal({
     );
   }
 
+  async function handleReorderWatchlistItems(orderedIds: string[]) {
+    if (!activeListId || orderedIds.length === 0) return;
+    const previous = watchlist;
+    const byId = new Map(previous.map(item => [item.id, item]));
+    const reordered: WatchlistItem[] = [];
+    const seen = new Set<string>();
+    for (const id of orderedIds) {
+      const found = byId.get(id);
+      if (found && !seen.has(id)) {
+        seen.add(id);
+        reordered.push({ ...found, position: reordered.length });
+      }
+    }
+    for (const item of previous) {
+      if (!seen.has(item.id)) {
+        reordered.push({ ...item, position: reordered.length });
+      }
+    }
+    setWatchlist(reordered);
+    try {
+      await reorderWatchlistItems(activeListId, reordered.map(item => item.id));
+    } catch (err) {
+      setWatchlist(previous);
+      throw err;
+    }
+  }
+
   async function handleSeedDefaults() {
     setWatchlistLoading(true);
     try {
@@ -1300,6 +1345,77 @@ export function FinanceModal({
     if (rawTabBars.length === 0) return [];
     return aggregateBars(rawTabBars, activeChartTab.barInterval);
   }, [rawTabBars, activeChartTab.barInterval]);
+
+  const dividendSymbolTarget = data ? (data.eod_ticker || data.yahoo_symbol || data.symbol || "").trim() : "";
+  const dividendSymbolKey = dividendSymbolTarget.toUpperCase();
+  const showDividends = Boolean(activeChartTab.showDividends);
+  const cachedDividendsEntry = dividendSymbolKey ? dividendsBySymbol[dividendSymbolKey] : undefined;
+  const dividendsLoading = Boolean(
+    showDividends && dividendSymbolKey && dividendsLoadingSymbol === dividendSymbolKey,
+  );
+
+  useEffect(() => {
+    if (!showDividends || !dividendSymbolTarget || !dividendSymbolKey) return;
+    if (dividendsBySymbol[dividendSymbolKey] && dividendsRetryNonce === 0) return;
+    const controller = new AbortController();
+    setDividendsLoadingSymbol(dividendSymbolKey);
+    setDividendsError(null);
+    fetchFinanceDividends(dividendSymbolTarget, dividendsRetryNonce > 0, controller.signal)
+      .then(res => {
+        if (controller.signal.aborted) return;
+        setDividendsBySymbol(prev => ({
+          ...prev,
+          [dividendSymbolKey]: {
+            items: res.dividends || [],
+            currency: res.currency || data?.currency || "",
+          },
+        }));
+        if (dividendsRetryNonce > 0) setDividendsRetryNonce(0);
+      })
+      .catch((err: unknown) => {
+        if (controller.signal.aborted) return;
+        setDividendsError(
+          err instanceof Error ? err.message : "Impossible de charger les versements de dividendes.",
+        );
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setDividendsLoadingSymbol(prev => (prev === dividendSymbolKey ? null : prev));
+        }
+      });
+    return () => controller.abort();
+  }, [showDividends, dividendSymbolTarget, dividendSymbolKey, dividendsBySymbol, dividendsRetryNonce, data?.currency]);
+
+  const projectedDividends = useMemo<ProjectedBarDividend[]>(() => {
+    if (!showDividends || !cachedDividendsEntry || filteredBars.length === 0) return [];
+    return projectDividendsToBars(
+      filteredBars,
+      cachedDividendsEntry.items,
+      activeChartTab.barInterval,
+      cachedDividendsEntry.currency || data?.currency || "",
+    );
+  }, [showDividends, cachedDividendsEntry, filteredBars, activeChartTab.barInterval, data?.currency]);
+
+  const dividendByDate = useMemo(() => {
+    const map = new Map<string, ProjectedBarDividend>();
+    for (const item of projectedDividends) {
+      map.set(item.barDate.slice(0, 10), item);
+    }
+    return map;
+  }, [projectedDividends]);
+
+  const dividendByBarIndex = useMemo(() => {
+    const map = new Map<number, ProjectedBarDividend>();
+    for (const item of projectedDividends) {
+      map.set(item.barIndex, item);
+    }
+    return map;
+  }, [projectedDividends]);
+
+  const dividendMarkers = useMemo(
+    () => (showDividends ? buildDividendChartMarkers(projectedDividends, theme.mode === "dark") : []),
+    [showDividends, projectedDividends, theme.mode],
+  );
 
   // Recharge la durée sélectionnée sur l'onglet actif si elle dépasse la profondeur déjà en mémoire
   async function changeTimeframe(tf: FinanceRange) {
@@ -2232,6 +2348,42 @@ export function FinanceModal({
 
                     <button
                       type="button"
+                      className={`finance-tf-btn${showDividends ? " active" : ""}`}
+                      aria-pressed={showDividends}
+                      onClick={() => {
+                        setDividendsError(null);
+                        updateChartTab(activeChartTab.id, prev => ({
+                          ...prev,
+                          showDividends: !prev.showDividends,
+                        }));
+                      }}
+                      title={
+                        showDividends
+                          ? "Masquer les versements de dividendes sur la courbe"
+                          : "Afficher les versements de dividendes sur la courbe"
+                      }
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 5,
+                        fontVariantNumeric: "tabular-nums",
+                      }}
+                    >
+                      {dividendsLoading ? (
+                        <LoaderCircle size={13} className="spin" />
+                      ) : (
+                        <Coins size={13} />
+                      )}
+                      <span>
+                        Dividendes
+                        {showDividends && cachedDividendsEntry
+                          ? ` (${projectedDividends.length})`
+                          : ""}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
                       className={`finance-chart-fullscreen-btn${chartFullscreen ? " active" : ""}`}
                       onClick={() => {
                         setChartFullscreen(prev => {
@@ -2278,6 +2430,38 @@ export function FinanceModal({
                   </div>
                 )}
 
+                {showDividends && dividendsError && (
+                  <div className="finance-modal-error" role="alert" style={{ marginBottom: 8 }}>
+                    <span>{dividendsError}</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDividendsError(null);
+                        setDividendsRetryNonce(n => n + 1);
+                      }}
+                    >
+                      <RefreshCw size={13} /> Réessayer
+                    </button>
+                  </div>
+                )}
+
+                {showDividends && !dividendsLoading && !dividendsError && cachedDividendsEntry && projectedDividends.length === 0 && (
+                  <div
+                    role="status"
+                    style={{
+                      fontSize: 12,
+                      color: "var(--muted, #64748b)",
+                      marginBottom: 8,
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 6,
+                    }}
+                  >
+                    <Coins size={13} />
+                    <span>Aucun versement de dividende détecté sur la période affichée.</span>
+                  </div>
+                )}
+
                 {activeChartTab.chartView === "advanced" && (
                   <FinanceTvChart
                     bars={filteredBars}
@@ -2307,6 +2491,8 @@ export function FinanceModal({
                       setIndicatorModalOpen(true);
                     }}
                     onDeleteCustomIndicator={id => void handleDeleteCustomIndicator(id)}
+                    markers={dividendMarkers}
+                    dividendByDate={showDividends ? dividendByDate : undefined}
                   />
                 )}
 
@@ -2318,6 +2504,7 @@ export function FinanceModal({
                       currency={data.currency}
                       hoveredIndex={hoveredBarIndex}
                       onHover={setHoveredBarIndex}
+                      dividendsByBarIndex={showDividends ? dividendByBarIndex : undefined}
                     />
                   ) : (
                     <div className="finance-chart-empty">
@@ -2343,6 +2530,14 @@ export function FinanceModal({
                         <>
                           <span>·</span>
                           <span>Vol. : {activeBar.volume.toLocaleString("fr-FR")}</span>
+                        </>
+                      )}
+                      {showDividends && hoveredBarIndex != null && dividendByBarIndex.get(hoveredBarIndex) && (
+                        <>
+                          <span>·</span>
+                          <strong style={{ color: theme.mode === "dark" ? "#fbbf24" : "#b45309" }}>
+                            {formatDividendHoverSummary(dividendByBarIndex.get(hoveredBarIndex)!)}
+                          </strong>
                         </>
                       )}
                     </div>
@@ -2871,6 +3066,7 @@ export function FinanceModal({
                   onAddStock={handleAddWatchlistStock}
                   onUpdateItemNote={handleUpdateWatchlistItemNote}
                   onRemoveStock={handleRemoveWatchlistStock}
+                  onReorderItems={handleReorderWatchlistItems}
                   onRefresh={() => void loadWorkspaceData(true)}
                   onSeedDefaults={handleSeedDefaults}
                 />
@@ -2989,11 +3185,13 @@ function InteractivePriceChart({
   currency,
   hoveredIndex,
   onHover,
+  dividendsByBarIndex,
 }: {
   bars: EodBar[];
   currency: string;
   hoveredIndex: number | null;
   onHover: (idx: number | null) => void;
+  dividendsByBarIndex?: ReadonlyMap<number, ProjectedBarDividend>;
 }) {
   const width = 800;
   const height = 220;
@@ -3102,12 +3300,13 @@ function InteractivePriceChart({
 
         {/* Interactive hover crosshair and dots */}
         {points.map((pt, i) => {
-          const isHovered = hoveredIndex === i;
+          const isHovered = hoveredIndex === pt.index;
+          const divInfo = dividendsByBarIndex?.get(pt.index);
           return (
             <g
               key={i}
               className="chart-point-group"
-              onMouseEnter={() => onHover(i)}
+              onMouseEnter={() => onHover(pt.index)}
               style={{ cursor: "pointer" }}
             >
               {/* Invisible wide hit area */}
@@ -3118,6 +3317,41 @@ function InteractivePriceChart({
                 height={height}
                 fill="transparent"
               />
+
+              {divInfo && (
+                <g>
+                  <line
+                    x1={pt.x}
+                    y1={pt.y + 4}
+                    x2={pt.x}
+                    y2={height - paddingY}
+                    stroke="#d97706"
+                    strokeWidth="1"
+                    strokeDasharray="2 3"
+                    opacity="0.65"
+                  />
+                  <circle
+                    cx={pt.x}
+                    cy={height - paddingY + 10}
+                    r="7"
+                    fill="#d97706"
+                    stroke="#ffffff"
+                    strokeWidth="1.2"
+                  />
+                  <text
+                    x={pt.x}
+                    y={height - paddingY + 13}
+                    textAnchor="middle"
+                    fontSize="8.5"
+                    fontWeight="700"
+                    fill="#ffffff"
+                    fontFamily="sans-serif"
+                  >
+                    D
+                  </text>
+                  <title>{formatDividendHoverSummary(divInfo)}</title>
+                </g>
+              )}
 
               {isHovered && (
                 <>

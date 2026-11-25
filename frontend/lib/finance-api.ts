@@ -9,6 +9,36 @@ import type { FinanceSyncProgress, FinanceWatchlistMeta } from "./api";
 
 export type ScreenerTimeframe = "day" | "week" | "month" | "quarter";
 
+// ---------------------------------------------------------------------------
+// Dividendes historiques (courbe du cours & cache entrepôt)
+// ---------------------------------------------------------------------------
+
+export type StockDividendItem = {
+  date: string;
+  value: number;
+  unadjusted?: number | null;
+  currency?: string;
+};
+
+export type StockDividendsResponse = {
+  symbol: string;
+  canonical_symbol: string;
+  currency: string;
+  source: string;
+  cached: boolean;
+  dividends: StockDividendItem[];
+};
+
+export async function fetchFinanceDividends(
+  symbol: string,
+  refresh = false,
+  signal?: AbortSignal,
+): Promise<StockDividendsResponse> {
+  const qs = new URLSearchParams({ symbol: symbol.trim() });
+  if (refresh) qs.set("refresh", "true");
+  return api<StockDividendsResponse>(`/finance/dividends?${qs.toString()}`, { signal });
+}
+
 export type ScreenerAssetType = "" | "stock" | "etf";
 
 export type ScreenerEtfExchangeInfo = {

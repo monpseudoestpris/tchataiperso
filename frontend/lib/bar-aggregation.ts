@@ -9,7 +9,7 @@ export const BAR_INTERVAL_LABELS: Record<BarInterval, string> = {
   quarter: "3 Mois",
 };
 
-function getBucketKey(dateStr: string, interval: Exclude<BarInterval, "day">): string {
+export function getBucketKey(dateStr: string, interval: Exclude<BarInterval, "day">): string {
   const dayPart = dateStr.slice(0, 10);
   const [yStr, mStr, dStr] = dayPart.split("-");
   const y = Number(yStr);

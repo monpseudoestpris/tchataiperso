@@ -1269,6 +1269,18 @@ class UpdateWatchlistItemNoteRequest(BaseModel):
         return (value or "").strip()[:240]
 
 
+class ReorderWatchlistItemsRequest(BaseModel):
+    item_ids: list[str] = Field(min_length=1, max_length=500)
+
+    @field_validator("item_ids")
+    @classmethod
+    def unique_non_empty_ids(cls, values: list[str]) -> list[str]:
+        cleaned = [v.strip() for v in values if isinstance(v, str) and v.strip()]
+        if not cleaned or len(cleaned) != len(set(cleaned)):
+            raise ValueError("Liste d'identifiants invalide ou contenant des doublons.")
+        return cleaned
+
+
 class CreateWatchlistRequest(BaseModel):
     name: str = Field(min_length=1, max_length=80)
 

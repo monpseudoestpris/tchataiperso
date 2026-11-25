@@ -21,6 +21,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FinanceHoverTip } from "@/components/finance-info-tip";
 import type { CustomIndicator, EodBar } from "@/lib/api";
 import {
+  formatDividendHoverSummary,
+  type ProjectedBarDividend,
+} from "@/lib/chart-dividends";
+import {
   formatRelativeSessionLabel,
   type ChartMarkerOverlay,
   type ChartPriceLineOverlay,
@@ -132,6 +136,7 @@ type FinanceTvChartProps = {
   onDeleteCustomIndicator?: (id: string) => void;
   priceLines?: ChartPriceLineOverlay[];
   markers?: ChartMarkerOverlay[];
+  dividendByDate?: ReadonlyMap<string, ProjectedBarDividend>;
   blindCutoffIndex?: number | null;
   blindTimeframe?: GameTimeframe;
   disableDrawingsPersistence?: boolean;
@@ -182,6 +187,7 @@ export function FinanceTvChart({
   onDeleteCustomIndicator,
   priceLines,
   markers,
+  dividendByDate,
   blindCutoffIndex = null,
   blindTimeframe = "day",
   disableDrawingsPersistence = false,
@@ -192,6 +198,11 @@ export function FinanceTvChart({
   const candlesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const paneBindingsRef = useRef<PaneBinding[]>([]);
   const rowsRef = useRef<EodBar[]>([]);
+  const dividendByDateRef = useRef<ReadonlyMap<string, ProjectedBarDividend> | undefined>(dividendByDate);
+  const [hoveredDividend, setHoveredDividend] = useState<ProjectedBarDividend | null>(null);
+  useEffect(() => {
+    dividendByDateRef.current = dividendByDate;
+  }, [dividendByDate]);
   const [internalActive, setInternalActive] = useState<Set<IndicatorKey>>(new Set(["sma20", "volume", "rsi"]));
   const [internalActiveCustom, setInternalActiveCustom] = useState<Set<string>>(new Set());
   const [internalParams, setInternalParams] = useState<IndicatorParamsMap>(() => loadIndicatorParams());
@@ -783,7 +794,20 @@ export function FinanceTvChart({
     paneBindingsRef.current = bindings;
     chart.timeScale().fitContent();
 
+    const handleCrosshairMove = (param: { time?: Time }) => {
+      const divMap = dividendByDateRef.current;
+      if (!divMap || divMap.size === 0 || param.time === undefined) {
+        setHoveredDividend(null);
+        return;
+      }
+      const isoKey = timeToIsoKey(param.time);
+      const exact = divMap.get(isoKey) ?? null;
+      setHoveredDividend(exact);
+    };
+    chart.subscribeCrosshairMove(handleCrosshairMove);
+
     return () => {
+      chart.unsubscribeCrosshairMove(handleCrosshairMove);
       chart.remove();
       chartRef.current = null;
       candlesRef.current = null;
@@ -1727,6 +1751,30 @@ export function FinanceTvChart({
           }
         >
           <div ref={containerRef} className="finance-tv-chart" style={{ height: "100%" }} />
+          {dividendByDate && hoveredDividend && dividendByDate.get(hoveredDividend.barDate.slice(0, 10)) && (
+            <div
+              role="status"
+              aria-live="polite"
+              style={{
+                position: "absolute",
+                top: 10,
+                left: 12,
+                zIndex: 6,
+                pointerEvents: "none",
+                padding: "4px 10px",
+                borderRadius: 999,
+                fontSize: 12,
+                fontWeight: 600,
+                fontVariantNumeric: "tabular-nums",
+                background: dark ? "rgba(24, 22, 19, 0.9)" : "rgba(255, 251, 235, 0.96)",
+                color: dark ? "#fbbf24" : "#92400e",
+                border: dark ? "1px solid rgba(245, 158, 11, 0.4)" : "1px solid rgba(180, 83, 9, 0.28)",
+                boxShadow: "0 2px 8px rgba(0,0,0,0.12)",
+              }}
+            >
+              {formatDividendHoverSummary(hoveredDividend)}
+            </div>
+          )}
           {overlaySize.width > 0 && overlaySize.height > 0 && (
             <svg
               ref={svgRef}

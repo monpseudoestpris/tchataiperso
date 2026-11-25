@@ -14,6 +14,7 @@ from sqlalchemy.orm import sessionmaker
 from ..config import Settings
 from ..deps import current_user, get_sessions, get_settings, get_upload_dir
 from ..finance import get_financial_dashboard_data
+from ..finance_dividends import get_stock_dividends
 from ..finance_dossier import generate_dossier_ai_analysis, get_financial_dossier
 from ..finance_experts import generate_finance_expert_opinion, list_finance_experts_and_cached
 from ..finance_funds import (
@@ -76,6 +77,7 @@ from ..schemas import (
     AnalyzeStockMoatRequest,
     CreateCustomIndicatorRequest,
     CreateWatchlistRequest,
+    ReorderWatchlistItemsRequest,
     SearchStockNewsRequest,
     UpdateCustomIndicatorRequest,
     UpdateWatchlistItemNoteRequest,
@@ -127,6 +129,20 @@ async def get_finance_details(
         raise HTTPException(
             502, f"Impossible de récupérer les données financières pour « {query} » : {exc}"
         ) from exc
+
+
+@router.get("/dividends")
+async def get_finance_dividends(
+    symbol: str = Query(..., min_length=1, max_length=32, description="Ticker boursier (ex. 'AI.PA', 'AAPL.US')"),
+    refresh: bool = Query(False, description="Forcer le re-téléchargement depuis EODHD / Yahoo Finance"),
+    settings: Settings = Depends(get_settings),
+    user: User = Depends(current_user),
+) -> dict[str, Any]:
+    """Retourne l'historique des versements de dividendes (cache entrepôt prioritaire)."""
+    clean = symbol.strip()
+    if not is_valid_symbol(clean):
+        raise HTTPException(400, "Ticker invalide.")
+    return await get_stock_dividends(settings, clean, refresh=refresh)
 
 
 @router.get("/statements")
@@ -1059,6 +1075,47 @@ def rename_user_watchlist(
         counts = _watchlist_counts(db, user.id)
         _backup_user_watchlists_to_warehouse(settings, db, user.id)
     return watchlist_json(target, counts.get(target.id, 0))
+
+
+@router.patch("/watchlists/{list_id}/reorder")
+def reorder_watchlist_items(
+    list_id: str,
+    body: ReorderWatchlistItemsRequest,
+    settings: Settings = Depends(get_settings),
+    user: User = Depends(current_user),
+    sessions: sessionmaker = Depends(get_sessions),
+) -> dict[str, Any]:
+    """Réordonne les actions d'une liste de suivi et synchronise l'entrepôt local."""
+    with sessions() as db:
+        _, target = _resolve_target_watchlist(db, user.id, list_id, settings=settings)
+        items = list(
+            db.scalars(
+                select(FinanceWatchlistItem)
+                .where(
+                    FinanceWatchlistItem.user_id == user.id,
+                    FinanceWatchlistItem.list_id == target.id,
+                )
+                .order_by(FinanceWatchlistItem.position.asc(), FinanceWatchlistItem.created_at.asc())
+            )
+        )
+        by_id = {it.id: it for it in items}
+        unknown = [item_id for item_id in body.item_ids if item_id not in by_id]
+        if unknown:
+            raise HTTPException(400, "Un ou plusieurs éléments n'appartiennent pas à cette liste de suivi.")
+
+        ordered_items = [by_id[item_id] for item_id in body.item_ids]
+        included = set(body.item_ids)
+        for it in items:
+            if it.id not in included:
+                ordered_items.append(it)
+
+        for idx, it in enumerate(ordered_items):
+            it.position = idx
+
+        db.commit()
+        _backup_user_watchlists_to_warehouse(settings, db, user.id)
+        ordered_ids = [it.id for it in ordered_items]
+    return {"list_id": target.id, "item_ids": ordered_ids}
 
 
 @router.delete("/watchlists/{list_id}", status_code=204)
