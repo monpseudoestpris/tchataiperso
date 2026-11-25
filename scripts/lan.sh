@@ -30,8 +30,9 @@ import sys
 from pathlib import Path
 
 raw = os.environ.get('CORS_ORIGINS')
-if raw is None and Path('.env').is_file():
-    for line in Path('.env').read_text(encoding='utf-8').splitlines():
+env_path = Path(os.environ.get('CLAIR_ENV_FILE') or (Path.home() / '.secrets' / '.env'))
+if raw is None and env_path.is_file():
+    for line in env_path.read_text(encoding='utf-8').splitlines():
         key, sep, value = line.partition('=')
         if sep and key.strip() == 'CORS_ORIGINS':
             raw = value

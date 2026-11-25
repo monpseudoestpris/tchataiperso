@@ -468,10 +468,11 @@ run_system_check() {
   fi
 
   log_step "Configuration & assets du projet"
-  if [[ -f "$repo_dir/.env" ]]; then
-    log_ok ".env : présent"
+  local env_path="${CLAIR_ENV_FILE:-$HOME/.secrets/.env}"
+  if [[ -f "$env_path" ]]; then
+    log_ok ".env : présent ($env_path)"
   else
-    log_warn ".env : absent (sera créé automatiquement par ./scripts/install.sh)"
+    log_warn ".env : absent ($env_path — sera créé automatiquement par ./scripts/install.sh)"
   fi
   local adc_path="$HOME/.config/gcloud/application_default_credentials.json"
   if [[ -d "$adc_path" ]]; then

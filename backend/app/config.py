@@ -1,5 +1,6 @@
 import json
 import ipaddress
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -349,7 +350,7 @@ class Settings(BaseSettings):
         default_env_files = tuple(
             str(p)
             for p in (Path(".env"), _REPO_ENV_FILE)
-            if p.resolve() not in _ISOLATED_ENV_PATHS
+            if p.resolve() not in _ISOLATED_ENV_PATHS and p.is_file() and os.access(p, os.R_OK)
         )
         env_arg = values.get("_env_file", default_env_files)
         explicit = {k for k in values if not k.startswith("_")}
@@ -861,7 +862,10 @@ class Settings(BaseSettings):
             p for p in (Path(".env"), _REPO_ENV_FILE)
             if p.resolve() not in _ISOLATED_ENV_PATHS
         ]
-        env_path = next((path for path in candidates if path.is_file()), None)
+        env_path = next(
+            (path for path in candidates if path.is_file() and os.access(path, os.R_OK)),
+            None,
+        )
         if env_path is None:
             return
         try:
@@ -871,7 +875,10 @@ class Settings(BaseSettings):
         if not force and mtime_ns == self._env_mtime_ns:
             return
         self._env_mtime_ns = mtime_ns
-        parsed = dotenv_values(env_path)
+        try:
+            parsed = dotenv_values(env_path)
+        except OSError:
+            return
         secret_fields = (
             "llm_api_key",
             "brave_api_key",

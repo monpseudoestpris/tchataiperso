@@ -10,6 +10,14 @@ from urllib.parse import parse_qs, urljoin, urlsplit
 import httpx
 from fastapi import HTTPException
 
+from .blog_themes import (
+    build_theme_editorial_context,
+    build_theme_targeted_queries,
+    get_blog_theme_category,
+    match_source_to_theme,
+    normalize_blog_theme_category,
+    prioritize_sources_by_theme,
+)
 from .config import Settings
 from .google_cloud import can_fallback_to_model, has_llm_access, post_chat_completion
 from .web import RedirectLimitError, ResponseTooLargeError, safe_stream_get
@@ -361,24 +369,33 @@ async def _search_single_query(searxng_url: str, query: str, limit: int = 12) ->
     return []
 
 
-async def search_blog_news(settings: Settings, topic_prompt: str, limit: int = 24) -> list[dict[str, str]]:
-    """Retrieve worldwide fresh news related to topic_prompt via SearXNG."""
+async def search_blog_news(
+    settings: Settings,
+    topic_prompt: str,
+    limit: int = 24,
+    topic_category: str | None = None,
+) -> list[dict[str, str]]:
+    """Retrieve worldwide fresh news related to topic_prompt via SearXNG, prioritizing theme sources."""
     clean_topic = " ".join(topic_prompt.strip().split())[:300]
     searxng_url = getattr(settings, "searxng_url", "").strip()
+    norm_theme = normalize_blog_theme_category(topic_category)
 
     if searxng_url:
-        queries = await get_international_queries(settings, clean_topic)
+        targeted_queries = build_theme_targeted_queries(clean_topic, norm_theme)
+        intl_queries = await get_international_queries(settings, clean_topic)
+        queries = targeted_queries + [q for q in intl_queries if q not in targeted_queries]
         merged_sources: list[dict[str, str]] = []
 
-        for q in queries:
+        for q in queries[:4]:
             sub_results = await _search_single_query(searxng_url, q, limit=12)
             merged_sources = merge_web_sources(merged_sources, sub_results, query=q, max_total=limit)
 
         if merged_sources:
-            prioritized = _prioritize_article_sources(merged_sources)
+            theme_ordered = prioritize_sources_by_theme(merged_sources, norm_theme)
+            prioritized = _prioritize_article_sources(theme_ordered)
             _logger.info(
-                "Blog SearXNG found %d international sources (%d prioritized) across %d queries",
-                len(merged_sources), len(prioritized), len(queries),
+                "Blog SearXNG found %d international sources (%d prioritized, theme=%s) across %d queries",
+                len(merged_sources), len(prioritized), norm_theme, len(queries[:4]),
             )
             return prioritized
 
@@ -386,7 +403,8 @@ async def search_blog_news(settings: Settings, topic_prompt: str, limit: int = 2
     try:
         sources = await search_web(settings, clean_topic, limit=limit)
         if sources:
-            return _prioritize_article_sources(sources)
+            theme_ordered = prioritize_sources_by_theme(sources, norm_theme)
+            return _prioritize_article_sources(theme_ordered)
     except Exception as exc:
         _logger.warning("Standard search_web fallback error for %r: %s", clean_topic, exc)
 
@@ -655,10 +673,13 @@ def ensure_minimum_cards(
     images: list[dict[str, str]] | None = None,
     videos: list[dict[str, str]] | None = None,
     min_count: int = 10,
+    topic_category: str | None = None,
 ) -> list[dict[str, Any]]:
     """Guarantee at least min_count cards by complementing with unused sources, images, videos, or thematic cards."""
     result = list(cards)
     cats = [c for c in (categories or ["news"]) if c in BLOG_CATEGORIES_CONFIG] or ["news"]
+    theme_cat = get_blog_theme_category(topic_category)
+    theme_sources = theme_cat.get("sources") or []
     used_urls = {str(c.get("url", "")).strip() for c in result if c.get("url") and c.get("url") != "#"}
     used_img_urls = {str(c.get("image_url", "")).strip() for c in result if c.get("image_url")}
     used_video_urls = {str(c.get("video_url", "")).strip() for c in result if c.get("video_url")}
@@ -731,13 +752,17 @@ def ensure_minimum_cards(
             body = (s.get("content") or s.get("snippet") or "").strip()
             snippet = body or f"Faits marquants et analyse concernant les développements récents sur {topic}."
 
-            domain = "Source web"
-            if url != "#":
-                try:
-                    domain = urlsplit(url).hostname or "Source web"
-                    domain = re.sub(r"^www\.", "", domain)
-                except Exception:
-                    pass
+            domain = s.get("theme_source_name") or "Source web"
+            if domain == "Source web" and url != "#":
+                matched_src = match_source_to_theme(url, theme_cat["id"])
+                if matched_src:
+                    domain = matched_src["name"]
+                else:
+                    try:
+                        domain = urlsplit(url).hostname or "Source web"
+                        domain = re.sub(r"^www\.", "", domain)
+                    except Exception:
+                        pass
 
             color = _COLORS[len(result) % len(_COLORS)]
             tags = [
@@ -809,13 +834,31 @@ def ensure_minimum_cards(
                 "category": target_cat,
             })
         else:
-            # Fallback for news or general analytical
+            # Fallback for news or general analytical using the selected theme's configured sources
+            if theme_sources:
+                t_src = theme_sources[len(result) % len(theme_sources)]
+                src_name = t_src["name"]
+                src_url = t_src.get("url") or f"https://{t_src['domain']}"
+                kind_label = (
+                    "Portail de référence"
+                    if t_src.get("kind") == "primary"
+                    else "Magazine spécialisé"
+                    if t_src.get("kind") == "journal"
+                    else "Blog & Critique"
+                )
+            else:
+                src_name = "Veille Mondiale"
+                src_url = "#"
+                kind_label = "Synthèse & Impact"
             result.append({
-                "title": f"Synthèse et perspectives clés · {topic.capitalize()}",
-                "text": f"Analyse approfondie des mutations et retours d'expérience sur {topic} à l'échelle mondiale.",
-                "url": "#",
-                "source_name": "Veille Mondiale",
-                "tag": "Synthèse & Impact",
+                "title": f"{theme_cat['emoji']} {src_name} : Point clé sur {topic.capitalize()}",
+                "text": (
+                    f"Analyse approfondie, actualités et retours critiques autour de {topic} "
+                    f"dans la thématique {theme_cat['label']} (source de référence : {src_name})."
+                ),
+                "url": src_url,
+                "source_name": src_name,
+                "tag": f"{theme_cat['emoji']} {kind_label}",
                 "color": color,
                 "category": "news",
             })
@@ -1143,6 +1186,7 @@ async def generate_blog_edition(
     topic_prompt: str,
     blog_title: str | None = None,
     categories: list[str] | None = None,
+    topic_category: str | None = None,
 ) -> tuple[str, str, str, list[dict[str, str]]]:
     """
     Search SearXNG worldwide and generate an edition composed of colored cards matching the selected categories.
@@ -1151,8 +1195,13 @@ async def generate_blog_edition(
     """
     clean_topic = topic_prompt.strip()
     active_categories = [c for c in (categories or ["news"]) if c in BLOG_CATEGORIES_CONFIG] or ["news"]
+    norm_theme = normalize_blog_theme_category(topic_category)
+    theme_cat = get_blog_theme_category(norm_theme)
 
-    sources = await search_blog_news(settings, clean_topic, limit=24)
+    if norm_theme == "general":
+        sources = await search_blog_news(settings, clean_topic, limit=24)
+    else:
+        sources = await search_blog_news(settings, clean_topic, limit=24, topic_category=norm_theme)
 
     images: list[dict[str, str]] = []
     if "images" in active_categories:
@@ -1260,7 +1309,14 @@ async def generate_blog_edition(
 
         # Ensure at least 10 cards in demo mode, properly padded according to active_categories
         demo_cards = ensure_minimum_cards(
-            demo_cards, sources, clean_topic, categories=active_categories, images=images, videos=videos, min_count=10
+            demo_cards,
+            sources,
+            clean_topic,
+            categories=active_categories,
+            images=images,
+            videos=videos,
+            min_count=10,
+            topic_category=norm_theme,
         )
 
         payload = {"title": title, "summary": summary, "trends": demo_trends, "cards": demo_cards}
@@ -1304,11 +1360,13 @@ async def generate_blog_edition(
     ]
     categories_desc_str = "\n".join(categories_desc_list)
     active_cats_json_list = ", ".join(f'"{c}"' for c in active_categories)
+    theme_editorial_context = build_theme_editorial_context(norm_theme)
 
     system_prompt = (
         "Tu es le rédacteur en chef d'un blog thématique et magazine d'information moderne, captivant et haut de gamme. "
         "À partir du sujet et des données web recueillies, tu dois obligatoirement composer UN MINIMUM DE 10 ENCARTS DISTINCTS (entre 10 et 15 encarts) "
         "en français de haute qualité, formatés sous forme d'encarts colorés.\n\n"
+        f"{theme_editorial_context}\n\n"
         f"CATÉGORIES DEMANDÉES POUR CETTE ÉDITION :\n{categories_desc_str}\n\n"
         "Exigences impératives :\n"
         "1. NOMBRE STRICT D'ENCARTS : La liste 'cards' DOIT CONTENIR AU MOINS 10 ENCARTS DIFFÉRENTS (>= 10).\n"
@@ -1343,6 +1401,7 @@ async def generate_blog_edition(
 
     user_message = (
         f"Thématique demandée : {clean_topic}\n"
+        f"Domaine / Catégorie de thème : {theme_cat['emoji']} {theme_cat['label']}\n"
         f"Date du jour : {date_formatted}\n"
         f"Catégories sélectionnées : {', '.join(active_categories)}\n\n"
         f"Sources web internationales recueillies ({len(sources)} sources) :\n"
@@ -1483,7 +1542,14 @@ async def generate_blog_edition(
 
         # Guarantee at least 10 cards
         cards = ensure_minimum_cards(
-            cards, sources, clean_topic, categories=active_categories, images=images, videos=videos, min_count=10
+            cards,
+            sources,
+            clean_topic,
+            categories=active_categories,
+            images=images,
+            videos=videos,
+            min_count=10,
+            topic_category=norm_theme,
         )
 
         json_storage = json.dumps({
@@ -1502,7 +1568,14 @@ async def generate_blog_edition(
         fallback_cards = parse_cards_from_content(raw_content)
         fallback_trends = parse_trends_from_content(raw_content)
         fallback_cards = ensure_minimum_cards(
-            fallback_cards, sources, clean_topic, categories=active_categories, images=images, videos=videos, min_count=10
+            fallback_cards,
+            sources,
+            clean_topic,
+            categories=active_categories,
+            images=images,
+            videos=videos,
+            min_count=10,
+            topic_category=norm_theme,
         )
         json_storage = json.dumps({
             "title": fallback_title,

@@ -362,12 +362,28 @@ export type BlogPost = {
   sources: Source[];
   created_at: string;
 };
+export type BlogThemeSourceItem = {
+  name: string;
+  domain: string;
+  kind: "primary" | "journal" | "blog";
+  url?: string;
+};
+export type BlogThemeCategoryDef = {
+  id: string;
+  group: string;
+  label: string;
+  emoji: string;
+  description: string;
+  sample_prompts?: string[];
+  sources: BlogThemeSourceItem[];
+};
 export type Blog = {
   id: string;
   title: string;
   prompt: string;
   auto_refresh: boolean;
   theme?: string;
+  topic_category?: string;
   categories?: string[];
   created_at: string;
   updated_at: string;
@@ -876,11 +892,27 @@ export async function fetchBlog(blogId: string): Promise<Blog> {
   return api<Blog>(`/blogs/${blogId}`);
 }
 
+export async function fetchBlogThemeCategories(): Promise<BlogThemeCategoryDef[]> {
+  return api<BlogThemeCategoryDef[]>("/blogs/theme-categories");
+}
+
+export async function improveBlogPrompt(body: {
+  prompt: string;
+  topic_category?: string;
+  categories?: string[];
+}): Promise<{ prompt: string; topic_category: string }> {
+  return api<{ prompt: string; topic_category: string }>("/blogs/improve-prompt", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
 export async function createBlog(body: {
   prompt: string;
   title?: string;
   auto_refresh?: boolean;
   theme?: string;
+  topic_category?: string;
   categories?: string[];
 }): Promise<Blog> {
   return api<Blog>("/blogs", {
@@ -891,7 +923,14 @@ export async function createBlog(body: {
 
 export async function updateBlog(
   blogId: string,
-  body: { title?: string; prompt?: string; auto_refresh?: boolean; theme?: string; categories?: string[] },
+  body: {
+    title?: string;
+    prompt?: string;
+    auto_refresh?: boolean;
+    theme?: string;
+    topic_category?: string;
+    categories?: string[];
+  },
 ): Promise<Blog> {
   return api<Blog>(`/blogs/${blogId}`, {
     method: "PATCH",

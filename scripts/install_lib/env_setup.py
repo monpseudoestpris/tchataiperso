@@ -153,12 +153,13 @@ def _create_new_env(template_path: Path, target_path: Path, mode: str, interacti
     for key_name, value in updates.items():
         lines = _set_or_append_key(lines, key_name, value, newline)
 
+    target_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     fd = os.open(target_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
         handle.write("".join(lines))
 
     ai_status = "mode réel activé" if has_real_ai else "mode démo activé (aucune clé LLM saisie)"
-    print(f"  ✓ .env créé avec permissions 600 ({ai_status}, secrets locaux générés).")
+    print(f"  ✓ {target_path} créé avec permissions 600 ({ai_status}, secrets locaux générés).")
 
 
 def _ensure_existing_env(target_path: Path) -> None:
@@ -191,9 +192,9 @@ def _ensure_existing_env(target_path: Path) -> None:
 
     if changed:
         target_path.write_text("".join(lines), encoding="utf-8")
-        print("  ✓ .env existant conservé (secrets internes manquants complétés).")
+        print(f"  ✓ {target_path} existant conservé (secrets internes manquants complétés).")
     else:
-        print("  ✓ .env existant conservé sans modification.")
+        print(f"  ✓ {target_path} existant conservé sans modification.")
 
     try:
         current_mode = target_path.stat().st_mode & 0o777
@@ -223,13 +224,19 @@ def _read_gcp_project(target_path: Path) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Initialise ou complète le fichier .env de cLAIr.")
     parser.add_argument("--repo-dir", type=Path, default=Path(__file__).resolve().parents[2])
+    parser.add_argument("--env-file", type=Path, default=None, help="Chemin cible du fichier .env.")
     parser.add_argument("--mode", choices=("docker", "local", "all"), default="docker")
     parser.add_argument("--interactive", action="store_true")
     parser.add_argument("--get-gcp-project", action="store_true", help="Affiche uniquement GOOGLE_CLOUD_PROJECT s'il est valide.")
     args = parser.parse_args()
 
     template_path = args.repo_dir / ".env.example"
-    target_path = args.repo_dir / ".env"
+    if args.env_file is not None:
+        target_path = args.env_file
+    elif os.environ.get("CLAIR_ENV_FILE"):
+        target_path = Path(os.environ["CLAIR_ENV_FILE"])
+    else:
+        target_path = Path.home() / ".secrets" / ".env"
 
     if args.get_gcp_project:
         print(_read_gcp_project(target_path))

@@ -602,6 +602,7 @@ class CreateBlog(BaseModel):
     title: str | None = Field(default=None, max_length=200)
     auto_refresh: bool = False
     theme: str = Field(default="sunset", max_length=50)
+    topic_category: str = Field(default="general", max_length=60)
     categories: list[str] = Field(default_factory=lambda: ["news"])
 
     @field_validator("prompt")
@@ -620,6 +621,13 @@ class CreateBlog(BaseModel):
         value = value.strip()
         return value or None
 
+    @field_validator("topic_category")
+    @classmethod
+    def validate_topic_category(cls, value: str) -> str:
+        from .blog_themes import normalize_blog_theme_category
+
+        return normalize_blog_theme_category(value)
+
     @field_validator("categories")
     @classmethod
     def validate_categories(cls, value: list[str]) -> list[str]:
@@ -636,6 +644,7 @@ class UpdateBlog(BaseModel):
     prompt: str | None = Field(default=None, min_length=1, max_length=2000)
     auto_refresh: bool | None = None
     theme: str | None = Field(default=None, max_length=50)
+    topic_category: str | None = Field(default=None, max_length=60)
     categories: list[str] | None = None
 
     @field_validator("title", "prompt")
@@ -648,6 +657,15 @@ class UpdateBlog(BaseModel):
             raise ValueError("Ce champ ne peut pas être vide")
         return value
 
+    @field_validator("topic_category")
+    @classmethod
+    def validate_optional_topic_category(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        from .blog_themes import normalize_blog_theme_category
+
+        return normalize_blog_theme_category(value)
+
     @field_validator("categories")
     @classmethod
     def validate_optional_categories(cls, value: list[str] | None) -> list[str] | None:
@@ -659,6 +677,27 @@ class UpdateBlog(BaseModel):
             if v not in seen:
                 seen.append(v)
         return seen or ["news"]
+
+
+class ImproveBlogPrompt(BaseModel):
+    prompt: str = Field(min_length=1, max_length=2000)
+    topic_category: str | None = Field(default="general", max_length=60)
+    categories: list[str] | None = None
+
+    @field_validator("prompt")
+    @classmethod
+    def trim_improve_blog_prompt(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Le prompt ne peut pas être vide")
+        return value
+
+    @field_validator("topic_category")
+    @classmethod
+    def validate_improve_topic_category(cls, value: str | None) -> str:
+        from .blog_themes import normalize_blog_theme_category
+
+        return normalize_blog_theme_category(value)
 
 
 class FlashcardItem(BaseModel):

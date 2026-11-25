@@ -2,6 +2,9 @@
 set -euo pipefail
 repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_dir"
+# shellcheck source=scripts/env_file.sh
+source "$repo_dir/scripts/env_file.sh"
+resolve_clair_env_file "$repo_dir"
 if [[ ! -x backend/.venv/bin/uvicorn || ! -d frontend/node_modules ]]; then
   echo 'Exécutez ./scripts/install.sh --local au préalable.' >&2
   exit 1
@@ -79,7 +82,7 @@ fi
   if command -v docker >/dev/null 2>&1; then
     export SEARXNG_URL="http://127.0.0.1:8080"
   fi
-  exec .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8001 --reload --env-file "$repo_dir/.env"
+  exec .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8001 --reload --env-file "$CLAIR_ENV_FILE"
 ) &
 backend_pid=$!
 if command -v docker >/dev/null 2>&1; then

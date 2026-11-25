@@ -7,6 +7,9 @@ set -euo pipefail
 repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_dir"
 
+# shellcheck source=scripts/env_file.sh
+source "$repo_dir/scripts/env_file.sh"
+resolve_clair_env_file "$repo_dir"
 # shellcheck source=scripts/install_lib/common.sh
 source "$repo_dir/scripts/install_lib/common.sh"
 # shellcheck source=scripts/install_lib/system.sh
@@ -36,6 +39,7 @@ Options :
   -h, --help       Affiche cette aide
 
 Variables d'environnement utiles en mode automatisé :
+  CLAIR_ENV_FILE           Chemin vers le fichier .env (défaut : ~/.secrets/.env)
   INITIAL_ADMIN_USERNAME   Identifiant du premier administrateur
   SMOKE_USERNAME           Identifiant pour scripts/smoke.py
   SMOKE_PASSWORD           Mot de passe pour scripts/smoke.py
@@ -105,6 +109,7 @@ fi
 # Helpers d'initialisation de base (Docker et Local)
 # ---------------------------------------------------------------------------
 DB_CHECK_PY='
+import os
 from pathlib import Path
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
@@ -112,12 +117,12 @@ import app
 from app.config import Settings
 from app.models import Attachment, Conversation, Memory, User
 
-env_candidates = (
-    Path("/app/.env"),
-    Path(app.__file__).resolve().parents[2] / ".env",
-    Path(".env"),
-)
-env_file = next((p for p in env_candidates if p.is_file()), None)
+env_candidates = [
+    Path(p) for p in (os.environ.get("CLAIR_ENV_FILE"),) if p
+] + [
+    Path.home() / ".secrets" / ".env",
+]
+env_file = next((p for p in env_candidates if p.is_file() and os.access(p, os.R_OK)), None)
 settings = Settings(_env_file=env_file) if env_file else Settings()
 engine = create_engine(settings.db_url, pool_pre_ping=True)
 sessions = sessionmaker(engine)
@@ -164,14 +169,14 @@ prepare_system_prerequisites() {
 
 prepare_env_and_gcloud() {
   log_step "3/6 — Configuration de l'environnement (.env & Google Cloud)"
-  local env_args=(--repo-dir "$repo_dir" --mode "$INSTALL_MODE")
+  local env_args=(--repo-dir "$repo_dir" --env-file "$CLAIR_ENV_FILE" --mode "$INSTALL_MODE")
   if is_interactive; then
     env_args+=(--interactive)
   fi
   python3 "$repo_dir/scripts/install_lib/env_setup.py" "${env_args[@]}"
 
   local gcp_project=''
-  gcp_project="$(python3 "$repo_dir/scripts/install_lib/env_setup.py" --repo-dir "$repo_dir" --get-gcp-project || true)"
+  gcp_project="$(python3 "$repo_dir/scripts/install_lib/env_setup.py" --repo-dir "$repo_dir" --env-file "$CLAIR_ENV_FILE" --get-gcp-project || true)"
   setup_gcloud_if_needed "$gcp_project" "$INSTALL_MODE"
 }
 
@@ -335,7 +340,7 @@ print_summary() {
     log_warn "Votre utilisateur vient d'être ajouté au groupe 'docker'."
     log_warn "Ouvrez un nouveau terminal (ou exécutez 'newgrp docker') pour utiliser Docker sans sudo."
   fi
-  printf '\n  %sNote :%s Pour modifier vos clés API plus tard, éditez .env puis exécutez ./scripts/start.sh\n\n' "$C_DIM" "$C_RESET"
+  printf '\n  %sNote :%s Pour modifier vos clés API plus tard, éditez %s puis exécutez ./scripts/start.sh\n\n' "$C_DIM" "$C_RESET" "$CLAIR_ENV_FILE"
 }
 
 main() {

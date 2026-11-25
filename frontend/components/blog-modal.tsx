@@ -27,14 +27,20 @@ import {
   Play,
   Plus,
   RefreshCw,
+  RotateCcw,
   Search,
   Sparkles,
   Trash2,
   TrendingUp,
   Video,
+  Wand2,
   X,
 } from "lucide-react";
 import { VISUAL_STYLES_LIST } from "./web-page-modal";
+import {
+  BlogThemeCategoryPicker,
+  FALLBACK_BLOG_THEME_CATEGORIES,
+} from "./blog-theme-category-picker";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeKatex from "rehype-katex";
@@ -46,6 +52,8 @@ import {
   errorMessage,
   fetchBlog,
   fetchBlogs,
+  fetchBlogThemeCategories,
+  improveBlogPrompt,
   refreshBlog,
   searchBlogImages,
   searchBlogVideos,
@@ -54,6 +62,7 @@ import {
   type Blog,
   type BlogCard,
   type BlogPost,
+  type BlogThemeCategoryDef,
   type SearxngImageResult,
   type SearxngVideoResult,
   type Source,
@@ -133,46 +142,53 @@ export const BLOG_CATEGORIES: BlogCategoryDef[] = [
 
 const SUGGESTIONS = [
   {
-    topic: "Les dernières actualités et avancées en intelligence artificielle",
+    topic: "Sorties cinéma de la semaine, critiques films et nouvelles séries en streaming",
+    label: "Cinéma & Séries",
+    icon: "🎬",
+    topicCategory: "cinema_series",
+    categories: ["news", "facts", "videos"],
+  },
+  {
+    topic: "Tests des dernières sorties jeux vidéo PC/consoles, notes et annonces studios",
+    label: "Jeux Vidéo & Esport",
+    icon: "🎮",
+    topicCategory: "gaming",
+    categories: ["news", "tips", "videos"],
+  },
+  {
+    topic: "Point marchés boursiers, CAC 40, S&P 500, banques centrales et résultats d'entreprises",
+    label: "Finance & Bourse",
+    icon: "📈",
+    topicCategory: "finance_markets",
+    categories: ["news", "stats", "concepts"],
+  },
+  {
+    topic: "Les dernières actualités et avancées en intelligence artificielle et modèles LLM",
     label: "Actualités IA & LLM",
     icon: "🤖",
+    topicCategory: "ai_data",
     categories: ["news", "tips", "stats"],
   },
   {
-    topic: "Curiosités du monde, science insolite et faits historiques méconnus",
-    label: "Faits & Culture Générale",
-    icon: "🧠",
-    categories: ["facts", "concepts", "stats"],
-  },
-  {
-    topic: "Exploration spatiale, télescopes, nébuleuses et découvertes astronomiques",
-    label: "Merveilles de l'Espace",
+    topic: "Exploration spatiale, télescopes, nébuleuses et découvertes scientifiques",
+    label: "Sciences & Espace",
     icon: "🚀",
+    topicCategory: "science_space",
     categories: ["images", "facts", "news"],
   },
   {
-    topic: "Cybersécurité, failles critiques et bonnes pratiques de protection",
-    label: "Cybersécurité & Failles",
+    topic: "Cybersécurité, failles critiques CVE, open-source et architecture logicielle",
+    label: "Cyber & Open Source",
     icon: "🛡️",
+    topicCategory: "dev_cyber_cloud",
     categories: ["news", "tips", "concepts"],
   },
   {
-    topic: "Innovations en énergie propre, climat et transition écologique",
-    label: "Énergie & Climat",
-    icon: "⚡",
+    topic: "Résultats sportifs, Ligue des Champions, Formule 1, Tennis et grands événements",
+    label: "Sport & Compétitions",
+    icon: "🏆",
+    topicCategory: "sports",
     categories: ["news", "stats", "facts"],
-  },
-  {
-    topic: "Actualités open-source, langages et développement logiciel",
-    label: "Open Source & Dév",
-    icon: "💻",
-    categories: ["news", "tips", "quotes"],
-  },
-  {
-    topic: "Grands documentaires scientifiques, reportages d'investigation et cours vidéo",
-    label: "Documentaires & Vidéos",
-    icon: "🎬",
-    categories: ["videos", "concepts", "facts"],
   },
 ];
 
@@ -275,17 +291,26 @@ export function BlogModal({ onClose, initialPrompt = "" }: BlogModalProps) {
   // Creation form state
   const [isCreating, setIsCreating] = useState(false);
   const [createPrompt, setCreatePrompt] = useState(initialPrompt);
+  const [previousPromptBeforeImprove, setPreviousPromptBeforeImprove] = useState<string | null>(null);
+  const [improvingPrompt, setImprovingPrompt] = useState(false);
   const [createTitle, setCreateTitle] = useState("");
   const [createAutoRefresh, setCreateAutoRefresh] = useState(false);
   const [createTheme, setCreateTheme] = useState("sunset");
+  const [createTopicCategory, setCreateTopicCategory] = useState("general");
   const [createCategories, setCreateCategories] = useState<string[]>(["news", "facts"]);
+  const [themeCategoriesCatalog, setThemeCategoriesCatalog] = useState<BlogThemeCategoryDef[]>(
+    FALLBACK_BLOG_THEME_CATEGORIES,
+  );
 
   // Category filter state for reader
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
 
-  // Edit categories inline
+  // Edit categories & theme category inline
   const [editingCategories, setEditingCategories] = useState(false);
   const [categoriesDraft, setCategoriesDraft] = useState<string[]>([]);
+  const [topicCategoryDraft, setTopicCategoryDraft] = useState<string>("general");
+  const [promptDraft, setPromptDraft] = useState<string>("");
+  const [improvingDraftPrompt, setImprovingDraftPrompt] = useState(false);
 
   // Style visuel (mêmes styles que les pages web), mémorisé par blog dans le navigateur
   const [visualStyle, setVisualStyle] = useState("");
@@ -486,15 +511,64 @@ export function BlogModal({ onClose, initialPrompt = "" }: BlogModalProps) {
     if (!activeBlog || busy || categoriesDraft.length === 0) return;
     setBusy("update");
     try {
-      const updated = await updateBlog(activeBlog.id, { categories: categoriesDraft });
+      const updated = await updateBlog(activeBlog.id, {
+        categories: categoriesDraft,
+        topic_category: topicCategoryDraft,
+        prompt: promptDraft.trim() || activeBlog.prompt,
+      });
       setActiveBlog(updated);
       setBlogs(current => current.map(b => (b.id === activeBlog.id ? updated : b)));
       setEditingCategories(false);
-      showToast("Catégories du blog mises à jour avec succès !");
+      showToast("Catégorie de thème, sources et rubriques mises à jour !");
     } catch (err) {
       setError(errorMessage(err));
     } finally {
       setBusy("");
+    }
+  }
+
+  async function handleImproveCreatePrompt() {
+    const raw = createPrompt.trim();
+    if (!raw || improvingPrompt || busy === "create") return;
+    setImprovingPrompt(true);
+    setError("");
+    try {
+      setPreviousPromptBeforeImprove(createPrompt);
+      const res = await improveBlogPrompt({
+        prompt: raw,
+        topic_category: createTopicCategory,
+        categories: createCategories,
+      });
+      if (res.prompt) {
+        setCreatePrompt(res.prompt);
+        showToast("Prompt enrichi avec les sources de la catégorie sélectionnée !");
+      }
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setImprovingPrompt(false);
+    }
+  }
+
+  async function handleImproveDraftPrompt() {
+    const raw = promptDraft.trim();
+    if (!raw || improvingDraftPrompt || busy === "update") return;
+    setImprovingDraftPrompt(true);
+    setError("");
+    try {
+      const res = await improveBlogPrompt({
+        prompt: raw,
+        topic_category: topicCategoryDraft,
+        categories: categoriesDraft,
+      });
+      if (res.prompt) {
+        setPromptDraft(res.prompt);
+        showToast("Requête du blog enrichie avec succès !");
+      }
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setImprovingDraftPrompt(false);
     }
   }
 
@@ -505,9 +579,18 @@ export function BlogModal({ onClose, initialPrompt = "" }: BlogModalProps) {
     });
   }
 
-  // Load initial blogs list
+  // Load initial blogs list & theme categories catalog
   useEffect(() => {
     const controller = new AbortController();
+    fetchBlogThemeCategories()
+      .then(cats => {
+        if (!controller.signal.aborted && Array.isArray(cats) && cats.length > 0) {
+          setThemeCategoriesCatalog(cats);
+        }
+      })
+      .catch(() => {
+        /* fallback catalog stays active */
+      });
     fetchBlogs()
       .then(items => {
         setBlogs(items);
@@ -643,6 +726,7 @@ export function BlogModal({ onClose, initialPrompt = "" }: BlogModalProps) {
         title: createTitle.trim() || undefined,
         auto_refresh: createAutoRefresh,
         theme: createTheme,
+        topic_category: createTopicCategory,
         categories: createCategories,
       });
 
@@ -655,6 +739,7 @@ export function BlogModal({ onClose, initialPrompt = "" }: BlogModalProps) {
       }
       setIsCreating(false);
       setCreatePrompt("");
+      setPreviousPromptBeforeImprove(null);
       setCreateTitle("");
       setCreateCategories(["news", "facts"]);
       showToast("Blog créé et première édition rédigée avec succès !");
@@ -961,23 +1046,80 @@ export function BlogModal({ onClose, initialPrompt = "" }: BlogModalProps) {
 
                 <form onSubmit={handleCreate} className="blog-create-form">
                   <div className="blog-form-group">
-                    <label htmlFor="blog-prompt-input">
-                      Sujet ou requête web pour le blog <span className="required">*</span>
-                    </label>
+                    <div
+                      style={{
+                        display: "flex",
+                        flexWrap: "wrap",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        gap: 8,
+                        marginBottom: 6,
+                      }}
+                    >
+                      <label htmlFor="blog-prompt-input" style={{ marginBottom: 0 }}>
+                        Sujet ou prompt libre pour le blog <span className="required">*</span>
+                      </label>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        {previousPromptBeforeImprove &&
+                          previousPromptBeforeImprove !== createPrompt && (
+                            <button
+                              type="button"
+                              className="blog-quick-cat-btn"
+                              disabled={busy === "create" || improvingPrompt}
+                              onClick={() => {
+                                setCreatePrompt(previousPromptBeforeImprove);
+                                setPreviousPromptBeforeImprove(null);
+                              }}
+                              title="Restaurer votre prompt initial avant amélioration"
+                              style={{ display: "inline-flex", alignItems: "center", gap: 4 }}
+                            >
+                              <RotateCcw size={12} />
+                              <span>Prompt initial</span>
+                            </button>
+                          )}
+                        <button
+                          type="button"
+                          className="blog-quick-cat-btn"
+                          disabled={busy === "create" || improvingPrompt || !createPrompt.trim()}
+                          onClick={handleImproveCreatePrompt}
+                          title="Reformuler et enrichir le prompt en ciblant la catégorie de thème et ses sources"
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 5,
+                            fontWeight: 600,
+                            borderColor: "var(--accent-primary, #B4532A)",
+                            color: "var(--accent-primary, #B4532A)",
+                          }}
+                        >
+                          {improvingPrompt ? (
+                            <>
+                              <LoaderCircle size={12} className="spin" />
+                              <span>Amélioration…</span>
+                            </>
+                          ) : (
+                            <>
+                              <Wand2 size={12} />
+                              <span>Améliorer le prompt</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
                     <textarea
                       id="blog-prompt-input"
                       rows={3}
-                      placeholder="Ex : Les dernières news IA et modèles de raisonnement"
+                      placeholder="Tapez le prompt que vous voulez (ex : Les sorties films SF et critiques séries de la semaine, Les tests RPG sur PC et Switch…)"
                       value={createPrompt}
                       onChange={e => setCreatePrompt(e.target.value)}
-                      disabled={busy === "create"}
+                      disabled={busy === "create" || improvingPrompt}
                       required
                       autoFocus
                     />
                   </div>
 
                   <div className="blog-suggestions-wrap">
-                    <span className="blog-suggestions-label">Suggestions en 1 clic :</span>
+                    <span className="blog-suggestions-label">Suggestions rapides (Prompt + Thème) :</span>
                     <div className="blog-suggestions-pills">
                       {SUGGESTIONS.map(s => (
                         <button
@@ -988,6 +1130,7 @@ export function BlogModal({ onClose, initialPrompt = "" }: BlogModalProps) {
                           onClick={() => {
                             setCreatePrompt(s.topic);
                             if (!createTitle) setCreateTitle(s.label);
+                            if (s.topicCategory) setCreateTopicCategory(s.topicCategory);
                             if (s.categories) setCreateCategories(s.categories);
                           }}
                         >
@@ -996,6 +1139,19 @@ export function BlogModal({ onClose, initialPrompt = "" }: BlogModalProps) {
                         </button>
                       ))}
                     </div>
+                  </div>
+
+                  <div className="blog-form-group">
+                    <BlogThemeCategoryPicker
+                      categories={themeCategoriesCatalog}
+                      selectedCategoryId={createTopicCategory}
+                      onSelectCategory={catId => setCreateTopicCategory(catId)}
+                      onApplySamplePrompt={(samplePrompt, catLabel) => {
+                        setCreatePrompt(samplePrompt);
+                        if (!createTitle.trim()) setCreateTitle(catLabel);
+                      }}
+                      disabled={busy === "create"}
+                    />
                   </div>
 
                   <div className="blog-form-group">
@@ -1247,6 +1403,28 @@ export function BlogModal({ onClose, initialPrompt = "" }: BlogModalProps) {
                     </div>
 
                     <div className="blog-categories-pills-row">
+                      {(() => {
+                        const activeThemeCat =
+                          themeCategoriesCatalog.find(
+                            tc => tc.id === (activeBlog.topic_category || "general"),
+                          ) || themeCategoriesCatalog[0];
+                        if (!activeThemeCat) return null;
+                        return (
+                          <span
+                            className="blog-active-cat-badge"
+                            title={`Thème : ${activeThemeCat.label} (${activeThemeCat.sources.map(s => s.name).join(", ")})`}
+                            style={{
+                              borderColor: "var(--accent-primary, #B4532A)",
+                              fontWeight: 600,
+                            }}
+                          >
+                            <span>{activeThemeCat.emoji}</span>
+                            <span>
+                              Thème : {activeThemeCat.label} ({activeThemeCat.sources.length} sources)
+                            </span>
+                          </span>
+                        );
+                      })()}
                       {(activeBlog.categories || ["news"]).map(cid => {
                         const meta = BLOG_CATEGORIES.find(c => c.id === cid);
                         return (
@@ -1259,21 +1437,23 @@ export function BlogModal({ onClose, initialPrompt = "" }: BlogModalProps) {
                       <button
                         type="button"
                         className="blog-edit-cats-btn"
-                        title="Modifier les catégories pour les prochaines éditions"
+                        title="Modifier le thème, les sources, le prompt ou les rubriques pour les prochaines éditions"
                         onClick={() => {
                           setCategoriesDraft(activeBlog.categories || ["news"]);
+                          setTopicCategoryDraft(activeBlog.topic_category || "general");
+                          setPromptDraft(activeBlog.prompt || "");
                           setEditingCategories(open => !open);
                         }}
                       >
                         <Pencil size={11} />
-                        <span>Rubriques</span>
+                        <span>Thème, Prompt & Rubriques</span>
                       </button>
                     </div>
 
                     {editingCategories && (
                       <div className="blog-edit-categories-box">
                         <div className="blog-edit-categories-header">
-                          <span>Catégories actives pour les prochaines éditions :</span>
+                          <span>Paramètres de veille (Thème, Sources, Prompt & Rubriques) :</span>
                           <button
                             type="button"
                             className="icon-button-subtle"
@@ -1283,6 +1463,75 @@ export function BlogModal({ onClose, initialPrompt = "" }: BlogModalProps) {
                             <X size={13} />
                           </button>
                         </div>
+
+                        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 }}>
+                          <div
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "space-between",
+                              gap: 8,
+                            }}
+                          >
+                            <label
+                              htmlFor="blog-edit-prompt-input"
+                              style={{ fontSize: "0.78rem", fontWeight: 600 }}
+                            >
+                              Prompt / Sujet de recherche :
+                            </label>
+                            <button
+                              type="button"
+                              className="blog-quick-cat-btn"
+                              disabled={busy === "update" || improvingDraftPrompt || !promptDraft.trim()}
+                              onClick={handleImproveDraftPrompt}
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: 4,
+                                fontWeight: 600,
+                              }}
+                            >
+                              {improvingDraftPrompt ? (
+                                <>
+                                  <LoaderCircle size={11} className="spin" />
+                                  <span>Amélioration…</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Wand2 size={11} />
+                                  <span>Améliorer le prompt</span>
+                                </>
+                              )}
+                            </button>
+                          </div>
+                          <textarea
+                            id="blog-edit-prompt-input"
+                            rows={2}
+                            value={promptDraft}
+                            onChange={e => setPromptDraft(e.target.value)}
+                            disabled={busy === "update" || improvingDraftPrompt}
+                            style={{
+                              width: "100%",
+                              padding: "7px 10px",
+                              borderRadius: 8,
+                              fontSize: "0.8rem",
+                              border: "1px solid var(--border-subtle, rgba(120,120,120,0.25))",
+                              background: "var(--bg-canvas, transparent)",
+                              color: "var(--text-primary, inherit)",
+                            }}
+                          />
+                        </div>
+
+                        <div style={{ marginBottom: 10 }}>
+                          <BlogThemeCategoryPicker
+                            categories={themeCategoriesCatalog}
+                            selectedCategoryId={topicCategoryDraft}
+                            onSelectCategory={catId => setTopicCategoryDraft(catId)}
+                            disabled={busy === "update"}
+                            compact
+                          />
+                        </div>
+
                         <div className="blog-edit-categories-chips">
                           {BLOG_CATEGORIES.map(cat => {
                             const isSelected = categoriesDraft.includes(cat.id);

@@ -1,0 +1,697 @@
+{
+  "version": "1.0",
+  "default_category": "general",
+  "categories": [
+    {
+      "id": "general",
+      "group": "Société, Monde & Savoirs",
+      "label": "Général & Multi-Sources",
+      "emoji": "🌐",
+      "description": "Agences de presse mondiales, grands quotidiens de référence et encyclopédies pour tous les sujets",
+      "sample_prompts": [
+        "Les grands événements mondiaux et décryptages de la semaine",
+        "Innovations majeures, société et découvertes récentes dans le monde"
+      ],
+      "sources": [
+        { "name": "Reuters", "domain": "reuters.com", "kind": "primary" },
+        { "name": "Associated Press", "domain": "apnews.com", "kind": "primary" },
+        { "name": "Franceinfo", "domain": "francetvinfo.fr", "kind": "primary" },
+        { "name": "BBC News", "domain": "bbc.com", "kind": "primary" },
+        { "name": "Wikipédia", "domain": "fr.wikipedia.org", "kind": "primary" },
+        { "name": "Le Monde", "domain": "lemonde.fr", "kind": "journal" },
+        { "name": "The Guardian", "domain": "theguardian.com", "kind": "journal" },
+        { "name": "Courrier International", "domain": "courrierinternational.com", "kind": "journal" },
+        { "name": "Les Échos", "domain": "lesechos.fr", "kind": "journal" },
+        { "name": "Le Figaro", "domain": "lefigaro.fr", "kind": "journal" },
+        { "name": "The Conversation", "domain": "theconversation.com", "kind": "blog" },
+        { "name": "Medium", "domain": "medium.com", "kind": "blog" },
+        { "name": "Substack", "domain": "substack.com", "kind": "blog" }
+      ]
+    },
+    {
+      "id": "cinema_series",
+      "group": "Culture & Divertissement",
+      "label": "Cinéma, Séries & Streaming",
+      "emoji": "🎬",
+      "description": "Sorties salles, critiques films, séries TV, plateformes VOD (Netflix, HBO, Disney+, Canal+) et box-office",
+      "sample_prompts": [
+        "Sorties cinéma de la semaine, critiques et box-office mondial",
+        "Les meilleures nouvelles séries en streaming et critiques sur Écran Large, AlloCiné et IMDb"
+      ],
+      "sources": [
+        { "name": "AlloCiné", "domain": "allocine.fr", "kind": "primary" },
+        { "name": "IMDb", "domain": "imdb.com", "kind": "primary" },
+        { "name": "Écran Large", "domain": "ecranlarge.com", "kind": "primary" },
+        { "name": "SensCritique", "domain": "senscritique.com", "kind": "primary" },
+        { "name": "Rotten Tomatoes", "domain": "rottentomatoes.com", "kind": "primary" },
+        { "name": "Letterboxd", "domain": "letterboxd.com", "kind": "primary" },
+        { "name": "Première", "domain": "premiere.fr", "kind": "journal" },
+        { "name": "Cahiers du Cinéma", "domain": "cahiersducinema.com", "kind": "journal" },
+        { "name": "Télérama Cinéma & Séries", "domain": "telerama.fr", "kind": "journal" },
+        { "name": "Variety", "domain": "variety.com", "kind": "journal" },
+        { "name": "The Hollywood Reporter", "domain": "hollywoodreporter.com", "kind": "journal" },
+        { "name": "Deadline", "domain": "deadline.com", "kind": "journal" },
+        { "name": "Le Film Français", "domain": "lefilmfrancais.com", "kind": "journal" },
+        { "name": "Mad Movies", "domain": "mad-movies.com", "kind": "journal" },
+        { "name": "IndieWire", "domain": "indiewire.com", "kind": "blog" },
+        { "name": "CloneWeb", "domain": "cloneweb.net", "kind": "blog" },
+        { "name": "Critikat", "domain": "critikat.com", "kind": "blog" },
+        { "name": "Collider", "domain": "collider.com", "kind": "blog" },
+        { "name": "ScreenRant", "domain": "screenrant.com", "kind": "blog" }
+      ]
+    },
+    {
+      "id": "gaming",
+      "group": "Tech, Gaming & Sciences",
+      "label": "Jeux Vidéo & Esport",
+      "emoji": "🎮",
+      "description": "Tests de jeux PC/PS5/Xbox/Switch, annonces studios, hardware gaming, scène esport et jeux indépendants",
+      "sample_prompts": [
+        "Tests des dernières sorties jeux vidéo, notes et annonces majeures PC et consoles",
+        "Actualités RPG, GTA, Nintendo, Steam et dossiers de fond de l'industrie gaming"
+      ],
+      "sources": [
+        { "name": "JeuxVideo.com", "domain": "jeuxvideo.com", "kind": "primary" },
+        { "name": "IGN", "domain": "ign.com", "kind": "primary" },
+        { "name": "Gamekult", "domain": "gamekult.com", "kind": "primary" },
+        { "name": "Gameblog", "domain": "gameblog.fr", "kind": "primary" },
+        { "name": "GameSpot", "domain": "gamespot.com", "kind": "primary" },
+        { "name": "Metacritic", "domain": "metacritic.com", "kind": "primary" },
+        { "name": "Canard PC", "domain": "canardpc.com", "kind": "journal" },
+        { "name": "PC Gamer", "domain": "pcgamer.com", "kind": "journal" },
+        { "name": "Eurogamer", "domain": "eurogamer.net", "kind": "journal" },
+        { "name": "Polygon", "domain": "polygon.com", "kind": "journal" },
+        { "name": "GamesIndustry.biz", "domain": "gamesindustry.biz", "kind": "journal" },
+        { "name": "Game Informer", "domain": "gameinformer.com", "kind": "journal" },
+        { "name": "Kotaku", "domain": "kotaku.com", "kind": "blog" },
+        { "name": "Rock Paper Shotgun", "domain": "rockpapershotgun.com", "kind": "blog" },
+        { "name": "ActuGaming", "domain": "actugaming.net", "kind": "blog" },
+        { "name": "Millenium", "domain": "millenium.org", "kind": "blog" },
+        { "name": "Gematsu", "domain": "gematsu.com", "kind": "blog" },
+        { "name": "Nintendo Life", "domain": "nintendolife.com", "kind": "blog" },
+        { "name": "Push Square", "domain": "pushsquare.com", "kind": "blog" }
+      ]
+    },
+    {
+      "id": "finance_markets",
+      "group": "Économie, Finance & Droit",
+      "label": "Finance, Bourse & Investissement",
+      "emoji": "📈",
+      "description": "Marchés actions, CAC 40, S&P 500, ETFs, banques centrales, résultats trimestriels et gestion de portefeuille",
+      "sample_prompts": [
+        "Point marchés boursiers, décisions de la Fed/BCE, résultats d'entreprises et valeurs à suivre",
+        "Stratégies ETF, dividendes, analyses fondamentales et actualités des marchés financiers"
+      ],
+      "sources": [
+        { "name": "Boursorama", "domain": "boursorama.com", "kind": "primary" },
+        { "name": "Zonebourse", "domain": "zonebourse.com", "kind": "primary" },
+        { "name": "Boursier.com", "domain": "boursier.com", "kind": "primary" },
+        { "name": "Investing.com", "domain": "investing.com", "kind": "primary" },
+        { "name": "Morningstar", "domain": "morningstar.fr", "kind": "primary" },
+        { "name": "Yahoo Finance", "domain": "finance.yahoo.com", "kind": "primary" },
+        { "name": "Les Échos Finance & Marchés", "domain": "lesechos.fr", "kind": "journal" },
+        { "name": "Investir (Les Échos)", "domain": "investir.lesechos.fr", "kind": "journal" },
+        { "name": "Bloomberg", "domain": "bloomberg.com", "kind": "journal" },
+        { "name": "Financial Times", "domain": "ft.com", "kind": "journal" },
+        { "name": "L'Agefi", "domain": "agefi.fr", "kind": "journal" },
+        { "name": "MarketWatch", "domain": "marketwatch.com", "kind": "journal" },
+        { "name": "CNBC", "domain": "cnbc.com", "kind": "journal" },
+        { "name": "Le Revenu", "domain": "lerevenu.com", "kind": "journal" },
+        { "name": "Seeking Alpha", "domain": "seekingalpha.com", "kind": "blog" },
+        { "name": "Avenue des Investisseurs", "domain": "avenuedesinvestisseurs.fr", "kind": "blog" },
+        { "name": "Café de la Bourse", "domain": "cafedelabourse.com", "kind": "blog" },
+        { "name": "Epargnant 3.0", "domain": "epargnant30.fr", "kind": "blog" }
+      ]
+    },
+    {
+      "id": "economy_business",
+      "group": "Économie, Finance & Droit",
+      "label": "Économie, Macro & Entreprises",
+      "emoji": "💼",
+      "description": "Conjoncture macroéconomique, inflation, commerce mondial, stratégie d'entreprise, startups et levées de fonds",
+      "sample_prompts": [
+        "Tendances macroéconomiques mondiales, inflation, emploi et stratégies des grandes entreprises",
+        "Levées de fonds startups, écosystème French Tech et transformations industrielles"
+      ],
+      "sources": [
+        { "name": "INSEE", "domain": "insee.fr", "kind": "primary" },
+        { "name": "Banque de France", "domain": "banque-france.fr", "kind": "primary" },
+        { "name": "OCDE / OECD", "domain": "oecd.org", "kind": "primary" },
+        { "name": "BFM Business", "domain": "bfmtv.com", "kind": "primary" },
+        { "name": "La Tribune", "domain": "latribune.fr", "kind": "journal" },
+        { "name": "Challenges", "domain": "challenges.fr", "kind": "journal" },
+        { "name": "Capital", "domain": "capital.fr", "kind": "journal" },
+        { "name": "The Economist", "domain": "economist.com", "kind": "journal" },
+        { "name": "The Wall Street Journal", "domain": "wsj.com", "kind": "journal" },
+        { "name": "Harvard Business Review", "domain": "hbr.org", "kind": "journal" },
+        { "name": "Forbes", "domain": "forbes.com", "kind": "journal" },
+        { "name": "Maddyness", "domain": "maddyness.com", "kind": "blog" },
+        { "name": "FrenchWeb", "domain": "frenchweb.fr", "kind": "blog" },
+        { "name": "Business Insider", "domain": "businessinsider.com", "kind": "blog" }
+      ]
+    },
+    {
+      "id": "crypto_web3",
+      "group": "Économie, Finance & Droit",
+      "label": "Cryptomonnaies, Blockchain & Web3",
+      "emoji": "🪙",
+      "description": "Bitcoin, Ethereum, DeFi, protocoles Layer 2, régulation MiCA/SEC, tokenisation et analyses on-chain",
+      "sample_prompts": [
+        "Actualités Bitcoin, Ethereum, ETF crypto, protocoles DeFi et régulation internationale",
+        "Analyses on-chain, innovations Layer 2 et sécurité des smart contracts"
+      ],
+      "sources": [
+        { "name": "Journal du Coin", "domain": "journalducoin.com", "kind": "primary" },
+        { "name": "Cryptoast", "domain": "cryptoast.fr", "kind": "primary" },
+        { "name": "CoinDesk", "domain": "coindesk.com", "kind": "primary" },
+        { "name": "Cointelegraph", "domain": "cointelegraph.com", "kind": "primary" },
+        { "name": "DefiLlama", "domain": "defillama.com", "kind": "primary" },
+        { "name": "The Block", "domain": "theblock.co", "kind": "journal" },
+        { "name": "Decrypt", "domain": "decrypt.co", "kind": "journal" },
+        { "name": "DL News", "domain": "dlnews.com", "kind": "journal" },
+        { "name": "Messari", "domain": "messari.io", "kind": "blog" },
+        { "name": "Bankless", "domain": "bankless.com", "kind": "blog" },
+        { "name": "Vitalik Buterin Blog", "domain": "vitalik.eth.limo", "kind": "blog" }
+      ]
+    },
+    {
+      "id": "ai_data",
+      "group": "Tech, Gaming & Sciences",
+      "label": "Intelligence Artificielle, LLM & Data",
+      "emoji": "🤖",
+      "description": "Modèles de fondation (Gemini, Claude, GPT, Mistral, Llama), agents IA, open-weight, GPU et recherche ML",
+      "sample_prompts": [
+        "Nouveaux modèles LLM, agents autonomes, benchmarks et avancées en intelligence artificielle",
+        "Outils IA pour développeurs, modèles open-source sur Hugging Face et publications arXiv"
+      ],
+      "sources": [
+        { "name": "ActuIA", "domain": "actuia.com", "kind": "primary" },
+        { "name": "Hugging Face Blog", "domain": "huggingface.co", "kind": "primary" },
+        { "name": "OpenAI News", "domain": "openai.com", "kind": "primary" },
+        { "name": "Anthropic News", "domain": "anthropic.com", "kind": "primary" },
+        { "name": "Google DeepMind", "domain": "deepmind.google", "kind": "primary" },
+        { "name": "Mistral AI", "domain": "mistral.ai", "kind": "primary" },
+        { "name": "arXiv CS.AI", "domain": "arxiv.org", "kind": "primary" },
+        { "name": "MIT Technology Review", "domain": "technologyreview.com", "kind": "journal" },
+        { "name": "VentureBeat AI", "domain": "venturebeat.com", "kind": "journal" },
+        { "name": "The Decoder", "domain": "the-decoder.com", "kind": "journal" },
+        { "name": "DeepLearning.AI (The Batch)", "domain": "deeplearning.ai", "kind": "blog" },
+        { "name": "Simon Willison's Weblog", "domain": "simonwillison.net", "kind": "blog" },
+        { "name": "Towards Data Science", "domain": "towardsdatascience.com", "kind": "blog" },
+        { "name": "LessWrong", "domain": "lesswrong.com", "kind": "blog" },
+        { "name": "Interconnects (Nathan Lambert)", "domain": "interconnects.ai", "kind": "blog" }
+      ]
+    },
+    {
+      "id": "tech_hardware",
+      "group": "Tech, Gaming & Sciences",
+      "label": "High-Tech, Smartphones & Hardware",
+      "emoji": "📱",
+      "description": "Tests smartphones, PC, processeurs, cartes graphiques, puces semi-conducteurs, objets connectés et numérique",
+      "sample_prompts": [
+        "Tests et sorties smartphones, processeurs, cartes graphiques et innovations matérielles",
+        "Grandes annonces Apple, Android, NVIDIA, AMD et tendances high-tech grand public"
+      ],
+      "sources": [
+        { "name": "Frandroid", "domain": "frandroid.com", "kind": "primary" },
+        { "name": "Les Numériques", "domain": "lesnumeriques.com", "kind": "primary" },
+        { "name": "Numerama", "domain": "numerama.com", "kind": "primary" },
+        { "name": "Next", "domain": "next.ink", "kind": "primary" },
+        { "name": "The Verge", "domain": "theverge.com", "kind": "primary" },
+        { "name": "TechCrunch", "domain": "techcrunch.com", "kind": "primary" },
+        { "name": "Wired", "domain": "wired.com", "kind": "journal" },
+        { "name": "Ars Technica", "domain": "arstechnica.com", "kind": "journal" },
+        { "name": "Tom's Hardware", "domain": "tomshardware.com", "kind": "journal" },
+        { "name": "01net", "domain": "01net.com", "kind": "journal" },
+        { "name": "Clubic", "domain": "clubic.com", "kind": "journal" },
+        { "name": "Journal du Geek", "domain": "journaldugeek.com", "kind": "blog" },
+        { "name": "MacGeneration", "domain": "macg.co", "kind": "blog" },
+        { "name": "Minimachines", "domain": "minimachines.net", "kind": "blog" },
+        { "name": "9to5Mac", "domain": "9to5mac.com", "kind": "blog" }
+      ]
+    },
+    {
+      "id": "dev_cyber_cloud",
+      "group": "Tech, Gaming & Sciences",
+      "label": "Dév, Open Source, Cloud & Cybersécurité",
+      "emoji": "🛡️",
+      "description": "Langages de programmation, Linux, DevOps, architecture logicielle, failles CVE, CERT/ANSSI et menaces cyber",
+      "sample_prompts": [
+        "Alertes cybersécurité, vulnérabilités critiques CVE, ANSSI et protection des infrastructures",
+        "Nouveautés open-source, Linux, Rust, TypeScript, Python et architecture cloud"
+      ],
+      "sources": [
+        { "name": "ANSSI / CERT-FR", "domain": "cert.ssi.gouv.fr", "kind": "primary" },
+        { "name": "BleepingComputer", "domain": "bleepingcomputer.com", "kind": "primary" },
+        { "name": "The Hacker News", "domain": "thehackernews.com", "kind": "primary" },
+        { "name": "Hacker News (Y Combinator)", "domain": "news.ycombinator.com", "kind": "primary" },
+        { "name": "Developpez.com", "domain": "developpez.com", "kind": "primary" },
+        { "name": "GitHub Blog", "domain": "github.blog", "kind": "primary" },
+        { "name": "InfoQ", "domain": "infoq.com", "kind": "journal" },
+        { "name": "LWN.net", "domain": "lwn.net", "kind": "journal" },
+        { "name": "Dark Reading", "domain": "darkreading.com", "kind": "journal" },
+        { "name": "LeMagIT", "domain": "lemagit.fr", "kind": "journal" },
+        { "name": "Korben", "domain": "korben.info", "kind": "blog" },
+        { "name": "Krebs on Security", "domain": "krebsonsecurity.com", "kind": "blog" },
+        { "name": "Zataz", "domain": "zataz.com", "kind": "blog" },
+        { "name": "Smashing Magazine", "domain": "smashingmagazine.com", "kind": "blog" },
+        { "name": "Martin Fowler", "domain": "martinfowler.com", "kind": "blog" },
+        { "name": "LinuxFr.org", "domain": "linuxfr.org", "kind": "blog" }
+      ]
+    },
+    {
+      "id": "science_space",
+      "group": "Tech, Gaming & Sciences",
+      "label": "Sciences, Physique & Exploration Spatiale",
+      "emoji": "🚀",
+      "description": "Astronomie, missions NASA/ESA/SpaceX, télescope James Webb, physique quantique, biologie et découvertes",
+      "sample_prompts": [
+        "Découvertes du télescope James Webb, missions spatiales NASA/ESA et astrophysique",
+        "Grandes avancées scientifiques en physique quantique, biologie et mathématiques"
+      ],
+      "sources": [
+        { "name": "NASA", "domain": "nasa.gov", "kind": "primary" },
+        { "name": "ESA", "domain": "esa.int", "kind": "primary" },
+        { "name": "CNRS Le Journal", "domain": "lejournal.cnrs.fr", "kind": "primary" },
+        { "name": "Nature", "domain": "nature.com", "kind": "primary" },
+        { "name": "Science (AAAS)", "domain": "science.org", "kind": "primary" },
+        { "name": "Futura Sciences", "domain": "futura-sciences.com", "kind": "primary" },
+        { "name": "Sciences et Avenir", "domain": "sciencesetavenir.fr", "kind": "journal" },
+        { "name": "Pour la Science", "domain": "pourlascience.fr", "kind": "journal" },
+        { "name": "La Recherche", "domain": "larecherche.fr", "kind": "journal" },
+        { "name": "Ciel & Espace", "domain": "cieletespace.fr", "kind": "journal" },
+        { "name": "Quanta Magazine", "domain": "quantamagazine.org", "kind": "journal" },
+        { "name": "New Scientist", "domain": "newscientist.com", "kind": "journal" },
+        { "name": "Space.com", "domain": "space.com", "kind": "journal" },
+        { "name": "Science Étonnante", "domain": "scienceetonnante.com", "kind": "blog" },
+        { "name": "Café des Sciences", "domain": "cafedesciences.org", "kind": "blog" },
+        { "name": "Phys.org", "domain": "phys.org", "kind": "blog" }
+      ]
+    },
+    {
+      "id": "health_medicine",
+      "group": "Tech, Gaming & Sciences",
+      "label": "Santé, Médecine & Biotechnologies",
+      "emoji": "🩺",
+      "description": "Recherche biomédicale, essais cliniques, santé publique, nutrition scientifique, longévité et prévention",
+      "sample_prompts": [
+        "Avancées médicales, essais cliniques majeurs, immunothérapie et santé publique",
+        "Recherches Inserm sur la nutrition, le sommeil, les neurosciences et la prévention"
+      ],
+      "sources": [
+        { "name": "Inserm", "domain": "inserm.fr", "kind": "primary" },
+        { "name": "PubMed / NCBI", "domain": "pubmed.ncbi.nlm.nih.gov", "kind": "primary" },
+        { "name": "Vidal", "domain": "vidal.fr", "kind": "primary" },
+        { "name": "OMS / WHO", "domain": "who.int", "kind": "primary" },
+        { "name": "HAS (Haute Autorité de Santé)", "domain": "has-sante.fr", "kind": "primary" },
+        { "name": "The Lancet", "domain": "thelancet.com", "kind": "journal" },
+        { "name": "NEJM", "domain": "nejm.org", "kind": "journal" },
+        { "name": "Le Quotidien du Médecin", "domain": "lequotidiendumedecin.fr", "kind": "journal" },
+        { "name": "Santé Magazine", "domain": "santemagazine.fr", "kind": "journal" },
+        { "name": "STAT News", "domain": "statnews.com", "kind": "journal" },
+        { "name": "Medscape", "domain": "medscape.com", "kind": "blog" },
+        { "name": "Pourquoi Docteur", "domain": "pourquoidocteur.fr", "kind": "blog" }
+      ]
+    },
+    {
+      "id": "geopolitics_news",
+      "group": "Société, Monde & Savoirs",
+      "label": "Actualités, Politique & Géopolitique",
+      "emoji": "🌍",
+      "description": "Relations internationales, diplomatie, défense, Union européenne, élections et enquêtes journalistiques",
+      "sample_prompts": [
+        "Décryptage géopolitique mondial, diplomatie, enjeux européens et sécurité internationale",
+        "Synthèse de la presse nationale et internationale sur les grands dossiers politiques"
+      ],
+      "sources": [
+        { "name": "Le Monde", "domain": "lemonde.fr", "kind": "primary" },
+        { "name": "Franceinfo", "domain": "francetvinfo.fr", "kind": "primary" },
+        { "name": "Reuters World", "domain": "reuters.com", "kind": "primary" },
+        { "name": "Associated Press", "domain": "apnews.com", "kind": "primary" },
+        { "name": "Le Figaro", "domain": "lefigaro.fr", "kind": "journal" },
+        { "name": "Libération", "domain": "liberation.fr", "kind": "journal" },
+        { "name": "Mediapart", "domain": "mediapart.fr", "kind": "journal" },
+        { "name": "Le Monde Diplomatique", "domain": "monde-diplomatique.fr", "kind": "journal" },
+        { "name": "Courrier International", "domain": "courrierinternational.com", "kind": "journal" },
+        { "name": "Foreign Affairs", "domain": "foreignaffairs.com", "kind": "journal" },
+        { "name": "Politico Europe", "domain": "politico.eu", "kind": "journal" },
+        { "name": "The New York Times", "domain": "nytimes.com", "kind": "journal" },
+        { "name": "Le Grand Continent", "domain": "legrandcontinent.eu", "kind": "blog" },
+        { "name": "IRIS (Relations Internationales)", "domain": "iris-france.org", "kind": "blog" },
+        { "name": "Diploweb", "domain": "diploweb.com", "kind": "blog" }
+      ]
+    },
+    {
+      "id": "anime_manga_comics",
+      "group": "Culture & Divertissement",
+      "label": "Manga, Anime, BD & Comics",
+      "emoji": "⛩️",
+      "description": "Sorties mangas, saisons d'anime, bande dessinée franco-belge, comics US, festivals d'Angoulême et Japan Expo",
+      "sample_prompts": [
+        "Annonces d'animes de la saison, sorties mangas au Japon et en France, critiques BD",
+        "Actualités bande dessinée franco-belge, comics Marvel/DC et palmarès festivals"
+      ],
+      "sources": [
+        { "name": "Nautiljon", "domain": "nautiljon.com", "kind": "primary" },
+        { "name": "MyAnimeList", "domain": "myanimelist.net", "kind": "primary" },
+        { "name": "Anime News Network", "domain": "animenewsnetwork.com", "kind": "primary" },
+        { "name": "Manga-News", "domain": "manga-news.com", "kind": "primary" },
+        { "name": "BD Gest'", "domain": "bdgest.com", "kind": "primary" },
+        { "name": "Crunchyroll News", "domain": "crunchyroll.com", "kind": "primary" },
+        { "name": "ActuaBD", "domain": "actuabd.com", "kind": "journal" },
+        { "name": "Animeland", "domain": "animeland.fr", "kind": "journal" },
+        { "name": "BoDoï", "domain": "bodoi.info", "kind": "journal" },
+        { "name": "CBR (Comic Book Resources)", "domain": "cbr.com", "kind": "blog" },
+        { "name": "Bubble BD", "domain": "bubblebd.com", "kind": "blog" },
+        { "name": "9emeArt", "domain": "9emeart.fr", "kind": "blog" },
+        { "name": "Bleeding Cool", "domain": "bleedingcool.com", "kind": "blog" }
+      ]
+    },
+    {
+      "id": "music_audio",
+      "group": "Culture & Divertissement",
+      "label": "Musique, Albums, Concerts & Audio",
+      "emoji": "🎵",
+      "description": "Critiques d'albums, sorties musicales, festivals, rock, rap, électro, jazz, classique et matériel Hi-Fi / MAO",
+      "sample_prompts": [
+        "Sorties d'albums de la semaine, critiques Pitchfork et Inrocks, tournées et festivals",
+        "Nouveautés musique électronique, synthèse sonore, synthétiseurs et production MAO"
+      ],
+      "sources": [
+        { "name": "Pitchfork", "domain": "pitchfork.com", "kind": "primary" },
+        { "name": "France Musique / Radio France", "domain": "radiofrance.fr", "kind": "primary" },
+        { "name": "FIP", "domain": "fip.fr", "kind": "primary" },
+        { "name": "Resident Advisor", "domain": "ra.co", "kind": "primary" },
+        { "name": "Audiofanzine", "domain": "audiofanzine.com", "kind": "primary" },
+        { "name": "Les Inrockuptibles", "domain": "lesinrocks.com", "kind": "journal" },
+        { "name": "Rolling Stone France", "domain": "rollingstone.fr", "kind": "journal" },
+        { "name": "Tsugi", "domain": "tsugi.fr", "kind": "journal" },
+        { "name": "Trax Magazine", "domain": "traxmag.com", "kind": "journal" },
+        { "name": "NME", "domain": "nme.com", "kind": "journal" },
+        { "name": "Diapason", "domain": "diapasonmag.fr", "kind": "journal" },
+        { "name": "Bandcamp Daily", "domain": "daily.bandcamp.com", "kind": "blog" },
+        { "name": "Stereogum", "domain": "stereogum.com", "kind": "blog" },
+        { "name": "Goûte Mes Disques", "domain": "goutemesdisques.com", "kind": "blog" }
+      ]
+    },
+    {
+      "id": "books_culture_arts",
+      "group": "Culture & Divertissement",
+      "label": "Littérature, Livres, expositions & Arts",
+      "emoji": "📚",
+      "description": "Rentrée littéraire, romans, essais, prix littéraires, expositions musées, beaux-arts, théâtre et patrimoine",
+      "sample_prompts": [
+        "Nouveautés romans et essais, critiques littéraires, prix et grandes expositions en cours",
+        "Grandes expositions d'art contemporain et classique, musées et critiques culturelles"
+      ],
+      "sources": [
+        { "name": "Babelio", "domain": "babelio.com", "kind": "primary" },
+        { "name": "Goodreads", "domain": "goodreads.com", "kind": "primary" },
+        { "name": "ActuaLitté", "domain": "actualitte.com", "kind": "primary" },
+        { "name": "France Culture", "domain": "radiofrance.fr", "kind": "primary" },
+        { "name": "Livres Hebdo", "domain": "livreshebdo.fr", "kind": "journal" },
+        { "name": "Télérama Livres & Arts", "domain": "telerama.fr", "kind": "journal" },
+        { "name": "Beaux Arts Magazine", "domain": "beauxarts.com", "kind": "journal" },
+        { "name": "Connaissance des Arts", "domain": "connaissancedesarts.com", "kind": "journal" },
+        { "name": "The Paris Review", "domain": "theparisreview.org", "kind": "journal" },
+        { "name": "En attendant Nadeau", "domain": "en-attendant-nadeau.fr", "kind": "blog" },
+        { "name": "Literary Hub", "domain": "lithub.com", "kind": "blog" },
+        { "name": "Fabula", "domain": "fabula.org", "kind": "blog" },
+        { "name": "La Tribune de l'Art", "domain": "latribunedelart.com", "kind": "blog" }
+      ]
+    },
+    {
+      "id": "sports",
+      "group": "Lifestyle, Sport & Quotidien",
+      "label": "Sport, Football, Tennis, F1 & Cyclisme",
+      "emoji": "🏆",
+      "description": "Résultats sportifs, Ligue des Champions, mercato, Formule 1, MotoGP, Tennis ATP/WTA, NBA, Rugby et JO",
+      "sample_prompts": [
+        "Résultats et analyses football européen, Ligue des Champions, mercato et tactique",
+        "Actualités Formule 1, Grands Prix, Tennis Grand Chelem, NBA et Rugby Top 14"
+      ],
+      "sources": [
+        { "name": "L'Équipe", "domain": "lequipe.fr", "kind": "primary" },
+        { "name": "Eurosport", "domain": "eurosport.fr", "kind": "primary" },
+        { "name": "RMC Sport", "domain": "rmcsport.bfmtv.com", "kind": "primary" },
+        { "name": "ESPN", "domain": "espn.com", "kind": "primary" },
+        { "name": "Motorsport.com", "domain": "fr.motorsport.com", "kind": "primary" },
+        { "name": "Rugbyrama", "domain": "rugbyrama.fr", "kind": "primary" },
+        { "name": "So Foot", "domain": "sofoot.com", "kind": "journal" },
+        { "name": "The Athletic", "domain": "theathletic.com", "kind": "journal" },
+        { "name": "AutoHebdo", "domain": "autohebdo.fr", "kind": "journal" },
+        { "name": "France Football", "domain": "francefootball.fr", "kind": "journal" },
+        { "name": "Basket USA", "domain": "basketusa.com", "kind": "blog" },
+        { "name": "Tennis Majors", "domain": "tennismajors.com", "kind": "blog" },
+        { "name": "Vélo 101", "domain": "velo101.com", "kind": "blog" },
+        { "name": "Trashtalk (NBA)", "domain": "trashtalk.co", "kind": "blog" }
+      ]
+    },
+    {
+      "id": "auto_mobility",
+      "group": "Lifestyle, Sport & Quotidien",
+      "label": "Automobile, Moto, Électrique & Mobilités",
+      "emoji": "🚗",
+      "description": "Essais voitures thermiques, hybrides et électriques, batteries, motos, marché de l'occasion et mobilités",
+      "sample_prompts": [
+        "Essais nouvelles voitures électriques, autonomie batteries, bornes et marché auto",
+        "Actualités constructeurs automobiles, nouveautés motos et salon de l'auto"
+      ],
+      "sources": [
+        { "name": "Caradisiac", "domain": "caradisiac.com", "kind": "primary" },
+        { "name": "Automobile Propre", "domain": "automobile-propre.com", "kind": "primary" },
+        { "name": "L'Argus", "domain": "largus.fr", "kind": "primary" },
+        { "name": "Auto Plus", "domain": "autoplus.fr", "kind": "journal" },
+        { "name": "L'Automobile Magazine", "domain": "automobile-magazine.fr", "kind": "journal" },
+        { "name": "Top Gear", "domain": "topgear.com", "kind": "journal" },
+        { "name": "InsideEVs", "domain": "insideevs.com", "kind": "blog" },
+        { "name": "Electrek", "domain": "electrek.co", "kind": "blog" },
+        { "name": "Le Repaire des Motards", "domain": "lerepairedesmotards.com", "kind": "blog" },
+        { "name": "Moto-Net", "domain": "moto-net.com", "kind": "blog" }
+      ]
+    },
+    {
+      "id": "food_gastronomy",
+      "group": "Lifestyle, Sport & Quotidien",
+      "label": "Cuisine, Gastronomie, Vins & Restaurants",
+      "emoji": "🍽️",
+      "description": "Recettes de saison, chefs étoilés, bonnes tables, pâtisserie, œnologie, science culinaire et tendances food",
+      "sample_prompts": [
+        "Nouvelles tables gastronomiques, palmarès Michelin, tendances culinaires et pâtisserie",
+        "Techniques de cuisine, recettes de saison, accords mets-vins et science des aliments"
+      ],
+      "sources": [
+        { "name": "Guide Michelin", "domain": "guide.michelin.com", "kind": "primary" },
+        { "name": "Gault&Millau", "domain": "fr.gaultmillau.com", "kind": "primary" },
+        { "name": "Marmiton", "domain": "marmiton.org", "kind": "primary" },
+        { "name": "750g", "domain": "750g.com", "kind": "primary" },
+        { "name": "La Revue du Vin de France", "domain": "larvf.com", "kind": "journal" },
+        { "name": "Bon Appétit", "domain": "bonappetit.com", "kind": "journal" },
+        { "name": "Le Fooding", "domain": "lefooding.com", "kind": "journal" },
+        { "name": "Serious Eats", "domain": "seriouseats.com", "kind": "blog" },
+        { "name": "Atabula", "domain": "atabula.com", "kind": "blog" },
+        { "name": "Eater", "domain": "eater.com", "kind": "blog" }
+      ]
+    },
+    {
+      "id": "travel_outdoor",
+      "group": "Lifestyle, Sport & Quotidien",
+      "label": "Voyage, Tourisme, Nature & Aventure",
+      "emoji": "🧭",
+      "description": "Destinations, itinéraires, randonnée, grands reportages nature, train/aérien, micro-aventure et patrimoine",
+      "sample_prompts": [
+        "Idées de destinations voyage en Europe et dans le monde, itinéraires train et nature",
+        "Grands reportages géographiques, parcs nationaux, trek et tourisme durable"
+      ],
+      "sources": [
+        { "name": "Lonely Planet", "domain": "lonelyplanet.fr", "kind": "primary" },
+        { "name": "Le Routard", "domain": "routard.com", "kind": "primary" },
+        { "name": "GEO", "domain": "geo.fr", "kind": "journal" },
+        { "name": "National Geographic", "domain": "nationalgeographic.fr", "kind": "journal" },
+        { "name": "Condé Nast Traveler", "domain": "cntraveler.com", "kind": "journal" },
+        { "name": "Trek Magazine", "domain": "trekmag.com", "kind": "journal" },
+        { "name": "L'Écho Touristique", "domain": "lechotouristique.com", "kind": "journal" },
+        { "name": "Outside", "domain": "outsideonline.com", "kind": "blog" },
+        { "name": "Génération Voyage", "domain": "generationvoyage.fr", "kind": "blog" },
+        { "name": "TourMaG", "domain": "tourmag.com", "kind": "blog" }
+      ]
+    },
+    {
+      "id": "environment_energy",
+      "group": "Société, Monde & Savoirs",
+      "label": "Environnement, Climat & Énergie",
+      "emoji": "🌱",
+      "description": "Transition énergétique, nucléaire, renouvelables, biodiversité, rapports GIEC, décarbonation et climat",
+      "sample_prompts": [
+        "Innovations énergétiques (nucléaire, solaire, hydrogène, batteries) et réseau électrique",
+        "Bilans climatiques, biodiversité, rapports du GIEC et politiques de décarbonation"
+      ],
+      "sources": [
+        { "name": "ADEME", "domain": "ademe.fr", "kind": "primary" },
+        { "name": "GIEC / IPCC", "domain": "ipcc.ch", "kind": "primary" },
+        { "name": "Connaissance des Énergies", "domain": "connaissancedesenergies.org", "kind": "primary" },
+        { "name": "Actu-Environnement", "domain": "actu-environnement.com", "kind": "primary" },
+        { "name": "Reporterre", "domain": "reporterre.net", "kind": "journal" },
+        { "name": "Novethic", "domain": "novethic.fr", "kind": "journal" },
+        { "name": "Carbon Brief", "domain": "carbonbrief.org", "kind": "journal" },
+        { "name": "Révolution Énergétique", "domain": "revolution-energetique.com", "kind": "journal" },
+        { "name": "Bon Pote", "domain": "bonpote.com", "kind": "blog" },
+        { "name": "Carbone 4", "domain": "carbone4.com", "kind": "blog" }
+      ]
+    },
+    {
+      "id": "real_estate_arch",
+      "group": "Économie, Finance & Droit",
+      "label": "Immobilier, Urbanisme & Architecture",
+      "emoji": "🏛️",
+      "description": "Prix de l'immobilier, taux de crédit, rénovation énergétique, investissement locatif, urbanisme et design architectural",
+      "sample_prompts": [
+        "Évolution des prix de l'immobilier, taux de crédit, marché locatif et rénovation DPE",
+        "Projets d'architecture contemporaine, urbanisme durable et matériaux biosourcés"
+      ],
+      "sources": [
+        { "name": "MeilleursAgents", "domain": "meilleursagents.com", "kind": "primary" },
+        { "name": "SeLoger Actus", "domain": "seloger.com", "kind": "primary" },
+        { "name": "Batiactu", "domain": "batiactu.com", "kind": "primary" },
+        { "name": "Le Moniteur", "domain": "lemoniteur.fr", "kind": "journal" },
+        { "name": "Les Échos Immobilier", "domain": "lesechos.fr", "kind": "journal" },
+        { "name": "AMC Architecture", "domain": "amc-archi.com", "kind": "journal" },
+        { "name": "ArchDaily", "domain": "archdaily.com", "kind": "blog" },
+        { "name": "Dezeen", "domain": "dezeen.com", "kind": "blog" },
+        { "name": "Chroniques d'architecture", "domain": "chroniques-architecture.com", "kind": "blog" }
+      ]
+    },
+    {
+      "id": "fashion_luxury_design",
+      "group": "Lifestyle, Sport & Quotidien",
+      "label": "Mode, Luxe, Beauté & Design",
+      "emoji": "✨",
+      "description": "Fashion Weeks, maisons de luxe (LVMH, Hermès, Kering), tendances mode, streetwear, horlogerie et design graphique",
+      "sample_prompts": [
+        "Actualités de l'industrie du luxe, défilés Fashion Week, créateurs et maisons de couture",
+        "Tendances design, streetwear, horlogerie et savoir-faire artisanal"
+      ],
+      "sources": [
+        { "name": "FashionNetwork", "domain": "fr.fashionnetwork.com", "kind": "primary" },
+        { "name": "Business of Fashion", "domain": "businessoffashion.com", "kind": "primary" },
+        { "name": "Vogue France", "domain": "vogue.fr", "kind": "journal" },
+        { "name": "WWD (Women's Wear Daily)", "domain": "wwd.com", "kind": "journal" },
+        { "name": "GQ France", "domain": "gqmagazine.fr", "kind": "journal" },
+        { "name": "Marie Claire", "domain": "marieclaire.fr", "kind": "journal" },
+        { "name": "Journal du Luxe", "domain": "journalduluxe.fr", "kind": "blog" },
+        { "name": "Hypebeast", "domain": "hypebeast.com", "kind": "blog" },
+        { "name": "Highsnobiety", "domain": "highsnobiety.com", "kind": "blog" },
+        { "name": "Étapes (Design)", "domain": "etapes.com", "kind": "blog" }
+      ]
+    },
+    {
+      "id": "law_tax_patrimoine",
+      "group": "Économie, Finance & Droit",
+      "label": "Droit, Fiscalité, Patrimoine & Législation",
+      "emoji": "⚖️",
+      "description": "Actualités juridiques, jurisprudence, loi de finances, fiscalité des particuliers/entreprises et droit social",
+      "sample_prompts": [
+        "Nouveautés fiscales, loi de finances, gestion de patrimoine et jurisprudence récente",
+        "Réformes du droit du travail, droit des affaires, RGPD et réglementation européenne"
+      ],
+      "sources": [
+        { "name": "Légifrance", "domain": "legifrance.gouv.fr", "kind": "primary" },
+        { "name": "Service-Public.fr", "domain": "service-public.fr", "kind": "primary" },
+        { "name": "BOFiP-Impôts", "domain": "bofip.impots.gouv.fr", "kind": "primary" },
+        { "name": "Dalloz Actualité", "domain": "dalloz-actualite.fr", "kind": "journal" },
+        { "name": "Actu-Juridique", "domain": "actu-juridique.fr", "kind": "journal" },
+        { "name": "Mieux Vivre Votre Argent", "domain": "mieuxvivre-votreargent.fr", "kind": "journal" },
+        { "name": "Village de la Justice", "domain": "village-justice.com", "kind": "blog" },
+        { "name": "Next Inpact / Droit du numérique", "domain": "next.ink", "kind": "blog" }
+      ]
+    },
+    {
+      "id": "education_career",
+      "group": "Société, Monde & Savoirs",
+      "label": "Éducation, Pédagogie, Emploi & Carrière",
+      "emoji": "🎓",
+      "description": "Enseignement supérieur, sciences de l'éducation, marché du travail, reconversion, management et télétravail",
+      "sample_prompts": [
+        "Innovations pédagogiques, enseignement supérieur, EdTech et méthodes d'apprentissage",
+        "Tendances du marché de l'emploi cadre, compétences recherchées et organisation du travail"
+      ],
+      "sources": [
+        { "name": "L'Étudiant", "domain": "letudiant.fr", "kind": "primary" },
+        { "name": "APEC", "domain": "apec.fr", "kind": "primary" },
+        { "name": "Onisep", "domain": "onisep.fr", "kind": "primary" },
+        { "name": "Ministère de l'Éducation", "domain": "education.gouv.fr", "kind": "primary" },
+        { "name": "Cadremploi", "domain": "cadremploi.fr", "kind": "journal" },
+        { "name": "EdSurge", "domain": "edsurge.com", "kind": "journal" },
+        { "name": "Le Café Pédagogique", "domain": "cafepedagogique.net", "kind": "blog" },
+        { "name": "Welcome to the Jungle", "domain": "welcometothejungle.com", "kind": "blog" }
+      ]
+    },
+    {
+      "id": "history_archaeology",
+      "group": "Société, Monde & Savoirs",
+      "label": "Histoire, Archéologie & Civilisations",
+      "emoji": "🏺",
+      "description": "Fouilles archéologiques, Antiquité, Moyen Âge, histoire contemporaine, archives historiques et patrimoine",
+      "sample_prompts": [
+        "Nouvelles découvertes archéologiques dans le monde, fouilles Inrap et civilisations anciennes",
+        "Grands dossiers historiques, archives déclassifiées et histoire des civilisations"
+      ],
+      "sources": [
+        { "name": "Inrap (Archéologie)", "domain": "inrap.fr", "kind": "primary" },
+        { "name": "Hérodote.net", "domain": "herodote.net", "kind": "primary" },
+        { "name": "RetroNews (BnF)", "domain": "retronews.fr", "kind": "primary" },
+        { "name": "L'Histoire", "domain": "lhistoire.fr", "kind": "journal" },
+        { "name": "Historia", "domain": "historia.fr", "kind": "journal" },
+        { "name": "Archéologia", "domain": "archeologia-magazine.com", "kind": "journal" },
+        { "name": "Smithsonian Magazine", "domain": "smithsonianmag.com", "kind": "journal" },
+        { "name": "History Today", "domain": "historytoday.com", "kind": "journal" },
+        { "name": "Storiavoce", "domain": "storiavoce.com", "kind": "blog" },
+        { "name": "World History Encyclopedia", "domain": "worldhistory.org", "kind": "blog" }
+      ]
+    },
+    {
+      "id": "psychology_philosophy",
+      "group": "Société, Monde & Savoirs",
+      "label": "Psychologie, Philosophie & Sciences Humaines",
+      "emoji": "🧠",
+      "description": "Sciences cognitives, neurosciences comportementales, sociologie, philosophie contemporaine et biais cognitifs",
+      "sample_prompts": [
+        "Études récentes en psychologie cognitive, neurosciences, mémoire et prise de décision",
+        "Réflexions philosophiques et sociologiques sur les mutations technologiques et sociales"
+      ],
+      "sources": [
+        { "name": "Cerveau & Psycho", "domain": "cerveauetpsycho.fr", "kind": "journal" },
+        { "name": "Sciences Humaines", "domain": "scienceshumaines.com", "kind": "journal" },
+        { "name": "Philosophie Magazine", "domain": "philomag.com", "kind": "journal" },
+        { "name": "Psychology Today", "domain": "psychologytoday.com", "kind": "journal" },
+        { "name": "Psychologies", "domain": "psychologies.com", "kind": "journal" },
+        { "name": "PsyPost", "domain": "psypost.org", "kind": "primary" },
+        { "name": "Carnets de science CNRS", "domain": "carnetsdescience.fr", "kind": "primary" },
+        { "name": "Aeon", "domain": "aeon.co", "kind": "blog" },
+        { "name": "The Marginalian", "domain": "themarginalian.org", "kind": "blog" }
+      ]
+    },
+    {
+      "id": "diy_home_maker",
+      "group": "Lifestyle, Sport & Quotidien",
+      "label": "Maison, Jardin, Bricolage, Maker & 3D",
+      "emoji": "🛠️",
+      "description": "Bricolage, rénovation, permaculture, jardinage, électronique Arduino/Raspberry Pi, domotique et impression 3D",
+      "sample_prompts": [
+        "Projets domotique open-source (Home Assistant), Raspberry Pi, électronique et impression 3D",
+        "Astuces rénovation maison, isolation thermique, outillage et jardinage de saison"
+      ],
+      "sources": [
+        { "name": "Système D", "domain": "systemed.fr", "kind": "journal" },
+        { "name": "Rustica", "domain": "rustica.fr", "kind": "journal" },
+        { "name": "Côté Maison", "domain": "cotemaison.fr", "kind": "journal" },
+        { "name": "Make: Magazine", "domain": "makezine.com", "kind": "journal" },
+        { "name": "Hackaday", "domain": "hackaday.com", "kind": "primary" },
+        { "name": "Instructables", "domain": "instructables.com", "kind": "primary" },
+        { "name": "All3DP", "domain": "all3dp.com", "kind": "primary" },
+        { "name": "Les Imprimantes 3D", "domain": "lesimprimantes3d.fr", "kind": "blog" },
+        { "name": "Framboise 314 (Raspberry Pi)", "domain": "framboise314.fr", "kind": "blog" }
+      ]
+    }
+  ]
+}

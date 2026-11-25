@@ -111,6 +111,8 @@ def bootstrap_database(engine: Engine, sessions: sessionmaker, settings: Setting
         with engine.begin() as conn:
             if "categories" not in blog_columns:
                 conn.execute(text("ALTER TABLE blogs ADD COLUMN categories JSON NOT NULL DEFAULT '[\"news\"]'"))
+            if "topic_category" not in blog_columns:
+                conn.execute(text("ALTER TABLE blogs ADD COLUMN topic_category VARCHAR(60) NOT NULL DEFAULT 'general'"))
 
     if "web_pages" in table_names:
         wp_columns = {column["name"] for column in inspector.get_columns("web_pages")}

@@ -19,6 +19,13 @@ from app.blog import (
     parse_trends_from_content,
     search_blog_news,
 )
+from app.blog_themes import (
+    build_theme_targeted_queries,
+    get_blog_theme_category,
+    improve_blog_prompt,
+    load_blog_theme_categories,
+    prioritize_sources_by_theme,
+)
 from app.config import Settings
 from app.main import create_app
 from app.models import Base, Blog, BlogPost, User
@@ -543,6 +550,122 @@ def test_enrich_sources_blocks_ssrf_redirect_to_private_host():
 
     assert requested == ["https://news.example.com/2026/11/redirect-trap-9999"]
     assert all("PRIVATE METADATA" not in s.get("content", "") for s in enriched)
+
+
+def test_blog_theme_sources_catalog_exhaustiveness():
+    categories = load_blog_theme_categories()
+    assert len(categories) >= 20
+    ids = {c["id"] for c in categories}
+    for expected_id in (
+        "general",
+        "cinema_series",
+        "gaming",
+        "finance_markets",
+        "economy_business",
+        "crypto_web3",
+        "ai_data",
+        "tech_hardware",
+        "dev_cyber_cloud",
+        "science_space",
+        "health_medicine",
+        "geopolitics_news",
+        "anime_manga_comics",
+        "music_audio",
+        "books_culture_arts",
+        "sports",
+        "auto_mobility",
+        "food_gastronomy",
+        "travel_outdoor",
+        "environment_energy",
+    ):
+        assert expected_id in ids, f"Missing expected theme category {expected_id}"
+
+    cinema = get_blog_theme_category("cinema_series")
+    cinema_domains = {s["domain"] for s in cinema["sources"]}
+    assert {"allocine.fr", "imdb.com", "ecranlarge.com", "premiere.fr"}.issubset(cinema_domains)
+    assert {s["kind"] for s in cinema["sources"]} == {"primary", "journal", "blog"}
+
+    gaming = get_blog_theme_category("gaming")
+    gaming_domains = {s["domain"] for s in gaming["sources"]}
+    assert {"jeuxvideo.com", "ign.com", "gamekult.com", "gameblog.fr"}.issubset(gaming_domains)
+
+    finance = get_blog_theme_category("finance_markets")
+    finance_domains = {s["domain"] for s in finance["sources"]}
+    assert {"lesechos.fr", "boursorama.com", "zonebourse.com", "investing.com"}.issubset(finance_domains)
+
+
+def test_theme_targeted_queries_and_source_prioritization():
+    queries = build_theme_targeted_queries("critiques films science-fiction", "cinema_series")
+    assert len(queries) >= 2
+    assert any("site:allocine.fr" in q or "site:ecranlarge.com" in q for q in queries)
+
+    raw_sources = [
+        {"title": "Blog générique", "url": "https://random-blog.example.com/2026/11/film-sf-critique-longue-12345"},
+        {"title": "Critique Écran Large", "url": "https://www.ecranlarge.com/films/critique/2026/11/dune-messiah-critique-12345"},
+        {"title": "Fiche AlloCiné", "url": "https://www.allocine.fr/article/fichearticle_gen_carticle=1000012345.html"},
+    ]
+    prioritized = prioritize_sources_by_theme(raw_sources, "cinema_series")
+    assert prioritized[0]["url"].startswith("https://www.ecranlarge.com")
+    assert prioritized[0]["theme_source_name"] == "Écran Large"
+    assert prioritized[1]["theme_source_name"] == "AlloCiné"
+
+
+def test_blog_theme_categories_and_improve_prompt_api(settings):
+    app = create_app(settings)
+
+    with auth_client_for_user(app, settings, "theme_user") as client:
+        cats_resp = client.get("/api/blogs/theme-categories")
+        assert cats_resp.status_code == 200
+        cats_data = cats_resp.json()
+        assert isinstance(cats_data, list)
+        assert len(cats_data) >= 20
+        assert any(c["id"] == "cinema_series" for c in cats_data)
+        assert any(c["id"] == "gaming" for c in cats_data)
+
+        # Improve prompt in demo mode
+        imp_resp = client.post(
+            "/api/blogs/improve-prompt",
+            json={
+                "prompt": "les meilleurs RPG de l'année",
+                "topic_category": "gaming",
+                "categories": ["news", "tips"],
+            },
+        )
+        assert imp_resp.status_code == 200
+        imp_json = imp_resp.json()
+        assert imp_json["topic_category"] == "gaming"
+        assert "les meilleurs RPG de l'année" in imp_json["prompt"]
+        assert "JeuxVideo.com" in imp_json["prompt"] or "IGN" in imp_json["prompt"]
+
+        # Create a blog with topic_category="cinema_series"
+        create_resp = client.post(
+            "/api/blogs",
+            json={
+                "title": "Ciné & Séries Hebdo",
+                "prompt": "les sorties cinéma et séries sci-fi",
+                "topic_category": "cinema_series",
+                "categories": ["news", "facts"],
+            },
+        )
+        assert create_resp.status_code == 201
+        created = create_resp.json()
+        assert created["topic_category"] == "cinema_series"
+        first_post_cards = created["posts"][0]["cards"]
+        assert len(first_post_cards) >= 10
+        assert any(
+            c.get("source_name") in {"AlloCiné", "IMDb", "Écran Large", "SensCritique", "Première", "Variety"}
+            for c in first_post_cards
+        )
+
+        # Update topic_category via PATCH
+        patch_resp = client.patch(
+            f"/api/blogs/{created['id']}",
+            json={"topic_category": "gaming", "prompt": "les sorties RPG et tests Switch 2"},
+        )
+        assert patch_resp.status_code == 200
+        assert patch_resp.json()["topic_category"] == "gaming"
+        assert patch_resp.json()["prompt"] == "les sorties RPG et tests Switch 2"
+
 
 
 

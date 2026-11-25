@@ -4,12 +4,16 @@ repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_dir"
 export BUILDX_CONFIG="${BUILDX_CONFIG:-$repo_dir/../.cache/buildx}"
 export CLAIR_MCP_URL="${CLAIR_MCP_URL:-http://clair-api:8001/api/hermes/mcp}"
-if [[ -f .env && ( -z "${SEARXNG_SECRET:-}" || -z "${HERMES_API_KEY:-}" ) ]]; then
-  python3 - <<'PY'
+# shellcheck source=scripts/env_file.sh
+source "$repo_dir/scripts/env_file.sh"
+resolve_clair_env_file "$repo_dir"
+if [[ -f "$CLAIR_ENV_FILE" && ( -z "${SEARXNG_SECRET:-}" || -z "${HERMES_API_KEY:-}" ) ]]; then
+  python3 - "$CLAIR_ENV_FILE" <<'PY'
 from pathlib import Path
 import secrets
+import sys
 
-target = Path('.env')
+target = Path(sys.argv[1])
 contents = target.read_bytes()
 newline = b'\r\n' if b'\r\n' in contents else b'\n'
 lines = contents.splitlines(keepends=True)
@@ -49,7 +53,11 @@ if [[ "$lan_mode" == true ]]; then
   source "$repo_dir/scripts/lan.sh"
   enable_lan_mode
 fi
-compose_files=(-f compose.yaml)
+compose_files=()
+if [[ -f "$CLAIR_ENV_FILE" ]]; then
+  compose_files+=(--env-file "$CLAIR_ENV_FILE")
+fi
+compose_files+=(-f compose.yaml)
 if [[ "${1:-}" == dev ]]; then
   compose_files+=(-f compose.dev.yaml)
   shift

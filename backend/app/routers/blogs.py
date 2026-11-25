@@ -4,14 +4,47 @@ from sqlalchemy.orm import sessionmaker
 
 from .. import providers
 from ..blog import generate_blog_edition, search_web_videos
+from ..blog_themes import (
+    improve_blog_prompt,
+    load_blog_theme_categories,
+    normalize_blog_theme_category,
+)
 from ..config import Settings
 from ..deps import current_user, get_sessions, get_settings
 from ..models import Blog, BlogPost, User, now
-from ..schemas import CreateBlog, UpdateBlog
+from ..schemas import CreateBlog, ImproveBlogPrompt, UpdateBlog
 from ..serializers import blog_json, blog_post_json
 
 
 router = APIRouter(tags=["blogs"])
+
+
+@router.get("/api/blogs/theme-categories")
+def list_blog_theme_categories(
+    user: User = Depends(current_user),
+):
+    return load_blog_theme_categories()
+
+
+@router.post("/api/blogs/improve-prompt")
+async def improve_blog_prompt_endpoint(
+    body: ImproveBlogPrompt,
+    user: User = Depends(current_user),
+    settings: Settings = Depends(get_settings),
+):
+    topic_category = normalize_blog_theme_category(body.topic_category)
+    try:
+        improved = await improve_blog_prompt(
+            settings,
+            body.prompt,
+            topic_category=topic_category,
+            categories=body.categories,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except providers.ProviderError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    return {"prompt": improved, "topic_category": topic_category}
 
 
 @router.get("/api/blogs")
@@ -44,9 +77,14 @@ async def create_blog(
 
     blog_title = body.title or (body.prompt[:60].strip().capitalize())
     categories = body.categories or ["news"]
+    topic_category = normalize_blog_theme_category(body.topic_category)
     try:
         post_title, post_summary, post_content, sources = await generate_blog_edition(
-            settings, body.prompt, blog_title=blog_title, categories=categories
+            settings,
+            body.prompt,
+            blog_title=blog_title,
+            categories=categories,
+            topic_category=topic_category,
         )
     except providers.ProviderError as exc:
         raise HTTPException(502, f"Erreur lors de la génération du blog : {exc}") from exc
@@ -59,6 +97,7 @@ async def create_blog(
             prompt=body.prompt,
             auto_refresh=body.auto_refresh,
             theme=body.theme or "sunset",
+            topic_category=topic_category,
             categories=categories,
         )
         db.add(blog)
@@ -152,6 +191,8 @@ def update_blog(
             blog.auto_refresh = body.auto_refresh
         if body.theme is not None:
             blog.theme = body.theme
+        if body.topic_category is not None:
+            blog.topic_category = normalize_blog_theme_category(body.topic_category)
         if body.categories is not None:
             blog.categories = body.categories
         blog.updated_at = now()
@@ -189,10 +230,15 @@ async def refresh_blog(
         prompt = blog.prompt
         title = blog.title
         categories = getattr(blog, "categories", None) or ["news"]
+        topic_category = normalize_blog_theme_category(getattr(blog, "topic_category", None))
 
     try:
         post_title, post_summary, post_content, sources = await generate_blog_edition(
-            settings, prompt, blog_title=title, categories=categories
+            settings,
+            prompt,
+            blog_title=title,
+            categories=categories,
+            topic_category=topic_category,
         )
     except providers.ProviderError as exc:
         raise HTTPException(502, f"Erreur lors de l'actualisation du blog : {exc}") from exc

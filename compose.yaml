@@ -28,7 +28,7 @@ services:
 
   clair-api:
     build: ./backend
-    env_file: .env
+    env_file: ${CLAIR_ENV_FILE:-~/.secrets/.env}
     environment:
       DATABASE_URL: postgresql+psycopg://tchat:${POSTGRES_PASSWORD}@clair-db:5432/tchat
       APP_DATA_DIR: /app/data
@@ -72,7 +72,6 @@ services:
     volumes:
       - uploads_data:/app/data
       - finance_data:/app/finance_data
-      - ./.env:/app/.env:ro
       - ~/.config/gcloud/application_default_credentials.json:/run/secrets/gcp-adc.json:ro
     ports:
       - "127.0.0.1:8001:8001"
