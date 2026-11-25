@@ -136,3 +136,14 @@ Ce glossaire fige les termes métier canoniques du projet **cLAIr** (`tchataiper
   - **DeepSearch (`DeepSearchReport`, table `deep_search_reports`)** : Investigation web multi-sources avec rapport HTML/PDF archivé (`deep_search.py`, `deep_search_html.py`), exécutée soit via Perplexity Sonar (`DEEP_SEARCH_ENGINE=sonar`), soit via Google Deep Research (`google_deep_research.py`), soit via le pipeline interne vérifié par registre de preuves (`evidence_ledger.py`, `fact_verifier.py`, `claim_semantics.py`). Suivi en direct via l'événement SSE `research_activity` (`ResearchActivityModal`).
   - **Mode Apprendre (`LearnReport`, table `learn_reports`)** : Génération de cours interactifs complets (`learn_mode.py`, `learn_html.py`, `LearnModal`, `StudyModal`) intégrant cartes mémoire (`Flashcard`), QCM (`QuizQuestion`) et textes à trous (`ClozeTestItem`).
   - **Créativité & Paramètres d'échantillonnage (`creativity` & `sampling_params`)** : `creativity` est un curseur normalisé `0.0–1.0` (`SidebarCreativityPotentiometer`, `CreativityControl`) qui calcule dynamiquement (`sampling.py`) les `sampling_params` (`temperature`, `top_p`, `min_p`, `reasoning_effort`, etc.) en filtrant strictement selon les `supported_parameters` du modèle cible.
+
+---
+
+## 4. Sécurité, Administration & Configuration
+
+### 15. Coffre-fort Clés API (`ApiKeyOverride` / `api_key_overrides`)
+- **Définition métier** : Surcharge chiffrée globale à l'instance permettant à un administrateur de renseigner depuis **Paramètres** l'une des 8 clés API fournisseurs externes en priorité sur le fichier `.env`, selon un contrat strictement **Write-Only** (jamais stockée dans le navigateur, jamais renvoyée ni même tronquée par l'API).
+- **DB Principale (`models.py`) & Clé Maîtresse** : Table `api_key_overrides` (`ApiKeyOverride`, colonnes `key_name`, `ciphertext` `AES-256-GCM` authentifié par `AAD = key_name`, `updated_at`, `updated_by_user_id`, migration Alembic `0033_add_api_key_overrides`), déchiffrée par une clé maîtresse 256 bits séparée de la base SQL (`CLAIR_VAULT_KEY` ou fichier `.vault.key` `0600`).
+- **Backend** : `api_key_vault.py`, `api_key_tester.py`, résolution prioritaire dans `config.py` (`active_vault > active_env > missing` + sortie automatique de `DEMO_MODE` si une clé LLM du coffre-fort est active), routes `/api/settings/api-keys*` (`routers/settings.py`) protégées par `require_admin` + vérification du mot de passe Admin (« mode sudo »).
+- **Frontend** : `SettingsApiKeysSection` (`components/settings-api-keys-section.tsx`), types `AdminApiKeyStatus` (`status: "active_vault" | "active_env" | "missing"` dans `lib/api.ts`).
+- **Règle d'alignement** : Ne jamais exposer aucun caractère d'une clé (ni coffre-fort, ni `.env`), ne jamais utiliser `localStorage` pour les clés API, et exclure systématiquement les secrets internes d'infrastructure (`POSTGRES_PASSWORD`, `SEARXNG_SECRET`, `HERMES_API_KEY`).

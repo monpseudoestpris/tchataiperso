@@ -987,6 +987,16 @@ async def stream_hermes_mission(
             selected_model,
         )
         mode = "local_autonomous"
+    elif (
+        mode == "gateway"
+        and pref == "auto"
+        and getattr(settings, "has_vault_override", lambda _k: False)("llm_api_key")
+        and not getattr(settings, "has_matching_env_secret", lambda _k: True)("llm_api_key")
+    ):
+        _logger.info(
+            "Hermes bascule en mode local_autonomous afin d'utiliser la clé LLM_API_KEY du coffre-fort Paramètres."
+        )
+        mode = "local_autonomous"
 
     memories = user_memories or []
     skills = user_skills or []

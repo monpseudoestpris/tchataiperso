@@ -882,7 +882,7 @@ def test_openrouter_image_generation_b64(settings, transport):
         assert request.url.path == "/v1/images"
         assert request.headers["authorization"] == "Bearer fake-llm-secret"
         body = json.loads(request.content.decode("utf-8"))
-        assert body["model"] == "google/gemini-3-pro-image"
+        assert body["model"] == "openai/gpt-image-2.5-sunburst"
         assert body["prompt"] == "Un paysage lunaire"
         assert body["aspect_ratio"] == "16:9"
         assert body["negative_prompt"] == "pas de flou"
@@ -898,10 +898,18 @@ def test_openrouter_image_generation_b64(settings, transport):
 
     transport(handler)
     result = asyncio.run(providers.generate_image(
-        settings, "Un paysage lunaire", "16:9", negative_prompt="pas de flou", model="google/gemini-3-pro-image"
+        settings, "Un paysage lunaire", "16:9", negative_prompt="pas de flou", model="openai/gpt-image-2.5-sunburst"
     ))
     assert result == (png, "image/png")
     assert len(requests) == 1
+
+    # Gemini image models must never hit OpenRouter /v1/images when Google Cloud is not configured
+    requests.clear()
+    with pytest.raises(providers.ProviderError, match="Google Cloud"):
+        asyncio.run(providers.generate_image(
+            settings, "Un paysage lunaire", "16:9", model="google/gemini-3-pro-image"
+        ))
+    assert requests == []
 
 
 def test_openrouter_image_url_blocks_ssrf_redirect_without_dns(settings, transport):

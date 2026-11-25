@@ -2,12 +2,27 @@
 
 import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type PointerEvent as ReactPointerEvent } from "react";
 import {
-  Ban, Brush, Check, CircleAlert, Coins, Copy, Download, Eraser, Expand, ExternalLink, Eye, Grid2x2, ImagePlus,
-  Layers, LoaderCircle, Minimize2, Paintbrush, RefreshCw, Replace, RotateCcw, Scissors, SlidersHorizontal, Sparkles, Star, Trash2, Type, Undo2, Upload, WandSparkles, X,
+  Ban, Brush, Check, CircleAlert, Coins, Copy, Download, Eraser, Expand, ExternalLink, Eye, FileCode2, Grid2x2, ImagePlus,
+  Layers, LoaderCircle, Maximize2, Minimize2, Paintbrush, RefreshCw, Replace, RotateCcw, Scissors, SlidersHorizontal, Sparkles, Star, Trash2, Type, Undo2, Upload, WandSparkles, X,
 } from "lucide-react";
-import { api, errorMessage, type Config, type GeneratedImage, type ImageModel, type LayerizeTextBlock } from "@/lib/api";
+import {
+  api,
+  errorMessage,
+  type Config,
+  type GeneratedImage,
+  type ImageModel,
+  type LayerizeTextBlock,
+  type UpscaleModelSpec,
+} from "@/lib/api";
 import { ImageModelModal } from "@/components/image-model-modal";
+import {
+  FALLBACK_UPSCALE_MODELS,
+  ImageStudioUpscalePanel,
+  type StudioSourceImage,
+} from "@/components/image-studio-upscale-panel";
+import { ImageStudioSvgPanel } from "@/components/image-studio-svg-panel";
 import { useModelFavorites } from "@/lib/model-favorites";
+import extStyles from "./image-studio-ext.module.css";
 
 const ASPECT_RATIOS = [
   { value: "1:1", label: "1:1", hint: "Carré" },
@@ -251,16 +266,9 @@ function formatDate(value: string) {
   }).format(new Date(value));
 }
 
-type SourceImage = {
-  kind: "upload" | "gallery";
-  name: string;
-  previewUrl: string;
-  dataUrl?: string;
-  sourceImageId?: string;
-  sizeBytes?: number;
-  width?: number;
-  height?: number;
-};
+type SourceImage = StudioSourceImage;
+
+type StudioTab = "create" | "upscale" | "svg";
 
 type EditMode =
   | "remix"
@@ -468,6 +476,12 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
   const [layerizeBlocksByImageId, setLayerizeBlocksByImageId] = useState<Record<string, LayerizeTextBlock[]>>({});
   const [copiedBlockIndex, setCopiedBlockIndex] = useState<number | null>(null);
   const [copiedLayerizeJsonId, setCopiedLayerizeJsonId] = useState<string | null>(null);
+  const [copiedSvgCodeId, setCopiedSvgCodeId] = useState<string | null>(null);
+  const [studioTab, setStudioTab] = useState<StudioTab>("create");
+  const [svgOperation, setSvgOperation] = useState<"generate" | "vectorize">("generate");
+  const [upscaleModels, setUpscaleModels] = useState<UpscaleModelSpec[]>(FALLBACK_UPSCALE_MODELS);
+  const [loadingUpscaleModels, setLoadingUpscaleModels] = useState(true);
+  const [customBusyLabel, setCustomBusyLabel] = useState<string | null>(null);
   const [maskTool, setMaskTool] = useState<MaskTool>("brush");
   const [brushSize, setBrushSize] = useState(40);
   const [maskStrokes, setMaskStrokes] = useState<MaskStroke[]>([]);
@@ -563,6 +577,10 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
   const selectedGenModel = availableImageModels.find(m => m.id === generationModel) || availableImageModels[0];
   const isIdeogramSelected =
     selectedGenModel?.provider === "ideogram" || generationModel === "ideogram" || generationModel.startsWith("ideogram-");
+  const isGoogleCloudSelected =
+    selectedGenModel?.routed_via === "google_cloud" || selectedGenModel?.provider === "google";
+  const googleProviderBadgeLabel =
+    config?.google_cloud_mode === "gemini_api" ? "Google Gemini API" : "Google Cloud (Vertex AI)";
   const supportsIdeogramWeight = isIdeogramSelected && generationModel !== "ideogram-4-5";
   const preferredIdeogramModel =
     availableImageModels.find(m => m.id === "ideogram-4-5")
@@ -598,11 +616,33 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
   }, []);
 
   useEffect(() => {
+    const controller = new AbortController();
+    api<UpscaleModelSpec[]>("/images/upscale-models", { signal: controller.signal })
+      .then(list => {
+        if (Array.isArray(list) && list.length > 0) {
+          setUpscaleModels(list);
+        }
+      })
+      .catch(() => {
+        // Fallback statique déjà chargé
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoadingUpscaleModels(false);
+      });
+    return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
     promptRef.current?.focus();
   }, []);
 
   const selected = images.find(item => item.id === selectedId) ?? images[0] ?? null;
-  const activeMaskEdit = Boolean(sourceImage) && isMaskEditMode(editMode);
+  const canUseIdeogram = Boolean(
+    config?.features.image_generation &&
+      !config.demo_mode &&
+      availableImageModels.some(m => m.provider === "ideogram" || m.id === "ideogram" || m.id.startsWith("ideogram-")),
+  );
+  const activeMaskEdit = studioTab === "create" && Boolean(sourceImage) && isMaskEditMode(editMode);
   const invertMaskPolarity = editMode === "remove_object";
   const isPromptRequired = !sourceImage || !isPromptOptionalEditMode(editMode);
   const effectiveTransparentBg =
@@ -768,7 +808,8 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
-  function activateSourceImage(next: SourceImage, ratio?: string) {
+  function activateSourceImage(next: SourceImage, ratio?: string, targetTab?: StudioTab) {
+    const activeTab = targetTab ?? studioTab;
     if (ratio) {
       setAspectRatio(ratio);
     }
@@ -777,10 +818,20 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
     setEditMode("remix");
     setPreviewingSource(true);
     setZoomed(false);
-    if (!isIdeogramSelected) {
-      setGenerationModel(preferredIdeogramModel.id);
+    if (activeTab === "create") {
+      if (!isIdeogramSelected) {
+        setGenerationModel(preferredIdeogramModel.id);
+      }
+      promptRef.current?.focus();
     }
-    promptRef.current?.focus();
+  }
+
+  function inferMimeFromFilename(name: string): string | undefined {
+    if (/\.png$/i.test(name)) return "image/png";
+    if (/\.jpe?g$/i.test(name)) return "image/jpeg";
+    if (/\.webp$/i.test(name)) return "image/webp";
+    if (/\.gif$/i.test(name)) return "image/gif";
+    return undefined;
   }
 
   function loadFileAsSourceImage(file: File) {
@@ -798,6 +849,7 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
       setError("L'image importée dépasse la limite de 10 Mo.");
       return;
     }
+    const detectedMime = file.type || inferMimeFromFilename(file.name);
     setError("");
     const reader = new FileReader();
     reader.onload = () => {
@@ -816,6 +868,7 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
             name: file.name || "image-importee.png",
             previewUrl: dataUrl,
             dataUrl,
+            mimeType: detectedMime,
             sizeBytes: file.size,
             width: w,
             height: h,
@@ -829,6 +882,7 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
           name: file.name || "image-importee.png",
           previewUrl: dataUrl,
           dataUrl,
+          mimeType: detectedMime,
           sizeBytes: file.size,
         });
       };
@@ -865,8 +919,9 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
   }
 
   function loadGalleryImageForEdit(target: GeneratedImage) {
-    if (busy) return;
+    if (busy || target.mime_type === "image/svg+xml") return;
     setError("");
+    setStudioTab("create");
     if (prompt.trim() === target.prompt.trim()) {
       setPrompt("");
     }
@@ -876,10 +931,50 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
         name: target.filename,
         previewUrl: target.url,
         sourceImageId: target.id,
+        mimeType: target.mime_type,
         sizeBytes: target.size,
+        width: target.output_width ?? undefined,
+        height: target.output_height ?? undefined,
       },
       target.aspect_ratio,
+      "create",
     );
+  }
+
+  function loadGalleryImageForTool(target: GeneratedImage, destination: "upscale" | "svg") {
+    if (busy || target.mime_type === "image/svg+xml") return;
+    setError("");
+    setStudioTab(destination);
+    if (destination === "svg") {
+      setSvgOperation("vectorize");
+    }
+    activateSourceImage(
+      {
+        kind: "gallery",
+        name: target.filename,
+        previewUrl: target.url,
+        sourceImageId: target.id,
+        mimeType: target.mime_type,
+        sizeBytes: target.size,
+        width: target.output_width ?? undefined,
+        height: target.output_height ?? undefined,
+      },
+      target.aspect_ratio,
+      destination,
+    );
+  }
+
+  async function copySvgSourceCode(target: GeneratedImage) {
+    try {
+      const response = await fetch(target.url, { credentials: "include" });
+      if (!response.ok) return;
+      const svgText = await response.text();
+      await navigator.clipboard.writeText(svgText);
+      setCopiedSvgCodeId(target.id);
+      setTimeout(() => setCopiedSvgCodeId(current => (current === target.id ? null : current)), 2000);
+    } catch {
+      setCopiedSvgCodeId(null);
+    }
   }
 
   async function improvePrompt() {
@@ -1069,10 +1164,22 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
 
   function reuseImageSettings(target: GeneratedImage) {
     if (busy) return;
+    setStudioTab("create");
     setPrompt(target.prompt);
-    setAspectRatio(target.aspect_ratio);
+    if (target.aspect_ratio !== "auto") {
+      setAspectRatio(target.aspect_ratio);
+    }
     setPreviousPrompt(null);
     promptRef.current?.focus();
+  }
+
+  function handleSwitchStudioTab(nextTab: StudioTab) {
+    if (busy) return;
+    setError("");
+    setStudioTab(nextTab);
+    if (nextTab !== "create") {
+      setCanvasBox(null);
+    }
   }
 
   return (
@@ -1126,7 +1233,7 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
           <div className="image-studio-notice" role="status">
             <CircleAlert size={16} />
             <span>
-              La génération d’images nécessite une clé <code>IDEOGRAM_API_KEY</code> ou <code>LLM_API_KEY</code> (OpenRouter) active côté serveur. Vous pouvez toujours consulter et télécharger vos images sauvegardées.
+              La génération d’images nécessite <code>IDEOGRAM_API_KEY</code>, <code>Google Cloud (Vertex AI)</code> ou <code>LLM_API_KEY</code> (OpenRouter) actif côté serveur. Vous pouvez toujours consulter et télécharger vos images sauvegardées.
             </span>
           </div>
         )}
@@ -1155,6 +1262,107 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
             }}
             onDrop={handleDropSource}
           >
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept={
+                studioTab === "create"
+                  ? "image/png,image/jpeg,image/webp,image/gif"
+                  : "image/png,image/jpeg,image/webp"
+              }
+              className="sr-only"
+              style={{ display: "none" }}
+              onChange={event => {
+                const file = event.target.files?.[0];
+                if (file) loadFileAsSourceImage(file);
+              }}
+            />
+
+            <div className={extStyles.modeSwitcher} role="tablist" aria-label="Mode du Studio Image">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={studioTab === "create"}
+                className={`${extStyles.modeTab} ${studioTab === "create" ? extStyles.modeTabActive : ""}`}
+                onClick={() => handleSwitchStudioTab("create")}
+                disabled={!!busy}
+              >
+                <Sparkles size={13} />
+                <span>Créer &amp; Retoucher</span>
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={studioTab === "upscale"}
+                className={`${extStyles.modeTab} ${studioTab === "upscale" ? extStyles.modeTabActive : ""}`}
+                onClick={() => handleSwitchStudioTab("upscale")}
+                disabled={!!busy}
+              >
+                <Maximize2 size={13} />
+                <span>Upscale HD</span>
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={studioTab === "svg"}
+                className={`${extStyles.modeTab} ${studioTab === "svg" ? extStyles.modeTabActive : ""}`}
+                onClick={() => handleSwitchStudioTab("svg")}
+                disabled={!!busy}
+              >
+                <FileCode2 size={13} />
+                <span>Vecteur SVG</span>
+              </button>
+            </div>
+
+            {studioTab === "upscale" ? (
+              <ImageStudioUpscalePanel
+                models={upscaleModels}
+                loadingModels={loadingUpscaleModels}
+                sourceImage={sourceImage}
+                previewingSource={previewingSource}
+                busy={!!busy}
+                canUseIdeogram={canUseIdeogram}
+                onPickFile={() => fileInputRef.current?.click()}
+                onTogglePreviewSource={() => setPreviewingSource(old => !old)}
+                onClearSource={clearSourceImage}
+                onUpscaleCreated={created => {
+                  setImages(current => [created, ...current]);
+                  setSelectedId(created.id);
+                  setPreviewingSource(false);
+                  setShowCheckerboard(false);
+                }}
+                onError={msg => setError(msg)}
+                onBusyChange={(nextBusy, statusLabel) => {
+                  setBusy(nextBusy);
+                  setCustomBusyLabel(nextBusy ? (statusLabel ?? null) : null);
+                }}
+              />
+            ) : studioTab === "svg" ? (
+              <ImageStudioSvgPanel
+                operation={svgOperation}
+                onOperationChange={op => setSvgOperation(op)}
+                sourceImage={sourceImage}
+                previewingSource={previewingSource}
+                busy={busy}
+                canUseIdeogram={canUseIdeogram}
+                canImproveChat={Boolean(config?.features.chat && !config.demo_mode)}
+                improveModel={improveModel}
+                onPickFile={() => fileInputRef.current?.click()}
+                onTogglePreviewSource={() => setPreviewingSource(old => !old)}
+                onClearSource={clearSourceImage}
+                onSvgCreated={created => {
+                  setImages(current => [created, ...current]);
+                  setSelectedId(created.id);
+                  setPreviewingSource(false);
+                  setShowCheckerboard(true);
+                }}
+                onError={msg => setError(msg)}
+                onBusyChange={(nextBusy, statusLabel) => {
+                  setBusy(nextBusy);
+                  setCustomBusyLabel(nextBusy ? (statusLabel ?? null) : null);
+                }}
+              />
+            ) : (
             <form className="image-studio-form" onSubmit={event => void generate(event)}>
               <div className="image-source-section">
                 <div className="image-source-header">
@@ -1170,18 +1378,6 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
                     <span className="image-source-hint-pill">Import · Glisser · Ctrl+V</span>
                   )}
                 </div>
-
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/png,image/jpeg,image/webp,image/gif"
-                  className="sr-only"
-                  style={{ display: "none" }}
-                  onChange={event => {
-                    const file = event.target.files?.[0];
-                    if (file) loadFileAsSourceImage(file);
-                  }}
-                />
 
                 {sourceImage ? (
                   <div className="image-source-card">
@@ -1640,8 +1836,14 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
                         <span>Max : {selectedGenModel.supported_resolutions[selectedGenModel.supported_resolutions.length - 1]}</span>
                       </div>
                     )}
-                    <div className="image-model-meta-pill" title="Fournisseur API">
-                      <span>{isIdeogramSelected ? "Ideogram API" : "OpenRouter API"}</span>
+                    <div className="image-model-meta-pill" title="Fournisseur API d’exécution">
+                      <span>
+                        {isIdeogramSelected
+                          ? "Ideogram API"
+                          : isGoogleCloudSelected
+                            ? googleProviderBadgeLabel
+                            : "OpenRouter API"}
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -1724,6 +1926,7 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
                 )}
               </button>
             </form>
+            )}
 
             <section className="image-studio-gallery" aria-label="Galerie d’images sauvegardées">
               <div className="image-gallery-header">
@@ -1752,6 +1955,9 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
                         aria-label={`Afficher l’image : ${item.prompt.slice(0, 60)}`}
                       >
                         <img src={item.url} alt={item.prompt} loading="lazy" />
+                        {item.mime_type === "image/svg+xml" && (
+                          <span className={extStyles.thumbFormatBadge}>SVG</span>
+                        )}
                         <span className="image-thumb-ratio">{item.aspect_ratio}</span>
                       </button>
                     </div>
@@ -1773,18 +1979,25 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
                   <LoaderCircle className="spin" size={34} />
                 </div>
                 <h3>
-                  {selectedGenModel?.name?.split("(")[0]?.trim() || "L'IA"}{" "}
-                  {sourceImage
-                    ? `${EDIT_MODE_COPY[editMode].busyLabel.toLowerCase()} en cours…`
-                    : "compose votre image…"}
+                  {studioTab !== "create" && customBusyLabel
+                    ? `${customBusyLabel}…`
+                    : `${selectedGenModel?.name?.split("(")[0]?.trim() || "L'IA"} ${
+                        sourceImage
+                          ? `${EDIT_MODE_COPY[editMode].busyLabel.toLowerCase()} en cours…`
+                          : "compose votre image…"
+                      }`}
                 </h3>
-                {prompt.trim() && <p>« {prompt.trim()} »</p>}
+                {studioTab === "create" && prompt.trim() && <p>« {prompt.trim()} »</p>}
                 <span className="image-generating-badge">
-                  {sourceImage
-                    ? `${EDIT_MODE_COPY[editMode].label} · Proportions source conservées`
-                    : effectiveTransparentBg
-                      ? `Format ${aspectRatio} · PNG fond transparent (Ideogram 3.0)`
-                      : `Format ${aspectRatio} · Sauvegarde automatique`}
+                  {studioTab === "upscale"
+                    ? "Ideogram Upscale v2 · Sauvegarde automatique"
+                    : studioTab === "svg"
+                      ? "Ideogram Vector 1.0 · SVG sécurisé & sauvegardé"
+                      : sourceImage
+                        ? `${EDIT_MODE_COPY[editMode].label} · Proportions source conservées`
+                        : effectiveTransparentBg
+                          ? `Format ${aspectRatio} · PNG fond transparent (Ideogram 3.0)`
+                          : `Format ${aspectRatio} · Sauvegarde automatique`}
                 </span>
               </div>
             ) : sourceImage && previewingSource ? (
@@ -1904,14 +2117,30 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
                   <div className="image-viewer-meta">
                     <div className="image-viewer-badges">
                       <span className="image-source-viewer-pill">
-                        {editModeIcon(editMode, 12)}
-                        {editMode === "remove_object"
-                          ? "Masque Effacer un objet (Ideogram 1.0)"
-                          : editMode === "inpaint"
-                            ? generationModel === "ideogram-4-5"
-                              ? "Masque Precise Edit (Ideogram 4.5)"
-                              : "Masque Inpaint (Ideogram 3.0)"
-                            : EDIT_MODE_COPY[editMode].label}
+                        {studioTab === "upscale" ? (
+                          <>
+                            <Maximize2 size={12} />
+                            Upscale HD Ideogram
+                          </>
+                        ) : studioTab === "svg" ? (
+                          <>
+                            <FileCode2 size={12} />
+                            {svgOperation === "vectorize"
+                              ? "Image → SVG (Ideogram Vector 1.0)"
+                              : "Référence SVG (Ideogram Vector 1.0)"}
+                          </>
+                        ) : (
+                          <>
+                            {editModeIcon(editMode, 12)}
+                            {editMode === "remove_object"
+                              ? "Masque Effacer un objet (Ideogram 1.0)"
+                              : editMode === "inpaint"
+                                ? generationModel === "ideogram-4-5"
+                                  ? "Masque Precise Edit (Ideogram 4.5)"
+                                  : "Masque Inpaint (Ideogram 3.0)"
+                                : EDIT_MODE_COPY[editMode].label}
+                          </>
+                        )}
                       </span>
                       {sourceImage.width && sourceImage.height && (
                         <span>{sourceImage.width}×{sourceImage.height} px</span>
@@ -1919,11 +2148,15 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
                       {sourceImage.sizeBytes && <span>{formatBytes(sourceImage.sizeBytes)}</span>}
                     </div>
                     <p className="image-viewer-prompt">
-                      {editMode === "remove_object"
-                        ? `${sourceImage.name} — Peignez en rouge l’objet à supprimer puis lancez l’effacement.`
-                        : editMode === "inpaint"
-                          ? `${sourceImage.name} — Peignez en violet la zone à remplacer puis décrivez le résultat à gauche.`
-                          : `${sourceImage.name} — Configurez l’outil choisi à gauche puis lancez l’action.`}
+                      {studioTab === "upscale"
+                        ? `${sourceImage.name} — Choisissez un modèle d’upscale et un facteur d’échelle à gauche puis lancez l’agrandissement.`
+                        : studioTab === "svg"
+                          ? `${sourceImage.name} — Configurez la vectorisation ou la génération SVG à gauche.`
+                          : editMode === "remove_object"
+                            ? `${sourceImage.name} — Peignez en rouge l’objet à supprimer puis lancez l’effacement.`
+                            : editMode === "inpaint"
+                              ? `${sourceImage.name} — Peignez en violet la zone à remplacer puis décrivez le résultat à gauche.`
+                              : `${sourceImage.name} — Configurez l’outil choisi à gauche puis lancez l’action.`}
                     </p>
                   </div>
 
@@ -1953,7 +2186,14 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
               </>
             ) : selected ? (
               <>
-                <div className={`image-viewer-stage ${showCheckerboard && selected.mime_type === "image/png" ? "is-checkerboard" : ""}`}>
+                <div
+                  className={`image-viewer-stage ${
+                    showCheckerboard &&
+                    (selected.mime_type === "image/png" || selected.mime_type === "image/svg+xml")
+                      ? "is-checkerboard"
+                      : ""
+                  }`}
+                >
                   <img
                     src={selected.url}
                     alt={selected.prompt}
@@ -1961,7 +2201,7 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
                     onClick={() => setZoomed(old => !old)}
                   />
                   <div className="image-stage-floating-tools">
-                    {selected.mime_type === "image/png" && (
+                    {(selected.mime_type === "image/png" || selected.mime_type === "image/svg+xml") && (
                       <button
                         type="button"
                         className={`image-stage-pill ${showCheckerboard ? "is-active" : ""}`}
@@ -1985,7 +2225,7 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
                       className="image-stage-pill"
                       href={selected.url}
                       target="_blank"
-                      rel="noreferrer"
+                      rel="noopener noreferrer"
                       title="Ouvrir dans un nouvel onglet"
                     >
                       <ExternalLink size={14} />
@@ -2068,7 +2308,13 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
                       <span className="image-saved-pill">
                         <Check size={12} /> Sauvegardée
                       </span>
+                      {selected.mime_type === "image/svg+xml" && <span>Vecteur SVG</span>}
                       <span>Format {selected.aspect_ratio}</span>
+                      {selected.output_width && selected.output_height && (
+                        <span>
+                          {selected.output_width}×{selected.output_height} px
+                        </span>
+                      )}
                       <span>{formatBytes(selected.size)}</span>
                       <span>{formatDate(selected.created_at)}</span>
                     </div>
@@ -2076,16 +2322,51 @@ export function ImageStudioModal({ config, initialPrompt = "", onClose }: ImageS
                   </div>
 
                   <div className="image-viewer-actions">
-                    <button
-                      type="button"
-                      className="image-edit-source-button"
-                      onClick={() => loadGalleryImageForEdit(selected)}
-                      disabled={!!busy}
-                      title="Charger cette image comme source pour lui apporter des modifications"
-                    >
-                      <Paintbrush size={15} />
-                      <span>Modifier cette image</span>
-                    </button>
+                    {selected.mime_type !== "image/svg+xml" ? (
+                      <>
+                        <button
+                          type="button"
+                          className="image-edit-source-button"
+                          onClick={() => loadGalleryImageForEdit(selected)}
+                          disabled={!!busy}
+                          title="Charger cette image comme source pour lui apporter des modifications"
+                        >
+                          <Paintbrush size={15} />
+                          <span>Modifier</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="image-secondary-action"
+                          onClick={() => loadGalleryImageForTool(selected, "upscale")}
+                          disabled={!!busy}
+                          title="Agrandir cette image avec l'un des 8 modèles Upscale Ideogram v2"
+                        >
+                          <Maximize2 size={15} />
+                          <span>Upscaler</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="image-secondary-action"
+                          onClick={() => loadGalleryImageForTool(selected, "svg")}
+                          disabled={!!busy}
+                          title="Vectoriser cette image en fichier SVG éditable"
+                        >
+                          <FileCode2 size={15} />
+                          <span>Image → SVG</span>
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        className="image-secondary-action"
+                        onClick={() => void copySvgSourceCode(selected)}
+                        disabled={!!busy}
+                        title="Copier le code XML du fichier SVG dans le presse-papiers"
+                      >
+                        {copiedSvgCodeId === selected.id ? <Check size={15} /> : <FileCode2 size={15} />}
+                        <span>{copiedSvgCodeId === selected.id ? "SVG copié" : "Copier le SVG"}</span>
+                      </button>
+                    )}
                     <a
                       className="image-download-button"
                       href={selected.download_url}

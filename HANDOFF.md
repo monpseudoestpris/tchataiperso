@@ -1,28 +1,26 @@
 # HANDOFF.md — Routeur de Session
 
 ## 1. Aperçu du Projet
-**cLAIr** (`tchataiperso`) est une plateforme de tchat IA multi-fournisseurs (Google Cloud Vertex/Gemini natif, OpenRouter, Mistral OCR/Voxtral, Ideogram, ElevenLabs, EODHD) articulée autour d'un backend **FastAPI / SQLAlchemy 2 / Alembic / SQLite WAL** (`backend/`) et d'un frontend **Next.js 16 / React 19 / TypeScript** (`frontend/`). Les concepts métier et choix d'architecture sont figés dans `GLOSSARY.md` et `docs/adr/0001..0006`.
+**cLAIr** (`tchataiperso`) est une plateforme de tchat IA multi-fournisseurs (Google Cloud Vertex/Gemini natif, OpenRouter, Mistral OCR/Voxtral, Ideogram, ElevenLabs, EODHD) articulée autour d'un backend **FastAPI / SQLAlchemy 2 / Alembic / SQLite WAL** (`backend/`) et d'un frontend **Next.js 16 / React 19 / TypeScript** (`frontend/`). Les concepts métier et choix d'architecture sont figés dans `GLOSSARY.md` et `docs/adr/0001..0007`.
 
-## 2. Santé de Référence (Baseline)
-- **Backend `pytest` Finance (Dividendes, Watchlist, Core & Replay)** (`cd backend && .venv/bin/python -m pytest tests/test_finance_dividends.py tests/test_finance_watchlist_reorder.py tests/test_finance.py tests/test_finance_game.py -q`) : **PASS** (`51 passed, 1 warning`).
-- **Backend `pytest` Blogs & Thèmes JSON** (`cd backend && .venv/bin/python -m pytest tests/test_blogs.py -q`) : **PASS** (`18 passed, 1 warning` précédemment ; non modifié).
+## 2. Santé de Référence
+- **Backend `pytest` complet** (`cd backend && HTTPS_PROXY=http://127.0.0.1:9 HTTP_PROXY=http://127.0.0.1:9 .venv/bin/python -m pytest -q`) : **PASS** (`687 passed, 0 failed`).
 - **Frontend `typecheck`** (`cd frontend && npm run typecheck`) : **PASS** (`0 error`).
-- **Frontend `lint` ciblé** (`npx eslint lib/bar-aggregation.ts lib/chart-dividends.ts lib/finance-api.ts components/finance-tv-chart.tsx components/finance-watchlist-table.tsx --max-warnings 0`) : **PASS** (`0 error, 0 warning`).
-- **Frontend `test`** (`cd frontend && npm test`) : **PASS** (`31 passed, 0 failed`).
+- **Frontend `lint` ciblé** (`cd frontend && npx eslint components/image-model-modal.tsx components/image-studio-upscale-panel.tsx components/image-studio-svg-panel.tsx lib/api.ts --max-warnings 0`) : **PASS** (`0 error, 0 warning`).
+- **Frontend `test`** (`cd frontend && npm test`) : **PASS** (`38 passed, 0 failed`).
+- **Frontend `build`** (`cd frontend && npm run build`) : **PASS** (`next build` Turbopack OK).
 
 ## 3. Plan Actif
-- **Aucun** (`plan/2026-11-25/finance-dividends-and-watchlist.md` **`TERMINÉ`**, tranches `T1` → `T4` toutes vérifiées).
+- **Aucun** (`plan/2026-11-25/studio-images-gemini-upscale-svg.md` **TERMINÉ**).
 
 ## 4. Travaux Ponctuels Récents
-- **Mode Finance — Dividendes sur la courbe & Listes de suivi (`plan/2026-11-25/finance-dividends-and-watchlist.md`, `T1`–`T4`)** : service `finance_dividends.py` + `GET /api/finance/dividends` (cache entrepôt `payload_type="dividends"` partagé, 0 crédit EODHD tant que non activé), projection multi-unités `chart-dividends.ts` (Jour/Semaine/Mois/3 Mois), toggle optionnel `Dividendes` mémorisé par onglet graphique (`FinanceTvChart` marqueurs + détail crosshair et `InteractivePriceChart` SVG + hover pill) ; endpoint `PATCH /api/finance/watchlists/{list_id}/reorder` (DB principale + miroir entrepôt), suppression directe toujours visible sans scroll horizontal et réordonnancement glisser-déposer + `↑`/`↓` dans `FinanceWatchlistTable`.
-- **Support `.env` externe (`CLAIR_ENV_FILE`)** : helper canonique `scripts/env_file.sh`, garde `os.access(..., os.R_OK)` dans `backend/app/config.py`.
-- **Catégories de Thèmes & Sources Spécialisées JSON dans le Blog Auto (`plan/2026-11-24/blog-theme-categories-sources.md`)** : catalogue 26 thèmes `blog_theme_sources.json`, `blog_themes.py`, Alembic `0032`, `BlogThemeCategoryPicker`.
-- **Modernisation UI Éditoriale (`plan/2026-11-24/modernisation-ui-editoriale.md`)** : `design-tokens.css` (12 palettes), `editorial-shell.css`, `editorial-modals.css`, `QuickThemeToggle`, `SidebarCreativityPotentiometer`.
-- **Jeu « Trading Replay » dans le Mode Finance (`plan/2026-11-24/finance-trading-replay-game.md`)** : moteur local `finance_game.py`, API `/api/finance/game/*`, onglet `6 · Défi Replay`.
+- **Studio Image — Exclusivité Google Cloud Gemini, Upscale Ideogram v2 (8 modèles) & Vecteurs SVG (`plan/2026-11-25/studio-images-gemini-upscale-svg.md`, `TERMINÉ`)** : isolation stricte des modèles d'image `google/*` sur Google Cloud (`vertex_oauth` / `vertex_api_key` / `gemini_api`) sans aucun repli vers OpenRouter + repli régional `locations/global` et `-preview` sur Vertex AI + badges UI `Google Cloud (Vertex AI)` ; ajout des routes `GET /api/images/upscale-models`, `POST /api/images/upscale` (8 modèles officiels : `auto`, `topaz-standard-2`, `topaz-text-refine`, `topaz-wonder-3-5`, `topaz-wonder-4`, `topaz-bloom-2`, `topaz-redefine`, `nano-banana-pro`, plafond sortie `60 Mio`) et `POST /api/images/svg` (`generate` & `vectorize` sur `ideogram-vector-1`) avec sanitizer XML anti-XXE/XSS (`svg_sanitize.py`) et `CSP sandbox` ; panneaux Sprout `ImageStudioUpscalePanel` et `ImageStudioSvgPanel`.
+- **Coffre-fort Clés API « Write-Only » dans Paramètres (`plan/2026-11-25/api-key-vault-settings.md`, `ADR-0007`, `TERMINÉ`)** : `api_key_overrides` (`AES-256-GCM`), routes `/api/settings/api-keys*` Admin + Sudo, `SettingsApiKeysSection`.
+- **Mode Finance — Refonte visuelle Éditoriale & Lisibilité Watchlist (`plan/2026-11-25/finance-ui-editorial-and-watchlist.md`, `TERMINÉ`)** : `editorial-finance.css`, cellule `Action` 2 lignes, tokenisation Screener & Synchro.
 
 ## 5. Risques & Blocages Connus
-- **Dettes restantes (hors plan clôturé)** : problèmes ESLint préexistants sur `chat-app.tsx` (`24` dont `10` erreurs), `finance-modal.tsx` (`18` anciens warnings/erreurs) et anciennes modales ; poursuite éventuelle du découpage de `providers.py` / `chat-app.tsx`.
-- **Hygiène dépôt** : modifications récentes non commitées dans l'arbre de travail ; fichier vide parasite `--system-prompt=Règle absolue...` ; `OLDPROJECT.md` conservé volontairement.
+- **Point d'attention `run_command` sandbox** : `.env.example` déclaré en chemin relatif dans la conf sandbox locale bloque l'exécution standard sans `BypassSandbox`.
+- **Dettes préexistantes (hors plan)** : erreurs/warnings ESLint anciens sur `chat-app.tsx` (`24`), `finance-modal.tsx` (`18`), `image-studio-modal.tsx` (`6` préexistants lignes 539–594) et `settings-modal.tsx` (`1` ligne 98) ; fichier vide parasite `--system-prompt=Règle absolue...` ; `OLDPROJECT.md` conservé volontairement.
 
 ## 6. Prochaine Action Immédiate
-Vérifier visuellement dans l'application locale le Mode Finance : (1) activer le bouton **Dividendes** sur une valeur à dividendes (ex. `AI.PA` / `TTE.PA` / `AAPL.US`) en vue **Analyse technique** et **Courbe** sur plusieurs unités (Jour / Semaine / Mois / 3 Mois) et thèmes Clair/Sombre ; (2) tester la suppression directe et le réordonnancement (glisser-déposer + `↑`/`↓`) dans les **Listes de suivi** en barre latérale compacte et élargie, puis revoir `git status` avant commit.
+Tester visuellement dans le **Studio Image** : (1) la génération Gemini affichant `Google Cloud (Vertex AI)`, (2) l'onglet **Upscale HD** sur les 8 modèles Ideogram v2, et (3) l'onglet **Vecteur SVG** (`Générer un SVG` et `Image → SVG` + copie du code SVG), puis passer en revue `git status` avant commit.

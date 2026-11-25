@@ -213,7 +213,7 @@ export function ImageModelModal({
                 <h2>Sélection du modèle d&apos;image & vision</h2>
                 <span className="model-count-pill">{models.length} modèles disponibles</span>
               </div>
-              <p>Modèles officiels d&apos;OpenRouter Image API & Ideogram avec tarifs directs, résolutions et capacités.</p>
+              <p>Modèles officiels Ideogram v2, Google Cloud (Vertex AI) &amp; OpenRouter Image API avec tarifs, résolutions et capacités.</p>
             </div>
           </div>
           <div className="model-modal-header-right">
@@ -376,10 +376,13 @@ export function ImageModelModal({
                 const isSelected = item.id === currentModel;
                 const isFav = isFavorite(item.id);
                 const pColor = providerColor(item.id);
+                const isGoogleCloud = item.routed_via === "google_cloud" || item.provider === "google";
                 const providerLabel =
                   item.provider === "ideogram"
                     ? "Ideogram v2"
-                    : item.id.split("/")[0].replace("-", " ").toUpperCase();
+                    : isGoogleCloud
+                      ? "Google Cloud · Vertex AI"
+                      : item.id.split("/")[0].replace("-", " ").toUpperCase();
 
                 return (
                   <div

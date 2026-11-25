@@ -148,12 +148,15 @@ def attachment_file(
         item = db.scalar(select(Attachment).where(Attachment.id == attachment_id, Attachment.user_id == user.id))
         if not item or not (upload_dir / item.storage_name).is_file():
             raise HTTPException(404, "Pièce jointe introuvable")
+        resp_headers = {"X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}
+        if item.mime_type == "image/svg+xml":
+            resp_headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'; sandbox"
         return FileResponse(
             upload_dir / item.storage_name,
             media_type=item.mime_type,
             filename=item.filename,
             content_disposition_type="inline" if item.mime_type.startswith("image/") else "attachment",
-            headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"},
+            headers=resp_headers,
         )
 
 

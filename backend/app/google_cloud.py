@@ -1287,6 +1287,27 @@ def _extract_image_from_imagen_payload(data: dict[str, Any]) -> tuple[bytes, str
     return None
 
 
+def _google_image_fallback_targets(
+    bare: str,
+    loc: str,
+    mode: str,
+) -> list[tuple[str, str]]:
+    """Build ordered (location, model_id) pairs on Google Cloud so regional/preview 404s stay on Vertex AI."""
+    candidates: list[tuple[str, str]] = [(loc, bare)]
+    low = bare.lower()
+    needs_preview_variant = (
+        (low.startswith("gemini-3") or low.startswith("gemini-nano-banana"))
+        and not low.endswith("-preview")
+    )
+    if mode == "vertex_oauth" and loc != "global":
+        candidates.append(("global", bare))
+        if needs_preview_variant:
+            candidates.append(("global", f"{bare}-preview"))
+    elif needs_preview_variant:
+        candidates.append((loc, f"{bare}-preview"))
+    return candidates
+
+
 async def generate_google_cloud_image(
     settings: Any,
     model: str,
@@ -1300,7 +1321,10 @@ async def generate_google_cloud_image(
     """Generate an image via Google Cloud (Vertex AI / Gemini API) using Imagen `:predict` or Gemini `:generateContent`."""
     mode = resolve_google_cloud_mode(settings)
     if not mode:
-        raise ProviderError("Google Cloud n'est pas configuré pour ce modèle d'image.")
+        raise ProviderError(
+            "Les modèles d'image Gemini passent exclusivement par Google Cloud (Vertex AI) ; "
+            "configurez GOOGLE_CLOUD_MODE et GOOGLE_CLOUD_PROJECT."
+        )
 
     bare = normalize_google_model_id(model, settings=settings, for_vertex_openapi=False)
     is_imagen = bare.lower().startswith("imagen-")
@@ -1342,18 +1366,18 @@ async def generate_google_cloud_image(
         }
         action = "generateContent"
 
+    loc = "global"
+    token = ""
+    project = ""
     if mode == "vertex_oauth":
         token, project = await get_google_cloud_access_token(settings)
         loc = _validate_location(settings)
-        host = vertex_api_host(loc)
-        url = f"{host}/v1/projects/{project}/locations/{loc}/publishers/google/models/{bare}:{action}"
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         route_label = "Google Cloud (Vertex AI Images)"
     elif mode == "vertex_api_key":
         api_key = clean_secret(getattr(settings, "vertex_api_key", None))
         if not api_key:
             raise ProviderError("Configurez VERTEX_API_KEY pour générer des images via Vertex AI.")
-        url = f"https://aiplatform.googleapis.com/v1/publishers/google/models/{bare}:{action}"
         headers = {"x-goog-api-key": api_key, "Content-Type": "application/json"}
         route_label = "Google Cloud (Vertex AI Images)"
     elif mode == "gemini_api":
@@ -1362,21 +1386,47 @@ async def generate_google_cloud_image(
         )
         if not api_key:
             raise ProviderError("Configurez GOOGLE_API_KEY pour générer des images via Gemini API.")
-        url = f"{_GEMINI_NATIVE_BASE_URL}/models/{bare}:{action}"
         headers = {"x-goog-api-key": api_key, "Content-Type": "application/json"}
         route_label = "Google Cloud (Gemini Images)"
     else:
         raise ProviderError("Mode Google Cloud non pris en charge.")
 
-    async def _exec(active_client: httpx.AsyncClient) -> httpx.Response:
-        return await active_client.post(url, headers=headers, json=req_body)
+    def _build_url(target_loc: str, target_bare: str) -> str:
+        if mode == "vertex_oauth":
+            host = vertex_api_host(target_loc)
+            return f"{host}/v1/projects/{project}/locations/{target_loc}/publishers/google/models/{target_bare}:{action}"
+        if mode == "vertex_api_key":
+            return f"https://aiplatform.googleapis.com/v1/publishers/google/models/{target_bare}:{action}"
+        return f"{_GEMINI_NATIVE_BASE_URL}/models/{target_bare}:{action}"
+
+    targets = _google_image_fallback_targets(bare, loc, mode)
+
+    async def _exec_with_fallbacks(active_client: httpx.AsyncClient) -> httpx.Response:
+        last_resp: httpx.Response | None = None
+        for idx, (cand_loc, cand_bare) in enumerate(targets):
+            url = _build_url(cand_loc, cand_bare)
+            resp = await active_client.post(url, headers=headers, json=req_body)
+            last_resp = resp
+            if resp.status_code == 404 and idx + 1 < len(targets):
+                _logger.info(
+                    "%s HTTP 404 sur %s (%s) ; nouvel essai sur %s (%s)",
+                    route_label,
+                    cand_bare,
+                    cand_loc,
+                    targets[idx + 1][1],
+                    targets[idx + 1][0],
+                )
+                continue
+            break
+        assert last_resp is not None
+        return last_resp
 
     try:
         if client is not None:
-            response = await _exec(client)
+            response = await _exec_with_fallbacks(client)
         else:
             async with httpx.AsyncClient(timeout=httpx.Timeout(180.0, connect=10.0), follow_redirects=False) as local_client:
-                response = await _exec(local_client)
+                response = await _exec_with_fallbacks(local_client)
         check_response(response, route_label)
         payload = json_body(response, route_label)
         extracted = (

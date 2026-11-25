@@ -45,6 +45,8 @@ from .providers_audio import (
 )
 from .providers_images import (
     IDEOGRAM_MODEL_TARGETS,
+    IDEOGRAM_UPSCALE_MODELS,
+    UPSCALE_MODELS_BY_ID,
     _IDEOGRAM_MAX_POLLS,
     _IDEOGRAM_POLL_INTERVAL,
     _MAX_IMAGE_BYTES,
@@ -57,8 +59,10 @@ from .providers_images import (
     _resolve_ideogram_payload,
     decode_reference_image,
     generate_image,
+    generate_svg_image,
     improve_image_prompt,
     is_ideogram_model,
+    upscale_image,
 )
 from .providers_study import (
     _is_methodology_study_item,

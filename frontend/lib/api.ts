@@ -60,7 +60,8 @@ export type Model = {
 export type ImageModel = {
   id: string;
   name: string;
-  provider: "ideogram" | "openrouter";
+  provider: "ideogram" | "openrouter" | "google";
+  routed_via?: "ideogram" | "google_cloud" | "openrouter";
   pricing_text?: string;
   description?: string;
   supported_aspect_ratios?: string[];
@@ -162,6 +163,80 @@ export type GeneratedImage = {
   created_at: string;
   edit_action?: string;
   text_blocks?: LayerizeTextBlock[];
+  output_width?: number;
+  output_height?: number;
+};
+
+export type UpscaleModelId =
+  | "auto"
+  | "topaz-standard-2"
+  | "topaz-text-refine"
+  | "topaz-wonder-3-5"
+  | "topaz-wonder-4"
+  | "topaz-bloom-2"
+  | "topaz-redefine"
+  | "nano-banana-pro";
+
+export type UpscaleFactor = "x2" | "x4" | "x8";
+export type UpscaleResolutionTier = "1K" | "2K" | "4K";
+
+export type UpscaleModelSpec = {
+  id: UpscaleModelId;
+  name: string;
+  kind: "automatic" | "faithful" | "detail" | "creative" | "regenerate";
+  kind_label: string;
+  description: string;
+  supported_factors: UpscaleFactor[];
+  supported_tiers: UpscaleResolutionTier[];
+  max_side_px: number | null;
+  max_megapixels: number | null;
+  supports_prompt: boolean;
+  supports_autoprompt: boolean;
+  supports_creativity: boolean;
+  supports_color_preservation: boolean;
+  supports_enhancement_strength: boolean;
+  supports_topaz_controls: boolean;
+  supports_redefine_controls: boolean;
+  supports_seed: boolean;
+};
+
+export type UpscaleImagePayload = {
+  model: UpscaleModelId;
+  reference_image_data?: string;
+  source_image_id?: string;
+  upscale_factor?: UpscaleFactor;
+  resolution_tier?: UpscaleResolutionTier;
+  prompt?: string;
+  autoprompt?: boolean;
+  creativity?: number;
+  color_preservation?: boolean;
+  enhancement_strength?: "low" | "medium" | "high";
+  strength?: number;
+  sharpen?: number;
+  denoise?: number;
+  fix_compression?: number;
+  texture?: number;
+  detail?: boolean;
+  detail_strength?: number;
+  face_enhancement?: boolean;
+  face_enhancement_strength?: number;
+  face_enhancement_creativity?: number;
+  subject_detection?: "all" | "foreground" | "background";
+  seed?: number;
+};
+
+export type CreateSvgPayload = {
+  operation: "generate" | "vectorize";
+  prompt?: string;
+  reference_image_data?: string;
+  source_image_id?: string;
+  aspect_ratio?: string;
+  quality?: "low" | "medium" | "high";
+  mode?: "auto" | "simple" | "detailed";
+  shape_density?: number;
+  color_variety?: number;
+  use_gradient?: boolean;
+  seed?: number;
 };
 export type GeneratedSound = {
   id: string;
@@ -591,6 +666,60 @@ export type UpdateUserSettings = {
   auto_memory_enabled?: boolean;
   default_voice?: string;
 };
+
+export type AdminApiKeyOriginStatus = "active_vault" | "active_env" | "missing";
+
+export type AdminApiKeyItem = {
+  key_name: string;
+  env_name: string;
+  label: string;
+  description: string;
+  is_llm_key: boolean;
+  status: AdminApiKeyOriginStatus;
+  has_env_fallback: boolean;
+  updated_at?: string | null;
+};
+
+export type AdminApiKeysResponse = {
+  demo_mode: boolean;
+  baseline_demo_mode: boolean;
+  items: AdminApiKeyItem[];
+};
+
+export type TestAdminApiKeyResponse = {
+  key_name: string;
+  valid: boolean;
+  detail: string;
+};
+
+export async function fetchAdminApiKeys(signal?: AbortSignal): Promise<AdminApiKeysResponse> {
+  return api<AdminApiKeysResponse>("/settings/api-keys", { signal });
+}
+
+export async function updateAdminApiKeys(payload: {
+  current_password: string;
+  keys?: Record<string, string>;
+  clear_keys?: string[];
+}): Promise<AdminApiKeysResponse> {
+  return api<AdminApiKeysResponse>("/settings/api-keys", {
+    method: "PATCH",
+    body: JSON.stringify({
+      current_password: payload.current_password,
+      keys: payload.keys ?? {},
+      clear_keys: payload.clear_keys ?? [],
+    }),
+  });
+}
+
+export async function testAdminApiKey(payload: {
+  key_name: string;
+  candidate_value?: string | null;
+}): Promise<TestAdminApiKeyResponse> {
+  return api<TestAdminApiKeyResponse>("/settings/api-keys/test", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
 
 export type AuthUser = {
   id: string;

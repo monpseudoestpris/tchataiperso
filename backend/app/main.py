@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
+from .api_key_vault import ApiKeyVault
 from .config import Settings
 from .db_bootstrap import bootstrap_database
 from .deps import check_model, claim, current_user, get_conversation, require_admin
@@ -74,12 +75,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             connection.execute("PRAGMA journal_mode=WAL")
 
     sessions = sessionmaker(engine, expire_on_commit=False)
+    vault = ApiKeyVault(sessions=sessions, app_data_dir=settings.app_data_dir)
+    settings.attach_vault(vault)
     locks: dict[str, asyncio.Lock] = {}
     login_failures: dict[str, tuple[int, float]] = {}
+    sudo_failures: dict[str, tuple[int, float]] = {}
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         bootstrap_database(engine, sessions, settings)
+        settings._sync_vault_overrides(force_reload=True)
         fin_db_path = warehouse_db_path(settings)
         configure_usage_db(fin_db_path)
         configure_sync_state_db(fin_db_path)
@@ -110,9 +115,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="cLAIr", version="0.1.0", lifespan=lifespan)
     app.state.settings = settings
     app.state.sessions = sessions
+    app.state.vault = vault
     app.state.engine = engine
     app.state.locks = locks
     app.state.login_failures = login_failures
+    app.state.sudo_failures = sudo_failures
     app.state.upload_dir = upload_dir
     app.state.shutting_down = False
     app.state.sync_task = None

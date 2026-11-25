@@ -726,6 +726,52 @@ def test_google_cloud_image_generation_and_validation(monkeypatch):
     assert any("ideogram.ai" in u for u in called_targets)
     assert any("openrouter.ai/api/v1/images" in u for u in called_targets)
 
+    # Regional 404 on Gemini 3 image retries global + -preview on Vertex AI and NEVER falls back to OpenRouter
+    s_reg_fb = Settings(
+        _env_file=None,
+        google_cloud_mode="vertex_oauth",
+        google_cloud_project="img-proj",
+        google_cloud_location="europe-west1",
+        llm_api_key=SecretStr("sk-or-must-not-be-used"),
+        google_cloud_fallback_openrouter=True,
+    )
+    vertex_attempts: list[str] = []
+
+    def reg_404_handler(url, headers, body):
+        vertex_attempts.append(url)
+        assert "openrouter.ai" not in url
+        if url.endswith("gemini-3-pro-image-preview:generateContent") and "/locations/global/" in url:
+            return httpx.Response(
+                200,
+                json={"candidates": [{"content": {"parts": [{"inlineData": {"mimeType": "image/png", "data": tiny_b64}}]}}]},
+                request=httpx.Request("POST", url),
+            )
+        return httpx.Response(404, json={"error": {"message": "Model not found in region"}}, request=httpx.Request("POST", url))
+
+    reg_cls, _ = _mock_async_client_factory(reg_404_handler)
+    monkeypatch.setattr(providers.httpx, "AsyncClient", reg_cls)
+    b3, m3 = asyncio.run(providers.generate_image(s_reg_fb, "Architecture", "1:1", None, model="google/gemini-3-pro-image"))
+    assert b3 == _TINY_PNG and m3 == "image/png"
+    assert vertex_attempts == [
+        "https://europe-west1-aiplatform.googleapis.com/v1/projects/img-proj/locations/europe-west1/publishers/google/models/gemini-3-pro-image:generateContent",
+        "https://aiplatform.googleapis.com/v1/projects/img-proj/locations/global/publishers/google/models/gemini-3-pro-image:generateContent",
+        "https://aiplatform.googleapis.com/v1/projects/img-proj/locations/global/publishers/google/models/gemini-3-pro-image-preview:generateContent",
+    ]
+
+    # Even when Vertex returns 503 and google_cloud_fallback_openrouter=True, Gemini image models NEVER hit OpenRouter
+    err_img_urls: list[str] = []
+
+    def err_503_handler(url, headers, body):
+        err_img_urls.append(url)
+        return httpx.Response(503, text="Vertex temporary error", request=httpx.Request("POST", url))
+
+    err_503_cls, _ = _mock_async_client_factory(err_503_handler)
+    monkeypatch.setattr(providers.httpx, "AsyncClient", err_503_cls)
+    with pytest.raises(providers.ProviderError):
+        asyncio.run(providers.generate_image(s_reg_fb, "Architecture", "1:1", None, model="google/gemini-2.5-flash-image"))
+    assert len(err_img_urls) == 1
+    assert all("openrouter.ai" not in u for u in err_img_urls)
+
 
 # 8. Non-Google Chat Models Stay on OpenRouter
 

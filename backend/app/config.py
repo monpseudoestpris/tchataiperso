@@ -3,7 +3,7 @@ import ipaddress
 import os
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from dotenv import dotenv_values
 from pydantic import PrivateAttr, SecretStr, field_validator, model_validator
@@ -344,8 +344,15 @@ class Settings(BaseSettings):
     _watch_env: bool = PrivateAttr(default=True)
     _env_mtime_ns: int = PrivateAttr(default=0)
     _explicit_fields: set[str] = PrivateAttr(default_factory=set)
+    _baseline_secrets: dict[str, str] = PrivateAttr(default_factory=dict)
+    _baseline_demo_mode: bool = PrivateAttr(default=False)
+    _demo_overridden_by_vault: bool = PrivateAttr(default=False)
+    _vault: Any = PrivateAttr(default=None)
+    _applied_vault_keys: dict[str, str] = PrivateAttr(default_factory=dict)
 
     def __init__(self, **values):
+        from .api_key_vault import ALLOWED_VAULT_KEY_NAMES
+
         has_env_arg = "_env_file" in values
         default_env_files = tuple(
             str(p)
@@ -359,9 +366,77 @@ class Settings(BaseSettings):
             init_values["_env_file"] = default_env_files or None
         super().__init__(**init_values)
         self._explicit_fields = explicit
+        self._baseline_secrets = {
+            field_name: _clean_api_key(getattr(self, field_name, None))
+            for field_name in ALLOWED_VAULT_KEY_NAMES
+        }
+        self._baseline_demo_mode = bool(self.demo_mode)
         self._watch_env = not (has_env_arg and env_arg is None)
         if self._watch_env:
             self.refresh_from_env_file(force=True)
+
+    def attach_vault(self, vault: Any) -> None:
+        self._vault = vault
+        self._sync_vault_overrides(force_reload=True)
+
+    def _sync_vault_overrides(self, force_reload: bool = False) -> None:
+        if self._vault is None:
+            return
+        from .api_key_vault import ALLOWED_VAULT_KEY_NAMES, LLM_VAULT_KEY_NAMES
+
+        vault_map = self._vault.get_decrypted_overrides(force_reload=force_reload)
+        for field_name in ALLOWED_VAULT_KEY_NAMES:
+            was_in_vault = field_name in self._applied_vault_keys
+            in_vault_now = field_name in vault_map and bool(vault_map[field_name])
+            if in_vault_now:
+                if not was_in_vault:
+                    self._baseline_secrets[field_name] = _clean_api_key(getattr(self, field_name, None))
+                setattr(self, field_name, SecretStr(vault_map[field_name]))
+            elif was_in_vault:
+                setattr(self, field_name, SecretStr(self._baseline_secrets.get(field_name, "")))
+            else:
+                self._baseline_secrets[field_name] = _clean_api_key(getattr(self, field_name, None))
+
+        has_vault_llm = any(bool(vault_map.get(name)) for name in LLM_VAULT_KEY_NAMES)
+        if has_vault_llm:
+            if not self._demo_overridden_by_vault:
+                self._baseline_demo_mode = bool(self.demo_mode)
+                self._demo_overridden_by_vault = True
+            self.demo_mode = False
+        elif self._demo_overridden_by_vault:
+            self.demo_mode = self._baseline_demo_mode
+            self._demo_overridden_by_vault = False
+        else:
+            self._baseline_demo_mode = bool(self.demo_mode)
+
+        if vault_map != self._applied_vault_keys:
+            self._applied_vault_keys = dict(vault_map)
+            from .google_cloud import clear_google_auth_cache
+            from .openrouter import clear_openrouter_cache
+
+            clear_openrouter_cache()
+            clear_google_auth_cache()
+
+    def api_key_origin(self, field_name: str) -> Literal["active_vault", "active_env", "missing"]:
+        self.refresh_from_env_file()
+        if self._vault is not None and bool(self._applied_vault_keys.get(field_name)):
+            return "active_vault"
+        if bool(self._baseline_secrets.get(field_name, "")):
+            return "active_env"
+        return "missing"
+
+    def has_env_fallback(self, field_name: str) -> bool:
+        self.refresh_from_env_file()
+        return bool(self._baseline_secrets.get(field_name, ""))
+
+    def has_vault_override(self, field_name: str) -> bool:
+        self.refresh_from_env_file()
+        return self._vault is not None and bool(self._applied_vault_keys.get(field_name))
+
+    def has_matching_env_secret(self, field_name: str) -> bool:
+        if self._vault is None or field_name not in self._applied_vault_keys:
+            return True
+        return self._applied_vault_keys.get(field_name, "") == self._baseline_secrets.get(field_name, "")
 
     app_data_dir: Path = Path("./data")
     finance_data_dir: Path | None = None
@@ -749,12 +824,20 @@ class Settings(BaseSettings):
         return self.get_models(force_refresh=False)
 
     def get_image_models(self, force_refresh: bool = False) -> list[dict[str, Any]]:
+        from .google_cloud import is_google_model
+
         self.refresh_from_env_file()
         if self.demo_mode:
             return []
         has_ideogram = self.enabled(self.ideogram_api_key)
         has_openrouter = self.enabled(self.llm_api_key)
-        has_google_cloud = self.google_cloud_enabled
+        gc_mode = self.active_google_cloud_mode
+        has_google_cloud = gc_mode is not None
+        gc_pricing_label = (
+            "Google Gemini API"
+            if gc_mode == "gemini_api"
+            else "Google Cloud (Vertex AI)"
+        )
 
         # Check explicit custom override in env first
         if self.image_models.strip():
@@ -763,25 +846,35 @@ class Settings(BaseSettings):
                 if isinstance(parsed, list) and parsed:
                     filtered = []
                     for item in parsed:
+                        mid = str(item.get("id", "")).strip()
                         prov = item.get("provider", "openrouter")
-                        is_google_img = str(item.get("id", "")).lower().startswith("google/")
+                        is_google_img = is_google_model(mid)
                         if prov == "ideogram" and not has_ideogram:
                             continue
-                        if prov == "openrouter" and not has_openrouter and not (has_google_cloud and is_google_img):
+                        if is_google_img and not has_google_cloud:
+                            continue
+                        if not is_google_img and prov == "openrouter" and not has_openrouter:
                             continue
                         entry = {
-                            "id": str(item["id"]),
-                            "name": str(item.get("name", item["id"])),
-                            "provider": prov,
-                            "pricing_text": str(item.get("pricing_text", "Tarif standard")),
+                            "id": mid,
+                            "name": str(item.get("name", mid)),
+                            "provider": "google" if is_google_img else prov,
+                            "pricing_text": (
+                                gc_pricing_label
+                                if is_google_img
+                                else str(item.get("pricing_text", "Tarif standard"))
+                            ),
                             "description": str(item.get("description", "")),
                             "supported_aspect_ratios": item.get("supported_aspect_ratios", []),
                             "supported_resolutions": item.get("supported_resolutions", []),
                             "supports_image_editing": prov == "ideogram",
                             "is_top": bool(item.get("is_top", False)),
+                            "routed_via": (
+                                "google_cloud"
+                                if is_google_img
+                                else ("ideogram" if prov == "ideogram" else "openrouter")
+                            ),
                         }
-                        if has_google_cloud and is_google_img:
-                            entry["routed_via"] = "google_cloud"
                         filtered.append(entry)
                     return filtered
             except Exception:
@@ -791,9 +884,9 @@ class Settings(BaseSettings):
 
         # 1. Modèles Ideogram (4.5, 4.0, 3.0, Auto) inclus en tête de liste
         for idx, item in enumerate(IDEOGRAM_IMAGE_MODELS):
-            results.append({**item, "_rank": -len(IDEOGRAM_IMAGE_MODELS) + idx})
+            results.append({**item, "routed_via": "ideogram", "_rank": -len(IDEOGRAM_IMAGE_MODELS) + idx})
 
-        # 2. Dynamic OpenRouter image models if enabled
+        # 2. Dynamic OpenRouter image models if enabled (Gemini/Google strictly routed via Google Cloud)
         if has_openrouter:
             from .openrouter import fetch_openrouter_image_models
             key = _clean_api_key(self.llm_api_key)
@@ -803,15 +896,34 @@ class Settings(BaseSettings):
                 force_refresh=force_refresh,
             )
             if dynamic:
+                seen_ids: set[str] = {m["id"] for m in results}
+                for m in dynamic:
+                    mid = str(m.get("id", "")).strip()
+                    is_google_img = is_google_model(mid)
+                    if is_google_img:
+                        if not has_google_cloud:
+                            continue
+                        results.append({
+                            **m,
+                            "provider": "google",
+                            "pricing_text": gc_pricing_label,
+                            "routed_via": "google_cloud",
+                        })
+                        seen_ids.add(mid)
+                    else:
+                        results.append({**m, "routed_via": "openrouter"})
+                        seen_ids.add(mid)
                 if has_google_cloud:
-                    results.extend(
-                        {**m, "routed_via": "google_cloud"}
-                        if str(m.get("id", "")).lower().startswith("google/")
-                        else m
-                        for m in dynamic
-                    )
-                else:
-                    results.extend(dynamic)
+                    for item in DEFAULT_IMAGE_MODELS:
+                        mid = str(item.get("id", "")).strip()
+                        if is_google_model(mid) and mid not in seen_ids:
+                            results.append({
+                                **item,
+                                "provider": "google",
+                                "pricing_text": gc_pricing_label,
+                                "routed_via": "google_cloud",
+                            })
+                            seen_ids.add(mid)
                 return results
 
         # 3. Fallback to default catalog if dynamic fetch is empty or offline
@@ -819,13 +931,19 @@ class Settings(BaseSettings):
             prov = item.get("provider", "openrouter")
             if prov == "ideogram":
                 continue
-            is_google_img = str(item.get("id", "")).lower().startswith("google/")
-            if prov == "openrouter" and not has_openrouter and not (has_google_cloud and is_google_img):
-                continue
-            if has_google_cloud and is_google_img:
-                results.append({**item, "routed_via": "google_cloud"})
-            else:
-                results.append(item)
+            mid = str(item.get("id", "")).strip()
+            is_google_img = is_google_model(mid)
+            if is_google_img:
+                if not has_google_cloud:
+                    continue
+                results.append({
+                    **item,
+                    "provider": "google",
+                    "pricing_text": gc_pricing_label,
+                    "routed_via": "google_cloud",
+                })
+            elif prov == "openrouter" and has_openrouter:
+                results.append({**item, "routed_via": "openrouter"})
 
         return results
 
@@ -857,6 +975,7 @@ class Settings(BaseSettings):
 
     def refresh_from_env_file(self, force: bool = False) -> None:
         if not self._watch_env:
+            self._sync_vault_overrides()
             return
         candidates = [
             p for p in (Path(".env"), _REPO_ENV_FILE)
@@ -867,17 +986,21 @@ class Settings(BaseSettings):
             None,
         )
         if env_path is None:
+            self._sync_vault_overrides()
             return
         try:
             mtime_ns = env_path.stat().st_mtime_ns
         except OSError:
+            self._sync_vault_overrides()
             return
         if not force and mtime_ns == self._env_mtime_ns:
+            self._sync_vault_overrides()
             return
         self._env_mtime_ns = mtime_ns
         try:
             parsed = dotenv_values(env_path)
         except OSError:
+            self._sync_vault_overrides()
             return
         secret_fields = (
             "llm_api_key",
@@ -904,7 +1027,10 @@ class Settings(BaseSettings):
             if raw_val is not None:
                 cleaned = _clean_api_key(raw_val)
                 if cleaned or force is False:
-                    setattr(self, field_name, SecretStr(cleaned))
+                    if field_name in self._baseline_secrets:
+                        self._baseline_secrets[field_name] = cleaned
+                    if field_name not in self._applied_vault_keys:
+                        setattr(self, field_name, SecretStr(cleaned))
         str_fields = (
             "llm_base_url",
             "ocr_model",
@@ -968,7 +1094,10 @@ class Settings(BaseSettings):
         if "demo_mode" not in self._explicit_fields and isinstance(parsed.get("DEMO_MODE"), str):
             val = parsed["DEMO_MODE"].strip().lower()
             if val in ("true", "1", "yes", "false", "0", "no"):
-                self.demo_mode = val in ("true", "1", "yes")
+                is_demo = val in ("true", "1", "yes")
+                self._baseline_demo_mode = is_demo
+                if not self._demo_overridden_by_vault:
+                    self.demo_mode = is_demo
         if "duckduckgo_enabled" not in self._explicit_fields and isinstance(parsed.get("DUCKDUCKGO_ENABLED"), str):
             val = parsed["DUCKDUCKGO_ENABLED"].strip().lower()
             if val in ("true", "1", "yes", "false", "0", "no"):
@@ -999,6 +1128,7 @@ class Settings(BaseSettings):
                     self.llm_timeout_seconds = timeout_s
             except ValueError:
                 pass
+        self._sync_vault_overrides()
 
     @property
     def active_google_cloud_mode(self) -> str | None:

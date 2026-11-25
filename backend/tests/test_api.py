@@ -814,7 +814,15 @@ def test_mock_image_generation_saved_in_history(tmp_path, monkeypatch):
 
 
 def test_dedicated_image_studio_gallery_improve_download_and_delete(tmp_path, monkeypatch):
-    settings = Settings(_env_file=None, app_data_dir=tmp_path, ideogram_api_key="image", llm_api_key="llm", demo_mode=False)
+    settings = Settings(
+        _env_file=None,
+        app_data_dir=tmp_path,
+        ideogram_api_key="image",
+        llm_api_key="llm",
+        google_cloud_mode="vertex_api_key",
+        vertex_api_key="vkey-test",
+        demo_mode=False,
+    )
 
     async def improve(_settings, model, prompt, style_keywords=None, negative_prompt=None):
         assert prompt == "Un renard"
@@ -870,40 +878,53 @@ def test_multi_model_image_generation_with_openrouter(tmp_path, monkeypatch):
     async def generate(_settings, prompt, ratio, negative_prompt=None, model="ideogram"):
         assert prompt == "Un robot astronaute"
         assert ratio == "1:1"
-        assert model == "google/gemini-3-pro-image"
+        assert model == "openai/gpt-image-2.5-sunburst"
         return b"\x89PNG\r\n\x1a\nrobot-image", "image/png"
 
     monkeypatch.setattr(providers, "generate_image", generate)
     with authenticated_client(settings) as client:
         config = client.get("/api/config").json()
         assert config["features"]["image_generation"] is True
-        assert any(m["id"] == "google/gemini-3-pro-image" for m in config["image_models"])
+        assert any(m["id"] == "openai/gpt-image-2.5-sunburst" for m in config["image_models"])
+        assert not any(m["id"].startswith("google/") for m in config["image_models"])
 
         # Dedicated dynamic image models endpoint
         models_resp = client.get("/api/images/models")
         assert models_resp.status_code == 200
         models_list = models_resp.json()
-        assert any(m["id"] == "google/gemini-3-pro-image" for m in models_list)
-        gemini_model = next(m for m in models_list if m["id"] == "google/gemini-3-pro-image")
-        assert "pricing_text" in gemini_model
-        assert "description" in gemini_model
+        assert any(m["id"] == "openai/gpt-image-2.5-sunburst" for m in models_list)
+        sunburst_model = next(m for m in models_list if m["id"] == "openai/gpt-image-2.5-sunburst")
+        assert "pricing_text" in sunburst_model
+        assert "description" in sunburst_model
 
         # Attempting ideogram without ideogram key raises 503
         bad = client.post("/api/images", json={"prompt": "Un chat", "model": "ideogram"})
         assert bad.status_code == 503
 
-        # Generating with google/gemini-3-pro-image works
-        created = client.post("/api/images", json={"prompt": "Un robot astronaute", "model": "google/gemini-3-pro-image"})
+        # Attempting Gemini image without Google Cloud raises 503 (never routes to OpenRouter)
+        bad_gemini = client.post("/api/images", json={"prompt": "Un chat", "model": "google/gemini-3-pro-image"})
+        assert bad_gemini.status_code == 503
+
+        # Generating with OpenRouter non-Google model works
+        created = client.post("/api/images", json={"prompt": "Un robot astronaute", "model": "openai/gpt-image-2.5-sunburst"})
         assert created.status_code == 201
         item = created.json()
         assert item["mime_type"] == "image/png"
-        assert item["filename"].startswith("gemini-3-pro-image-")
+        assert item["filename"].startswith("gpt-image-2-5-sunburst-")
 
 
 def test_image_studio_edit_uploaded_and_gallery_image(tmp_path, monkeypatch):
     import base64 as _b64
 
-    settings = Settings(_env_file=None, app_data_dir=tmp_path, ideogram_api_key="image", llm_api_key="llm", demo_mode=False)
+    settings = Settings(
+        _env_file=None,
+        app_data_dir=tmp_path,
+        ideogram_api_key="image",
+        llm_api_key="llm",
+        google_cloud_mode="vertex_api_key",
+        vertex_api_key="vkey-test",
+        demo_mode=False,
+    )
     src_png = b"\x89PNG\r\n\x1a\nimported-src"
     mask_png = b"\x89PNG\r\n\x1a\nmask-png"
     edited_png = b"\x89PNG\r\n\x1a\nedited-out"

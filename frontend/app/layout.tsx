@@ -5,6 +5,7 @@ import "./design-tokens.css";
 import "./interface-themes.css";
 import "./editorial-shell.css";
 import "./editorial-modals.css";
+import "./editorial-finance.css";
 import { InterfaceThemeSync } from "@/components/interface-theme-sync";
 import { interfaceThemeBootstrap } from "@/lib/interface-themes";
 

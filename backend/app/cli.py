@@ -68,6 +68,7 @@ def prepare_schema(settings: Settings) -> None:
         "0030_add_visual_doc_links",
         "0031_add_saved_videos",
         "0032_add_blog_topic_category",
+        "0033_add_api_key_overrides",
     }:
         raise SystemExit(f"Révision de base non reconnue : {current}")
 

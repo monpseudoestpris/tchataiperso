@@ -568,6 +568,19 @@ class SavedVideo(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
 
 
+class ApiKeyOverride(Base):
+    """Surcharge chiffrée AES-256-GCM (Write-Only) d'une clé API fournisseur externe."""
+    __tablename__ = "api_key_overrides"
+
+    key_name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+    updated_by_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+
+
+
 
 
 

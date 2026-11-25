@@ -498,6 +498,7 @@ class ImproveImagePrompt(BaseModel):
     reference_image_data: str | None = Field(default=None, max_length=15_000_000)
     source_image_id: str | None = Field(default=None, max_length=64)
     is_edit: bool = False
+    is_svg: bool = False
 
     @field_validator("prompt")
     @classmethod
@@ -514,6 +515,117 @@ class ImproveImagePrompt(BaseModel):
             return None
         cleaned = value.strip()
         return cleaned or None
+
+
+UpscaleModelId = Literal[
+    "auto",
+    "topaz-standard-2",
+    "topaz-text-refine",
+    "topaz-wonder-3-5",
+    "topaz-wonder-4",
+    "topaz-bloom-2",
+    "topaz-redefine",
+    "nano-banana-pro",
+]
+
+
+class UpscaleImageRequest(BaseModel):
+    model: UpscaleModelId = "auto"
+    reference_image_data: str | None = Field(default=None, max_length=15_000_000)
+    source_image_id: str | None = Field(default=None, max_length=64)
+    upscale_factor: Literal["x2", "x4", "x8"] = "x2"
+    resolution_tier: Literal["1K", "2K", "4K"] = "2K"
+    prompt: str | None = Field(default=None, max_length=1024)
+    autoprompt: bool | None = None
+    creativity: int | None = Field(default=None, ge=1, le=9)
+    color_preservation: bool | None = None
+    enhancement_strength: Literal["low", "medium", "high"] | None = None
+    strength: float | None = Field(default=None, ge=0.01, le=1.0)
+    sharpen: float | None = Field(default=None, ge=0.0, le=1.0)
+    denoise: float | None = Field(default=None, ge=0.0, le=1.0)
+    fix_compression: float | None = Field(default=None, ge=0.0, le=1.0)
+    texture: int | None = Field(default=None, ge=1, le=5)
+    detail: bool | None = None
+    detail_strength: float | None = Field(default=None, ge=0.0, le=10.0)
+    face_enhancement: bool | None = None
+    face_enhancement_strength: float | None = Field(default=None, ge=0.0, le=1.0)
+    face_enhancement_creativity: float | None = Field(default=None, ge=0.0, le=1.0)
+    subject_detection: Literal["all", "foreground", "background"] | None = None
+    seed: int | None = Field(default=None, ge=0, le=2147483647)
+
+    @field_validator("prompt", "reference_image_data", "source_image_id")
+    @classmethod
+    def sanitize_optional_upscale_str(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+    @model_validator(mode="after")
+    def validate_upscale_constraints(self) -> "UpscaleImageRequest":
+        if not self.reference_image_data and not self.source_image_id:
+            raise ValueError("Une image source est requise pour l'agrandissement (Upscale)")
+        if self.model == "topaz-wonder-4" and self.upscale_factor == "x8":
+            raise ValueError("Topaz Wonder 4 prend uniquement en charge les facteurs x2 et x4")
+        return self
+
+
+SVG_ALLOWED_ASPECT_RATIOS = {
+    "auto",
+    "1:1",
+    "16:9",
+    "9:16",
+    "4:3",
+    "3:4",
+    "3:2",
+    "2:3",
+    "16:10",
+    "10:16",
+    "2:1",
+    "1:2",
+    "3:1",
+    "1:3",
+    "4:1",
+    "1:4",
+    "4:5",
+    "5:4",
+}
+
+
+class CreateSvgRequest(BaseModel):
+    operation: Literal["generate", "vectorize"] = "generate"
+    prompt: str = Field(default="", max_length=4000)
+    reference_image_data: str | None = Field(default=None, max_length=15_000_000)
+    source_image_id: str | None = Field(default=None, max_length=64)
+    aspect_ratio: str = Field(default="auto", max_length=16)
+    quality: Literal["low", "medium", "high"] = "medium"
+    mode: Literal["auto", "simple", "detailed"] = "auto"
+    shape_density: float | None = Field(default=None, ge=1.0, le=16.0)
+    color_variety: float | None = Field(default=None, ge=1.0, le=8.0)
+    use_gradient: bool = True
+    seed: int | None = Field(default=None, ge=0, le=2147483647)
+
+    @field_validator("reference_image_data", "source_image_id")
+    @classmethod
+    def sanitize_optional_svg_str(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+    @model_validator(mode="after")
+    def validate_svg_constraints(self) -> "CreateSvgRequest":
+        self.prompt = (self.prompt or "").strip()
+        self.aspect_ratio = (self.aspect_ratio or "auto").strip().lower()
+        if self.operation == "generate":
+            if not self.prompt:
+                raise ValueError("Un prompt est requis pour générer un vecteur SVG")
+            if self.aspect_ratio not in SVG_ALLOWED_ASPECT_RATIOS:
+                raise ValueError("Format de vecteur SVG non pris en charge")
+        elif self.operation == "vectorize":
+            if not self.reference_image_data and not self.source_image_id:
+                raise ValueError("Une image source est requise pour convertir une image en SVG")
+        return self
 
 
 SOUND_OUTPUT_FORMATS_ALLOWED = {
@@ -1465,6 +1577,41 @@ class AddVisualDocLinksRequest(BaseModel):
     urls: list[str] = Field(default_factory=list, max_length=25)
     url: str | None = Field(default=None, max_length=2048)
     title: str | None = Field(default=None, max_length=200)
+
+
+class AdminApiKeyItem(BaseModel):
+    key_name: str
+    env_name: str
+    label: str
+    description: str
+    is_llm_key: bool
+    status: Literal["active_vault", "active_env", "missing"]
+    has_env_fallback: bool
+    updated_at: str | None = None
+
+
+class AdminApiKeysResponse(BaseModel):
+    demo_mode: bool
+    baseline_demo_mode: bool
+    items: list[AdminApiKeyItem]
+
+
+class UpdateAdminApiKeysRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=256)
+    keys: dict[str, str] = Field(default_factory=dict)
+    clear_keys: list[str] = Field(default_factory=list, max_length=8)
+
+
+class TestAdminApiKeyRequest(BaseModel):
+    key_name: str = Field(min_length=1, max_length=64)
+    candidate_value: str | None = Field(default=None, max_length=600)
+
+
+class TestAdminApiKeyResponse(BaseModel):
+    key_name: str
+    valid: bool
+    detail: str
+
 
 
 

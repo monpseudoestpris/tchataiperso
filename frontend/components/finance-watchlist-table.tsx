@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ArrowDown, ArrowLeftRight, ArrowUp, Check, ChevronDown, ChevronUp, FolderPlus, GripVertical, LineChart, LoaderCircle, PanelRightClose, Pencil, Plus, RefreshCw, Sparkles, StickyNote, Trash2, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowLeftRight, ArrowUp, Check, ChevronDown, ChevronUp, FolderPlus, GripVertical, LineChart, LoaderCircle, PanelRightClose, Pencil, Plus, RefreshCw, Sparkles, StickyNote, Trash2, X } from "lucide-react";
 
 import { FinanceHoverTip } from "@/components/finance-info-tip";
 import type { FinanceWatchlistMeta, WatchlistItem } from "@/lib/api";
@@ -477,7 +477,12 @@ export function FinanceWatchlistTable({
         </div>
       </div>
 
-      {addError && <div className="finance-watchlist-error">⚠️ {addError}</div>}
+      {addError && (
+        <div className="finance-watchlist-error" role="alert">
+          <AlertTriangle size={14} aria-hidden="true" />
+          <span>{addError}</span>
+        </div>
+      )}
 
       {onReorderItems && sortKey !== null && items.length > 1 && (
         <div className={styles.sortNotice}>
@@ -601,10 +606,18 @@ export function FinanceWatchlistTable({
                           </span>
                         )}
                         <div className={`finance-wl-identity ${styles.identityMain}`}>
-                          <div className={styles.identityTopRow}>
-                            <strong className={styles.identityTitle} title={item.name}>
-                              {item.name}
-                            </strong>
+                          <strong className={styles.identityTitle} title={item.name}>
+                            {item.name}
+                          </strong>
+                          <div className={styles.identityMetaRow}>
+                            <div className="finance-wl-meta">
+                              <span className="finance-symbol-tag">{item.symbol}</span>
+                              {isEufund ? (
+                                <span className="finance-wl-exch is-eufund">Fonds · EUFUND</span>
+                              ) : (
+                                item.exchange && <span className="finance-wl-exch">{item.exchange}</span>
+                              )}
+                            </div>
                             <div className={styles.rowActions} onClick={e => e.stopPropagation()}>
                               {canReorder && (
                                 <>
@@ -641,14 +654,6 @@ export function FinanceWatchlistTable({
                                 {removingId === item.id ? <LoaderCircle size={12} className="spin" /> : <Trash2 size={12} />}
                               </button>
                             </div>
-                          </div>
-                          <div className="finance-wl-meta">
-                            <span className="finance-symbol-tag">{item.symbol}</span>
-                            {isEufund ? (
-                              <span className="finance-wl-exch is-eufund">Fonds · EUFUND</span>
-                            ) : (
-                              item.exchange && <span className="finance-wl-exch">{item.exchange}</span>
-                            )}
                           </div>
                           {editingNoteId === item.id ? (
                             <form

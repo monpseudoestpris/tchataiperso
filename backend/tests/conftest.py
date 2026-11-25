@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from app import api_key_vault as vault_module
 from app import config as config_module
 from app.config import Settings
 from app.google_cloud import clear_google_auth_cache
@@ -26,6 +27,8 @@ _EXTRA_ISOLATED_ENV_VARS = {
     "GOOGLE_CLOUD_API_KEY",
     "GEMINI_API_KEY",
     "GOOGLE_APPLICATION_CREDENTIALS",
+    "CLAIR_VAULT_KEY",
+    "CLAIR_VAULT_KEY_FILE",
 }
 
 
@@ -37,6 +40,7 @@ def _isolate_settings_env(monkeypatch, tmp_path):
             monkeypatch.delenv(key, raising=False)
     monkeypatch.setattr(config_module, "_ISOLATED_ENV_PATHS", _REAL_ENV_PATHS)
     monkeypatch.setattr(config_module, "_REPO_ENV_FILE", tmp_path / ".isolated_nonexistent_env")
+    monkeypatch.setattr(vault_module, "_ALLOW_USER_SECRETS_DIR", False)
     clear_google_auth_cache()
     yield
     clear_google_auth_cache()

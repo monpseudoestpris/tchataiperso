@@ -4297,6 +4297,11 @@ export function ChatApp() {
         voices={config?.voice?.voices ?? []}
         serverDefaultVoice={config?.voice?.default_voice ?? "Aoede"}
         ttsEnabled={Boolean(config?.features?.tts)}
+        onApiKeysUpdated={() => {
+          void api<Config>("/config")
+            .then((fresh) => setConfig(fresh))
+            .catch(() => undefined);
+        }}
         onSettingsUpdated={(updated) => {
           setUser(prev => prev ? { ...prev, ...updated } : prev);
           if (updated.default_voice) {

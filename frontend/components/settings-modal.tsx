@@ -25,6 +25,7 @@ import {
 import { api, errorMessage, type AgentTeamsResponse, type AuthUser, type PromptPreset, type UserSettings } from "@/lib/api";
 import { synthesizeSpeech, type VoiceOption } from "@/lib/voice-api";
 import { InterfaceThemePicker } from "@/components/interface-theme";
+import { SettingsApiKeysSection } from "@/components/settings-api-keys-section";
 
 type SettingsModalProps = {
   currentUser: AuthUser;
@@ -33,6 +34,7 @@ type SettingsModalProps = {
   voices?: VoiceOption[];
   serverDefaultVoice?: string;
   ttsEnabled?: boolean;
+  onApiKeysUpdated?: () => void;
   onSettingsUpdated?: (updated: {
     system_prompt: string;
     prompt_cache_enabled: boolean;
@@ -48,6 +50,7 @@ export function SettingsModal({
   voices = [],
   serverDefaultVoice = "Aoede",
   ttsEnabled = false,
+  onApiKeysUpdated,
   onSettingsUpdated,
 }: SettingsModalProps) {
   const [loading, setLoading] = useState(true);
@@ -287,6 +290,9 @@ export function SettingsModal({
         {/* Content body */}
         <div className="settings-modal-body">
           <InterfaceThemePicker />
+          {currentUser.is_admin && (
+            <SettingsApiKeysSection onApiKeysUpdated={onApiKeysUpdated} />
+          )}
           {loading ? (
             <div className="settings-loading-state">
               <LoaderCircle size={28} className="spin" />

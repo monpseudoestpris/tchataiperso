@@ -46,11 +46,13 @@ import { FinanceStatements } from "@/components/finance-statements";
 import { FinanceTvChart } from "@/components/finance-tv-chart";
 import { FinanceWatchlistTable } from "@/components/finance-watchlist-table";
 import {
+  AlertTriangle,
   ArrowDownRight,
   ArrowUpRight,
   Award,
   BarChart3,
   Building2,
+  Calendar,
   Check,
   ChevronRight,
   ClipboardList,
@@ -1886,7 +1888,8 @@ export function FinanceModal({
           <div className="finance-modal-body" ref={modalBodyRef}>
             {error && (
               <div className="finance-modal-error" role="alert">
-                <span>⚠️ {error}</span>
+                <AlertTriangle size={15} aria-hidden="true" />
+                <span>{error}</span>
                 <button type="button" onClick={() => void loadDetails(query)}>
                   <RefreshCw size={14} /> Réessayer
                 </button>
@@ -2348,7 +2351,7 @@ export function FinanceModal({
 
                     <button
                       type="button"
-                      className={`finance-tf-btn${showDividends ? " active" : ""}`}
+                      className={`finance-dividend-toggle-btn${showDividends ? " active" : ""}`}
                       aria-pressed={showDividends}
                       onClick={() => {
                         setDividendsError(null);
@@ -2362,12 +2365,6 @@ export function FinanceModal({
                           ? "Masquer les versements de dividendes sur la courbe"
                           : "Afficher les versements de dividendes sur la courbe"
                       }
-                      style={{
-                        display: "inline-flex",
-                        alignItems: "center",
-                        gap: 5,
-                        fontVariantNumeric: "tabular-nums",
-                      }}
                     >
                       {dividendsLoading ? (
                         <LoaderCircle size={13} className="spin" />
@@ -2406,7 +2403,8 @@ export function FinanceModal({
 
                 {chartFullscreen && error && (
                   <div className="finance-modal-error" role="alert">
-                    <span>⚠️ {error}</span>
+                    <AlertTriangle size={15} aria-hidden="true" />
+                    <span>{error}</span>
                     <button type="button" onClick={() => setError(null)} aria-label="Fermer l'erreur">
                       <X size={14} /> Fermer
                     </button>
@@ -2446,17 +2444,7 @@ export function FinanceModal({
                 )}
 
                 {showDividends && !dividendsLoading && !dividendsError && cachedDividendsEntry && projectedDividends.length === 0 && (
-                  <div
-                    role="status"
-                    style={{
-                      fontSize: 12,
-                      color: "var(--muted, #64748b)",
-                      marginBottom: 8,
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: 6,
-                    }}
-                  >
+                  <div role="status" className="finance-dividend-empty-status">
                     <Coins size={13} />
                     <span>Aucun versement de dividende détecté sur la période affichée.</span>
                   </div>
@@ -2515,7 +2503,10 @@ export function FinanceModal({
                   {/* Active Bar Hover Details Card */}
                   {activeBar && (
                     <div className="finance-chart-hover-pill">
-                      <span>📅 {activeBar.date}</span>
+                      <span className="finance-hover-date">
+                        <Calendar size={12} aria-hidden="true" />
+                        <span>{activeBar.date}</span>
+                      </span>
                       <span>·</span>
                       <span>
                         Clôture : <strong>{activeBar.close?.toFixed(2)} {data.currency}</strong>

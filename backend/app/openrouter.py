@@ -27,6 +27,15 @@ _IMAGE_CACHE: dict[str, Any] = {
 }
 _CACHE_TTL = 900.0  # 15 minutes
 
+
+def clear_openrouter_cache() -> None:
+    """Purge les caches mémoire OpenRouter lors d'une rotation de clé API."""
+    _CACHE["timestamp"] = 0.0
+    _CACHE["models"] = []
+    _MODEL_PARAMS_CACHE.clear()
+    _IMAGE_CACHE["timestamp"] = 0.0
+    _IMAGE_CACHE["models"] = []
+
 # Top 12 ranked image generation models on OpenRouter
 # (Source: https://openrouter.ai/collections/image-models)
 TOP_IMAGE_MODELS: list[str] = [
